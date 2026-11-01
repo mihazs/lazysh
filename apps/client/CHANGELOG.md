@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.7.3
+
+### Patch Changes
+
+- 2e41ca2: Prioritize existing app sessions in Workspaces, disclose healthy Herdr server setup, and refine compact themed navigation while preserving shared-focus warnings and session identity.
+- a95d903: Prevent delayed terminal controls from taking focus away from an open credential dialog.
+- @lazysh/account-usage@1.7.3
+  - @lazysh/common@1.7.3
+  - @lazysh/display-idle@1.7.3
+  - @lazysh/et-transport@1.7.3
+  - @lazysh/mosh-transport@1.7.3
+
 ## 1.7.2
 
 ### Patch Changes
