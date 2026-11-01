@@ -2271,6 +2271,8 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".connection-options > summary"))
+                .perform(webScrollIntoView()).perform(webClick())
             if (requireCompanion || requireHerdrMosh) {
                 closeSoftKeyboard()
                 // The real Add Host chooser saved this preference; do not invoke
