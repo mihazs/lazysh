@@ -9,6 +9,8 @@
 - Correct README download availability and link to the public roadmap and installation guidance.
 
 - Add direct Live agents and Activity jump controls at the top of the Agents drawer. Move focus and only the drawer scroll position while preserving mounted readers, drafts, approvals and Back behavior; no agent data or connection settings change.
+- Add explicit managed Cline root lifecycle plugin setup for a selected existing profile, with protected absolute companion binding, inspected install/remove plans and profile discovery. Existing plugin restrictions and settings are preserved; a new Cline session must load the profile, and setup does not verify live reporting.
+
 - Detect installed host agents and known profile locations when opening Agent hook setup, with no provider preselected. Select a detected target or enter a manual profile before inspecting and installing hooks; discovery does not install hooks, create profiles or change trust settings. Executable discovery and live activity remain separate.
 
 - Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.

@@ -40,7 +40,7 @@ it('requires a fresh inspection after an uncertain write without retrying it',as
   expect(await screen.findByRole('alert')).toHaveProperty('textContent','Setup could not be confirmed. Inspect again before retrying.');
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(2);
 });
-it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor'],['droid','/home/user/.factory']] as const)('uses the explicit %s profile only after inspection',async(agent,placeholder)=>{
+it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor'],['droid','/home/user/.factory'],['cline','/home/user/.cline']] as const)('uses the explicit %s profile only after inspection',async(agent,placeholder)=>{
   hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
   render(<CompanionHooksPanel sessionId="new-provider" visible/>);
   fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});
@@ -51,6 +51,19 @@ it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor'],['droid
   fireEvent.click(await screen.findByRole('button',{name:'Install or update hooks'}));
   await screen.findByText('Hooks configured. Live reporting has not been verified.');
   expect(hooks.mock.calls[1]).toEqual(['new-provider',{agent,action:'install',profileRoot:`/owned/${agent} profile`,expectedPlan:inspected.installPlan}]);
+});
+
+it('keeps Cline loading guidance configured-only and reporting unverified',async()=>{
+  hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="cline-loading" visible/>);selectProfile('cline');
+  const guide='Start a new Cline session with this profile to load the root-only plugin, then start a turn. Existing plugin restrictions still apply.';
+  expect(screen.queryByText(guide)).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));await screen.findByRole('button',{name:'Install or update hooks'});
+  expect(screen.queryByText(guide)).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(await screen.findByText(guide)).toBeTruthy();
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
+  expect(hooks.mock.calls.map(call=>call[1].action)).toEqual(['status','status']);
 });
 
 it('explains required native Droid standalone setup without enabling mutation',async()=>{
@@ -91,6 +104,8 @@ function openDiscovery(container:HTMLElement){const details=container.querySelec
 it('validates bounded discovery and refuses unknown providers, capabilities and private payload fields',()=>{
   expect(parseHookDiscovery(detected).agents[0].profiles[0].path).toBe('/owned/custom profile');
   for(const patch of [{schemaVersion:2},{privateConfig:'must not be accepted'},{supported:'yes'},{managedSetupSupported:'yes'},{truncated:1},{supported:false},{agents:Array(12).fill(detected.agents[0])},{agents:[detected.agents[0],detected.agents[0]]}])expect(()=>parseHookDiscovery({...detected,...patch})).toThrow();
+  expect(parseHookDiscovery({...detected,agents:[{...detected.agents[0],agent:'cline'}]}).agents[0].setup).toBe('managed');
+  expect(()=>parseHookDiscovery({...detected,agents:[{agent:'cline',setup:'manual',executable:null,profiles:[]}]})).toThrow();
   const original=detected.agents[0];
   for(const patch of [{agent:'unknown'},{setup:'manual'},{executable:{path:'/owned/codex',source:'other'}},{profiles:[{path:null,source:'default',state:'directory'}]},{profiles:[{path:'/owned/../foreign',source:'default',state:'directory'}]},{executable:{path:'relative/codex',source:'path'}},{privateContents:'refused'},{profiles:[{path:'/owned/profile',source:'default',state:'configured'}]},{profiles:[{path:'x'.repeat(4097),source:'default',state:'missing'}]},{profiles:[{path:'/owned/profile',source:'default\nprivate',state:'directory'}]},{profiles:Array(9).fill(original.profiles[0])}])expect(()=>parseHookDiscovery({...detected,agents:[{...original,...patch}]})).toThrow();
 });
@@ -108,10 +123,10 @@ it('detects only opened visible setup and requires an explicit profile selection
   expect(hooks.mock.calls[1]).toEqual(['discovered-host',{agent:'codex',action:'install',profileRoot:'/owned/custom profile',expectedPlan:inspected.installPlan}]);
 });
 it('keeps installed executable, missing profile, manual setup and health-only capabilities separate',async()=>{
-  discover.mockResolvedValue({...detected,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'cline',setup:'manual',executable:{path:'/owned/bin/cline',source:'path'},profiles:[]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
+  discover.mockResolvedValue({...detected,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
   const view=render(<CompanionHooksPanel sessionId="capabilities" visible/>);openDiscovery(view.container);
   expect(await screen.findByRole('button',{name:/Codex.*Profile missing/})).toHaveProperty('disabled',true);
-  expect(screen.getByRole('button',{name:/Cline.*Manual setup/})).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:/Aider.*Callback health only/})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:/Kimi.*Manual setup/})).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:/Aider.*Callback health only/})).toHaveProperty('disabled',true);
   expect(screen.getByText('Some locations were not checked. Use a manual path if needed.')).toBeTruthy();expect(hooks).not.toHaveBeenCalled();
   selectProfile();expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',false);
 });

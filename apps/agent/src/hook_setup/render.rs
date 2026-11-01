@@ -54,7 +54,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             ),
             5,
         ),
-        Agent::Opencode => (false, 0),
+        Agent::Opencode | Agent::Cline => (false, 0),
     };
     if !valid {
         return Err("HooksInvalidTemplate");
@@ -83,7 +83,7 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
-        Agent::Opencode => return Ok(Vec::new()),
+        Agent::Opencode | Agent::Cline => return Ok(Vec::new()),
     };
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
@@ -120,19 +120,27 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         })
         .collect()
 }
-pub(super) fn plugin(binary: &Path) -> Result<String, &'static str> {
-    let body = crate::hooks::opencode_plugin();
-    let body = body["content"].as_str().ok_or("HooksInvalidTemplate")?;
-    const COMMAND: &str = "['lazysh-agent', 'ingest', '--agent', 'opencode']";
-    if body.matches(COMMAND).count() != 1 {
-        return Err("HooksInvalidTemplate");
-    }
+pub(super) fn plugin(agent: Agent, binary: &Path) -> Result<String, &'static str> {
     let path = binary.to_str().ok_or("HooksInvalidBinary")?;
     let path = serde_json::to_string(path).map_err(|_| "HooksInvalidBinary")?;
-    Ok(body.replace(
-        COMMAND,
-        &format!("[{path}, 'ingest', '--agent', 'opencode']"),
-    ))
+    let (asset, command, replacement) = match agent {
+        Agent::Opencode => (
+            crate::hooks::opencode_plugin(),
+            "['lazysh-agent', 'ingest', '--agent', 'opencode']",
+            format!("[{path}, 'ingest', '--agent', 'opencode']"),
+        ),
+        Agent::Cline => (
+            crate::hooks::cline_plugin(),
+            "childProcess.execFile('lazysh-agent',",
+            format!("childProcess.execFile({path},"),
+        ),
+        _ => return Err("HooksInvalidTemplate"),
+    };
+    let body = asset["content"].as_str().ok_or("HooksInvalidTemplate")?;
+    if body.matches(command).count() != 1 {
+        return Err("HooksInvalidTemplate");
+    }
+    Ok(body.replace(command, &replacement))
 }
 
 /// Provider envelope handling stays separate from ownership of individual groups.

@@ -3,12 +3,12 @@ import {api as nativeApi} from './bridge';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
-type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode';
+type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline';
 const providers={claude:'Claude Code',codex:'Codex',droid:'Droid',gemini:'Gemini CLI',cursor:'Cursor CLI',opencode:'OpenCode',cline:'Cline',kimi:'Kimi',copilot:'GitHub Copilot',amp:'Amp',aider:'Aider'} as const;
 type DetectedAgent=keyof typeof providers;
 type Profile={path:string|null;source:string;state:'directory'|'missing'|'unavailable'|'invalid'};
 type Discovery={schemaVersion:1;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
-const managed=new Set<string>(['claude','codex','droid','gemini','cursor','opencode']);
+const managed=new Set<string>(['claude','codex','droid','gemini','cursor','opencode','cline']);
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new LocalUiError('hooksInvalid');return value as Record<string,unknown>;}
 function closed(value:Record<string,unknown>,keys:string[]){if(Object.keys(value).some(key=>!keys.includes(key)))throw new LocalUiError('hooksInvalid');}
 function boundedText(value:unknown,maximum=4096):value is string{return typeof value==='string'&&value.length>0&&value.length<=maximum&&!/[\x00-\x1f\x7f]/.test(value);}
@@ -117,14 +117,14 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     </section>
     <p className="agent-note">{t('hooksManualPath')}</p>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option></select></label>
-      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
+      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option></select></label>
+      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
       <button ref={inspect} className="subtle-button" disabled={busy || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
     {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
     {status?.supported && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
-    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':'hooksTrust' : 'hooksTrust')}</p>
+    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':'hooksTrust' : 'hooksTrust')}</p>
   </details>;
 }

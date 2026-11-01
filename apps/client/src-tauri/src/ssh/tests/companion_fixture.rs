@@ -160,7 +160,9 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         !marker.exists() && !detected_profile.join("hooks.json").exists(),
         "Discovery must not execute the agent or install hooks"
     );
-    for agent in ["claude", "codex", "droid", "gemini", "cursor", "opencode"] {
+    for agent in [
+        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline",
+    ] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
         let json_name = match agent {
