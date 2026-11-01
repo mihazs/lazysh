@@ -338,8 +338,33 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:profile,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false) {
+export function attachmentReceipt(text:string,nonce:string) {
+  let parsed:unknown;
+  try{if(text.length>1024)throw new Error();parsed=JSON.parse(text);}catch{throw new Error('Owned attachment receipt invalid');}
+  if(!parsed || typeof parsed!=='object' || Array.isArray(parsed))throw new Error('Owned attachment receipt invalid');
+  const value=parsed as Record<string,unknown>;
+  if(!/^[a-f0-9]{32}$/.test(nonce) || Object.keys(value).sort().join(',')!=='bytes,height,nonce,schemaVersion,sha256,width'
+    || value.schemaVersion!==1 || value.nonce!==nonce || typeof value.bytes!=='number' || !Number.isSafeInteger(value.bytes) || value.bytes<400*1024 || value.bytes>600*1024
+    || value.width!==448 || value.height!==320 || typeof value.sha256!=='string' || !/^[a-f0-9]{64}$/.test(value.sha256))
+    throw new Error('Owned attachment receipt invalid');
+  return value as {schemaVersion:1;nonce:string;bytes:number;width:448;height:320;sha256:string};
+}
+export async function attachmentIdentity(path:string) {
+  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    const before=await file.stat({bigint:true});
+    if(!before.isFile() || before.uid!==BigInt(process.getuid!()) || before.size<1n || before.size>BigInt(600*1024))throw new Error('Owned attachment file invalid');
+    const bytes=Buffer.alloc(Number(before.size)+1);let bytesRead=0;
+    while(bytesRead<bytes.length){const result=await file.read(bytes,bytesRead,bytes.length-bytesRead,bytesRead);if(!result.bytesRead)break;bytesRead+=result.bytesRead;}
+    const after=await file.stat({bigint:true});
+    if(bytesRead!==Number(before.size) || reportIdentity(before)!==reportIdentity(after))throw new Error('Owned attachment changed during readback');
+    return {identity:reportIdentity(after),bytes:bytesRead,sha256:createHash('sha256').update(bytes.subarray(0,bytesRead)).digest('hex')};
+  } finally {await file.close();}
+}
+
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(attachments && (herdr || companion || moshBackground || herdrMosh || sharedHerdr))throw new Error('Owned attachment mode must be isolated');
   if(sharedHerdr && (!herdr || herdrMosh || companion || moshBackground))throw new Error('Owned shared navigation requires its SSH Herdr fixture');
   if(herdrMosh && (!herdr || companion || moshBackground))throw new Error('Owned Mosh Herdr requires its separate guarded fixture');
   if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
@@ -348,8 +373,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
   const evidence=companion?await publishedCompanion():undefined;
-  const moshBinary=moshBackground?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
+  const moshBinary=(moshBackground || attachments)?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
   const fixture=herdr?.ssh??await SshFixture.start(undefined,companion?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
+  const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`};
+  let collisionBefore:Awaited<ReturnType<typeof attachmentIdentity>>|undefined;
   let moshWitness:ReturnType<typeof observeAndroidMoshBackground>|undefined;
   const managed=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
@@ -370,7 +397,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['pull','/sdcard/Android/data/app.lazysh.client/files/herdr-navigation',destination]);
   };
   try {
-    if(moshBackground || herdrMosh) {
+    if(attachments) {
+      await writeFile(join(fixture.directory,attachmentNames.collisionName),Buffer.from(`OWNED-COLLISION:${fixture.nonce}`),{mode:0o600,flag:'wx'});
+      collisionBefore=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
+      await lstat(join(fixture.directory,attachmentNames.newName)).then(()=>{throw new Error('Owned upload destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw error;});
+    }
+    if(moshBackground || herdrMosh || attachments) {
       const server=join(fixture.directory,'bin/mosh-server');
       if((await stat(server)).size>64*1024*1024)throw new Error('Owned Mosh server binary exceeds bound');
       const bytes=await readFile(server);
@@ -386,7 +418,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
     }
     // The host allowlist key must match the concrete device port removed in cleanup.
-    if(!moshBackground && !herdrMosh) {
+    if(!moshBackground && !herdrMosh && !attachments) {
       await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
       reverse=String(fixture.port);
     }
@@ -396,7 +428,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
@@ -410,11 +442,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
-      ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
+      ...((herdr || attachments)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
-    retainedPackages=!!herdr;
+    retainedPackages=!!herdr || attachments;
     let monitoring=sharedHerdr,byteFailure:unknown;
     const byteWitness=(async()=>{while(monitoring){
       try{await herdr!.expectNavigationBytes();}catch(error){
@@ -442,9 +474,19 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
+    if(attachments) {
+      const expected=attachmentReceipt(await shell(['shell','run-as','app.lazysh.client','cat',`files/owned-attachment-${fixture.nonce}.json`]),fixture.nonce);
+      const actual=await attachmentIdentity(join(fixture.directory,attachmentNames.newName));
+      if(actual.bytes!==expected.bytes || actual.sha256!==expected.sha256)throw new Error('Manual native attachment bytes differ from the valid provider PNG');
+      const collisionAfter=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
+      if(JSON.stringify(collisionBefore)!==JSON.stringify(collisionAfter))throw new Error('Existing attachment inode, size, mtime or hash changed');
+      const attachmentFiles=(await readdir(fixture.directory)).filter(name=>/^owned-(?:upload|collision)-/.test(name)).sort();
+      if(JSON.stringify(attachmentFiles)!==JSON.stringify(Object.values(attachmentNames).sort()))throw new Error('Unexpected owned attachment destination created');
+      console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
+    }
     if(sharedHerdr)await herdr!.expectNavigationBytes();
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
-    if(herdrMosh && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh Herdr entry must bootstrap exactly once');
+    if((herdrMosh || attachments) && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh entry must bootstrap exactly once');
     console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
@@ -461,7 +503,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     } catch {moshBackgroundObservation={state:'unavailable'};}
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
       // Sample before an inspection adb command could implicitly restart its server.
       const hostServerAfter=await hostAdbServerIdentity(adb);

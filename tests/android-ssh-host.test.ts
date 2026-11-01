@@ -146,6 +146,10 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app perform
   await androidSshAcceptance();
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')('actual Android manual Mosh attachment uploads a large valid PNG and preserves a pre-existing destination',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,true);
+},610_000);
+
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android Mosh survives busy background with the same owned shell and releases its last worker',async()=>{
   await androidSshAcceptance(undefined,undefined,false,true);
 },610_000);
