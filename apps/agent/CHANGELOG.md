@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.7.0
+
+### Minor Changes
+
+- bcc7feb: Add opt-in V3 managed Amp system-plugin setup with protected ownership, shadow-aware removal and bounded V2 metadata compatibility.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.7.0
+  - @lazysh/common@1.7.0
+  - @lazysh/notification-client@1.7.0
+
 ## 1.6.0
 
 ### Minor Changes
