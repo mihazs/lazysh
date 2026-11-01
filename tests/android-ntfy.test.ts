@@ -3,10 +3,124 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation,ntfyClockComparison,observeNtfyClock} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
+test('controlled clock admits only an entire positive interval within the declared bound',()=>{
+  const before=clockPoint(100000),after=clockPoint(100010,10000000n);
+  for(const [raw,result]of [['100010','outsideDeclaredOffset'],['100011','outsideDeclaredOffset'],['100012','verified'],
+    ['101999','verified'],['102000','outsideDeclaredOffset'],['100005','outsideDeclaredOffset'],['%s%3N','malformed'],
+    ['101000\r\n','malformed'],['101000\n\n','malformed'],['NaN','malformed'],['8640000000000000','malformed']]as const)
+    expect(controlledNtfyClockReadback(raw,before,after)).toBe(result);
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100251,251000000n))).toBe('wideBracket');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100248,248000000n))).toBe('verified');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100249,249000000n))).toBe('wideBracket');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100100,1000000n))).toBe('hostDiscontinuity');
+  expect(controlledNtfyClockReadback('101000',before,after,clockPoint(99000))).toBe('hostDiscontinuity');
+  expect(controlledNtfyClockReadback('101000',clockPoint(NaN),after)).toBe('hostDiscontinuity');
+});
+
+function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean}={}) {
+  const commands:string[][]=[],events:string[]=[];let auto=options.auto??true,set:number|undefined,index=0;
+  const points=[clockPoint(100000),clockPoint(100010,10000000n),clockPoint(100020,20000000n)].map(point=>({...point,after:point.after+100n}));
+  const clock=new OwnedNtfyClock(async args=>{
+    commands.push(args);events.push(args.join(' '));
+    if(args[1]==='pm')return options.occupied?'package:app.lazysh.client\n':'';
+    if(args[1]==='date')return options.readback??String(options.unchanged?100015:set!+15)+'\n';
+    if(args[2]==='alarm'){if(options.unsupported)throw new Error('private unsupported token');set=Number(args[4]);return '';}
+    if(args[3]==='is_auto_detection_enabled')return options.autoReply??String(auto)+'\n';
+    if(args[3]==='set_auto_detection_enabled'){
+      if(options.restoreFails&&set!==undefined)throw new Error('private restoration token');
+      if(!options.ignoreRestore||set===undefined)auto=args[4]==='true';return '';
+    }
+    throw new Error('Unexpected command');
+  },async()=>{events.push('identity');if(options.identityLostAfterSet&&set!==undefined)throw new Error('Owned identity changed');},()=>{
+    events.push('sample');return points[index++];
+  });
+  return {clock,commands,events,get auto(){return auto;}};
+}
+
+test('one fixed clock setup restores the exact original boolean only after absent-state teardown',async()=>{
+  for(const auto of [true,false]) {
+    const f=controlledClockFixture({auto});await f.clock.prepare();
+    expect(f.clock.observation()).toMatchObject({state:'verified',readback:'verified',restoration:'pending'});
+    expect(f.commands.filter(a=>a[2]==='alarm')).toEqual([['shell','cmd','alarm','set-time','101000']]);
+    await expect(f.clock.prepare()).rejects.toThrow('cannot be repeated');
+    await f.clock.restore(async()=>{f.events.push('teardown');});
+    expect(f.auto).toBe(auto);expect(f.clock.observation().restoration).toBe('restored');
+    const teardown=f.events.indexOf('teardown');
+    expect(f.events.slice(teardown+1)).toContain(`shell cmd time_detector set_auto_detection_enabled ${auto}`);
+    expect(f.commands.filter(a=>a[2]==='alarm')).toHaveLength(1);
+    expect(JSON.stringify(f.clock.observation())).not.toMatch(/101000|private|token|epoch|boot|hash/);
+    await expect(f.clock.restore(async()=>{})).rejects.toThrow('cannot be repeated');
+  }
+});
+
+test('unsupported or unchanged clock never passes on set-time success and never retries',async()=>{
+  for(const options of [{unsupported:true},{unchanged:true},{readback:'%s%3N\n'}]) {
+    const f=controlledClockFixture(options);await expect(f.clock.prepare()).rejects.toThrow();
+    expect(f.clock.observation().state).toBe('preparing');
+    expect(f.commands.filter(a=>a[2]==='alarm')).toHaveLength(1);
+    await f.clock.restore(async()=>{});expect(f.auto).toBe(true);
+    expect(f.clock.observation().restoration).toBe('restored');
+  }
+});
+
+test('malformed automatic-time state cannot be guessed or mutated',async()=>{
+  for(const autoReply of ['','True','true\n\n','false\r\n','private']) {
+    const f=controlledClockFixture({autoReply});await expect(f.clock.prepare()).rejects.toThrow('automatic time response invalid');
+    expect(f.commands.some(a=>a[3]==='set_auto_detection_enabled'||a[2]==='alarm')).toBe(false);
+    await f.clock.restore(async()=>{throw new Error('No restoration should be needed');});
+  }
+});
+
+test('package or identity failure admits no mutation and cannot restore beneath retained state',async()=>{
+  const occupied=controlledClockFixture({occupied:true});await expect(occupied.clock.prepare()).rejects.toThrow('packages/state must be absent');
+  expect(occupied.commands.every(a=>a[1]==='pm')).toBe(true);
+  let commands=0;const original=new Error('Owned identity failed');
+  const denied=new OwnedNtfyClock(async()=>{commands++;return '';},async()=>{throw original;});
+  await expect(denied.prepare()).rejects.toBe(original);expect(commands).toBe(0);
+  const blocked=controlledClockFixture();await blocked.clock.prepare();const count=blocked.commands.length;
+  await expect(blocked.clock.restore(async()=>{throw original;})).rejects.toBe(original);
+  expect(blocked.commands).toHaveLength(count);expect(blocked.clock.observation().restoration).toBe('blocked');
+  const lost=controlledClockFixture({identityLostAfterSet:true});await expect(lost.clock.prepare()).rejects.toThrow('identity changed');
+  await expect(lost.clock.restore(async()=>{})).rejects.toThrow('identity changed');
+  expect(lost.commands.filter(a=>a[3]==='set_auto_detection_enabled')).toHaveLength(1);
+});
+
+test('restoration failure is closed, recorded and cannot be retried',async()=>{
+  for(const options of [{restoreFails:true},{ignoreRestore:true}]) {
+    const f=controlledClockFixture(options);await f.clock.prepare();let cleanup:unknown;
+    try{await f.clock.restore(async()=>{});}catch(error){cleanup=error;}
+    expect(cleanup).toBeInstanceOf(Error);
+    expect(String(cleanup)).not.toContain('private');expect(f.clock.observation().restoration).toBe('failed');
+    await expect(f.clock.restore(async()=>{})).rejects.toThrow('cannot be repeated');
+  }
+  const options={occupied:false},retained=controlledClockFixture(options);await retained.clock.prepare();options.occupied=true;
+  await expect(retained.clock.restore(async()=>{})).rejects.toThrow('packages/state must be absent');
+  expect(retained.clock.observation().restoration).toBe('blocked');
+  expect(retained.commands.filter(a=>a[3]==='set_auto_detection_enabled')).toHaveLength(1);
+});
+
+test('clock ownership requires stable QEMU-admitted bridge, transport and boot observations',()=>{
+  const owner={server:{state:'available' as const,hash:'server'},guest:{connection:'device',process:'unavailable',mainPids:[],reverse:'not-created',
+    transport:'available',transportHash:'transport',boot:'available',bootHash:'boot',adbd:'available',adbdHash:'adbd'}};
+  expect(sameNtfyClockOwner(owner,owner)).toBe(true);
+  expect(sameNtfyClockOwner({...owner,guest:{...owner.guest,connection:'offline'}},owner)).toBe(false);
+  expect(sameNtfyClockOwner(owner,{...owner,server:{state:'inconclusive',hash:null}})).toBe(false);
+  for(const field of ['transportHash','bootHash','adbdHash','connection']as const)
+    expect(sameNtfyClockOwner(owner,{...owner,guest:{...owner.guest,[field]:'changed'}})).toBe(false);
+});
+
+test('teardown absence uses strict exact package names rather than uninstall acknowledgements or prefixes',async()=>{
+  const queried:string[]=[];
+  await absentNtfyPackages(async args=>{queried.push(args.at(-1)!);return 'package:app.lazysh.client.unrelated\n';});
+  expect(queried).toEqual(['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client']);
+  for(const reply of ['package:app.lazysh.client\n','private output','\n','package:app.lazysh.client.unrelated\r\n','package:app.lazysh.client.unrelated\n'.repeat(200)])
+    await expect(absentNtfyPackages(async()=>reply)).rejects.toThrow('packages/state must be absent');
+  await expect(absentNtfyPackages(async()=>{throw new Error('Read unavailable');})).rejects.toThrow('Read unavailable');
+});
 test('host-device comparison accounts for second and millisecond quantization',()=>{
   const compare=(guest:string,start=100000,end=100010)=>ntfyClockComparison(guest,clockPoint(start),clockPoint(end,BigInt(end-start)*1000000n));
   expect(compare('100\n')).toMatchObject({status:'observed',offset:'overlapsZero',magnitude:'crossesBand',uncertainty:'atMostTwoSeconds'});
