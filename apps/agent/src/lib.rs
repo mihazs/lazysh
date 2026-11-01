@@ -424,6 +424,26 @@ fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File>
     }
 }
 
+fn initialize_schema(connection: &mut Connection) -> Result<()> {
+    // Defer writer acquisition so an already initialized store can open beside a live writer.
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+    transaction
+        .execute_batch(storage_schema::V1_SESSIONS)
+        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+    transaction
+        .execute_batch(reported_history::SCHEMA)
+        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+    transaction
+        .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
+        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+    relay::initialize(&transaction).map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
+    transaction
+        .commit()
+        .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))
+}
+
 impl Store {
     pub fn open(directory: &Path) -> Result<Self> {
         Self::open_with_admission(directory, storage_filesystem::require_local)
@@ -517,17 +537,7 @@ impl Store {
         connection
             .execute_batch("PRAGMA journal_size_limit=1048576;")
             .map_err(|e| storage_failure(StoragePhase::JournalSize, e.into()))?;
-        connection
-            .execute_batch(storage_schema::V1_SESSIONS)
-            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-        connection
-            .execute_batch(reported_history::SCHEMA)
-            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-        connection
-            .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
-            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-        relay::initialize(&connection)
-            .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
+        initialize_schema(&mut connection)?;
         connection
             .busy_handler(Some(wait_for_storage))
             .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;

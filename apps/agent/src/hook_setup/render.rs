@@ -18,6 +18,18 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             5,
         ),
         Agent::Codex => (common || event == "Interrupt", 3),
+        Agent::Droid => (
+            matches!(
+                event,
+                "UserPromptSubmit"
+                    | "PreToolUse"
+                    | "PostToolUse"
+                    | "Notification"
+                    | "Stop"
+                    | "SessionEnd"
+            ),
+            5,
+        ),
         Agent::Gemini => (
             matches!(
                 event,
@@ -68,6 +80,7 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
     let config = match agent {
         Agent::Claude => crate::claude_config(),
         Agent::Codex => crate::hooks::codex_config(),
+        Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
         Agent::Opencode => return Ok(Vec::new()),
@@ -75,7 +88,12 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
     }
-    let events = config["hooks"].as_object().ok_or("HooksInvalidTemplate")?;
+    let events = if agent == Agent::Droid {
+        &config
+    } else {
+        &config["hooks"]
+    };
+    let events = events.as_object().ok_or("HooksInvalidTemplate")?;
     events
         .iter()
         .map(|(event, groups)| {
@@ -129,5 +147,9 @@ pub(super) fn configuration(
     } else {
         input.into()
     };
-    super::json::rewrite(&input, previous, next)
+    if agent == Agent::Droid {
+        super::json::rewrite_standalone(&input, previous, next)
+    } else {
+        super::json::rewrite(&input, previous, next)
+    }
 }

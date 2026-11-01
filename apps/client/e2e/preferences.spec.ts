@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import { expect, test } from '@playwright/test';
@@ -6,6 +7,7 @@ const fontFile = new URL('./fixtures/LiberationMono-Regular.ttf', import.meta.ur
 
 async function preferences(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts', { exact: true }).click();
 }
 
@@ -56,6 +58,7 @@ test('font count is bounded and missing selections report fallback explicitly', 
 test('brand, light and dark themes keep controls readable and reset', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await openPreferenceCategory(page,'Appearance');
   const appTheme = page.getByRole('combobox', {name: 'App theme', exact: true});
   await expect(appTheme.locator('option[value="forest"]')).toHaveText('lazysh');
   await expect(page.getByRole('combobox', {name: 'Terminal theme', exact: true})).toHaveValue('forest');
@@ -66,6 +69,7 @@ test('brand, light and dark themes keep controls readable and reset', async ({ p
     expect(contrast.filter(item => item.ratio < 4.5), theme).toEqual([]);
     await page.screenshot({path: testInfo.outputPath(`${theme}-preferences.png`)});
   }
+  await openPreferenceCategory(page,'Reset');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
   await expect(appTheme).toHaveValue('forest');
   await page.reload();
@@ -80,6 +84,7 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByRole('combobox', {name: 'D-pad left corner', exact: true}).selectOption('custom');
   await page.getByLabel('D-pad left corner chord', {exact: true}).fill('text:/clear');
   await page.getByRole('button', {name: 'Save D-pad left corner chord', exact: true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords', {exact: true}).click();
   await page.getByLabel('Chord name', {exact: true}).fill('Agent pane');
   await page.getByLabel('Key sequence', {exact: true}).fill('F12, M-h');
@@ -92,6 +97,7 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByRole('button', {name: 'Reset gestures', exact: true}).click();
   await expect(page.getByRole('combobox', {name: 'Double tap', exact: true})).toHaveValue('none');
   await expect(page.getByLabel('Double tap chord', {exact: true})).toHaveCount(0);
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords', {exact: true}).click();
   await expect(page.getByText('Agent pane: F12, M-h', {exact: true})).toBeVisible();
 });
@@ -140,4 +146,26 @@ test('long settings use a mobile page with a persistent close action and short c
   if(phone){const bounds=(await choices.boundingBox())!;expect(bounds.y).toBeGreaterThan(0);expect(bounds.y+bounds.height).toBeLessThan(844);}
   await page.screenshot({path:testInfo.outputPath('choice-sheet.png')});
   await page.keyboard.press('Escape');await expect(choices).toHaveCount(0);
+});
+
+
+test('Preferences starts with compact categories at the top and keeps drafts while switching them',async({page},testInfo)=>{
+  await page.goto('/');if(testInfo.project.name==='phone')await page.setViewportSize({width:393,height:852});
+  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
+  expect(await dialog.locator('.preferences-category').evaluateAll(nodes=>nodes.every(node=>!(node as HTMLDetailsElement).open))).toBe(true);
+  await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();
+  await expect(dialog.locator('.preferences-category > summary').first()).toBeInViewport({ratio:0.9});
+  await expect(dialog.locator('.preferences-category > summary').last()).toBeInViewport({ratio:0.9});
+  await page.screenshot({path:testInfo.outputPath('preferences-category-entry.png'),animations:'disabled'});
+  await openPreferenceCategory(page,'Input');await page.getByText('Text snippets',{exact:true}).click();
+  const name=dialog.getByRole('textbox',{name:'Snippet name',exact:true}),text=dialog.getByRole('textbox',{name:'Snippet text',exact:true});
+  await name.fill('Unsent');await text.fill(' exact local draft ');const original=await text.elementHandle();
+  await dialog.locator('.preferences-category > summary').filter({hasText:'Keyboard and gestures'}).click();
+  await openPreferenceCategory(page,'Appearance');await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeVisible();
+  await openPreferenceCategory(page,'Input');await expect(name).toHaveValue('Unsent');await expect(text).toHaveValue(' exact local draft ');
+  expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
 });

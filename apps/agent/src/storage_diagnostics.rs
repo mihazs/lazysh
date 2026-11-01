@@ -175,3 +175,78 @@ fn profile_storage_commit_phases() {
 fn profile_storage_with_known_commit_hold() {
     probe(Duration::from_millis(250));
 }
+
+#[test]
+fn schema_initialization_commits_once_and_warm_open_does_not_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut connection = Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    let commits = Arc::new(AtomicU64::new(0));
+    let observed = commits.clone();
+    connection
+        .commit_hook(Some(move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+            false
+        }))
+        .unwrap();
+    let durations = Arc::new(Mutex::new(Vec::new()));
+    let measured = durations.clone();
+    connection
+        .trace_v2(
+            TraceEventCodes::SQLITE_TRACE_PROFILE,
+            Some(move |event: TraceEvent<'_>| {
+                if let TraceEvent::Profile(_, elapsed) = event {
+                    measured.lock().unwrap().push(elapsed.as_micros());
+                }
+            }),
+        )
+        .unwrap();
+    let started = Instant::now();
+    initialize_schema(&mut connection).unwrap();
+    eprintln!(
+        "schema_bootstrap commits={} wall_us={} statement_us={:?}",
+        commits.load(Ordering::Relaxed),
+        started.elapsed().as_micros(),
+        durations.lock().unwrap()
+    );
+    assert_eq!(
+        commits.load(Ordering::Relaxed),
+        1,
+        "Schema DDL must share one commit"
+    );
+    commits.store(0, Ordering::Relaxed);
+    initialize_schema(&mut connection).unwrap();
+    assert_eq!(
+        commits.load(Ordering::Relaxed),
+        0,
+        "Warm schema must not acquire a write transaction"
+    );
+}
+
+#[test]
+fn last_schema_failure_rolls_back_new_tables_and_preserves_existing_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut connection = Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    // The final relay index cannot be created on this incompatible preexisting table.
+    connection.execute_batch("CREATE TABLE relay_outbox(id TEXT PRIMARY KEY); INSERT INTO relay_outbox VALUES ('owned');").unwrap();
+    assert!(initialize_schema(&mut connection).is_err());
+    let created: i64 = connection.query_row("SELECT count(*) FROM sqlite_schema WHERE name IN ('sessions','claude_reported_history','aider_hook_health','relay_policy')", [], |row| row.get(0)).unwrap();
+    assert_eq!(
+        created, 0,
+        "A later DDL failure must not publish partial bootstrap tables"
+    );
+    let preserved: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM relay_outbox WHERE id='owned'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, 1);
+    assert!(connection.is_autocommit());
+}

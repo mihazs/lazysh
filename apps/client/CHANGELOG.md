@@ -1,5 +1,78 @@
 # @lazysh/client
 
+## 1.4.2
+
+### Patch Changes
+
+- cf4b9f3: Qualify compact settings and workspace navigation through visible browser acceptance preconditions while retaining existing locale, display ownership, QR privacy and stale dictation assertions.
+- 8d7a15d: Show concise provider-specific verification guidance after inspected hook configuration without changing trust, loading or reporting status.
+- 0844aa3: Keep Workspace tools short by default with explicit session-tool, connection and application disclosures, preserving existing guarded actions and touch targets.
+- @lazysh/account-usage@1.4.2
+  - @lazysh/common@1.4.2
+  - @lazysh/display-idle@1.4.2
+  - @lazysh/et-transport@1.4.2
+  - @lazysh/mosh-transport@1.4.2
+
+## 1.4.1
+
+### Patch Changes
+
+- 137bb78: Keep the native branded cover until the current renderer acknowledges its workspace commit when app lock is disabled, including after recreation. Preserve native unlock controls for confirmed locks. Physical-device launch-frame qualification remains pending.
+- 4c31c91: Return from usage and workspace tools to their opening context without replacing the terminal session, and dismiss local overlays before Android Back navigates.
+- 16460c7: Open the existing hook inspection workflow directly from empty Activity without automatically installing hooks or asserting live reporting.
+- 08210fc: Prioritize agents over optional setup in healthy workspaces, retaining visible repairs and pending approvals.
+- 8bc9f45: Collapse healthy selected Herdr setup even when other servers are available. Preserve explicit alternate selection and automatic setup for missing or unhealthy selections.
+- fb2b45d: Refine frosted navigation and short action sheets using the active theme colors. Keep long forms and terminal output opaque and preserve reduced-transparency and forced-color fallbacks.
+- 8d9f8b7: Publish the Android workspace UX critique and fresh Moshi/Termish benchmark, with inspected screenshots, issue links and observable redesign acceptance criteria. This research checkpoint does not claim the reported UX or agent-activity failures are fixed.
+- dd2c945: Retain the one native notification-permission action budget separately from later menu queries and record only the first measured expiry operation, without changing deadlines, input or permissions.
+- c9265d1: Start Preferences at a compact category list without focusing text input, preserving settings drafts and operations.
+- 8fb1c57: Collapse saved-host connection options and focus credentials or Connect without opening advanced Mosh fields.
+- a928587: Distinguish terminal input queue saturation from channel closure and add bounded, content-free caller/ownership diagnostics. This improves diagnosis; it does not claim the Android navigation failure is fixed.
+- @lazysh/account-usage@1.4.1
+  - @lazysh/common@1.4.1
+  - @lazysh/display-idle@1.4.1
+  - @lazysh/et-transport@1.4.1
+  - @lazysh/mosh-transport@1.4.1
+
+## 1.4.0
+
+### Minor Changes
+
+- 54796e0: Browse Herdr spaces and live agent panes from workspace navigation. Reuse or explicitly attach the exact server display, then use stock shared workspace/tab focus or the companion's exact shell/agent pane focus. Disclose shared focus and require fresh Chat confirmation after navigation.
+- 730cb2a: Add explicit inspected-plan lifecycle hook setup for Claude Code, Codex and OpenCode, with an SSH-connected Agents setup flow and companion CLI.
+
+  Preserve foreign profile values and ordinary file mode/group metadata, refuse unhandled ACLs or ownership conflicts, and keep configured state distinct from trust and live reporting. Managed writes initially support qualified Linux filesystems; other platforms retain preview-only capability.
+- 7218f34: Add inspected-profile managed Droid hooks for an already-existing standalone hooks.json, including the connected Agents selector.
+
+  Preserve foreign groups and fallback policy; refuse absent configuration rather than shadowing settings/legacy declarations. No automatic trust changes, fresh-profile migration or native Droid lifecycle claim.
+- 7477209: Extend explicit inspected-profile lifecycle hook setup to Gemini CLI and Cursor CLI, including the SSH-connected Agents setup selector.
+
+  Preserve Gemini millisecond deadlines and disable flags, Cursor version-1/fail-open observer semantics, foreign policy and the existing retained filesystem transaction. Other managed providers, macOS writes and actual provider-trusted reporting remain separate gaps.
+- 8b5770c: Enter the saved named multiplexer through Mosh without forcing SSH, retain exact transport and attachment restoration intent, and preserve native display admission before exposing the connection.
+
+### Patch Changes
+
+- bc6c84d: Recover built-in account quotas from empty external reports and offer companion setup when a remote usage command is missing or outdated.
+- b42a598: Fence Android and desktop IME composition completion and Enter against replay; apply owned trailing ASCII corrections without enabling private keyboard mode. Flush preedit before toolbar modifier changes. Complete the Android terminal no-autocorrect policy with autocomplete off; Compose hints remain unchanged. Preserve upstream handling for unsupported replacement spans pending remote editor compatibility.
+- 6026586: Show branded Android startup content until the native access policy is known.
+- b3d7262: Keep Android system bar icons readable over the native navy background.
+- ad7e576: Reduce repeated mobile guidance and compact unavailable Apple status without hiding active sharing controls or safety limits.
+- fd3a0aa: Free the terminal control row and prevent composer action overlap; give long mobile dialogs a fullscreen layout while preserving trust, authentication and dismissal protections.
+- 34d9ba1: Compact and align the workspace restore notice, retaining restoration limitations in an accessible details disclosure and preserving explicit restore and dismissal behavior.
+- 19e9da2: Verify companion files with a fixed, bounded window of SFTP reads while retaining ordered full-file hashing, legal partial-read handling, explicit EOF and metadata checks. Preserve existing time limits, conservative residue warnings and deletion guards; closed cleanup stage/reason observations distinguish incomplete cleanup from installation outcomes.
+- f573077: Classify failed companion installer tag rechecks without exposing request or response text or changing verification rules.
+- c0eaf57: Keep a continuous terminal touch drag routed to its original pane until the finger lifts or the gesture is cancelled.
+- 693d31d: Keep Herdr navigation and agent reports reachable within one scrollable drawer on short screens.
+- 1af65c3: Display structured native terminal error messages and preserve localized failures instead of rendering `[object Object]`.
+- c6871fd: Clear sticky touch hover from momentary terminal keys while retaining intentional modifiers, held-key feedback, fine-pointer hover and accessible keyboard focus.
+- 975d88e: Hold unsupported terminal IME corrections for bounded inline review and explicit copy without replaying text, guessing erase units or submitting deferred Enter. Preserve Compose drafts and clear local context at session/access lifecycle boundaries.
+- Updated dependencies [bc6c84d]
+  - @lazysh/account-usage@1.4.0
+  - @lazysh/common@1.4.0
+  - @lazysh/display-idle@1.4.0
+  - @lazysh/et-transport@1.4.0
+  - @lazysh/mosh-transport@1.4.0
+
 ## 1.3.3
 
 ### Patch Changes

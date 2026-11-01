@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { StrictMode, useState } from "react";
 import {uiI18n,useUi} from "./i18n/core";
-import {uiErrorText,type UiErrorCause} from "./i18n/localError";
+import {LocalUiError,uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -42,6 +42,18 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+it.each(['write','resize'] as const)('keeps structured native and localized %s failures readable',async operation=>{
+  let receive!:(data:string)=>void, resized!:(size:{cols:number;rows:number})=>void;
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.onResize=(listener:(size:{cols:number;rows:number})=>void)=>{resized=listener;return{dispose(){}};};
+  const reportError=vi.fn();
+  render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+  for(const cause of [{kind:'transport_error',message:'Owned transport unavailable'},new LocalUiError('hostToolsClosed')]) {
+    mocks[operation].mockRejectedValueOnce(cause);
+    await act(async()=>{if(operation==='write')receive('reply');else resized({cols:80,rows:24});});
+    expect(reportError).toHaveBeenLastCalledWith(cause instanceof LocalUiError?cause:cause.message);
+  }
+});
 function mountInputOwner(initial = "") {
   const element=document.createElement('div'), textarea=document.createElement('textarea');
   textarea.value=initial;
@@ -51,10 +63,58 @@ function mountInputOwner(initial = "") {
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
   terminal.focus.mockImplementation(()=>textarea.focus());
   const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
-  const view=render(<TerminalPane session={session} active reportError={vi.fn()} />);
+  const reportError=vi.fn();
+  const view=render(<TerminalPane session={session} active reportError={reportError} />);
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
-  return {textarea,session,view,emit};
+  return {textarea,session,view,emit,reportError};
 }
+it.each(['terminal-user','terminal-nonuser','named-key','chord','gesture'] as const)('records content-free %s input failures without hiding the cause',async caller=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try {
+    savePreferences({...defaults,chords:[{label:'Owned sequence',keys:'C-b T'}],bodyGestures:{...defaults.bodyGestures,tap:'escape',doubleTap:'none',tripleTap:'none'}});
+    const owner=mountInputOwner();
+    const send=()=>{
+      if(caller.startsWith('terminal-'))owner.emit('private-content-😀',caller==='terminal-user');
+      else if(caller==='named-key')fireEvent.click(screen.getByRole('button',{name:'tab'}));
+      else if(caller==='chord')fireEvent.click(screen.getByRole('button',{name:'Owned sequence'}));
+      else {
+        const canvas=screen.getByLabelText('Terminal for Host');
+        fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:10,clientY:10});
+        fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:10,clientY:10});
+      }
+    };
+    for(const [kind,cause,message] of [['backpressure','queue-full','Terminal input queue is full'],['input_closed','channel-closed','Terminal input channel is closed'],['transport_error','other','private native failure']]) {
+      mocks[caller==='chord'?'writeSequence':'write'].mockRejectedValueOnce({kind,message,hostId:'private-host',sessionId:'private-session'});
+      await act(async()=>send());
+      const raw=warn.mock.calls.at(-1)!;
+      expect(raw).toHaveLength(1);
+      const receipt=JSON.parse((raw[0] as string).replace('lazysh-terminal-input ',''));
+      expect(receipt).toEqual({caller,cause,utf16Units:caller.startsWith('terminal-')?18:caller==='chord'?2:1,
+        dispatch:{active:true,connected:true,disposed:false,currentOwner:true},receipt:{active:true,connected:true,disposed:false,currentOwner:true}});
+      expect(raw[0]).not.toMatch(/private|ssh|Host|😀/);
+      expect(owner.reportError).toHaveBeenLastCalledWith(message);
+    }
+  } finally {focused.mockRestore();warn.mockRestore();}
+});
+it.each(['inactive','disconnect','replacement','dispose'] as const)('captures dispatch and %s receipt ownership without retaining the rejected input',async boundary=>{
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  let reject!:(error:unknown)=>void;
+  mocks.write.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+  try {
+    const owner=mountInputOwner();
+    act(()=>owner.emit('x'.repeat(70000),false));
+    if(boundary==='dispose')owner.view.unmount();
+    else owner.view.rerender(<TerminalPane session={boundary==='replacement'?{...owner.session,id:'private-replacement'}:boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={owner.reportError} />);
+    await act(async()=>reject({kind:'input_closed',message:'private failure'}));
+    const receipt=JSON.parse((warn.mock.calls.at(-1)![0] as string).replace('lazysh-terminal-input ',''));
+    expect(receipt).toEqual({caller:'terminal-nonuser',cause:'channel-closed',utf16Units:65536,
+      dispatch:{active:true,connected:true,disposed:false,currentOwner:true},
+      receipt:{active:boundary!=='inactive'&&boundary!=='dispose',connected:boundary!=='disconnect',disposed:boundary==='replacement'||boundary==='dispose',currentOwner:boundary!=='replacement'&&boundary!=='dispose'}});
+    expect(owner.reportError).toHaveBeenLastCalledWith('private failure');
+    expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
+  } finally {warn.mockRestore();}
+});
 function touchScrollFixture() {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
@@ -852,4 +912,24 @@ it("portals only the active terminal controls into the existing header and retai
     expect(within(target).getAllByRole('button')).toHaveLength(2);
     view.unmount(); expect(target.childElementCount).toBe(0);
   } finally {target.remove();}
+});
+
+it('publishes only the active local overlay Back handler and keeps its draft without sending',()=>{
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const onBackChange=vi.fn(),reportError=vi.fn();
+  const view=render(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'retained draft'}});
+  const close=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  act(()=>expect(close()).toBe(true));expect(screen.queryByLabelText('Compose text')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  const stale=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  view.rerender(<TerminalPane session={session} active={false} reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);act(()=>expect(stale()).toBe(false));
+  view.rerender(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  view.unmount();expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  expect(mocks.write).not.toHaveBeenCalled();expect(terminal.paste).not.toHaveBeenCalled();
 });

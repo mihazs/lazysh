@@ -5,6 +5,38 @@
 - Document Obtainium as the preferred Android installation/update method, with explicit APK flavor filters, signature-channel caveats and manual SHA256 verification. No application default changes.
 
 - Correct README download availability and link to the public roadmap and installation guidance.
+- Add direct Live agents and Activity jump controls at the top of the Agents drawer. Move focus and only the drawer scroll position while preserving mounted readers, drafts, approvals and Back behavior; no agent data or connection settings change.
+- Detect installed host agents and known profile locations when opening Agent hook setup, with no provider preselected. Select a detected target or enter a manual profile before inspecting and installing hooks; discovery does not install hooks, create profiles or change trust settings. Executable discovery and live activity remain separate.
+
+- Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
+
+- Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+
+- Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
+
+- Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.
+
+
+- Distinguish a full terminal input queue from a closed input channel, and record content-free write-caller and ownership diagnostics for investigating Android session navigation failures. Input delivery, queue capacity and error visibility are unchanged.
+- Open Preferences at the top with collapsed categories for appearance, language, terminal behavior, keyboard controls, security and connection settings. Preserve mounted drafts, async operations and safety text; opening settings no longer focuses Font size or requests text input. Saved settings and permission defaults are unchanged.
+
+- Prioritize Connect when opening a saved host: connection options now start collapsed with the effective transport shown. Focus required credentials when needed or Connect when saved credentials are available, without stealing focus from a manual entry. Advanced Mosh/ET settings, saved defaults and validation remain available.
+- Keep the native branded startup cover until the current renderer acknowledges its first workspace commit when app lock is disabled, including after renderer recreation. Confirmed locks retain their native unlock controls.
+
+- Offer Agent hook setup directly from empty Activity, opening the existing inspected setup workflow for the selected host. Hook installation and provider trust remain explicit; an empty list does not establish whether live reporting is configured.
+
+- Refine theme-aware frosted navigation and short action sheets, keeping long forms and terminal output opaque and preserving reduced-transparency and forced-color fallbacks. No theme defaults change.
+
+- Prioritize live agents and reported activity over optional configuration. Healthy Agents setup and single-server Herdr selection now start collapsed; explicit setup preserves mounted drafts and operations, while companion repair and pending approvals remain visible. Connection, permission and collection defaults are unchanged.
+
+- Classify failed companion installer tag rechecks with closed diagnostics while preserving localized errors, provenance verification and installation defaults.
+
+- Add explicit managed Droid hook setup for an existing standalone `.factory/hooks.json`, including the connected Agents selector. Preserve foreign event groups and fallback/settings policy, bind the inspected absolute companion, and refuse missing files rather than shadowing legacy hooks. Fresh-profile migration and native Droid runtime qualification remain unsupported; no defaults or trust settings change.
+
+- Display native terminal failure messages instead of `[object Object]`, preserving localized errors.
+
+- Keep connected Herdr navigation and agent reports in one scrollable drawer so live rows remain reachable on short phone screens. Preserve the existing navigation, report readers and drafts when switching views.
+- Initialize companion database tables and indexes in one deferred transaction, avoiding separate schema commits and rolling back partial initialization on failure. Preserve full synchronization, existing writer coexistence and storage wait budgets.
 
 - Keep Android status and navigation icons light over the fixed navy native window background in both system appearances. Preserve keyboard and system insets and custom app/terminal themes.
 - Add a print-only Cline runtime plugin for root run activity, completion/stopped and generic failure attention, using native run identities and a two-second companion writer deadline. Child runs, permission waits and managed Cline installation remain unsupported; existing profiles, approval policy and adapters are unchanged.

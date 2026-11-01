@@ -176,3 +176,31 @@ it('retires pending failure observations with their source and ignores late clea
   expect(panel.dataset).toMatchObject({installPhase:'checkingInstalled',installFailure:'none',installOutcome:'uncertain',installReason:'verificationUnavailable'});
   expect(installed).not.toHaveBeenCalled();
 });
+
+it('projects only complete tag recheck codes at the matching native failure boundary',async()=>{
+  const base={kind:'companion_release_unavailable',phase:'verifying'};
+  const codes=['body','json','ref','type','sha','status:100','status:403','status:429','status:599','status:other',
+    ...['timeout','connect','redirect','body','decode','request','other'].map(value=>`transport:${value}`)];
+  for(const code of codes){
+    const message=`lazysh-tag-recheck-v1:${code}`;
+    expect(companionInstallFailure({...base,message}).recheck).toBe(message);
+  }
+  for(const value of [
+    ...['status:099','status:600','status:2000','status:0403','status:NaN','transport:private','unknown',
+      'status:403 /private/host','status:403\n','ref\nprivate'].map(code=>({...base,message:`lazysh-tag-recheck-v1:${code}`})),
+    {...base,message:'lazysh-tag-recheck-v1:ref',kind:'ssh_error'},
+    {...base,message:'lazysh-tag-recheck-v1:ref',phase:'checkingRelease'},
+    {...base,message:'lazysh-tag-recheck-v1:ref',phase:null},
+    {...base,message:{toString:()=> 'lazysh-tag-recheck-v1:ref'}}
+  ])expect(companionInstallFailure(value).recheck).toBeUndefined();
+  install.mockRejectedValue({...base,message:'lazysh-tag-recheck-v1:status:403'});
+  render(<CompanionInstallPanel sessionId="recheck-failure" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  const panel=screen.getByText('Host companion installation').closest('details')!;
+  expect(panel.dataset.installRecheck).toBe('lazysh-tag-recheck-v1:status:403');
+  expect(screen.getByRole('alert').textContent).toBe('The current release has no compatible companion available.');
+  install.mockRejectedValue({...base,message:'lazysh-tag-recheck-v1:status:403 /private/host'});
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  expect(panel.hasAttribute('data-install-recheck')).toBe(false);
+  expect(panel.textContent).not.toContain('/private/host');
+});

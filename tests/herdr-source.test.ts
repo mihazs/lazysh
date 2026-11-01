@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,3 +90,104 @@ for (const [name, sourceManifest] of [
     }
   }, 100_000);
 }
+
+test('CI seals guarded bytes before compiling independently admitted original stock source',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const producer=workflow.jobs['herdr-native'],steps=producer.steps;
+  expect(producer['timeout-minutes']).toBe(30);
+  expect(producer.outputs['stock-sha256']).toBe('${{ steps.stock-artifact.outputs.sha256 }}');
+  const index=(id:string)=>steps.findIndex((step:any)=>step.id===id);
+  const guardedUpload=steps.findIndex((step:any)=>step.with?.name==='guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
+  expect(index('guarded-artifact')).toBeLessThan(guardedUpload);
+  expect(guardedUpload).toBeLessThan(index('stock-source-download'));
+  expect(index('stock-source')).toBeLessThan(index('stock-build'));
+  expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
+  const download=steps[index('stock-source-download')];
+  expect(download.env.HERDR_ARCHIVE_URL).toBe('https://codeload.github.com/herdrdev/herdr/tar.gz/7b116c05bfda646af39d2524c54e70c751f57ee8');
+  expect(download.run).toContain('--max-time 180');expect(download.run).toContain('--max-filesize 33554432');
+  const source=steps[index('stock-source')],build=steps[index('stock-build')];
+  expect(source.run).toContain('a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124');
+  for(const step of [source,build]){
+    expect(step.run).toContain('1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9');
+    expect(step.run).toContain('sha256sum --check --quiet "$manifest"');
+    expect(step.run).toContain('-eq 1828');
+  }
+  expect(build['working-directory']).toBe('${{ runner.temp }}/lazysh-herdr-native/stock-source');
+  expect(build.run).toContain('cargo +1.96.1 build --locked --bin herdr');
+  expect(build.env.CARGO_TARGET_DIR).toBe('${{ runner.temp }}/lazysh-herdr-native/stock-target');
+  expect(build.env.ZIG_LOCAL_CACHE_DIR).toBe(build.env.CARGO_TARGET_DIR+'/zig-local');
+  expect(build.env.ZIG_GLOBAL_CACHE_DIR).toBe(build.env.CARGO_TARGET_DIR+'/zig-global');
+  expect(steps[index('stock-artifact')].env.CARGO_TARGET_DIR).toBe(build.env.CARGO_TARGET_DIR);
+  expect(steps[index('guarded-artifact')].env.CARGO_TARGET_DIR).toBeUndefined();
+  const upload=steps.find((step:any)=>step.with?.name==='stock-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
+  expect(upload.with['retention-days']).toBe(3);expect(upload.with['if-no-files-found']).toBe('error');
+});
+test('stock source admission rejects changed archive bytes before extraction or compilation',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const admission=workflow.jobs['herdr-native'].steps.find((step:any)=>step.id==='stock-source').run;
+  const fixture=await mkdtemp(join(tmpdir(),'lazysh-stock-source-rejection-'));
+  try {
+    await writeFile(join(fixture,'stock-source.tar.gz'),'wrong owned source bytes');
+    const child=Bun.spawn(['bash','-e','-c',admission],{env:{...process.env,HERDR_CI_ROOT:fixture,GITHUB_WORKSPACE:root},stdout:'pipe',stderr:'pipe'});
+    expect(await child.exited).toBe(1);
+    expect(await stat(join(fixture,'stock-source')).then(()=>true,()=>false)).toBe(false);
+  } finally {await rm(fixture,{recursive:true,force:true});}
+});
+
+test('same-run stock admission rejects changed binary, source, checkout or unknown receipt fields without executing the binary',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const admission=workflow.jobs['native-android-herdr-navigation'].steps.find((step:any)=>step.name==='Verify same-run stock Herdr').run;
+  const fixture=await mkdtemp(join(tmpdir(),'lazysh-stock-receipt-')),directory=join(fixture,'lazysh-stock-herdr');
+  await mkdir(directory);
+  const bytes=Buffer.from('owned validation bytes; never a native executable'),digest=createHash('sha256').update(bytes).digest('hex');
+  const receipt={schemaVersion:1,sourceCommit:'7b116c05bfda646af39d2524c54e70c751f57ee8',archiveSha256:'a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124',manifestSha256:'1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9',sourceFiles:1828,binarySha256:digest,checkout:'a'.repeat(40)};
+  const mutations:Record<string,Record<string,unknown>>={source:{sourceCommit:'0'.repeat(40)},archive:{archiveSha256:'0'.repeat(64)},manifest:{manifestSha256:'0'.repeat(64)},files:{sourceFiles:0},receiptBinary:{binarySha256:'0'.repeat(64)},checkout:{checkout:'b'.repeat(40)},extra:{private:'not admitted'}};
+  try {
+    for(const variant of ['matching','binary','source','archive','manifest','files','receiptBinary','checkout','extra'] as const){
+      await writeFile(join(directory,'herdr'),variant==='binary'?'changed validation bytes':bytes,{mode:0o600});
+      await writeFile(join(directory,'source.json'),JSON.stringify({...receipt,...(mutations[variant]??{})}));
+      const child=Bun.spawn(['bash','-e','-c',admission],{cwd:fixture,env:{...process.env,RUNNER_TEMP:fixture,STOCK_HERDR_SHA256:digest,GITHUB_SHA:receipt.checkout,GITHUB_ENV:join(fixture,'env')},stdout:'pipe',stderr:'pipe'});
+      expect(await child.exited,variant).toBe(variant==='matching'?0:1);
+    }
+  } finally {await rm(fixture,{recursive:true,force:true});}
+});
+
+test('stock Zig package admission copies only into an absent destination and cannot nest caches',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const run=workflow.jobs['herdr-native'].steps.find((step:any)=>step.id==='stock-source').run as string;
+  const copy=/test ! -e vendor\/libghostty-vt\/zig-pkg[\s\S]*$/.exec(run)?.[0];
+  expect(copy).toBeDefined();expect(copy).not.toContain('cargo');
+  const fixture=await mkdtemp(join(tmpdir(),'lazysh-stock-zig-copy-')),stock=join(fixture,'stock-source');
+  const source=join(fixture,'herdr-upstream/vendor/libghostty-vt/zig-pkg'),destination=join(stock,'vendor/libghostty-vt/zig-pkg');
+  try {
+    await mkdir(source,{recursive:true});await mkdir(join(stock,'vendor/libghostty-vt'),{recursive:true});
+    await writeFile(join(source,'owned-package'),'verified generated dependency fixture');
+    for(const mode of ['absent','existing','symlink'] as const){
+      if(mode==='symlink'){await rm(destination,{recursive:true});await symlink('missing-package-target',destination);}
+      const child=Bun.spawn(['bash','-e','-c',copy!],{cwd:stock,env:{...process.env,HERDR_CI_ROOT:fixture},stdout:'pipe',stderr:'pipe'});
+      expect(await child.exited,mode).toBe(mode==='absent'?0:1);
+      expect(await stat(join(destination,'zig-pkg')).then(()=>true,()=>false)).toBe(false);
+    }
+  } finally {await rm(fixture,{recursive:true,force:true});}
+});
+
+test('guarded and stock artifact retention select distinct target bytes and publish the matching hash',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const steps=workflow.jobs['herdr-native'].steps;
+  const fixture=await mkdtemp(join(tmpdir(),'lazysh-herdr-target-binding-')),base=join(fixture,'lazysh-herdr-native');
+  const guarded=Buffer.from('guarded unit fixture bytes'),stock=Buffer.from('stock unit fixture bytes');
+  try {
+    for(const [target,bytes] of [['target',guarded],['stock-target',stock]] as const){
+      const directory=join(base,target,'debug');await mkdir(directory,{recursive:true});await writeFile(join(directory,'herdr'),bytes);
+    }
+    for(const [id,expected,foreign] of [['guarded-artifact',guarded,stock],['stock-artifact',stock,guarded]] as const){
+      const step=steps.find((value:any)=>value.id===id),output=join(fixture,id+'.out');
+      const target=step.env.CARGO_TARGET_DIR?.replace('${{ runner.temp }}',fixture)??join(base,'target');
+      const child=Bun.spawn(['bash','-e','-c',step.run],{env:{...process.env,HERDR_CI_ROOT:base,HERDR_ARTIFACT_DIRECTORY:step.env.HERDR_ARTIFACT_DIRECTORY,CARGO_TARGET_DIR:target,GITHUB_OUTPUT:output},stdout:'pipe',stderr:'pipe'});
+      expect(await child.exited).toBe(0);
+      const bytes=Buffer.from(await Bun.file(join(base,step.env.HERDR_ARTIFACT_DIRECTORY,'herdr')).arrayBuffer());
+      expect(bytes.equals(expected),id).toBe(true);expect(bytes.equals(foreign),id).toBe(false);
+      expect(await Bun.file(output).text()).toBe('sha256='+createHash('sha256').update(expected).digest('hex')+'\n');
+    }
+  } finally {await rm(fixture,{recursive:true,force:true});}
+});

@@ -2,8 +2,14 @@
 
 ## Managed lifecycle hook setup
 
-In **Agents → Agent hook setup**, select the provider and its existing absolute
-profile directory on the connected SSH host, then choose **Inspect setup**.
+Opening **Agents → Agent hook setup** detects installed agents and known profile
+locations on the connected SSH host. Select an agent and profile, then choose
+**Inspect setup**. Detection does not execute agents or install hooks. A found
+profile is shown separately from an installed executable; manual-only adapters
+cannot use managed installation.
+Use manual setup for an alternate absolute profile directory. The SSH environment
+can differ from a running agent's environment, so an inferred path does not prove
+which profile that agent loaded. Missing profiles are not created automatically.
 Installing/updating or removing requires a separate explicit action against
 that inspected plan. Install or update the host companion first when the host
 has an older version. Setup uses the resolved companion executable's absolute
@@ -13,11 +19,11 @@ and protected from replacement through writable or symlink ancestors. Root-owned
 standard binary directories are supported; shared writable source directories
 are refused.
 
-Managed setup supports Claude Code, Codex, Gemini CLI, Cursor CLI and OpenCode
+Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI and OpenCode
 on the qualified Linux filesystems described below. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
-layer; setup does not discover or enable the provider's active layer.
+layer; detection does not establish or enable the provider's active layer.
 
 Gemini's six native groups retain their 5000 **millisecond** deadline and preserve
 `hooksConfig.enabled` and `hooksConfig.disabled` exactly. Cursor retains its
@@ -31,11 +37,24 @@ global hooks are enabled, trusted, or reporting in the running provider.
 The equivalent local commands are:
 
 ```sh
+lazysh-agent hooks discover
 lazysh-agent hooks preview --agent codex
 lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
 lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
 lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
 ```
+
+Discovery uses executable metadata on bounded absolute `PATH` entries and known
+Codex standalone locations. It respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`GEMINI_CLI_HOME` (with `.gemini` appended), and OpenCode's
+`OPENCODE_CONFIG_DIR`/XDG configuration directory. `OPENCODE_CONFIG` names a file,
+so it is not used as a hook profile directory. Invalid overrides are reported
+instead of silently selecting another profile. A truncated scan is labelled;
+manual selection remains available. No credential or profile contents are read
+by discovery. Discovery and managed installation have separate platform limits.
+Cursor hook discovery uses its [documented hook location](https://prod.cursor.com/docs/hooks), `~/.cursor/hooks.json`;
+CLI configuration overrides are not assumed to relocate hooks. Use manual
+selection for another verified hook layer.
 
 `install` also updates existing owned entries. Every changed profile needs a
 fresh inspection. Claude and Gemini use `settings.json`, Codex and Cursor use `hooks.json`,
@@ -69,9 +88,18 @@ conflict too. The cooperative profile lock and final preimage checks do not
 provide an atomic compare-and-swap against a noncooperating editor changing a
 path after the final check, or a physical power-loss durability guarantee.
 
+Droid requires an already-existing, admitted `.factory/hooks.json` standalone
+root event map. A missing file returns `HooksDroidStandaloneRequired` without
+creating configuration or ownership metadata. Use Droid's native `/hooks` UI to
+prepare/review its standalone file, then inspect again. Fresh-profile creation
+and migration from `settings.json` or legacy `hooks/hooks.json` are unsupported:
+creating a new standalone file could shadow those foreign declarations.
+Existing fallback files and trust/disable/enterprise policy remain untouched.
+Wrapped settings-style documents, non-array event values and duplicate keys
+are refused. Removal retains the standalone file and foreign event groups.
+
 Other native providers retain their agent-specific print-only setup commands.
-Managed installation for them remains unimplemented; this extension adds only
-Gemini and Cursor to the initial three providers.
+Managed installation for them remains unimplemented.
 
 Companion lifecycle reports describe observed activity. They do not grant terminal
 input access, answer permission prompts, install an agent or discover processes
@@ -202,7 +230,14 @@ this hook contract; the last observed working state can remain during idle time.
 SessionEnd reports the root CLI-instance/session-owner boundary, including a
 reload, rather than completion of each turn. This capability gap remains open.
 
-These commands only print configuration and require a companion executable
+Droid managed setup uses the same six events and five-second deadline in its
+standalone event map, with the inspected companion’s quoted absolute path.
+Configured hooks still require Droid’s normal active-configuration review;
+installation does not establish native event delivery. The
+[official hook-file contract](https://docs.factory.com/harness/hooks) distinguishes
+standalone files, fallback settings and legacy configuration.
+
+The agent-specific commands above only print configuration and require a companion executable
 available in the hook environment. Factory recommends absolute command paths;
 replace the printed executable with its verified installed absolute path when
 configuring Droid. No command writes an agent profile, overwrites unrelated
@@ -315,7 +350,7 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter, print-only fragment and explicit Linux managed setup; contract fixtures |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
-| [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter and print-only standalone hook map; contract fixtures |
+| [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter, standalone printer and explicit existing-file Linux setup; contract fixtures, native runtime unverified |
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
 | [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |

@@ -14,7 +14,7 @@ pub(super) fn environment(directory: &Path) -> String {
     fs::set_permissions(bin.join("lazysh-agent"), fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(directory.join(".zshrc"), b"").unwrap();
     assert!(!directory.to_str().unwrap().chars().any(char::is_whitespace));
-    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",bin.display(),directory.display(),directory.join("data").display(),directory.join("state").display(),directory.display())
+    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} CODEX_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",bin.display(),directory.display(),directory.join(".codex").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
 }
 pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
     let binary = PathBuf::from(
@@ -127,15 +127,52 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
 
 #[cfg(target_os = "linux")]
 async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Path) {
-    for agent in ["claude", "codex", "gemini", "cursor", "opencode"] {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = directory.join("bin/codex");
+    let marker = directory.join("agent-was-executed");
+    fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\ntouch {}\n",
+            crate::ssh::quote(marker.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let detected_profile = directory.join(".codex");
+    fs::create_dir(&detected_profile).unwrap();
+    let discovery = crate::companion::hooks::discover(session, lease)
+        .await
+        .unwrap();
+    let detected = discovery["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == "codex")
+        .expect("Owned installed Codex must be discovered over SSH");
+    assert_eq!(detected["executable"]["path"], executable.to_str().unwrap());
+    assert_eq!(
+        detected["profiles"][0]["path"],
+        detected_profile.to_str().unwrap()
+    );
+    assert_eq!(detected["profiles"][0]["state"], "directory");
+    assert!(
+        !marker.exists() && !detected_profile.join("hooks.json").exists(),
+        "Discovery must not execute the agent or install hooks"
+    );
+    for agent in ["claude", "codex", "droid", "gemini", "cursor", "opencode"] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
         let json_name = match agent {
             "claude" | "gemini" => Some("settings.json"),
-            "codex" | "cursor" => Some("hooks.json"),
+            "codex" | "droid" | "cursor" => Some("hooks.json"),
             _ => None,
         };
-        let foreign = "{\"foreign\": { \"keep\" : true }}";
+        let foreign = if agent == "droid" {
+            "{\"ForeignEvent\":[{ \"keep\" : true }]}"
+        } else {
+            "{\"foreign\": { \"keep\" : true }}"
+        };
         if let Some(name) = json_name {
             fs::write(profile.join(name), foreign).unwrap();
         }

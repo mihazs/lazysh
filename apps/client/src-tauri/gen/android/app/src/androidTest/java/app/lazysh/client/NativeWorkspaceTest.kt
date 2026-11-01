@@ -86,18 +86,32 @@ private class NtfyFirstLaunch(started: Long) {
     private var after="unavailable"
     private var action="none"
     private var snapshot="unavailable"
+    private var clickBefore="unavailable"
+    private var clickAfter="unavailable"
+    private var firstExpiry="none"
     private fun budget(now:Long)=if(active(now))"positive" else "expired"
     fun start(stage:String,now:Long) {
         require(stage in listOf("foreground","allow","deny","toolbar","prompt","menu","click"))
         this.stage=stage;before=budget(now);after="unavailable"
-        if(stage=="click")action="calling"
+        if(firstExpiry=="none" && before=="expired")firstExpiry="between"
+        if(stage=="click") {
+            if(clickBefore=="unavailable")clickBefore=before
+            action="calling"
+        }
     }
-    fun finish(now:Long) {after=budget(now);if(stage=="click")action="returned"}
+    fun finish(now:Long) {
+        after=budget(now)
+        if(firstExpiry=="none" && before=="positive" && after=="expired")firstExpiry=stage
+        if(stage=="click") {
+            if(clickAfter=="unavailable")clickAfter=after
+            action="returned"
+        }
+    }
     fun failed() {if(action=="calling")action="threw"}
     fun sampled() {snapshot=if(action=="none")"beforeAction" else "afterAction"}
     fun observation(permission:String):String {
         require(permission in listOf("granted","denied","unavailable"))
-        return "Ntfy first-launch action[stage=$stage before=$before after=$after action=$action snapshot=$snapshot permission=$permission]"
+        return "Ntfy first-launch action[stage=$stage before=$before after=$after action=$action snapshot=$snapshot permission=$permission clickBefore=$clickBefore clickAfter=$clickAfter firstExpiry=$firstExpiry]"
     }
 }
 private class NtfySettingsScroll(started: Long) {
@@ -147,8 +161,8 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, stage, """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
 
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
+        deadline: Long = System.nanoTime() + TimeUnit.SECONDS.toNanos(120),
         observe: ((Long) -> String)? = null) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         var firstObservation: String? = null
         var lastObservation: String? = null
         while (true) {
@@ -794,6 +808,7 @@ class NativeWorkspaceTest {
         assertEquals("Discard must preserve the theme", "true", evaluate(scenario, appearance("forest")))
 
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Appearance and fonts']")).perform(webClick())
         onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Import and share theme']")).perform(webClick())
         val draftSelector = "textarea[aria-label='Theme JSON or share code']"
         val draft = "unfinished native theme draft"
@@ -823,6 +838,7 @@ class NativeWorkspaceTest {
         assertEquals("Replacement review/discard must preserve the manual draft", "true", evaluate(scenario, draftKept))
         // Only this isolated acceptance's own appearance state is changed. Reset
         // through the actual UI before the ordinary native workspace suite.
+        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Reset settings']")).perform(webClick())
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
@@ -1113,6 +1129,7 @@ class NativeWorkspaceTest {
             var capture = observe()
             awaitDocument(scenario, "QR workspace ready", "Boolean(document.querySelector('button[aria-label=Preferences]'))")
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label=Preferences]")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Appearance and fonts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
             awaitDocument(scenario, "explicit QR controls", available)
             typeInto(scenario, draftSelector, draft)
@@ -1145,7 +1162,7 @@ class NativeWorkspaceTest {
                 capture = observe()
                 button("Scan QR with camera")
             }
-            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario, frame))
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", observe = qrVideoObservation(scenario, frame))
             assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
             assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
@@ -1175,8 +1192,10 @@ class NativeWorkspaceTest {
     private fun workspaceElementVisible(selector: String, touchable: Boolean = false) = """
         (()=>{const element=document.querySelector(${JSONObject.quote(selector)});
           if(!element || !element.getClientRects().length || getComputedStyle(element).visibility==='hidden')return false;
+          const bounds=element.getBoundingClientRect();
+          if(bounds.width<=0 || bounds.height<=0 || bounds.right<=0 || bounds.bottom<=0 || bounds.left>=innerWidth || bounds.top>=innerHeight)return false;
           if(!$touchable)return true;
-          const bounds=element.getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+          const hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
           return bounds.left>=0 && bounds.top>=0 && bounds.right<=innerWidth && bounds.bottom<=innerHeight && Boolean(hit && element.contains(hit));})()
     """
 
@@ -1191,20 +1210,83 @@ class NativeWorkspaceTest {
     """
 
     private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         val menu = "[role=dialog][aria-label='Workspace tools']"
         if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
-            awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"))
+            awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
             trigger.perform(webScrollIntoView())
-            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true))
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline)
             trigger.perform(webClick())
         }
-        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu))
+        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
+        for (group in listOf("workspace-more-tools", "workspace-connection-actions", "workspace-application-options")) {
+            val details = "$menu details.$group"
+            val ownsHiddenAction = """
+                (()=>{const owner=document.querySelector(${JSONObject.quote(details)});
+                  const target=Array.from(document.querySelectorAll(${JSONObject.quote(menu + " button")}))
+                    .find(button=>button.textContent.trim()===${JSONObject.quote(text)});
+                  return Boolean(owner&&!owner.open&&target?.closest('details')===owner);})()
+            """
+            if (evaluate(scenario, ownsHiddenAction) == "true") {
+                val selector = "$details > summary"
+                val disclosure = onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector))
+                disclosure.perform(webScrollIntoView())
+                awaitDocument(scenario, "touchable workspace disclosure", workspaceElementVisible(selector, true), deadline = deadline)
+                disclosure.perform(webClick())
+                awaitDocument(scenario, "workspace disclosure expanded", "Boolean(document.querySelector(${JSONObject.quote(details)})?.open)", deadline = deadline)
+            }
+        }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
         target.perform(webScrollIntoView())
-        awaitDocument(scenario, "visible workspace menu action", workspaceButtonVisible(menu, text))
+        awaitDocument(scenario, "visible workspace menu action", workspaceButtonVisible(menu, text), deadline = deadline)
         target.perform(webClick())
+        awaitDocument(scenario, "workspace More action dismissed", "!Boolean(document.querySelector(${JSONObject.quote(menu)}))", deadline = deadline)
+    }
+
+    private fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
+
+    private fun selectOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
+        val switcher = "[role=dialog][aria-label='Switch terminal session']"
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
+        awaitDocument(scenario, "exact owned session choice", """
+            (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
+              return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(name)}).length===1;})()
+        """)
+        val choice = onWebView().withElement(findElement(Locator.XPATH,
+            "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$name']]"))
+        choice.perform(webScrollIntoView())
+        choice.perform(webClick())
+        awaitDocument(scenario, "exact owned session selected before End", """
+            (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+              return !document.querySelector("$switcher") && selected.length===1 &&
+                selected[0].textContent.trim()===${JSONObject.quote(name)} &&
+                document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(name)} &&
+                document.querySelectorAll(${JSONObject.quote("button[aria-label='Disconnect $name']")}).length===1 &&
+                ${if (requireMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
+        """)
+    }
+
+    private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
+        val closeHosts = "button[aria-label='Close hosts']"
+        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
+            awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
+        }
+        val disconnect = "button[aria-label='Disconnect $name']"
+        if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
+            selectOwnedConnection(scenario, name, requireMosh)
+            workspaceMenuAction(scenario, "End $name connection")
+        } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
+            val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
+            close.perform(webScrollIntoView())
+            awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
+            close.perform(webClick())
+        } else {
+            workspaceMenuAction(scenario, "End $name connection")
+        }
+        awaitDocument(scenario, "exact owned connection ended", "!" + present(disconnect))
     }
 
     private fun sessionView(scenario: ActivityScenario<MainActivity>, text: String) {
@@ -1249,8 +1331,24 @@ class NativeWorkspaceTest {
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
-                .perform(webScrollIntoView()).perform(webClick())
+            val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
+            val expanded = evaluate(scenario, """
+                (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
+                  return buttons.length===1?buttons[0].getAttribute('aria-expanded'):'unavailable';})()
+            """)
+            assertTrue("One current board Setup disclosure is required", expanded == "true" || expanded == "false")
+            if (expanded == "false") {
+                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR, setup))
+                button.perform(webScrollIntoView())
+                assertEquals("Current board Setup must be hit-testable", "true", evaluate(scenario,
+                    workspaceButtonVisible(".agent-panel:not([hidden]) > .tool-bar", "Setup")))
+                button.perform(webClick())
+            }
+            val control = onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
+            control.perform(webScrollIntoView())
+            assertEquals("Current keep-awake checkbox must be hit-testable", "true", evaluate(scenario,
+                workspaceElementVisible(checkbox, true)))
+            control.perform(webClick())
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
         fun awaitActive(stage: String) {
@@ -1269,17 +1367,16 @@ class NativeWorkspaceTest {
                 Regex("${Regex.escape(workspace)}:t[0-9]+").matches(tab) && tab.length <= 50 &&
                 Regex("${Regex.escape(workspace)}:p[0-9]+").matches(pane) && pane.length <= 50 &&
                 terminal.length in 1..256 && terminal.none { c -> c.isISOControl() }) { "Owned Herdr report identity required" }
-            // Terminal correlation is checked against the real host snapshot and
-            // native parser. The UI exposes server/workspace/tab/pane scope only.
-            val scope = JSONObject.quote("$server · $workspace · $tab · $pane")
+            // Pane/terminal membership and this label/cwd context come from the
+            // same real host snapshot. Shipping navigation intentionally exposes labels, not IDs.
+            val context = it.getString("agentContext")
+            require(context.length in 1..4096 && context.none { c -> c.isISOControl() })
+            val navigationOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                .open("owned-visible-herdr.js").use { it.readNBytes(4097) }
+                .also { require(it.size <= 4096) { "Herdr navigation oracle bound" } }.toString(Charsets.UTF_8)
             """(()=>{
-              const panel=document.querySelector('.herdr-agents');
-              const cards=panel?.querySelectorAll('.live-agent-list .agent-card');
-              return panel?.querySelector('select')?.value===${JSONObject.quote(server)} && cards?.length===1 &&
-                cards[0].querySelector('strong')?.textContent==='codex' &&
-                Array.from(cards[0].querySelectorAll('p')).some(x=>x.textContent==='Unknown status') &&
-                cards[0].querySelector('small')?.textContent===$scope &&
-                !cards[0].querySelector('button,input,textarea') &&
+              $navigationOracle
+              return ownedLiveHerdrNavigation(document,${JSONObject.quote(server)},${JSONObject.quote(context)}) &&
                 Array.from(document.querySelectorAll('.agent-panel .panel-empty h3')).some(x=>x.textContent==='No agent events yet.') &&
                 !document.querySelector('.agent-panel .agent-board .agent-card');
             })()"""
@@ -1288,21 +1385,23 @@ class NativeWorkspaceTest {
         try {
             awaitFlag(false, "connected terminal before opt-in")
             sessionView(scenario, "Agents")
-            awaitDocument(scenario, "board keep-awake available and off",
-                "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)} && ($liveHerdr)")
+            val boardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+            val keepAwakeReady = "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}"
+            awaitDocument(scenario, "board keep-awake off and owned live Herdr navigation",
+                "($keepAwakeReady) && ($liveHerdr)", deadline = boardDeadline, observe = { remaining ->
+                    evaluateIfPresent(scenario, "JSON.stringify({keepAwakeReady:Boolean($keepAwakeReady),liveHerdrReady:Boolean($liveHerdr)})", remaining) ?: "unavailable"
+                })
             if (herdr != null) {
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-agents .live-agent-list .agent-card"))
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-navigation:not([hidden]) .herdr-navigation-row"))
                     .perform(webScrollIntoView())
                 val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
                     .also { require(it.size <= 2048) { "Viewport oracle bound" } }.toString(Charsets.UTF_8)
-                assertEquals("Owned live Herdr report must be visible over empty companion reports", "true", evaluate(scenario, """
+                awaitDocument(scenario, "owned live Herdr report visually ready over empty companion reports", """
                     (()=>{
                       if(!($liveHerdr)) return false;
-                      const card=document.querySelector('.herdr-agents .live-agent-list .agent-card');
-                      const labels=[card?.querySelector('strong'),
-                        Array.from(card?.querySelectorAll('p')??[]).find(label=>label.textContent==='Unknown status'),
-                        card?.querySelector('small')];
+                      const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
+                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
                       if(!card || labels.some(label=>!label)) return false;
                       const ranges=labels.map(label=>{
                         const range=document.createRange(); range.selectNodeContents(label); return range;
@@ -1315,8 +1414,9 @@ class NativeWorkspaceTest {
                           return hit===labels[index] || labels[index].contains(hit);
                         }));
                     })()
-                """))
-                println("lazysh live Herdr agents: synthetic Codex report visible with exact server/pane scope and empty companion reports")
+                """, deadline = boardDeadline)
+                assertTrue("Owned live Herdr visual admission exceeded the original board deadline", System.nanoTime() < boardDeadline)
+                println("lazysh live Herdr navigation: owned Codex row visible with exact server and host-readback context over empty companion reports")
             }
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')!=='true'"))
@@ -1451,7 +1551,7 @@ class NativeWorkspaceTest {
             "document.querySelector('form.chat-composer textarea')?.value===${JSONObject.quote(draft)}"))
         click("Choose terminal destination")
         awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"),
-            herdrConfirmationObservation(scenario, "$parent / $name", draft))
+            observe = herdrConfirmationObservation(scenario, "$parent / $name", draft))
         assertEquals("Preparation alone must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
         click("Confirm this destination")
         awaitDocument(scenario, "explicit owned Herdr binding", hasButton("Send to terminal"))
@@ -1473,6 +1573,146 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "owned Herdr child disconnected", "document.querySelectorAll('[role=tab]').length===1")
         }
         println("lazysh guarded Herdr Chat: real packaged UI/companion/native SSH preparation, confirmation, queue acknowledgement and source retirement completed")
+    }
+
+    private fun verifySharedHerdrNavigation(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String) {
+        val navigation = herdr.getJSONObject("navigation")
+        val server = herdr.getString("name")
+        require(server == "owned-guard")
+        val source = navigation.getJSONObject("source")
+        val shell = navigation.getJSONObject("shell")
+        val agent = navigation.getJSONObject("agent")
+        val targets = listOf(source, shell, agent)
+        targets.forEach { target ->
+            require(Regex("w[0-9]{1,49}").matches(target.getString("workspaceId")))
+            require(Regex("w[0-9]+:t[0-9]+").matches(target.getString("tabId")) && target.getString("tabId").length <= 50)
+            require(Regex("w[0-9]+:p[0-9]+").matches(target.getString("paneId")) && target.getString("paneId").length <= 50)
+            require(Regex("NAV_(SOURCE|SHELL|AGENT)_[a-f0-9]{32}").matches(target.getString("marker")))
+        }
+        val first = "$parent / $server"
+        val second = "$first / $server"
+        val labels = listOf(parent, first, second)
+        val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
+        require(observer.length <= 4096)
+        fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webScrollIntoView()).perform(webClick())
+        fun visible(display: Int, target: JSONObject) {
+            sessionView(scenario, "Terminal")
+            val forbidden = JSONArray(targets.filter { it !== target }.map { it.getString("marker") })
+            awaitDocument(scenario, "exact owned Herdr visible display and target", """
+                (()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(labels)},$display,${JSONObject.quote(target.getString("marker"))},$forbidden);})()
+            """)
+        }
+        var capture = 0
+        fun screenshot(name: String) {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val directory = java.io.File(requireNotNull(instrumentation.targetContext.getExternalFilesDir(null)), "herdr-navigation")
+            require(directory.mkdirs() || directory.isDirectory)
+            if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Owned navigation capture requires frame commits")
+            val committed = CountDownLatch(1)
+            val frame = Runnable { committed.countDown() }
+            var observing = true
+            var tree: android.view.ViewTreeObserver? = null
+            scenario.onActivity { activity ->
+                val view = checkNotNull(webView(activity.window.decorView))
+                assertTrue("Owned navigation WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
+                view.postVisualStateCallback(capture.toLong(), object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        if (observing && view.isAttachedToWindow) {
+                            tree = view.viewTreeObserver
+                            tree?.registerFrameCommitCallback(frame)
+                            view.invalidate()
+                        }
+                    }
+                })
+            }
+            val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
+                scenario.onActivity {
+                    observing = false
+                    tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
+                }
+            }
+            assertTrue("Owned navigation DOM must reach a committed frame", submitted)
+            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
+            finally { bitmap.recycle() }
+        }
+        fun select(display: Int, target: JSONObject) {
+            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, labels[display])
+            else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(${display + 1}) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
+            visible(display, target)
+            screenshot("display-$display-${target.getString("marker").substringBeforeLast('_')}")
+        }
+        fun reopenSource() {
+            sessionView(scenario, "Transcript")
+            val path = "input[placeholder='Absolute host path to session.jsonl']"
+            awaitDocument(scenario, "owned transcript source control", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, path)).perform(webClick())
+            onView(isAssignableFrom(WebView::class.java)).perform(
+                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()), pressKey(KeyEvent.KEYCODE_DEL))
+            typeInto(scenario, path, herdr.getString("transcript")); closeSoftKeyboard(); click("Open transcript")
+            awaitDocument(scenario, "exact owned navigation transcript loaded", "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(herdr.getString("record"))})")
+        }
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null) {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
+            val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
+            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
+            awaitDocument(scenario, "shared Herdr navigation target ready", """
+                (()=>{const rows=document.evaluate(${JSONObject.quote(row)},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);
+                  return Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.') &&
+                    rows.snapshotLength===1 && !rows.snapshotItem(0).disabled;})()
+            """)
+            onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
+            screenshot(if (mode == "Agents") "agents" else "spaces")
+            onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())
+            visible(2, target)
+            select(1, target) // Stock public focus must move the other real client too.
+            select(2, target)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            for (display in 1..2) {
+                sessionView(scenario, "Sessions")
+                val discoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+                awaitDocument(scenario, "owned Herdr list ready for display $display", "Array.from(document.querySelectorAll('.multiplexer-panel button')).filter(x=>x.textContent.trim()==='List herdr sessions' && !x.disabled).length===1", deadline = discoveryDeadline)
+                click("List herdr sessions")
+                awaitDocument(scenario, "owned server discovered for display $display", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Attach herdr $server').length===1", deadline = discoveryDeadline)
+                click("Attach herdr $server")
+                awaitDocument(scenario, "distinct owned Herdr display $display", "document.querySelectorAll('.session-tabs [role=tab]').length===${display + 1} && document.querySelectorAll('.session-tabs [role=tab]')[${display}]?.getAttribute('aria-selected')==='true'")
+            }
+            visible(2, source)
+            reopenSource()
+            pasteOwnedText(scenario, "form.chat-composer textarea", herdr.getString("draft"), label); closeSoftKeyboard()
+            click("Choose terminal destination")
+            awaitDocument(scenario, "stock Herdr truthfully refuses private input preparation", "document.querySelector(\"section[aria-label='Terminal input'] [role=alert]\")?.textContent==='Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.'")
+            assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
+            navigate("Workspaces", shell.getString("label"), shell)
+            navigate("Agents", "codex", agent, agent.getString("label"))
+            navigate("Workspaces", shell.getString("paneId"), shell)
+            sessionView(scenario, "Transcript")
+            assertEquals("Navigation cannot create stock input authority", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            reopenSource()
+            assertEquals("Reopening the old transcript cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            // Restore the exact old target through public navigation; stock still has no private receipt.
+            navigate("Agents", "codex", source, source.getString("label"))
+            reopenSource()
+            assertEquals("Returning to the old destination cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus and unavailable private Chat input; no input action dispatched")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+            for (child in listOf(second, first)) {
+                val selector = "button[aria-label='Disconnect $child']"
+                if (evaluate(scenario, present(selector)) == "true") endOwnedConnection(scenario, child)
+            }
+            awaitDocument(scenario, "owned navigation children closed", "document.querySelectorAll('.session-tabs [role=tab]').length===1")
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
+        }
     }
 
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
@@ -1533,6 +1773,7 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+    @Test fun ownedSharedHerdrNavigationThroughRealUi() = ownedSshUi(true, requireSharedHerdr = true)
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
@@ -1779,7 +2020,10 @@ class NativeWorkspaceTest {
                 record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
-            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response))
+            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response), observe = { remaining ->
+                runCatching { MoshBackgroundObservation.parse(evaluate(scenario,
+                    MoshBackgroundObservation.expression(key, token, name), remaining)).toString() }.getOrDefault("unavailable")
+            })
             execution(true)
             send("sleep 3; exit")
             home()
@@ -1807,6 +2051,23 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun moshBackgroundObservationNeverRetainsTerminalContentOrInterpretsTransportState() {
+        val sample = JSONObject().put("retained", true).put("helperCount", "one").put("documentFocused", true)
+            .put("activeKind", "terminal").put("readOnly", false).put("disabled", false).put("composerPresent", true)
+            .put("composerEmpty", true).put("rendererConnected", false).put("globalError", true).put("unappliedEdit", false)
+        assertEquals(sample.toString(), MoshBackgroundObservation.parse(sample.toString()).toString())
+        val absent = JSONObject(sample.toString()).put("helperCount", "zero").put("readOnly", JSONObject.NULL)
+            .put("disabled", JSONObject.NULL).put("composerPresent", false).put("composerEmpty", JSONObject.NULL)
+            .put("rendererConnected", JSONObject.NULL).put("activeKind", "other")
+        assertEquals(absent.toString(), MoshBackgroundObservation.parse(absent.toString()).toString())
+        for (invalid in listOf("{", " ".repeat(769), JSONObject(sample.toString()).put("activeKind", "private text").toString(),
+            JSONObject(sample.toString()).put("readOnly", "false").toString(), JSONObject(sample.toString()).put("rawDOM", "private text").toString(),
+            JSONObject(sample.toString()).put("helperCount", "many").toString(), JSONObject(sample.toString()).put("composerEmpty", JSONObject.NULL).toString(),
+            JSONObject(sample.toString()).apply { remove("retained") }.toString())) {
+            assertTrue("Unexpected Mosh observation must be unavailable", runCatching { MoshBackgroundObservation.parse(invalid) }.isFailure)
+        }
+    }
+
     private fun moshTransportLabel(labels: List<String>): String {
         require(labels.size == 1 && labels.single() in setOf("Mosh", "Mosh (forced)")) {
             "Owned Mosh transport option is unavailable or ambiguous"
@@ -1824,7 +2085,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false) {
+        require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
         val useMosh = requireMoshBackground || requireHerdrMosh
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
@@ -1879,7 +2141,6 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.XPATH,
                 "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
-        fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectOwnedOption(selector: String, value: String) {
             closeSoftKeyboard()
@@ -2080,6 +2341,8 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".connection-options > summary"))
+                .perform(webScrollIntoView()).perform(webClick())
             if (requireCompanion || requireHerdrMosh) {
                 closeSoftKeyboard()
                 // The real Add Host chooser saved this preference; do not invoke
@@ -2187,7 +2450,7 @@ class NativeWorkspaceTest {
                       return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
                         [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
                     })()
-                """, { remaining ->
+                """, observe = { remaining ->
                     val native = JSONObject()
                     scenario.onActivity { activity ->
                         val decor = activity.window.decorView
@@ -2251,38 +2514,11 @@ class NativeWorkspaceTest {
                 awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                     screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
-                verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
-                if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
+                if (!requireSharedHerdr) verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
+                if (requireSharedHerdr) verifySharedHerdrNavigation(scenario, fixture.getJSONObject("herdr"), name, label)
+                else if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             }
-            val disconnect = "button[aria-label='Disconnect $connectedName']"
-            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
-                val switcher = "[role=dialog][aria-label='Switch terminal session']"
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
-                awaitDocument(scenario, "exact owned session choice", """
-                    (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
-                      return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(connectedName)}).length===1;})()
-                """)
-                val choice = onWebView().withElement(findElement(Locator.XPATH,
-                    "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$connectedName']]"))
-                choice.perform(webScrollIntoView())
-                choice.perform(webClick())
-                awaitDocument(scenario, "exact owned session selected before End", """
-                    (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
-                      return !document.querySelector("$switcher") && selected.length===1 &&
-                        selected[0].textContent.trim()===${JSONObject.quote(connectedName)} &&
-                        document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(connectedName)} &&
-                        document.querySelectorAll(${JSONObject.quote(disconnect)}).length===1 &&
-                        ${if (requireHerdrMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
-                """)
-                workspaceMenuAction(scenario, "End $connectedName connection")
-            } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
-                val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
-                close.perform(webScrollIntoView())
-                awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
-                close.perform(webClick())
-            } else {
-                workspaceMenuAction(scenario, "End $connectedName connection")
-            }
+            endOwnedConnection(scenario, connectedName, requireHerdrMosh)
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())
@@ -2296,7 +2532,7 @@ class NativeWorkspaceTest {
             var cleanupFailure: Throwable? = null
             fun retainCleanup(failure: Throwable, message: String) {
                 val first = primaryFailure ?: cleanupFailure
-                if (first != null) first.addSuppressed(AssertionError(message))
+                if (first != null) first.addSuppressed(AssertionError(message, failure))
                 else cleanupFailure = failure
             }
             try {
@@ -2315,8 +2551,7 @@ class NativeWorkspaceTest {
                 val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
                 for (ownedName in ownedNames) {
                     val disconnect = "button[aria-label='Disconnect $ownedName']"
-                    if (evaluate(scenario, present(disconnect)) == "true")
-                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                    if (evaluate(scenario, present(disconnect)) == "true") endOwnedConnection(scenario, ownedName)
                 }
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
@@ -2377,15 +2612,25 @@ class NativeWorkspaceTest {
         assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
         assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
         val trace=NtfyFirstLaunch(0)
-        assertEquals("Ntfy first-launch action[stage=none before=unavailable after=unavailable action=none snapshot=unavailable permission=unavailable]",trace.observation("unavailable"))
+        assertEquals("Ntfy first-launch action[stage=none before=unavailable after=unavailable action=none snapshot=unavailable permission=unavailable clickBefore=unavailable clickAfter=unavailable firstExpiry=none]",trace.observation("unavailable"))
         trace.start("menu",TimeUnit.SECONDS.toNanos(4));trace.finish(TimeUnit.SECONDS.toNanos(5));trace.sampled()
         assertTrue("A sampled prompt before the one action is not a post-action observation",trace.observation("denied").contains("snapshot=beforeAction"))
         assertTrue("Observation does not consume admission",trace.allow(TimeUnit.SECONDS.toNanos(5),true))
         trace.start("click",TimeUnit.SECONDS.toNanos(5));trace.finish(TimeUnit.SECONDS.toNanos(6))
-        assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted]",trace.observation("granted"))
+        assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("granted"))
         assertTrue("A returned action does not extend the original deadline or allowance",!trace.active(TimeUnit.SECONDS.toNanos(6)) && !trace.allow(TimeUnit.SECONDS.toNanos(5),true))
         trace.start("menu",TimeUnit.SECONDS.toNanos(6));trace.finish(TimeUnit.SECONDS.toNanos(7));trace.sampled()
-        assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied]",trace.observation("denied"))
+        assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("denied"))
+        val postClick=NtfyFirstLaunch(0)
+        assertTrue(postClick.allow(TimeUnit.SECONDS.toNanos(1),true))
+        postClick.start("click",TimeUnit.SECONDS.toNanos(1));postClick.finish(TimeUnit.SECONDS.toNanos(2))
+        postClick.start("prompt",TimeUnit.SECONDS.toNanos(5));postClick.finish(TimeUnit.SECONDS.toNanos(6))
+        postClick.start("menu",TimeUnit.SECONDS.toNanos(6));postClick.finish(TimeUnit.SECONDS.toNanos(7));postClick.sampled()
+        assertEquals("Later menu expiry must not replace the positive click samples or the first crossing operation",
+            "Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied clickBefore=positive clickAfter=positive firstExpiry=prompt]",postClick.observation("denied"))
+        val between=NtfyFirstLaunch(0)
+        between.start("menu",TimeUnit.SECONDS.toNanos(6));between.finish(TimeUnit.SECONDS.toNanos(7))
+        assertTrue("Expiry outside a measured operation must remain unattributed",between.observation("denied").contains("firstExpiry=between"))
         val thrown=NtfyFirstLaunch(0)
         assertTrue(thrown.allow(1,true));thrown.start("click",1);thrown.failed()
         assertTrue("Original action exceptions retain an incomplete stage",thrown.observation("unavailable").contains("after=unavailable action=threw"))

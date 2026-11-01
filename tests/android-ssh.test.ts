@@ -1,12 +1,13 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
+import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -988,4 +989,70 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
   for(const value of [child,draft,privateValue,'secret','/private'])expect(serialized).not.toContain(value);
   expect(serialized.length).toBeLessThan(250);
   expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+});
+
+
+test('shared Herdr native report requires the completed exact single case, not a skipped or substituted owner',()=>{
+  const row='<testcase name="ownedSharedHerdrNavigationThroughRealUi" classname="app.lazysh.client.NativeWorkspaceTest" />';
+  const report=`<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite>${row}</testsuite></testsuites>`;
+  expect(validateSharedHerdrReport(report)).toEqual({nativeCase:'ownedSharedHerdrNavigationThroughRealUi',passed:1,failed:0,skipped:0});
+  for(const invalid of ['',report.replace(row,''),report.replace(row,row+row),report.replace('ownedSharedHerdrNavigationThroughRealUi','otherOwner'),report.replace('app.lazysh.client.NativeWorkspaceTest','foreign.Case'),report.replace('</testsuite>','<skipped /></testsuite>'),report.replace('</testsuite>','<failure /></testsuite>'),report.replace('</testsuite>','<error /></testsuite>'),report.replace('failures="0"','failures="1"'),report.replace('</testsuites>',''),report.replace(row,`<!--${row}-->`),report.replace(row,`<![CDATA[${row}]]>`)])
+    expect(()=>validateSharedHerdrReport(invalid)).toThrow('did not pass exactly once');
+});
+test('shared Herdr result rejects stale, duplicate, oversized and symlink report files',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-herdr-report-')),path=join(directory,'TEST-owned.xml');
+  const report='<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite><testcase name="ownedSharedHerdrNavigationThroughRealUi" classname="app.lazysh.client.NativeWorkspaceTest" /></testsuite></testsuites>';
+  try {
+    expect(await sharedHerdrReportIdentity(directory)).toBeUndefined();
+    await writeFile(path,report);
+    expect((await verifySharedHerdrResult(directory)).passed).toBe(1);
+    await expect(verifySharedHerdrResult(directory,await sharedHerdrReportIdentity(directory))).rejects.toThrow('not refreshed');
+    await writeFile(join(directory,'TEST-extra.xml'),report);
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Expected one');
+    await rm(join(directory,'TEST-extra.xml'));
+    await writeFile(path,'x'.repeat(262145));
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
+    await rm(path);await writeFile(join(directory,'private-target'),report);await symlink('private-target',path);
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('background Mosh witness retains its failed stage and original error without publishing private values',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-mosh-diagnostic-'));
+  const original=new Error('private owned witness error');
+  let enter!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;});
+  await writeFile(join(directory,'background-before'),'123 456\n');
+  const observer=observeAndroidMoshBackground({directory,daemon:{async liveIdentity(){enter();throw original;}}});
+  try {
+    await entered;await observer.stop();
+    const sample=observer.diagnostic();
+    expect(sample).toEqual({schemaVersion:1,phase:'before-ownership',beforeValidated:false,beforeAck:false,afterValidated:false,outputValidated:false,afterAck:false,verified:false,stopped:true,failure:'witness-failure'});
+    expect(JSON.stringify(sample)).not.toContain('private');expect(JSON.stringify(sample)).not.toContain(directory);
+    let caught:unknown;try {observer.check();}catch(error){caught=error;}
+    expect(caught).toBe(original);
+    await expect(readFile(join(directory,'background-before-ack'))).rejects.toMatchObject({code:'ENOENT'});
+    await observer.stop();expect(observer.diagnostic()).toEqual(sample);
+  } finally {await observer.stop();await rm(directory,{recursive:true,force:true});}
+},2000);
+
+test('background Mosh document observations distinguish renderer state without retaining text or claiming transport identity',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/MoshBackgroundObservation.kt'),'utf8');
+  const source=kotlin.match(/fun expression[\s\S]*?= """([\s\S]*?)"""/)![1];
+  const name='owned private session',key='owned-key',token='owned-token';
+  const expression=source.replaceAll('$key',JSON.stringify(key)).replaceAll('$token',JSON.stringify(token)).replaceAll('${JSONObject.quote(name)}',JSON.stringify(name));
+  const evaluate=new Function('window','document',`return ${expression}`);
+  const helper={readOnly:true,disabled:false,value:'private terminal input'},composer={value:'private draft'};
+  let helpers:unknown[]=[helper],active:unknown=helper,connected=false,error=true,retained=true;
+  const pane={querySelector:(selector:string)=>selector.includes('textarea')?composer:selector.includes('terminal-edit-review')?{}:null};
+  const terminal={isConnected:true,closest:()=>pane,querySelectorAll:()=>helpers};
+  const tab={querySelector:(selector:string)=>selector==='[role=tab]'?{textContent:name}:{classList:{contains:()=>!connected}}};
+  const document={hasFocus:()=>true,get activeElement(){return active;},querySelector:(selector:string)=>selector==='.terminal-canvas'?terminal:selector==='.session-tab-active'?tab:selector==='.global-error'&&error?{}:null,querySelectorAll:()=>[terminal]};
+  const sample=()=>evaluate({[key]:{token:retained?token:'stale',terminal}},document);
+  expect(sample()).toEqual({retained:true,helperCount:'one',documentFocused:true,activeKind:'terminal',readOnly:true,disabled:false,composerPresent:true,composerEmpty:false,rendererConnected:false,globalError:true,unappliedEdit:true});
+  connected=true;error=false;active=composer;retained=false;helpers=[];
+  expect(sample()).toMatchObject({retained:false,helperCount:'zero',activeKind:'composer',readOnly:null,disabled:null,rendererConnected:true,globalError:false});
+  helpers=[helper,helper];active={matches:()=>true};
+  expect(sample()).toMatchObject({helperCount:'many',activeKind:'control',readOnly:null});
+  expect(JSON.stringify(sample())).not.toContain('private');expect(JSON.stringify(sample())).not.toContain(name);
 });

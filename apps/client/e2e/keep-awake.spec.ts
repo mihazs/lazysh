@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
+import {openAgentSetup} from './fixtures/workspaceControl';
 import type {mountAgentAwakeHarness} from './fixtures/AgentAwakeHarness';
 declare global {interface Window {
   awakeHarness:ReturnType<typeof mountAgentAwakeHarness>;
@@ -37,6 +38,7 @@ async function fixture(page:Page) {
     const {mountAgentAwakeHarness}=await import('/e2e/fixtures/AgentAwakeHarness.tsx');
     window.awakeHarness=mountAgentAwakeHarness();
   });
+  await openAgentSetup(page);
 }
 test('visible agent board defaults off and leaving releases its exact native ownership',async({page})=>{
   await fixture(page);

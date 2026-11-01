@@ -1,6 +1,7 @@
 //! Explicit, profile-scoped lifecycle hook setup; configuration is not reporting evidence.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod commit;
+mod discovery;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -21,6 +22,7 @@ use std::path::PathBuf;
 pub enum AgentProfile {
     Claude,
     Codex,
+    Droid,
     Gemini,
     Cursor,
     Opencode,
@@ -31,6 +33,7 @@ impl AgentProfile {
         match self {
             Self::Claude => record::Agent::Claude,
             Self::Codex => record::Agent::Codex,
+            Self::Droid => record::Agent::Droid,
             Self::Gemini => record::Agent::Gemini,
             Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
@@ -47,6 +50,8 @@ pub struct Target {
 }
 #[derive(Subcommand)]
 pub enum Command {
+    /// Discover known installed executables and profile directories without reading configuration.
+    Discover,
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
     Preview {
         #[arg(long, value_enum)]
@@ -73,10 +78,11 @@ pub enum Command {
     },
 }
 pub fn run(command: Command) -> Result<Value> {
-    if let Command::Preview { agent } = command {
-        return preview(agent);
+    match command {
+        Command::Discover => Ok(discovery::run()),
+        Command::Preview { agent } => preview(agent),
+        other => manage(other),
     }
-    manage(command)
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn preview(agent: AgentProfile) -> Result<Value> {
@@ -89,7 +95,10 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         )
     } else {
         let entries = render::entries(agent, &source).map_err(Error::Installation)?;
-        let asset = if matches!(agent, record::Agent::Gemini | record::Agent::Cursor) {
+        let asset = if matches!(
+            agent,
+            record::Agent::Gemini | record::Agent::Cursor | record::Agent::Droid
+        ) {
             let content = render::configuration(agent, "{}", &[], &entries)
                 .map_err(|_| Error::Installation("HooksInvalidTemplate"))?;
             serde_json::from_str(&content)
@@ -111,6 +120,7 @@ fn preview(agent: AgentProfile) -> Result<Value> {
     let (asset, dialect) = match agent {
         AgentProfile::Claude => (crate::claude_config(), "posix-shell"),
         AgentProfile::Codex => (crate::hooks::codex_config(), "posix-shell"),
+        AgentProfile::Droid => (crate::hooks::droid_config(), "posix-shell"),
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
         AgentProfile::Opencode => (
@@ -129,7 +139,7 @@ fn manage(command: Command) -> Result<Value> {
         Command::Status { target } => (target, None),
         Command::Install { target, .. } => (target, Some(files::Action::Install)),
         Command::Remove { target, .. } => (target, Some(files::Action::Remove)),
-        Command::Preview { .. } => unreachable!(),
+        Command::Preview { .. } | Command::Discover => unreachable!(),
     };
     let selected = files::Target {
         agent: target.agent.agent(),
@@ -148,9 +158,11 @@ fn manage(command: Command) -> Result<Value> {
         );
     }
     let inspected = match files::inspect(selected, &source) {
-        Err(Error::Installation("HooksAclUnsupported")) => {
+        Err(Error::Installation(
+            reason @ ("HooksAclUnsupported" | "HooksDroidStandaloneRequired"),
+        )) => {
             return Ok(
-                json!({"schemaVersion":1,"supported":false,"reason":"HooksAclUnsupported","reporting":"notChecked","trust":"notChecked"}),
+                json!({"schemaVersion":1,"supported":false,"reason":reason,"reporting":"notChecked","trust":"notChecked"}),
             )
         }
         other => other?,

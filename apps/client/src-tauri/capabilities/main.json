@@ -134,6 +134,7 @@
     "allow-agent-reported-history",
     "allow-install-companion",
     "allow-companion-hooks",
+    "allow-companion-hook-discovery",
     "allow-get-companion-settings",
     "allow-update-companion-settings",
     "allow-agent-transcript",

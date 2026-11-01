@@ -1,3 +1,4 @@
+import {openPreferenceCategory,openThemeImport} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {expect,test} from '@playwright/test';
 for (const value of [
@@ -5,8 +6,7 @@ for (const value of [
   {v:1,name:'Dark 夜',mode:'dark',colors:{background:'#101010',foreground:'#101010',cursor:'#111111',red:'#101010'}},
 ]) test(`${value.mode} whole-app theme requires review, persists, exports, and reset removes custom styles`,async({page})=>{
   await page.goto('/');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Import and share theme',{exact:true}).click();
+  await openThemeImport(page);
   const input=page.getByLabel('Theme JSON or share code',{exact:true});
   await input.fill(JSON.stringify(value));
   await page.getByRole('button',{name:'Preview theme',exact:true}).click();
@@ -25,6 +25,7 @@ for (const value of [
   const code=await page.getByLabel('Exported theme',{exact:true}).inputValue();expect(code).toMatch(/^lazysh-theme:/);
   await page.reload();await page.getByRole('button',{name:'Preferences',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme','custom');
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Import and share theme',{exact:true}).click();
   await input.fill(code);await page.getByRole('button',{name:'Preview theme',exact:true}).click();
   await expect(page.getByRole('heading',{name:value.name,exact:true})).toBeVisible();
@@ -33,6 +34,7 @@ for (const value of [
   await page.getByRole('button',{name:'Preview theme',exact:true}).click();
   await expect(page.getByRole('button',{name:'Apply to app and terminal',exact:true})).toHaveCount(0);
   await expect(page.locator('html')).toHaveCSS('--theme-bg',value.colors.background);
+  await openPreferenceCategory(page,'Reset');
   await page.getByRole('button',{name:'Reset preferences',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme','forest');
   expect(await page.locator('html').evaluate(e=>e.style.getPropertyValue('--theme-bg'))).toBe('');

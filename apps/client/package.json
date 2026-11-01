@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/client",
-  "version": "1.3.3",
+  "version": "1.4.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,7 +21,7 @@
     "test:android-push-artifact": "bun test ../../tests/android-push-artifact.test.ts",
     "test:android-fdroid": "LAZYSH_ANDROID_PUSH_VARIANT=fdroid bun run test:android-push-artifact && src-tauri/gen/android/gradlew -p src-tauri/gen/android :tauri-plugin-lazysh-push:testDebugUnitTest :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshFdroidAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#pushRegistrationMatchesPackagedNativeProvider,app.lazysh.client.UnifiedPushEnrollmentTest --no-daemon",
     "test:android-ntfy": "cargo test -p lazysh-notifications --locked --lib --no-run && LAZYSH_ANDROID_NTFY=1 bun test ../../tests/android-ntfy.test.ts",
-    "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview",
+    "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshDefaultHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedMoshSurvivesBusyBackgroundThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview",
     "build:ios": "cd src-tauri && tauri ios build --target aarch64-sim --debug --ci",
     "check": "tsc -b",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
@@ -46,6 +46,7 @@
     "test:ios-workspace": "xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO",
     "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview",
     "test:android-ssh": "LAZYSH_ANDROID_UI_SSH=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts",
+    "test:android-herdr-navigation": "LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1 bun test ../../tests/android-ssh-host.test.ts --test-name-pattern '^actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes$'",
     "test:android-qr": "LAZYSH_ANDROID_UI_QR=1 bun test ../../tests/android-qr.test.ts"
   },
   "dependencies": {

@@ -14,7 +14,7 @@ function authority(locked=false){
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked,reason:'Owned font UI fixture',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'b'.repeat(64)})});
   acknowledgeAccessReady(accessSnapshot().epoch);
 }
-function mount(){const view=render(<PreferencesPanel/>);fireEvent.click(screen.getByText('Imported fonts',{exact:true}));return view;}
+function mount(){const view=render(<PreferencesPanel/>);fireEvent.click(screen.getByText(t('preferencesCategoryAppearance')));fireEvent.click(screen.getByText('Imported fonts',{exact:true}));return view;}
 beforeEach(()=>{
   authority();vi.stubGlobal('fetch',vi.fn());
   deviceFonts={fonts:[],selection:{},warnings:[],ready:true};
@@ -62,6 +62,9 @@ it('keeps one original download while language changes and translates progress w
   vi.mocked(downloadNotoFont).mockImplementationOnce(()=>new Promise(done=>{finish=done;}));
   mount();fireEvent.click(screen.getByRole('button',{name:'Download Noto Sans Mono CJK SC'}));
   const [signal,current,progress]=vi.mocked(downloadNotoFont).mock.calls[0];
+  fireEvent.click(screen.getByText(t('preferencesCategoryAppearance')));
+  expect(signal.aborted).toBe(false);expect(current()).toBe(true);
+  fireEvent.click(screen.getByText(t('preferencesCategoryAppearance')));
   await act(async()=>{progress!(1024);});
   for(const locale of ['pt-BR','es','en']){
     await act(async()=>{await uiI18n.changeLanguage(locale);});

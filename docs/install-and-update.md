@@ -104,9 +104,9 @@ complete remote-notification parity while #344 remains open.
 
 For a manually downloaded APK, save `SHA256SUMS` from the **same release** and
 check the exact file before opening it. For example, on Linux use
-`sha256sum lazysh-1.3.3-android-foss-arm64.apk`, on macOS use
-`shasum -a 256 lazysh-1.3.3-android-foss-arm64.apk`, or in PowerShell use
-`Get-FileHash .\lazysh-1.3.3-android-foss-arm64.apk -Algorithm SHA256`.
+`sha256sum lazysh-1.4.1-android-foss-arm64.apk`, on macOS use
+`shasum -a 256 lazysh-1.4.1-android-foss-arm64.apk`, or in PowerShell use
+`Get-FileHash .\lazysh-1.4.1-android-foss-arm64.apk -Algorithm SHA256`.
 Replace the example version/flavor with your downloaded file and compare the
 complete result with that file's SHA256SUMS entry and release manifest. This
 manual comparison is not a claim that Obtainium automatically enforces the

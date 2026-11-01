@@ -64,7 +64,8 @@ export class SshFixture {
     if(!this.toolNamespace || !this.environment)throw new Error('Owned Herdr namespace required');
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin/herdr'),...args],this.directory,this.environment);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean}={}) {
+    if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
     if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
@@ -120,14 +121,15 @@ export class SshFixture {
         environment!.PATH=bin+':/usr/bin:/bin';
       }
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
-      const commandSeconds=options.companion?companionFixtureBudget/1000:90;
+      // Only the three-display navigation case shares the existing 600s outer fixture budget.
+      const commandSeconds=options.companion || options.sharedNavigation?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
         `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
         ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
-        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
+        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
         `Banner none`,''].join('\n'),{mode:0o600});
       const arguments_=['-D','-e','-f',config];
       const privateTtyGroup=options.privateTtyGroup===true || !!tools;
