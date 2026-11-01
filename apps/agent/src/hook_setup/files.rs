@@ -75,6 +75,8 @@ pub(super) struct Plan {
     pub manifest: FileState,
     pub binary: Binary,
     pub transition: Option<Record>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amp_shadows: Option<[Option<Identity>; 2]>,
 }
 impl Plan {
     pub(super) fn digest(&self) -> Result<String> {
@@ -201,14 +203,40 @@ pub(super) struct Inspection {
     pub record: Option<Record>,
     pub observation: Option<Observation>,
     pub binary: Binary,
+    pub amp_shadows: Option<[Option<Identity>; 2]>,
+}
+/// Metadata only: do not traverse or read a foreign same-name plugin.
+pub(super) fn amp_shadows(
+    agent: Agent,
+    directory: Option<&Directory>,
+) -> Result<Option<[Option<Identity>; 2]>> {
+    if agent != Agent::Amp {
+        return Ok(None);
+    }
+    let Some(directory) = directory else {
+        return Ok(Some([None, None]));
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut snapshot = [None, None];
+        for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
+            *slot = match directory.open_file(name, libc::O_PATH) {
+                Ok(file) => Some(identity(&file.metadata()?)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+        }
+        Ok(Some(snapshot))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = directory;
+        Err(rejected("HooksAclUnsupported"))
+    }
 }
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
-        match self.target.agent {
-            Agent::Claude | Agent::Gemini => "settings.json",
-            Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-            Agent::Opencode => "lazysh.js",
-        }
+        self.target.agent.provider_name()
     }
     pub(super) fn manifest_name(&self) -> String {
         format!(".lazysh-hooks-{}.json", self.target.agent.name())
@@ -223,9 +251,9 @@ impl Inspection {
     }
     pub(super) fn desired(&self) -> Result<Owned> {
         let entries = render::entries(self.target.agent, &self.binary.path).map_err(rejected)?;
-        let plugin_sha256 = if self.target.agent == Agent::Opencode {
+        let plugin_sha256 = if self.target.agent.is_whole_file() {
             Some(record::hash(
-                render::plugin(&self.binary.path)
+                render::owned_file(self.target.agent, &self.binary.path)
                     .map_err(rejected)?
                     .as_bytes(),
             ))
@@ -243,10 +271,19 @@ impl Inspection {
     pub(super) fn plan(&self, action: Action) -> Result<Plan> {
         let previous = self.previous()?;
         let next = match action {
-            Action::Install => Some(self.desired()?),
+            Action::Install => {
+                if self
+                    .amp_shadows
+                    .as_ref()
+                    .is_some_and(|items| items.iter().any(Option::is_some))
+                {
+                    return Err(rejected("HooksAmpShadow"));
+                }
+                Some(self.desired()?)
+            }
             Action::Remove => None,
         };
-        if self.target.agent == Agent::Opencode
+        if self.target.agent.is_whole_file()
             && previous.is_none()
             && next.is_some()
             && self.provider.contents.is_some()
@@ -284,6 +321,7 @@ impl Inspection {
             manifest: self.manifest.state.clone(),
             binary: self.binary.clone(),
             transition,
+            amp_shadows: self.amp_shadows.clone(),
         })
     }
     pub(super) fn after(
@@ -294,9 +332,9 @@ impl Inspection {
         if previous.is_none() && next.is_none() {
             return Ok(self.provider.contents.clone());
         }
-        if self.target.agent == Agent::Opencode {
+        if self.target.agent.is_whole_file() {
             return next
-                .map(|_| render::plugin(&self.binary.path).map_err(rejected))
+                .map(|_| render::owned_file(self.target.agent, &self.binary.path).map_err(rejected))
                 .transpose();
         }
         let previous = previous
@@ -322,8 +360,11 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     let profile = Directory::profile(&target.profile)?;
     storage_filesystem::require_local(&profile.path)?;
     directory_admission(&profile)?;
-    let plugins = if target.agent == Agent::Opencode {
-        match profile.child("plugins", false) {
+    let plugins = if target.agent.is_whole_file() {
+        match profile.child(
+            target.agent.asset_directory().expect("whole-file agent"),
+            false,
+        ) {
             Ok(directory) => Some(directory),
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
@@ -334,12 +375,8 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     if let Some(directory) = &plugins {
         directory_admission(directory)?;
     }
-    let provider_name = match target.agent {
-        Agent::Claude | Agent::Gemini => "settings.json",
-        Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-        Agent::Opencode => "lazysh.js",
-    };
-    let provider = if target.agent == Agent::Opencode && plugins.is_none() {
+    let provider_name = target.agent.provider_name();
+    let provider = if target.agent.is_whole_file() && plugins.is_none() {
         ReadFile {
             state: FileState::Missing,
             contents: None,
@@ -382,6 +419,7 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         })
         .transpose()?;
     let binary = binary(source)?;
+    let amp_shadows = amp_shadows(target.agent, plugins.as_ref())?;
     directory_admission(&profile)?;
     if let Some(plugins) = &plugins {
         directory_admission(plugins)?;
@@ -395,5 +433,6 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         record,
         observation,
         binary,
+        amp_shadows,
     })
 }

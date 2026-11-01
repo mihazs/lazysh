@@ -3,8 +3,78 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation,ntfyClockComparison,observeNtfyClock} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
+
+const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
+test('host-device comparison accounts for second and millisecond quantization',()=>{
+  const compare=(guest:string,start=100000,end=100010)=>ntfyClockComparison(guest,clockPoint(start),clockPoint(end,BigInt(end-start)*1000000n));
+  expect(compare('100\n')).toMatchObject({status:'observed',offset:'overlapsZero',magnitude:'crossesBand',uncertainty:'atMostTwoSeconds'});
+  expect(compare('99')).toMatchObject({offset:'behind',magnitude:'crossesBand'});
+  expect(compare('98')).toMatchObject({offset:'behind',magnitude:'oneToFiveSeconds'});
+  expect(compare('102')).toMatchObject({offset:'ahead',magnitude:'oneToFiveSeconds'});
+  expect(compare('90')).toMatchObject({offset:'behind',magnitude:'fiveToThirtySeconds'});
+  expect(compare('60')).toMatchObject({offset:'behind',magnitude:'atLeastThirtySeconds'});
+  expect(compare('140')).toMatchObject({offset:'ahead',magnitude:'atLeastThirtySeconds'});
+  expect(compare('105')).toMatchObject({magnitude:'crossesBand'});
+  expect(compare('100',100000,103000)).toMatchObject({offset:'overlapsZero',uncertainty:'twoToFiveSeconds'});
+  expect(compare('100',100000,106000)).toMatchObject({uncertainty:'overFiveSeconds'});
+  for(const [elapsed,uncertainty]of [[999,'atMostTwoSeconds'],[1000,'twoToFiveSeconds'],[3999,'twoToFiveSeconds'],[4000,'overFiveSeconds']]as const)
+    expect(compare('100',100000,100000+elapsed).uncertainty).toBe(uncertainty);
+});
+
+test('clock comparison suppresses offset claims after host discontinuity and malformed observations',()=>{
+  const start=clockPoint(100000);
+  for(const [end,progress]of [[clockPoint(103000,1000000n),'wallAhead'],[clockPoint(99000,1000000n),'wallBehind']]as const)
+    expect(ntfyClockComparison('98',start,end)).toMatchObject({status:'hostDiscontinuity',offset:'unavailable',magnitude:'unavailable',hostProgress:progress});
+  expect(ntfyClockComparison('100',start,clockPoint(100000,1000000n))).toMatchObject({status:'observed'});
+  expect(ntfyClockComparison('100',start,clockPoint(100001))).toMatchObject({status:'observed'});
+  expect(ntfyClockComparison('100',start,clockPoint(99999))).toMatchObject({status:'hostDiscontinuity',hostProgress:'wallBehind'});
+  for(const text of ['','private-key','100\nprivate','100\n\n','100\r\n',' 100','0100','-1','NaN','Infinity','100.5','9'.repeat(200)])
+    expect(ntfyClockComparison(text,start,start)).toMatchObject({status:'malformed',offset:'unavailable'});
+  for(const point of [clockPoint(NaN),clockPoint(Infinity),clockPoint(-1),clockPoint(1.5),clockPoint(Number.MAX_SAFE_INTEGER),clockPoint(100000,-1n),{wall:100000,before:1n,after:0n}])
+    expect(ntfyClockComparison('100',point,start)).toMatchObject({status:'outOfBounds',offset:'unavailable'});
+  expect(ntfyClockComparison('8640000000000',start,start)).toMatchObject({status:'outOfBounds'});
+  expect(ntfyClockComparison('100',clockPoint(100000,2n),clockPoint(100000,1n))).toMatchObject({status:'outOfBounds'});
+  expect(ntfyClockComparison('100',start,clockPoint(100000,9_223_372_036_854_775_808n))).toMatchObject({status:'outOfBounds'});
+  expect(JSON.stringify(ntfyClockComparison('98',start,clockPoint(100001,1000000n)))).not.toMatch(/[0-9]|private|epoch|wallTime|nanos/);
+});
+
+test('one diagnostic read preserves owned identity checks and redacts command failures',async()=>{
+  const calls:string[]=[];let sample=0;
+  const observed=await observeNtfyClock(async()=>{calls.push('read');return '98\n';},async()=>{calls.push('check');},()=>clockPoint(100000,sample++===0?0n:1000000n));
+  expect(calls).toEqual(['check','read','check']);expect(observed.offset).toBe('behind');
+  const failed=await observeNtfyClock(async()=>{throw new Error('private-token /private/path 123');},async()=>{},()=>clockPoint(100000));
+  expect(failed).toMatchObject({status:'commandFailed',offset:'unavailable'});
+  expect(JSON.stringify(failed)).not.toMatch(/private|token|path|123/);
+  let reads=0,checks=0;
+  const original=new Error('Owned identity changed');
+  await expect(observeNtfyClock(async()=>{reads++;return '100';},async()=>{throw original;})).rejects.toBe(original);expect(reads).toBe(0);
+  await expect(observeNtfyClock(async()=>{throw new Error('private command');},async()=>{if(++checks===2)throw original;},()=>clockPoint(100000))).rejects.toBe(original);
+  expect(checks).toBe(2);
+  checks=0;
+  await expect(observeNtfyClock(async()=> '100',async()=>{if(++checks===2)throw original;},()=>clockPoint(100000))).rejects.toBe(original);
+});
+
+test('diagnostic command teardown settles before the final identity check',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.stdout.write("private");process.exit(7)']);
+  const result=await observeNtfyClock(()=>child.finish('owned clock unit fixture',2000),async()=>{
+    if(child.child.exitCode!==null)expect(await child.liveIdentity()).toBeUndefined();
+  },()=>clockPoint(100000));
+  expect(result.status).toBe('commandFailed');expect(child.child.exitCode).toBe(7);
+  expect(await child.liveIdentity()).toBeUndefined();expect(child.child.stdout!.destroyed).toBe(true);
+});
+
+test('successful and timed-out diagnostic children release owned handles without changing the caller budget',async()=>{
+  for(const timeout of [false,true]) {
+    const child=new OwnedProcess(process.execPath,['-e',timeout?'setInterval(()=>{},1000)':'process.stdout.write("100\\n")']);
+    let checks=0;
+    const result=await observeNtfyClock(()=>child.finish('owned clock cleanup fixture',timeout?25:2000),async()=>{checks++;},()=>clockPoint(100000));
+    expect(result.status).toBe(timeout?'commandFailed':'observed');expect(checks).toBe(2);
+    expect(await child.liveIdentity()).toBeUndefined();expect(child.child.stdout!.destroyed).toBe(true);
+    expect(child.child.stdin!.destroyed).toBe(true);expect(child.child.stderr!.destroyed).toBe(true);
+  }
+});
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
   const sdk=process.env.ANDROID_HOME;

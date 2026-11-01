@@ -269,6 +269,7 @@ pub fn run() {
                 ssh::agent_reported_history,
                 companion::install_companion,
                 companion::hooks::companion_hooks,
+                companion::hooks::companion_hook_discovery,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,

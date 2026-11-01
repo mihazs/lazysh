@@ -6,8 +6,10 @@ import type {SshFixture} from './sshFixture';
 
 // Only private fixture receipts and descendants of its retained namespace owner.
 // Nothing here inspects an arbitrary host, changes a connection, or emits PIDs.
-export function observeAndroidMoshBackground(ssh:SshFixture) {
-  let stopped=false,verified=false,failure:unknown;
+export function observeAndroidMoshBackground(ssh:Pick<SshFixture,'directory'> & {daemon:Pick<SshFixture['daemon'],'liveIdentity'>}) {
+  let stopped=false,verified=false,failed=false,failure:unknown;
+  let phase:'before-receipt'|'before-ownership'|'before-ack'|'after-receipt'|'after-ownership'|'after-output'|'after-ack'|'complete'='before-receipt';
+  const evidence={beforeValidated:false,beforeAck:false,afterValidated:false,outputValidated:false,afterAck:false};
   const deadline=performance.now()+600_000;
   const receipt=async(part:string)=>{
     const path=join(ssh.directory,`background-${part}`);
@@ -53,28 +55,36 @@ export function observeAndroidMoshBackground(ssh:SshFixture) {
   const task=(async()=>{
     try {
       let before:Awaited<ReturnType<typeof snapshot>>|undefined;
-      for(const part of ['before','after']) {
+      for(const part of ['before','after'] as const) {
+        phase=`${part}-receipt`;
         let observed:Awaited<ReturnType<typeof receipt>>=undefined;
         while(!stopped && performance.now()<deadline && !(observed=await receipt(part)))await delay(50);
         if(stopped)return;
         if(!observed)throw new Error('Owned Mosh background receipt deadline');
+        phase=`${part}-ownership`;
         const current=await snapshot(observed);
         if(before && (current.shell.pid!==before.shell.pid || current.shell.start!==before.shell.start ||
           current.daemon.owner.pid!==before.daemon.owner.pid || current.daemon.owner.start!==before.daemon.owner.start ||
           current.daemon.inode!==before.daemon.inode))throw new Error('Owned Mosh background transport identity changed');
+        evidence[part==='before'?'beforeValidated':'afterValidated']=true;
         before=current;
         if(part==='after') {
+          phase='after-output';
           const samples=await readFile(join(ssh.directory,'background-samples'),'utf8');
           if(!/^[1-9][0-9]{0,2}\n$/.test(samples) || Number(samples)<263 || Number(samples)>900 ||
             await stat(join(ssh.directory,'background-expired')).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))
             throw new Error('Owned Mosh busy output expired or generated fewer than 256 KiB');
+          evidence.outputValidated=true;
         }
+        phase=`${part}-ack`;
         await writeFile(join(ssh.directory,`background-${part}-ack`),'observed\n',{mode:0o600,flag:'wx'});
+        evidence[part==='before'?'beforeAck':'afterAck']=true;
       }
-      verified=true;
-    } catch(error){failure=error;}
+      verified=true;phase='complete';
+    } catch(error){failed=true;failure=error;}
   })();
   return {
+    diagnostic(){return {schemaVersion:1 as const,phase,...evidence,verified,stopped,failure:failed?'witness-failure' as const:null};},
     check(){if(failure)throw failure;},
     async stop(){stopped=true;await task;},
     async assertVerified(){stopped=true;await task;if(failure)throw failure;if(!verified)throw new Error('Owned Mosh background witness incomplete');

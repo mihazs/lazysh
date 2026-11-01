@@ -868,7 +868,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::hooks::companion_hooks];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -912,7 +912,11 @@ mod tests {
             hooks.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","request":{"agent":"codex","action":"status","profileRoot":"/owned/selected"}}),
             );
-            [read, update, installer, hooks]
+            let mut discovery = request(nonce);
+            discovery.cmd = "companion_hook_discovery".into();
+            discovery.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            [read, update, installer, hooks, discovery]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {

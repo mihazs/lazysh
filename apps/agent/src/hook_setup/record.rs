@@ -13,8 +13,29 @@ pub(super) enum Agent {
     Gemini,
     Cursor,
     Opencode,
+    Cline,
+    Copilot,
+    Amp,
 }
 impl Agent {
+    pub(super) fn is_whole_file(self) -> bool {
+        self.asset_directory().is_some()
+    }
+    pub(super) fn asset_directory(self) -> Option<&'static str> {
+        match self {
+            Self::Opencode | Self::Cline | Self::Amp => Some("plugins"),
+            Self::Copilot => Some("hooks"),
+            _ => None,
+        }
+    }
+    pub(super) fn provider_name(self) -> &'static str {
+        match self {
+            Self::Claude | Self::Gemini => "settings.json",
+            Self::Codex | Self::Droid | Self::Cursor => "hooks.json",
+            Self::Opencode | Self::Cline | Self::Amp => "lazysh.js",
+            Self::Copilot => "lazysh.json",
+        }
+    }
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -23,6 +44,9 @@ impl Agent {
             Self::Gemini => "gemini",
             Self::Cursor => "cursor",
             Self::Opencode => "opencode",
+            Self::Cline => "cline",
+            Self::Copilot => "copilot",
+            Self::Amp => "amp",
         }
     }
 }
@@ -98,10 +122,10 @@ impl Record {
             || !valid_path(&self.profile)
             || (self.previous.is_some() && self.provider_before == FileState::Missing)
             || (self.next.is_some() && self.provider_after_sha256.is_none())
-            || (self.agent != Agent::Opencode
+            || (!self.agent.is_whole_file()
                 && self.provider_after_sha256.is_none()
                 && (self.previous.is_some() || self.next.is_some()))
-            || (self.agent == Agent::Opencode
+            || (self.agent.is_whole_file()
                 && self.previous.is_none()
                 && self.provider_before != FileState::Missing)
             || self
@@ -133,7 +157,7 @@ impl Record {
                 return Err("HooksInvalidRecord");
             }
             match self.agent {
-                Agent::Opencode
+                Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp
                     if owned.entries.is_empty()
                         && owned
                             .plugin_sha256
@@ -161,7 +185,7 @@ impl Record {
                 _ => return Err("HooksInvalidRecord"),
             }
         }
-        if self.agent == Agent::Opencode
+        if self.agent.is_whole_file()
             && self
                 .next
                 .as_ref()
@@ -170,7 +194,7 @@ impl Record {
         {
             return Err("HooksInvalidRecord");
         }
-        if self.agent == Agent::Opencode
+        if self.agent.is_whole_file()
             && matches!((&self.previous,&self.provider_before),
             (Some(owned),FileState::Present{sha256,..}) if owned.plugin_sha256.as_ref()!=Some(sha256))
         {

@@ -9,13 +9,13 @@
 
 **SSH from your phone. Keep long-running sessions on your server. Check in on your coding agents.**
 
-lazysh is a **free, open-source SSH client and remote development workspace** designed for developers who want to work from anywhere—even from bed. It combines a native terminal, persistent remote sessions, and optional visibility into AI coding agents in one app being developed for **Android, iPhone/iPad (iOS), macOS, Linux, and Windows**.
+lazysh is a **free, open-source SSH client and remote development workspace** for connecting to your own development machines from mobile and desktop. Persistent work stays in host-side sessions; coding-agent visibility is optional.
 
 Connect directly to servers you control, pick up a **tmux, Herdr, or Zellij** session, and inspect supported **Claude Code, Codex, and OpenCode** records. Your remote processes and agents run on your own host, not on a lazysh server.
 
-> **Development preview — not a stable release.** The repository contains native implementations and tests, but feature coverage and real-device acceptance vary by platform. There are currently no published production installers or public app-store releases. See [installation and release status](docs/install-and-update.md), the [roadmap](https://github.com/users/mihazs/projects/2), and the [feature-parity tracker](https://github.com/mihazs/lazysh/issues/1).
+> **Development preview.** GitHub releases include Android, Linux and Windows packages, but feature coverage and real-device acceptance vary. Apple app distribution and F-Droid inclusion remain pending. Check the [installation guide](docs/install-and-update.md), release notes and [public roadmap](docs/roadmap.md) before trying a build.
 
-[**Try the source preview**](#run-the-source-preview) · [Explore the workflows](#what-you-can-do) · [Read the docs](#documentation) · [Contribute](CONTRIBUTING.md)
+[**Download Preview**](https://github.com/mihazs/lazysh/releases) · [Documentation](#documentation) · [Explore the workflows](#what-you-can-do) · [Contribute](CONTRIBUTING.md)
 
 ## Why lazysh?
 
@@ -24,7 +24,20 @@ Connect directly to servers you control, pick up a **tmux, Herdr, or Zellij** se
 - **Keep an eye on AI coding work.** Read supported agent events and transcripts through an optional companion, without moving the agent runtime to a hosted lazysh service.
 - **Use your own infrastructure.** Ordinary SSH requires no lazysh account, subscription, or proprietary connection relay. Extra sync, sharing, voice, and notification services are optional and have their own setup requirements.
 
-## Run the source preview
+## Android: install with Obtainium (preferred)
+
+Use [Obtainium](https://github.com/ImranR98/Obtainium) to install and track updates
+from `https://github.com/mihazs/lazysh`. Select one Android ARM64 APK flavor and
+keep that signing channel. Follow the [Obtainium setup, APK filters and verification
+steps](docs/install-and-update.md#android). Manual APK download remains available.
+This is a development preview; installation through Obtainium still needs
+native device verification.
+
+## Get started
+
+Download a package from [GitHub Releases](https://github.com/mihazs/lazysh/releases), then follow the [installation and update guide](docs/install-and-update.md) for architecture, signing, checksums and platform-specific limitations. Published packages do not establish full platform or device acceptance.
+
+To build from source instead:
 
 **Prerequisites:** [Bun](https://bun.sh/), Rust stable, the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system, and CMake plus libclang for the local Whisper integration. Linux/macOS Mosh builds require additional native libraries; see the [Mosh build notes](packages/mosh-transport/README.md).
 
@@ -82,13 +95,13 @@ Some capabilities require remote tools or separate configuration, and native/mob
 
 lazysh shares a **Rust + Tauri 2 + React/xterm.js** client across desktop and mobile targets. A checked-in target is not the same as a tested, signed, publicly distributed app.
 
-| Target | Development route |
+| Target | Availability |
 | --- | --- |
-| **Android** | Android 7.0 / API 24+; native Tauri Android build and debug APK workflow. |
+| **Android** | ARM64 Google and FOSS APKs on GitHub Releases; Android 7.0 / API 24+. Physical-device and feature acceptance remain incomplete. |
 | **iPhone / iPad** | iOS 16+; Xcode on macOS and an unsigned simulator build. Public iOS distribution is not available. |
 | **macOS** | macOS 13+; native source builds. |
-| **Linux** | Native source builds; desktop and transport dependencies vary by distribution. |
-| **Windows** | Native source builds; native Windows acceptance and packaging gates apply. |
+| **Linux** | x64 AppImage and Debian packages on GitHub Releases; runtime dependencies vary by distribution. |
+| **Windows** | x64 installer on GitHub Releases; unsigned publisher warning and native GUI acceptance limitations apply. |
 
 <details>
 <summary><strong>Platform-specific build commands</strong></summary>
@@ -120,7 +133,7 @@ Development builds and CI artifacts are not verified production downloads. Read 
 
 **Interested in an open-source mobile SSH client for remote development and AI-agent workflows?** [Star lazysh on GitHub](https://github.com/mihazs/lazysh) to follow its progress, try the source preview, or share feedback.
 
-- [Browse the roadmap](https://github.com/users/mihazs/projects/2) to see planned and in-progress work.
+- [Browse the public roadmap](docs/roadmap.md) to see planned and in-progress work.
 - [Report a bug or suggest an improvement](https://github.com/mihazs/lazysh/issues/new).
 - [Read the contribution guide](CONTRIBUTING.md) before opening a pull request.
 
@@ -130,7 +143,7 @@ Please check existing issues and platform acceptance notes before assuming a fea
 
 **Is lazysh an SSH client for Android and iPhone?**
 
-Those are target platforms with development build paths. lazysh is not yet a stable, published mobile app; device coverage differs between features.
+Android ARM64 packages are available on GitHub Releases. iOS remains a source/simulator target without public app distribution. Feature and device coverage differ; see the release notes and installation guide.
 
 **Do I need to install an AI agent or use an AI provider?**
 

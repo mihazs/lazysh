@@ -169,10 +169,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   useEffect(() => {
     const element = container.current;
     if (!element || preferences.screenReader) return;
-    let scroll: {x: number; y: number; lastY: number; active: boolean} | null = null;
+    let scroll: {x: number; y: number; lastY: number; pending: number; active: boolean} | null = null;
     const start = (event: TouchEvent) => {
       const point = event.touches.length === 1 ? event.touches[0] : undefined;
-      scroll = point ? {x: point.clientX, y: point.clientY, lastY: point.clientY, active: false} : null;
+      scroll = point ? {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, active: false} : null;
     };
     const end = () => {scroll = null;};
     const multitouch = (event: TouchEvent) => {
@@ -185,10 +185,22 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             const deltaY = scroll.lastY - point.clientY;
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
-            // xterm's wheel path also reports mouse scrolling to Herdr/other full-screen apps.
-            session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
+            const tracking = session.terminal.modes.mouseTrackingMode;
+            const height = tracking !== 'none' && tracking !== 'x10'
+              ? (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows : 0;
+            let count = 1, amount = deltaY;
+            let mode: number = WheelEvent.DOM_DELTA_PIXEL;
+            if (Number.isFinite(height) && height > 0) {
+              // Mouse reports have no magnitude; accumulate travel into rendered-row notches.
+              if (deltaY && Math.sign(deltaY) !== Math.sign(scroll.pending)) scroll.pending = 0;
+              scroll.pending += deltaY;
+              count = Math.min(10, Math.floor(Math.abs(scroll.pending) / height));
+              amount = Math.sign(scroll.pending); mode = WheelEvent.DOM_DELTA_LINE;
+              scroll.pending -= amount * count * height;
+            } else scroll.pending = 0;
+            for (let notch = 0; notch < count; notch++) session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
-              bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY,
+              bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY: amount, deltaMode: mode,
             }));
             event.stopPropagation();
             if (event.cancelable) event.preventDefault();
@@ -566,7 +578,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       <button>{t('terminalNext')}</button><button type="button" onClick={() => search(-1)}>{t('terminalPrevious')}</button><button type="button" onClick={() => {setSearching(false); focusTerminal();}}>{t('terminalCloseSearch')}</button>
       <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
-    <div ref={container} className="terminal-canvas" style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
+    <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
       <div className="terminal-compose-actions"><button type="button" className="icon-button" title={t('terminalPasteDraft')} aria-label={t('terminalPasteDraft')} disabled={!session.connected || !draft || !!unappliedEdit} onClick={() => {if (pasteLiteral(draft)) {setDraft(""); focusTerminal();}}}><ClipboardPaste size={18} aria-hidden="true" /></button><button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={() => setComposing(false)}><X size={18} aria-hidden="true" /></button></div>
     </div>}

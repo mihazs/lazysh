@@ -2,8 +2,14 @@
 
 ## Managed lifecycle hook setup
 
-In **Agents → Agent hook setup**, select the provider and its existing absolute
-profile directory on the connected SSH host, then choose **Inspect setup**.
+Opening **Agents → Agent hook setup** detects installed agents and known profile
+locations on the connected SSH host. Select an agent and profile, then choose
+**Inspect setup**. Detection does not execute agents or install hooks. A found
+profile is shown separately from an installed executable; manual-only adapters
+cannot use managed installation.
+Use manual setup for an alternate absolute profile directory. The SSH environment
+can differ from a running agent's environment, so an inferred path does not prove
+which profile that agent loaded. Missing profiles are not created automatically.
 Installing/updating or removing requires a separate explicit action against
 that inspected plan. Install or update the host companion first when the host
 has an older version. Setup uses the resolved companion executable's absolute
@@ -13,11 +19,13 @@ and protected from replacement through writable or symlink ancestors. Root-owned
 standard binary directories are supported; shared writable source directories
 are refused.
 
-Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI and OpenCode
-on the qualified Linux filesystems described below. Gemini uses the selected
+Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
+on the qualified Linux filesystems described below. Explicit version-2 discovery
+also enables managed GitHub Copilot CLI setup; explicit version-3 discovery adds
+managed Amp setup while preserving both older mappings. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
-layer; setup does not discover or enable the provider's active layer.
+layer; detection does not establish or enable the provider's active layer.
 
 Gemini's six native groups retain their 5000 **millisecond** deadline and preserve
 `hooksConfig.enabled` and `hooksConfig.disabled` exactly. Cursor retains its
@@ -31,26 +39,47 @@ global hooks are enabled, trusted, or reporting in the running provider.
 The equivalent local commands are:
 
 ```sh
+lazysh-agent hooks discover
 lazysh-agent hooks preview --agent codex
 lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
 lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
 lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
 ```
 
+Discovery uses executable metadata on bounded absolute `PATH` entries and known
+Codex standalone locations. It respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`GEMINI_CLI_HOME` (with `.gemini` appended), and OpenCode's
+`OPENCODE_CONFIG_DIR`/XDG configuration directory, plus Cline's `CLINE_DIR` or `~/.cline`. `OPENCODE_CONFIG` names a file,
+so it is not used as a hook profile directory. Invalid overrides are reported
+instead of silently selecting another profile. A truncated scan is labelled;
+manual selection remains available. No credential or profile contents are read
+by discovery. Discovery and managed installation have separate platform limits.
+Cursor hook discovery uses its [documented hook location](https://prod.cursor.com/docs/hooks), `~/.cursor/hooks.json`;
+CLI configuration overrides are not assumed to relocate hooks. Use manual
+selection for another verified hook layer.
+
 `install` also updates existing owned entries. Every changed profile needs a
 fresh inspection. Claude and Gemini use `settings.json`, Codex and Cursor use `hooks.json`,
-and OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
+and OpenCode and Cline use `plugins/lazysh.js` under the selected profile. JSON must be strict,
 without comments or duplicate keys. Existing foreign JSON value bytes remain
 intact; owned entry separators and whitespace may change. A foreign same-name
-OpenCode plugin is never overwritten. The private prepared receipt records own
+plugin is never overwritten. The private prepared receipt records own
 templates and hashes/identities, never a copy of provider configuration.
+
+Cline setup installs only the existing root lifecycle plugin, bound to the inspected
+absolute companion. Select the `.cline` directory used by `--config`, `CLINE_DIR`,
+or the workspace explicitly; discovery cannot determine a running session's layer.
+Start a new Cline session with that profile to load the plugin, then start a turn.
+Existing disabled-plugin settings and plugin restrictions are preserved, and setup
+does not establish live reporting. See Cline's [plugin locations](https://docs.cline.bot/sdk/plugin-install)
+and [plugin lifecycle](https://docs.cline.bot/sdk/plugins).
 
 Managed writes currently support qualified local Linux filesystems without
 extended access/default ACLs. Special file permission bits, unsafe links,
 read-only files, unhandled ACLs and uncertain ownership are refused. Existing
 ordinary file permissions and group ID are retained. macOS/Windows writes
 remain unsupported; preview is available without accessing a profile. Preview
-labels POSIX shell or Bun JavaScript dialect. On Windows it returns the
+labels POSIX shell, Bun JavaScript or Cline JavaScript dialect. On Windows it returns the
 existing unbound print-only templates, explicitly without an executable
 binding or managed-setup support; it does not quote a Windows executable as
 a POSIX command. These
@@ -169,16 +198,24 @@ active process. Missing companions never change the callbacks' control results.
 Initial support is deliberately root-only. Delegated children can inherit the
 parent plugin while using another directory, so their callbacks are ignored;
 parent workspace context is never attributed to a child. Shared root-session IDs
-are not native run identity. Permission/question waits and managed Cline setup
-are unsupported. A loaded plugin is not proof of fresh reporting, and native
-worker failure or a missed callback can leave an observation stale.
+are not native run identity. Permission/question waits remain unsupported.
+Explicit Linux managed setup is available as described above. A loaded plugin is
+not proof of fresh reporting, and native worker failure or a missed callback can
+leave an observation stale.
 
 Contract source: [Cline CLI 3.0.74 runtime hooks](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/docs/sdk/plugins.mdx).
 The official Linux CLI 3.0.74 was qualified with a private loopback provider:
 one interactive root retained its exact agent/conversation IDs across two native
 run IDs and reported working, done, working, done to the actual companion Store.
-Root-only child omission also has plugin/ingestion regression coverage; actual
-child directory binding remains unqualified. Windows and real authenticated
+A fresh owned Cline 3.0.74 session also qualified the managed absolute companion
+binding with a private loopback provider: working advanced to the same row's
+completed done state with `Turn finished` and fixed response readback. In a
+separate owned profile, an existing exact-path `disabledPlugins` setting stayed
+unchanged through installation and native response readback, with no companion
+rows. This negative qualifies pre-run suppression; it does not identify after-run
+callback timing. Both use an isolated local source-built companion, not a public
+release artifact. Root-only child omission also has plugin/ingestion regression
+coverage; actual child directory binding remains unqualified. Windows and real authenticated
 provider sessions require separate qualification.
 
 ## Gemini CLI, Droid and Kimi CLI
@@ -197,11 +234,35 @@ activity indicates work; permission, idle and elicitation notifications indicate
 attention. Droid also emits an idle notification after cancellation, so a
 canceled turn is not reported as a successful final response.
 
-`lazysh-agent kimi-config` prints JSON containing a TOML fragment in `content`
-for Kimi's `[[hooks]]` entries. Kimi prompt/tool activity indicates work, including
+`lazysh-agent kimi-config` retains the legacy Kimi CLI **1.52.0** contract and
+prints the same JSON containing a TOML fragment in `content` for its `[[hooks]]`
+entries. It does not configure or qualify Kimi Code 2.4.1. Legacy prompt/tool
+activity indicates work, including
 failed tools while the agent continues. Only the documented permission_prompt
 notification is treated as a permission wait. SessionStart and child lifecycle
 notifications do not finish a parent or create a fictitious working turn.
+
+Hook discovery reports separate metadata candidates for current Kimi Code 2.4.1
+(`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and legacy Kimi CLI 1.52.0
+(`KIMI_SHARE_DIR`, otherwise `~/.kimi`), in that order. Nonempty overrides are
+used literally: discovery does not trim whitespace, expand `~`, or resolve
+relative paths. Paths outside its absolute-path admission are labelled invalid;
+an invalid override does not fall back to the default for that dialect. Empty
+overrides use the default. The other dialect remains a separate candidate, not a
+fallback or automatic selection. Identical unresolved HOME diagnostics appear
+once. Discovery reads directory metadata only: it
+does not execute Kimi, open/create configuration, migrate profiles, or identify
+the installed version. Kimi remains manual-only in discovery schema 1; the seven
+managed providers and existing printer/ingestion behavior are unchanged.
+
+Kimi Code 2.4.1 native lifecycle remains unqualified. Its external hooks omit
+agent identity from several turn/tool events; blockable `Stop` is not successful
+turn completion, and `PermissionRequest` is an observation that approval was
+requested, not proof it is still waiting. Metadata presence does not establish
+hook loading, current root state or per-turn completion. See [#696](https://github.com/mihazs/lazysh/issues/696).
+The path contracts are pinned to [Kimi Code 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/apps/kimi-code/src/utils/paths.ts#L35)
+and [Kimi CLI 1.52.0](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/share.py#L7);
+the current event limits follow the [2.4.1 emitters](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts#L178).
 
 Kimi 1.52.0 shares the parent's session and hook engine with child souls. Both
 root and child turns emit identical unscoped Stop/StopFailure payloads, so those
@@ -243,6 +304,37 @@ the printed TOML with Bun. Real authenticated agent sessions remain unverified.
 
 ## GitHub Copilot CLI
 
+### Explicit managed setup
+
+Use `lazysh-agent hooks discover --schema-version 2` to discover the selected
+Copilot profile and its managed capability. The app requests this version when
+hook setup is explicitly opened. Default discovery and `--schema-version 1`
+retain the original seven managed providers and label Copilot manual, preserving
+released clients. An older companion must be updated before Copilot setup;
+the original seven providers still permit manual profile inspection when
+detection is unavailable.
+
+Select an existing absolute profile, then inspect and separately install/update
+or remove its exact plan using `--agent copilot`. The companion owns only
+`hooks/lazysh.json` and `.lazysh-hooks-copilot.json` in that profile. It binds the
+six shell-free handlers to its inspected absolute executable. A foreign or
+manually installed `hooks/lazysh.json` is a conflict, even if its content matches
+the printed template; it is never adopted or overwritten. Other hook files,
+opaque JSONC/configuration, providers, settings, trust and disabled-hook policy
+remain unchanged. Removal leaves unrelated files and the hooks directory.
+Remove owned hooks with the current companion before downgrading to an older
+companion that does not understand the Copilot ownership record.
+
+Copilot 1.0.105's shipped resolver preserves nonempty `COPILOT_HOME` literally,
+including trailing whitespace; only empty/unset values fall back to `~/.copilot`.
+Unsafe or relative overrides are reported invalid, never replaced with a guessed
+default. The deprecated `--config-dir` can select a different profile that SSH
+environment metadata cannot identify. Start a new Copilot session with the
+selected profile and review `/hooks` under normal policy; installation alone
+does not verify that hooks are enabled, loaded or reporting.
+
+### Manual hooks and lifecycle qualification
+
 `lazysh-agent copilot-config` prints a version-1 hook file for the selected
 Copilot CLI hook scope. It uses shell-free `exec` and fixed `args`, with a
 five-second `timeoutSec`. PascalCase compatible events provide the explicit
@@ -260,8 +352,38 @@ permissionRequest because that fires before automatic rules and does not prove
 that a human prompt is waiting. No approval decision or additional context is
 returned. This targets Copilot CLI; notification and shell-free execution
 support differ in the cloud agent. Contracts follow the current
-[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference);
-authenticated Copilot CLI acceptance remains unverified.
+[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference).
+
+On Linux, CLI **1.0.105** loaded the manually placed printed hooks with a local
+companion built from [`91d6f8ba`](https://github.com/mihazs/lazysh/commit/91d6f8ba7f800170939a1946dae18322c5569ac9).
+Isolated mock-provider turns verified root `working` → `done` with `Turn finished`
+and native response readback, and root `working` → `needs_attention` while an
+elicitation question and both choices remained visible and unanswered. The latter
+is an attention notice, not a valid actionable approval. Each case used one
+provider request and ordinary session-only folder consent; no question answer or
+tool approval was sent. [Issue #704](https://github.com/mihazs/lazysh/issues/704)
+retains binary/source bindings, receipt hashes and earlier failed attempts.
+
+A separate Linux 1.0.105 no-tools child probe used a passive producer observer
+and a local companion from [`2435d50c`](https://github.com/mihazs/lazysh/commit/2435d50ca61709940a583874b4ee0089d2ebd7d7)
+to verify child `done` before the parent's final response, while the parent stayed
+`working`. Tagged completion requires `session_id == agent_id` and a valid,
+distinct `parent_agent_id`; shared-parent callbacks remain ignored. Native child
+`Stop` was exercised; child `SessionEnd` has CLI contract coverage. See
+[#713](https://github.com/mihazs/lazysh/issues/713) for the preserved stale-child
+baseline and candidate replay.
+
+Those earlier checks used manually loaded files. Separately, a local **1.5.4**
+companion built from [`3ea4ef20`](https://github.com/mihazs/lazysh/commit/3ea4ef20369905601bc7636f7c0000d249b42a84)
+installed the six absolute-executable hooks using an inspected managed plan.
+Fresh Linux CLI **1.0.105** sessions then verified the same root completion,
+unanswered attention and no-tools child behavior with isolated mock providers.
+The child case retained its separately labeled passive producer observer. Hook,
+ownership-receipt and provider files remained unchanged; process, socket and
+terminal cleanup passed. [Issue #717](https://github.com/mihazs/lazysh/issues/717)
+retains the source/binary bindings and separate case receipts. Other child
+configurations, real-provider/account behavior, public companion artifacts and
+Android delivery remain unqualified.
 
 ## Cursor CLI, Amp and Aider
 
@@ -280,10 +402,34 @@ These contracts follow the [Cursor hook reference](https://cursor.com/docs/hooks
 and [scope-specific working directories](https://cursor.com/docs/reference/third-party-hooks).
 Authenticated Cursor execution and neutral-output acceptance remain unverified.
 
+Managed Amp setup requires explicit `hooks discover --schema-version 3`. The
+app requests V3 when setup is opened; only a native remote-command rejection
+allows one V2 metadata request for older Copilot-capable companions. Malformed
+responses, unsupported capability, access changes and source loss do not trigger
+fallback. Default V1 and explicit V2 continue to label Amp manual.
+
+Select the existing system profile `<configuration-base>/amp`; a nonempty
+`XDG_CONFIG_HOME` is used literally without trimming and must be a safe absolute
+path. Empty/unset values use `~/.config`; unsafe explicit values never fall back.
+The inspected installer owns only `plugins/lazysh.js` and
+`.lazysh-hooks-amp.json`, binding the observer's one spawn executable to the
+absolute companion. It preserves settings, other plugins, trust and policy.
+Foreign `lazysh.ts` or `lazysh` entries (including links) block installation and
+updates. Exact-owned JS removal remains available through a freshly inspected
+remove plan; it preserves those foreign entries. Shadow metadata changes retire
+old plans and are checked again at the existing write boundaries. The cooperative
+lock does not make absence atomic against other same-user writers after the last
+check, and a workspace plugin can still mask the system plugin. Configured status
+therefore retains `reporting:notChecked` and `trust:notChecked`. Start a new Amp
+session with that configuration and review its normal plugin policy; loading,
+native ordering and root/child attribution require separate qualification. Use
+the newer companion to remove owned Amp hooks before downgrading to a companion
+that cannot read its Amp ownership record.
+
 `lazysh-agent amp-plugin` prints the original plugin in `content`, with its
 suggested filename. Place reviewed content in your selected Amp plugin directory.
 It subscribes to native `ctx.thread.state` for encountered threads: `running`
-reports work, `awaiting-approval` reports attention, `idle` reports completion,
+reports work, `awaiting-approval` reports attention, `idle` after observed running reports completion,
 and `error` reports a failed turn. It does not intercept tools or answer approvals.
 Per-thread writes are ordered; while a write is pending, only the latest next
 state is retained. A late initial lookup cannot overwrite a newer native state.
@@ -329,11 +475,11 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Codex](https://learn.chatgpt.com/docs/hooks) | UserPromptSubmit/tool events; PermissionRequest; Stop/Interrupt/SessionEnd | Native adapter and print-only configuration; contract fixtures |
 | [OpenCode](https://opencode.ai/docs/plugins/) | session.status busy/retry; permission.asked/question.asked; status idle/session.deleted | Native plugin and adapter; contract fixtures |
 | [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter, print-only fragment and explicit Linux managed setup; contract fixtures |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Explicit V2 managed setup and manual shell-free hooks; scoped Linux 1.0.105 root/attention/no-tools child qualification |
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter, standalone printer and explicit existing-file Linux setup; contract fixtures, native runtime unverified |
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
-| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
+| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Explicit V3 managed system plugin and bounded observer; actual asset fixtures, native loading/order and authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
 | [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 

@@ -26,6 +26,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.webkit.WebView
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -70,6 +71,60 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+
+// Instrumentation-only: observe the original Window dispatch without consuming or rewriting input.
+private class OwnedFingerWindowObserver(
+    private val original: android.view.Window.Callback,
+    private val epoch: Long,
+    private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
+) : android.view.Window.Callback by original {
+    private val rows = JSONArray()
+    @Volatile private var unavailable = false
+    private var overflow = false
+    companion object {
+        fun coordinate(value: Float): Any = if (value.isFinite()) value.coerceIn(-65_535f, 65_535f).toDouble() else JSONObject.NULL
+    }
+    private fun elapsed(value: Long) = (value - epoch).coerceIn(0, 65_535)
+    private fun record(row: JSONObject?, outcome: String) {
+        try {
+            if (row != null) synchronized(rows) {
+                if (rows.length() < 6) rows.put(row.put("outcome", outcome).put("returnedAtMs", elapsed(now())))
+                else overflow = true
+            }
+        } catch (_: Throwable) { unavailable = true }
+    }
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        val row = try {
+            if (event.downTime != epoch) null else JSONObject()
+                .put("action", when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> "down"
+                    android.view.MotionEvent.ACTION_MOVE -> "move"
+                    android.view.MotionEvent.ACTION_UP -> "up"
+                    android.view.MotionEvent.ACTION_CANCEL -> "cancel"
+                    else -> "other"
+                })
+                .put("eventAtMs", elapsed(event.eventTime)).put("dispatchAtMs", elapsed(now()))
+                .put("point", JSONArray(listOf(event.x, event.y, event.rawX, event.rawY).map(::coordinate)))
+                .put("historyCount", event.historySize.coerceIn(0, 8))
+                .put("pointerMatches", event.pointerCount == 1 && event.getPointerId(0) == 0)
+                .put("finger", event.pointerCount > 0 && event.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER)
+                .put("touchscreen", event.isFromSource(android.view.InputDevice.SOURCE_TOUCHSCREEN))
+        } catch (_: Throwable) { unavailable = true; null }
+        try {
+            val handled = original.dispatchTouchEvent(event)
+            record(row, if (handled) "handled" else "unhandled")
+            return handled
+        } catch (failure: Throwable) { record(row, "threw"); throw failure }
+    }
+    fun snapshot(): String = try {
+        synchronized(rows) { JSONObject().put("state", if (unavailable) "unavailable" else "observed")
+            .put("overflow", overflow).put("events", JSONArray(rows.toString())).toString() }
+    } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
+    fun restore(window: android.view.Window) {
+        check(window.callback === this) { "Owned finger Window callback changed" }
+        window.callback = original
+    }
+}
 
 private class NtfyFirstLaunch(started: Long) {
     val deadline = started + TimeUnit.SECONDS.toNanos(6)
@@ -1220,6 +1275,23 @@ class NativeWorkspaceTest {
             trigger.perform(webClick())
         }
         awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
+        for (group in listOf("workspace-more-tools", "workspace-connection-actions", "workspace-application-options")) {
+            val details = "$menu details.$group"
+            val ownsHiddenAction = """
+                (()=>{const owner=document.querySelector(${JSONObject.quote(details)});
+                  const target=Array.from(document.querySelectorAll(${JSONObject.quote(menu + " button")}))
+                    .find(button=>button.textContent.trim()===${JSONObject.quote(text)});
+                  return Boolean(owner&&!owner.open&&target?.closest('details')===owner);})()
+            """
+            if (evaluate(scenario, ownsHiddenAction) == "true") {
+                val selector = "$details > summary"
+                val disclosure = onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector))
+                disclosure.perform(webScrollIntoView())
+                awaitDocument(scenario, "touchable workspace disclosure", workspaceElementVisible(selector, true), deadline = deadline)
+                disclosure.perform(webClick())
+                awaitDocument(scenario, "workspace disclosure expanded", "Boolean(document.querySelector(${JSONObject.quote(details)})?.open)", deadline = deadline)
+            }
+        }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
         target.perform(webScrollIntoView())
@@ -1314,8 +1386,26 @@ class NativeWorkspaceTest {
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
-                .perform(webScrollIntoView()).perform(webClick())
+            val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
+            val expanded = evaluate(scenario, """
+                (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
+                  if(buttons.length!==1)return null;
+                  const state=buttons[0].getAttribute('aria-expanded');
+                  return state==='true'?true:state==='false'?false:null;})()
+            """)
+            assertTrue("One current board Setup disclosure is required", expanded == "true" || expanded == "false")
+            if (expanded == "false") {
+                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR, setup))
+                button.perform(webScrollIntoView())
+                assertEquals("Current board Setup must be hit-testable", "true", evaluate(scenario,
+                    workspaceButtonVisible(".agent-panel:not([hidden]) > .tool-bar", "Setup")))
+                button.perform(webClick())
+            }
+            val control = onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
+            control.perform(webScrollIntoView())
+            assertEquals("Current keep-awake checkbox must be hit-testable", "true", evaluate(scenario,
+                workspaceElementVisible(checkbox, true)))
+            control.perform(webClick())
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
         fun awaitActive(stage: String) {
@@ -1364,6 +1454,35 @@ class NativeWorkspaceTest {
                 val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
                     .also { require(it.size <= 2048) { "Viewport oracle bound" } }.toString(Charsets.UTF_8)
+                val visualObservation = """
+                    (()=>{try {
+                      const cards=document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row'), card=cards[0];
+                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
+                      const box=rect=>rect?[rect.left,rect.top,rect.right,rect.bottom].map(bounded):null;
+                      const viewport=window.visualViewport;
+                      const kind=(hit,label)=>!hit?'none':hit===label?'label':label.contains(hit)?'label-descendant':hit===card?'card':card.contains(hit)?'card-descendant':'other';
+                      const observed=labels.map(label=>{
+                        if(!label)return {present:false,rect:null,glyphs:0,truncated:false,failedRect:null,hit:'none'};
+                        const range=document.createRange();range.selectNodeContents(label);
+                        const rectangles=Array.from(range.getClientRects()), failed=rectangles.slice(0,64).find(rect=>{
+                          const hit=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
+                          return hit!==label&&!label.contains(hit);
+                        });
+                        const hit=failed?document.elementFromPoint((failed.left+failed.right)/2,(failed.top+failed.bottom)/2):label;
+                        return {present:true,rect:box(range.getBoundingClientRect()),glyphs:Math.min(64,rectangles.length),
+                          truncated:rectangles.length>64,failedRect:box(failed),hit:kind(hit,label)};
+                      });
+                      $viewportOracle
+                      return {state:'observed',liveReady:Boolean($liveHerdr),cards:Math.min(8,cards.length),
+                        cardShown:!!card?.getClientRects().length,cardRect:box(card?.getBoundingClientRect()),
+                        viewport:viewport?[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale].map(bounded):null,
+                        viewportReady:!!card&&observed.every(label=>label.present)&&ownedKeyboardViewportContains(viewport,
+                          [card.getBoundingClientRect(),...labels.map(label=>{const range=document.createRange();range.selectNodeContents(label);return range.getBoundingClientRect();})]),
+                        blockers:Math.min(8,Array.from(document.querySelectorAll('[role=dialog], main[inert]')).filter(node=>node.getClientRects().length>0).length),
+                        labels:observed};
+                    } catch {return {state:'unavailable'};}})()
+                """.trimIndent()
                 awaitDocument(scenario, "owned live Herdr report visually ready over empty companion reports", """
                     (()=>{
                       if(!($liveHerdr)) return false;
@@ -1381,7 +1500,9 @@ class NativeWorkspaceTest {
                           return hit===labels[index] || labels[index].contains(hit);
                         }));
                     })()
-                """, deadline = boardDeadline)
+                """, deadline = boardDeadline, observe = { remaining ->
+                    runCatching { evaluate(scenario, visualObservation, remaining) }.getOrDefault("unavailable")
+                })
                 assertTrue("Owned live Herdr visual admission exceeded the original board deadline", System.nanoTime() < boardDeadline)
                 println("lazysh live Herdr navigation: owned Codex row visible with exact server and host-readback context over empty companion reports")
             }
@@ -1439,6 +1560,95 @@ class NativeWorkspaceTest {
                 else throw cleanup
             }
         }
+    }
+
+    private fun swipeViewClearOfIme(visible: Boolean?, bottom: Int?, top: Int, height: Int, rootHeight: Int): Boolean {
+        val end = top.toLong() + height
+        if (top < 0 || height <= 0 || rootHeight <= 0 || end > rootHeight) return false
+        return when (visible) {
+            false -> true
+            true -> bottom != null && bottom > 0 && end <= rootHeight.toLong() - bottom
+            null -> false
+        }
+    }
+
+    @Test fun ownedFingerWindowObservationPreservesDispatchAndExactRestoration() {
+        NativeActivityFixture.scenario.onActivity { activity ->
+            val window = activity.window
+            val original = checkNotNull(window.callback)
+            val epoch = android.os.SystemClock.uptimeMillis()
+            val event = android.view.MotionEvent.obtain(epoch, epoch + 1, android.view.MotionEvent.ACTION_MOVE, 10f, 20f, 0)
+            var calls = 0
+            var expected = event
+            var handled = false
+            var failure: Throwable? = null
+            val sentinel = AssertionError("private delegate failure")
+            val delegate = object : android.view.Window.Callback by original {
+                override fun dispatchTouchEvent(received: android.view.MotionEvent): Boolean {
+                    calls++; assertSame(expected, received)
+                    failure?.let { throw it }
+                    return handled
+                }
+            }
+            val observer = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+            try {
+                assertFalse(observer.dispatchTouchEvent(event)); assertEquals(1, calls)
+                handled = true
+                assertTrue(observer.dispatchTouchEvent(event)); assertEquals(2, calls)
+                failure = sentinel
+                assertSame(sentinel, runCatching { observer.dispatchTouchEvent(event) }.exceptionOrNull())
+                assertEquals(3, calls)
+                failure = null
+                repeat(8) { observer.dispatchTouchEvent(event) }
+                val trace = JSONObject(observer.snapshot())
+                assertEquals(6, trace.getJSONArray("events").length()); assertTrue(trace.getBoolean("overflow"))
+                assertEquals("unhandled", trace.getJSONArray("events").getJSONObject(0).getString("outcome"))
+                assertEquals("handled", trace.getJSONArray("events").getJSONObject(1).getString("outcome"))
+                assertEquals("threw", trace.getJSONArray("events").getJSONObject(2).getString("outcome"))
+                assertFalse(trace.toString().contains("private"))
+                val unavailable = OwnedFingerWindowObserver(delegate, epoch) { throw IllegalStateException("private observation failure") }
+                handled = false
+                assertFalse(unavailable.dispatchTouchEvent(event))
+                failure = sentinel
+                assertSame(sentinel, runCatching { unavailable.dispatchTouchEvent(event) }.exceptionOrNull())
+                assertEquals("unavailable", JSONObject(unavailable.snapshot()).getString("state"))
+                assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.NaN))
+                assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.POSITIVE_INFINITY))
+                assertEquals(65_535.0, OwnedFingerWindowObserver.coordinate(Float.MAX_VALUE))
+                failure = null
+                val foreign = android.view.MotionEvent.obtain(epoch + 10, epoch + 11, android.view.MotionEvent.ACTION_MOVE, 10f, 20f, 0)
+                try {
+                    expected = foreign
+                    val filtered = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+                    val before = calls
+                    assertFalse(filtered.dispatchTouchEvent(foreign)); assertEquals(before + 1, calls)
+                    assertEquals(0, JSONObject(filtered.snapshot()).getJSONArray("events").length())
+                } finally { foreign.recycle(); expected = event }
+                window.callback = delegate
+                window.callback = observer
+                observer.restore(window); assertSame(delegate, window.callback)
+                window.callback = observer
+                window.callback = original
+                assertTrue(runCatching { observer.restore(window) }.isFailure)
+                assertSame(original, window.callback)
+            } finally {
+                if (window.callback === observer || window.callback === delegate) window.callback = original
+                event.recycle()
+            }
+        }
+    }
+
+    @Test fun nativeSwipeAdmissionRequiresTheWholeWebViewAboveTheDockedIme() {
+        assertTrue(swipeViewClearOfIme(false, 0, 10, 190, 200))
+        assertTrue(swipeViewClearOfIme(true, 100, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 100, 10, 91, 200))
+        assertFalse(swipeViewClearOfIme(null, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 0, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, -1, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 0, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 191, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, Int.MAX_VALUE, Int.MAX_VALUE, Int.MAX_VALUE))
     }
 
     private fun herdrConfirmationObservation(scenario: ActivityScenario<MainActivity>, expectedChild: String, expectedDraft: String): (Long) -> String {
@@ -1505,6 +1715,243 @@ class NativeWorkspaceTest {
             click("Attach herdr $name")
             awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
         }
+        val history = herdr.getJSONObject("history")
+        val original = herdr.getJSONObject("agent")
+        val historyTab = history.getString("tabId")
+        val originalTab = original.getString("tabId")
+        require(historyTab.matches(Regex("w[0-9]+:t[0-9]+")) && historyTab.length <= 50 &&
+            originalTab.matches(Regex("w[0-9]+:t[0-9]+")) && originalTab.length <= 50 && historyTab != originalTab)
+        val childDisconnect = JSONObject.quote("button[aria-label='Disconnect $parent / $name']")
+        val discoveryObservation = """
+            (()=>{
+              const panels=Array.from(document.querySelectorAll('.multiplexer-panel'));
+              const panel=panels.length===1?panels[0]:null;
+              const list=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent.trim()==='List herdr sessions');
+              const capabilityText=panel?.querySelector('p.muted')?.textContent.match(/(?:^| · )Herdr (detected|not installed)(?: · |${'$'})/)?.[1];
+              const capability=capabilityText==='detected'?'detected':capabilityText==='not installed'?'missing':'unknown';
+              const selected=label=>Array.from(document.querySelectorAll('.view-tabs button[aria-current=page], .mobile-session-views button[aria-current=page]')).some(x=>x.textContent.trim()===label);
+              const count=selector=>Math.min(8,document.querySelectorAll(selector).length);
+              const child=document.querySelector($childDisconnect);
+              return {panelCount:Math.min(8,panels.length),loading:Boolean(panel?.querySelector('.loading')),
+                inlineError:Boolean(panel?.querySelector('.inline-error[role=alert]')),herdrCapability:capability,
+                listCount:Math.min(8,list.length),listEnabled:list.length===1&&!list[0].disabled,
+                sessionsSelected:selected('Sessions'),terminalSelected:selected('Terminal'),
+                menuCount:count('.mobile-session-views'),tabsCount:count('[role=tab]'),
+                terminalCount:count('.terminal-canvas'),childDisconnect:Boolean(child),
+                endedPlaceholder:document.querySelector('.session-body > .panel-empty h3')?.textContent?.trim()==='This connection has ended.',
+                expectedChildTabSelected:Boolean(child?.closest('.session-tab')?.querySelector('[role=tab][aria-selected=true]'))};
+            })()
+        """.trimIndent()
+        fun focusTab(tab: String) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "owned Herdr discovery controls", hasButton("List herdr sessions"),
+                observe = { remaining -> evaluate(scenario, discoveryObservation, remaining) })
+            click("List herdr sessions")
+            awaitDocument(scenario, "owned Herdr browse action", hasButton("Browse Herdr $name"))
+            click("Browse Herdr $name")
+            awaitDocument(scenario, "owned exact Herdr tab action", hasButton("Focus $tab"))
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='Focus $tab']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "owned Herdr tab focus acknowledged",
+                "Array.from(document.querySelectorAll('button')).find(x=>x.textContent.trim()==='Focus $tab')?.closest('details')?.querySelector('summary')?.textContent.endsWith(' · focused')===true")
+            sessionView(scenario, "Terminal")
+        }
+        focusTab(historyTab)
+        val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
+        awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
+        val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        // Wait for the scheduled terminal focus before dismissing its keyboard.
+        awaitDocument(scenario, "owned history terminal focus settled", """
+            (()=>{const screens=$screens;return screens.length===1 &&
+              screens[0].parentElement?.classList.contains('focus') &&
+              screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+        """, deadline = geometryDeadline)
+        closeSoftKeyboard()
+        val fingerSource = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-herdr-finger.js")
+            .use { it.readNBytes(16_385) }
+        require(fingerSource.size <= 16_384)
+        val fingerScript = fingerSource.toString(Charsets.UTF_8)
+        val geometryScript = "(()=>{$fingerScript;return ownedHerdrSwipeGeometry($screens,window.visualViewport,devicePixelRatio,document);})()"
+        var geometry = JSONObject()
+        while (true) {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
+            assertTrue("Native swipe path did not settle inside its owned screen/viewport: diagnostic=${geometry.optJSONObject("diagnostic")}", remaining > 0)
+            geometry = JSONObject(evaluate(scenario, geometryScript, remaining))
+            if (geometry.getBoolean("ready") && System.nanoTime() < geometryDeadline) break
+            val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
+            if (pause > 0) Thread.sleep(pause)
+        }
+        val rect = geometry.getJSONArray("rect")
+        val viewport = geometry.getJSONArray("viewport")
+        val bounds = (0..3).map { rect.getDouble(it) }
+        val visible = (0..4).map { viewport.getDouble(it) }
+        require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
+            bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
+            bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        lateinit var fingerActivity: MainActivity
+        lateinit var fingerView: WebView
+        lateinit var fingerDecor: View
+        lateinit var fingerRoot: View
+        var fingerWindow: OwnedFingerWindowObserver? = null
+        scenario.onActivity { activity ->
+            fingerActivity = activity; fingerDecor = activity.window.decorView
+            fingerView = checkNotNull(webView(fingerDecor)); fingerRoot = fingerView.rootView
+        }
+        var startFrame: List<Int>? = null
+        fun fingerFrame(view: View): List<Int> {
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            return listOf(origin[0], origin[1], view.width, view.height)
+        }
+        fun ownsFingerView() = !fingerActivity.isFinishing && !fingerActivity.isDestroyed &&
+            fingerActivity.window.decorView === fingerDecor && fingerView.rootView === fingerRoot &&
+            fingerView.isAttachedToWindow && fingerView.isShown && fingerView.hasWindowFocus() &&
+            (fingerWindow == null || fingerActivity.window.callback === fingerWindow) &&
+            (startFrame == null || fingerFrame(fingerView) == startFrame)
+        fun fingerPoint(view: View, fraction: Double, dispatch: JSONObject): FloatArray {
+            val frame = fingerFrame(view)
+            if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
+            val density = view.resources.displayMetrics.density.toDouble()
+            val predicates = mapOf(
+                "ownedView" to (view === fingerView && ownsFingerView()), "webView" to (view is WebView), "attached" to view.isAttachedToWindow, "shown" to view.isShown,
+                "windowFocused" to view.hasWindowFocus(), "layoutSettled" to !view.isLayoutRequested,
+                "sizePositive" to (view.width > 0 && view.height > 0), "densityValid" to (density.isFinite() && density > 0),
+                "densityMatchesDom" to (geometry.getDouble("density") == density))
+            val insets = ViewCompat.getRootWindowInsets(view.rootView)
+            val imeVisible = insets?.isVisible(WindowInsetsCompat.Type.ime())
+            val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom
+            val windowOrigin = IntArray(2); view.getLocationInWindow(windowOrigin)
+            val rootOrigin = IntArray(2); view.rootView.getLocationInWindow(rootOrigin)
+            val top = windowOrigin[1] - rootOrigin[1]
+            val clear = swipeViewClearOfIme(imeVisible, bottom, top, view.height, view.rootView.height)
+            val imeState = when (imeVisible) { true -> "visible"; false -> "hidden"; null -> "unavailable" }
+            val imeGeometry = listOf(top, view.height, view.rootView.height, bottom ?: -1).map { it.coerceIn(-1, 65535) }
+            dispatch.put("ime", imeState).put("imeClear", clear).put("imeGeometry", JSONArray(imeGeometry))
+            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState clear=$clear geometry=$imeGeometry",
+                predicates.values.all { it } && clear)
+            val scaleX = view.width / visible[2]
+            val scaleY = view.height / visible[3]
+            val travel = (bounds[3] - bounds[1]) * 0.5 * scaleY
+            assertTrue("Owned native swipe must exceed both DOM scroll admission and native touch slop",
+                travel > 10 * scaleY && travel > ViewConfiguration.get(view.context).scaledTouchSlop * 2 && travel > 10 * density)
+            val x = ((bounds[0] + bounds[2]) / 2 - visible[0]) * scaleX
+            val y = (bounds[1] + (bounds[3] - bounds[1]) * fraction - visible[1]) * scaleY
+            assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
+            return floatArrayOf((frame[0] + x).toFloat(), (frame[1] + y).toFloat())
+        }
+        val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
+        val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
+        assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val pointer = android.view.MotionEvent.PointerProperties().apply {
+            id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+        }
+        var fingerDown = false
+        var lastPoint = floatArrayOf()
+        var fingerFailure: Throwable? = null
+        val fingerStarted = System.nanoTime()
+        val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
+        val dispatches = JSONArray()
+        fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fingerStarted).coerceIn(0, 65_535)
+        fun sendFinger(action: Int, point: FloatArray) {
+            val coordinate = android.view.MotionEvent.PointerCoords().apply {
+                x = point[0]; y = point[1]; pressure = 1f; size = 1f
+            }
+            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try {
+                assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
+                assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
+                instrumentation.sendPointerSync(event)
+            } finally {event.recycle()}
+        }
+        fun injectFinger(action: Int, fraction: Double) {
+            val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
+            if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
+            assertTrue("Owned finger dispatch trace is bounded", dispatches.length() < 6)
+            dispatches.put(dispatch)
+            // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
+            instrumentation.runOnMainSync {
+                lastPoint = fingerPoint(fingerView, fraction, dispatch)
+                val global = Rect(); val visibleWindow = Rect()
+                dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
+                fingerView.getWindowVisibleDisplayFrame(visibleWindow)
+                dispatch.put("frame", JSONArray(startFrame)).put("point", JSONArray(lastPoint.map { it.toInt() }))
+                    .put("scroll", JSONArray(listOf(fingerView.scrollX, fingerView.scrollY)))
+                    .put("global", JSONArray(listOf(global.left, global.top, global.right, global.bottom)))
+                    .put("window", JSONArray(listOf(visibleWindow.left, visibleWindow.top, visibleWindow.right, visibleWindow.bottom)))
+            }
+            dispatch.put("injectBeginMs", elapsed()).put("eventAgeMs", android.os.SystemClock.uptimeMillis() - downTime)
+            if (action != android.view.MotionEvent.ACTION_UP)
+                assertTrue("Owned finger injection requires remaining original budget: dispatches=$dispatches", System.nanoTime() < fingerDeadline)
+            sendFinger(action, lastPoint)
+            dispatch.put("injectEndMs", elapsed())
+        }
+        var lastFingerSample = JSONObject()
+        var samplePhase = 0
+        var sampleSequence = 0
+        var sampleAtMs = 0L
+        fun fingerSample(timeoutMillis: Long): String {
+            val result = AtomicReference<String>()
+            val completed = CountDownLatch(1)
+            assertTrue("Owned finger probe dispatch rejected", fingerView.post {
+                if (ownsFingerView() && System.nanoTime() < fingerDeadline) {
+                    fingerView.evaluateJavascript("window[$fingerKey].sample()") { value ->
+                        if (ownsFingerView() && System.nanoTime() < fingerDeadline) result.set(value)
+                        completed.countDown()
+                    }
+                } else completed.countDown()
+            })
+            assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
+            return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget" }
+        }
+        fun progress(before: Int, moves: Int): Int {
+            while (true) {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
+                val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
+                lastFingerSample = sample
+                samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
+                assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
+                val row = sample.getInt("row")
+                if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                Thread.sleep(10)
+            }
+        }
+        try {
+            instrumentation.runOnMainSync {
+                check(ownsFingerView()) { "Owned finger Window installation lost its view" }
+                val window = fingerActivity.window
+                val observer = OwnedFingerWindowObserver(checkNotNull(window.callback), downTime)
+                window.callback = observer
+                fingerWindow = observer
+            }
+            fingerDown = true
+            injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
+            val firstRow = progress(512, 1)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.75)
+            val secondRow = progress(firstRow, 2)
+            assertTrue("Second MOVE must reveal further history before the same finger lifts", secondRow < firstRow)
+            injectFinger(android.view.MotionEvent.ACTION_UP, 0.75)
+            fingerDown = false
+        } catch (failure: Throwable) {fingerFailure = failure; throw failure}
+        finally {
+            var cleanup: Throwable? = null
+            try {
+                if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
+            } catch (failure: Throwable) {cleanup = failure}
+            try { instrumentation.runOnMainSync { fingerWindow?.restore(fingerActivity.window) } }
+            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
+            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
+        }
+        awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
+            (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
+        """)
+        focusTab(originalTab)
+        println("lazysh Herdr finger scroll: two native MOVE phases advanced history before one UP; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -1712,6 +2159,9 @@ class NativeWorkspaceTest {
             clipboard.setPrimaryClip(clip)
         }
         requireTime()
+        onView(isAssignableFrom(WebView::class.java)).perform(
+            pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()))
+        requireTime()
         onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
         requireTime()
         // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
@@ -1744,6 +2194,7 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
+    @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
 
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
@@ -1802,6 +2253,83 @@ class NativeWorkspaceTest {
             println("lazysh clipboard UI: PNG/JPEG preview without upload and non-content/oversize rejection verified")
         }
     }
+
+    private fun verifyManualAttachmentUpload(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val nonce = fixture.getString("nonce")
+        val expectedName = JSONObject.quote(fixture.getString("name"))
+        awaitDocument(scenario, "one selected owned Mosh attachment terminal", """
+            (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+              return selected.length===1 && selected[0].textContent.trim()===$expectedName &&
+                ${workspaceElementVisible("button.session-switcher-trigger", true)} &&
+                document.querySelector('.session-switcher-trigger')?.textContent===$expectedName &&
+                document.querySelector('.workspace-footer')?.textContent.includes('Mosh') &&
+                Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0).length===1;})()
+        """)
+        selectOwnedConnection(scenario, fixture.getString("name"), true)
+        val owned = fixture.getJSONObject("attachments")
+        require(owned.getString("newName") == "owned-upload-$nonce.png" && owned.getString("collisionName") == "owned-collision-$nonce.png")
+        val uri = Uri.parse("content://app.lazysh.client.test.clipboardfixture/large-png")
+        val image = checkNotNull(context.contentResolver.openInputStream(uri)).use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            while (true) {
+                val count = input.read(chunk)
+                if (count < 0) break
+                require(output.size() + count <= 600 * 1024) { "Owned PNG exceeds its fixture bound" }
+                output.write(chunk, 0, count)
+            }
+            output.toByteArray()
+        }
+        require(image.size in 400 * 1024..600 * 1024) { "Owned PNG must cross multiple upload chunks" }
+        val bitmap = checkNotNull(android.graphics.BitmapFactory.decodeByteArray(image, 0, image.size))
+        try { assertEquals(448, bitmap.width); assertEquals(320, bitmap.height) } finally {bitmap.recycle()}
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val receipt = JSONObject().put("schemaVersion", 1).put("nonce", nonce).put("bytes", image.size)
+            .put("width", 448).put("height", 320).put("sha256", digest)
+        java.io.File(context.filesDir, "owned-attachment-$nonce.json").writeText(receipt.toString())
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val panel = ".attachment-panel"
+        val destination = "$panel label:has(input:not([type]):not([readonly])) input"
+        fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        fun stage(name: String) {
+            sessionView(scenario, "Attach")
+            awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
+            instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
+            click("Paste clipboard image")
+            awaitDocument(scenario, "large protected clipboard image staged without upload", "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]') && !document.querySelector('$panel [role=alert]')")
+            pasteOwnedText(scenario, destination, "./$name", label)
+            closeSoftKeyboard()
+            assertEquals("Exact owned relative upload path", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
+            assertEquals("One enabled manual upload action", "true", evaluate(scenario,
+                "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
+            click("Upload attachment")
+        }
+        stage(owned.getString("newName"))
+        awaitDocument(scenario, "manual large image upload completed", """
+            (()=>{const fields=document.querySelectorAll('$panel input[readonly]');return fields.length===1 &&
+              fields[0].value.endsWith(${JSONObject.quote("/"+owned.getString("newName")+"'")}) &&
+              !document.querySelector('$panel [role=alert]') &&
+              document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
+        """)
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
+        stage(owned.getString("collisionName"))
+        awaitDocument(scenario, "fresh existing-path SFTP rejection", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 &&
+              alerts[0].textContent.trim()==='Failure: Failure' && !document.querySelector('$panel input[readonly]') &&
+              document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
+        """)
+        sessionView(scenario, "Terminal")
+        selectOwnedConnection(scenario, fixture.getString("name"), true)
+        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; original Mosh display selected")
+    }
+
+    private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
 
     private fun ownedWakeLockHeld(power: String, uid: Int, pid: Int): Boolean {
         val start = Regex("(?m)^Wake Locks: size=[0-9]+\\r?$").find(power)
@@ -1987,7 +2515,10 @@ class NativeWorkspaceTest {
                 record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
-            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response))
+            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response), observe = { remaining ->
+                runCatching { MoshBackgroundObservation.parse(evaluate(scenario,
+                    MoshBackgroundObservation.expression(key, token, name), remaining)).toString() }.getOrDefault("unavailable")
+            })
             execution(true)
             send("sleep 3; exit")
             home()
@@ -2015,6 +2546,23 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun moshBackgroundObservationNeverRetainsTerminalContentOrInterpretsTransportState() {
+        val sample = JSONObject().put("retained", true).put("helperCount", "one").put("documentFocused", true)
+            .put("activeKind", "terminal").put("readOnly", false).put("disabled", false).put("composerPresent", true)
+            .put("composerEmpty", true).put("rendererConnected", false).put("globalError", true).put("unappliedEdit", false)
+        assertEquals(sample.toString(), MoshBackgroundObservation.parse(sample.toString()).toString())
+        val absent = JSONObject(sample.toString()).put("helperCount", "zero").put("readOnly", JSONObject.NULL)
+            .put("disabled", JSONObject.NULL).put("composerPresent", false).put("composerEmpty", JSONObject.NULL)
+            .put("rendererConnected", JSONObject.NULL).put("activeKind", "other")
+        assertEquals(absent.toString(), MoshBackgroundObservation.parse(absent.toString()).toString())
+        for (invalid in listOf("{", " ".repeat(769), JSONObject(sample.toString()).put("activeKind", "private text").toString(),
+            JSONObject(sample.toString()).put("readOnly", "false").toString(), JSONObject(sample.toString()).put("rawDOM", "private text").toString(),
+            JSONObject(sample.toString()).put("helperCount", "many").toString(), JSONObject(sample.toString()).put("composerEmpty", JSONObject.NULL).toString(),
+            JSONObject(sample.toString()).apply { remove("retained") }.toString())) {
+            assertTrue("Unexpected Mosh observation must be unavailable", runCatching { MoshBackgroundObservation.parse(invalid) }.isFailure)
+        }
+    }
+
     private fun moshTransportLabel(labels: List<String>): String {
         require(labels.size == 1 && labels.single() in setOf("Mosh", "Mosh (forced)")) {
             "Owned Mosh transport option is unavailable or ambiguous"
@@ -2032,10 +2580,11 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false) {
+        require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
         require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
-        val useMosh = requireMoshBackground || requireHerdrMosh
+        val useMosh = requireMoshBackground || requireHerdrMosh || requireAttachments
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
@@ -2057,8 +2606,9 @@ class NativeWorkspaceTest {
         }
         val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
-        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
+        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
+        require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -2200,6 +2750,7 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
+            val recheckPattern = Regex("lazysh-tag-recheck-v1:(transport:(timeout|connect|redirect|body|decode|request|other)|status:([1-5][0-9]{2}|other)|body|json|ref|type|sha)")
             for (reused in listOf(false, true)) {
                 if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel summary")).perform(webScrollIntoView()).perform(webClick())
@@ -2215,6 +2766,7 @@ class NativeWorkspaceTest {
                 button.perform(webClick())
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
+                var recheck = "none"
                 var completedWithinBudget = false
                 while (true) {
                     val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
@@ -2222,13 +2774,15 @@ class NativeWorkspaceTest {
                     val sample = runCatching { JSONObject(evaluate(scenario, """
                         (()=>{const p=document.querySelector('$panel');return {
                           phase:p?.getAttribute('data-install-phase'),failure:p?.getAttribute('data-install-failure'),
-                          state:p?.getAttribute('data-install-outcome'),reason:p?.getAttribute('data-install-reason')};})()
+                          state:p?.getAttribute('data-install-outcome'),reason:p?.getAttribute('data-install-reason'),
+                          recheck:p?.getAttribute('data-install-recheck')};})()
                     """, remaining.coerceAtMost(1_000))) }.getOrNull()
                     if (sample != null) {
                         phase = sample.optString("phase").takeIf { it in phases } ?: "unavailable"
                         failure = sample.optString("failure").takeIf { it in failures } ?: "other"
                         outcome = sample.optString("state").takeIf { it in setOf("idle", "pending", "failed", "uncertain", "installed", "reused") } ?: "unavailable"
                         reason = sample.optString("reason").takeIf { it in setOf("none", "committedDurabilityUnknown", "commitResponseLost", "verificationUnavailable") } ?: "unavailable"
+                        recheck = sample.optString("recheck").takeIf { phase == "verifying" && failure == "companion_release_unavailable" && recheckPattern.matches(it) } ?: "none"
                         if (outcome == expected || outcome == "failed" || outcome == "uncertain") {
                             completedWithinBudget = System.nanoTime() < deadline
                             break
@@ -2236,7 +2790,7 @@ class NativeWorkspaceTest {
                     }
                     Thread.sleep(200)
                 }
-                val observation = "Owned companion result phase=$phase kind=$failure outcome=$outcome reason=$reason"
+                val observation = "Owned companion result phase=$phase kind=$failure outcome=$outcome reason=$reason recheck=$recheck"
                 assertTrue(observation, completedWithinBudget)
                 assertEquals(observation, expected, outcome)
                 val text = if (reused) "Host companion $version is already installed." else "Installed host companion $version."
@@ -2313,7 +2867,7 @@ class NativeWorkspaceTest {
             clickButton("Trust key and connect")
             if (requireMoshBackground) {
                 verifyMoshBackground(scenario, fixture, name, label)
-            } else if (!requireHerdrMosh) {
+            } else if (!requireHerdrMosh && !requireAttachments) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
             if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
@@ -2328,6 +2882,8 @@ class NativeWorkspaceTest {
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (requireAttachments) {
+                verifyManualAttachmentUpload(scenario, fixture, label)
             } else if (!requireMoshBackground) {
                 clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
@@ -2482,7 +3038,14 @@ class NativeWorkspaceTest {
                 if (first != null) first.addSuppressed(AssertionError(message, failure))
                 else cleanupFailure = failure
             }
-            try {
+            var cleanupStage = SshUiCleanupStage.DISMISS
+            fun cleanupUi(action: () -> Unit) {
+                try { action() }
+                catch (cleanup: Throwable) {
+                    retainCleanup(cleanup, "Owned SSH UI cleanup failed: ${cleanupStage.name}:${cleanup.javaClass.simpleName}")
+                }
+            }
+            cleanupUi {
                 val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
                 if (evaluate(scenario, present(authentication)) == "true") {
                     clickButton("Cancel")
@@ -2495,18 +3058,27 @@ class NativeWorkspaceTest {
                         Thread.sleep(50)
                     }
                 }
-                val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
-                for (ownedName in ownedNames) {
+                val menu = "[role=dialog][aria-label='Workspace tools']"
+                if (evaluate(scenario, workspaceElementVisible(menu)) == "true")
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
+            }
+            val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
+            for (ownedName in ownedNames) {
+                cleanupUi {
+                    cleanupStage = SshUiCleanupStage.SESSION_SELECT
                     val disconnect = "button[aria-label='Disconnect $ownedName']"
                     if (evaluate(scenario, present(disconnect)) == "true") endOwnedConnection(scenario, ownedName)
                 }
+            }
+            cleanupStage = SshUiCleanupStage.HOST_DELETE
+            cleanupUi {
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, delete)).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
                 }
-            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH UI cleanup failed") }
+            }
             try {
                 instrumentation.runOnMainSync {
                     if (clipboard.primaryClipDescription?.label?.toString() == label) {

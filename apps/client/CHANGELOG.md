@@ -1,5 +1,134 @@
 # @lazysh/client
 
+## 1.7.1
+
+### Patch Changes
+
+- 45c8b2f: Follow the visible Appearance disclosure before native iOS app-icon acceptance. Preserve actual icon confirmation, readback, restoration and existing wait limits.
+- 222c1e2: Retain bounded host/device clock comparison diagnostics in owned Android ntfy acceptance receipts without changing notification admission or clock settings.
+- @lazysh/account-usage@1.7.1
+  - @lazysh/common@1.7.1
+  - @lazysh/display-idle@1.7.1
+  - @lazysh/et-transport@1.7.1
+  - @lazysh/mosh-transport@1.7.1
+
+## 1.7.0
+
+### Minor Changes
+
+- bcc7feb: Add opt-in V3 managed Amp system-plugin setup with protected ownership, shadow-aware removal and bounded V2 metadata compatibility.
+
+### Patch Changes
+
+- b988e84: Qualify manual Android Mosh attachment uploads with a valid image spanning multiple chunks and an unchanged pre-existing destination. This checkpoint does not establish closed-control recovery, file-picker/camera or Samsung device compatibility.
+- @lazysh/account-usage@1.7.0
+  - @lazysh/common@1.7.0
+  - @lazysh/display-idle@1.7.0
+  - @lazysh/et-transport@1.7.0
+  - @lazysh/mosh-transport@1.7.0
+
+## 1.6.0
+
+### Minor Changes
+
+- aad0990: Add opt-in version-2 hook discovery and inspected, profile-scoped Copilot hook setup while preserving version-1 compatibility, foreign settings and provider trust.
+
+### Patch Changes
+
+- b6c3bd3: Keep a held touch scroll on the stable terminal screen when output redraws its text spans. Preserve screen-reader mode and desktop hit testing.
+- b6c3bd3: Normalize mouse-tracking touch scroll by finger travel instead of event frequency, retaining partial distance, original targeting and bounded wheel batches until the gesture ends. Keep the outer terminal canvas anchored during keyboard-sized resize and input visibility requests. Plain terminal history and physical wheel behavior remain unchanged.
+- @lazysh/account-usage@1.6.0
+  - @lazysh/common@1.6.0
+  - @lazysh/display-idle@1.6.0
+  - @lazysh/et-transport@1.6.0
+  - @lazysh/mosh-transport@1.6.0
+
+## 1.5.5
+
+### Patch Changes
+
+- da17fde: Qualify closing one SSH relay stream through its owned server subtree for Android upload-recovery testing. Refuse stale, missing or ambiguous server attribution and preserve the original Mosh UDP daemon. Android recovery UI acceptance remains separate.
+- @lazysh/account-usage@1.5.5
+  - @lazysh/common@1.5.5
+  - @lazysh/display-idle@1.5.5
+  - @lazysh/et-transport@1.5.5
+  - @lazysh/mosh-transport@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.4
+  - @lazysh/common@1.5.4
+  - @lazysh/display-idle@1.5.4
+  - @lazysh/et-transport@1.5.4
+  - @lazysh/mosh-transport@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- cd969ee: Correct native Android fixture Setup-state reads and whole-value clipboard replacement, and retain bounded visual-readiness observations without changing gesture or transport acceptance.
+- @lazysh/account-usage@1.5.3
+  - @lazysh/common@1.5.3
+  - @lazysh/display-idle@1.5.3
+  - @lazysh/et-transport@1.5.3
+  - @lazysh/mosh-transport@1.5.3
+
+## 1.5.2
+
+### Patch Changes
+
+- 11187d3: Refine mobile connected navigation with full-width agent/workspace views, compact accessible Herdr actions and progressive activity details while preserving terminal and session behavior.
+- @lazysh/account-usage@1.5.2
+  - @lazysh/common@1.5.2
+  - @lazysh/display-idle@1.5.2
+  - @lazysh/et-transport@1.5.2
+  - @lazysh/mosh-transport@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.1
+  - @lazysh/common@1.5.1
+  - @lazysh/display-idle@1.5.1
+  - @lazysh/et-transport@1.5.1
+  - @lazysh/mosh-transport@1.5.1
+
+## 1.5.0
+
+### Minor Changes
+
+- f0b0b94: Show optional read-only Herdr reported-session details with same-connection companion matches and explicit unverified/shared-reference labels. Path references remain private; input and Chat authority are unchanged.
+- 8db8a98: Detect installed host agents and known profile locations before explicit hook setup. Let users select a target while preserving inspected installation plans, manual profile selection and provider trust decisions. Discovery never installs hooks or creates missing profiles.
+- afc27ec: Add explicit managed Cline root lifecycle plugin setup and profile discovery. Preserve existing plugin restrictions and require inspected install/remove plans; configuration does not establish live reporting.
+
+### Patch Changes
+
+- 9f2c42f: Make reported agent activity reachable from the top of the Agents drawer without changing readers or navigation state.
+- 8811c8a: Retain the mobile Agents drawer reading position when returning from a tool without changing navigation or provider state.
+- a422338: Reveal the current Agents Setup through its visible public button before native keep-awake acceptance toggles the checkbox. Preserve the ownership checks, deadlines and strict gesture oracle; this test precondition repair does not establish Android gesture acceptance.
+- b190865: Correct download and public roadmap guidance, and document Obtainium as the preferred Android installation method with explicit APK flavor selection and verification limits.
+- @lazysh/account-usage@1.5.0
+  - @lazysh/common@1.5.0
+  - @lazysh/display-idle@1.5.0
+  - @lazysh/et-transport@1.5.0
+  - @lazysh/mosh-transport@1.5.0
+
+## 1.4.2
+
+### Patch Changes
+
+- cf4b9f3: Qualify compact settings and workspace navigation through visible browser acceptance preconditions while retaining existing locale, display ownership, QR privacy and stale dictation assertions.
+- 8d7a15d: Show concise provider-specific verification guidance after inspected hook configuration without changing trust, loading or reporting status.
+- 0844aa3: Keep Workspace tools short by default with explicit session-tool, connection and application disclosures, preserving existing guarded actions and touch targets.
+- @lazysh/account-usage@1.4.2
+  - @lazysh/common@1.4.2
+  - @lazysh/display-idle@1.4.2
+  - @lazysh/et-transport@1.4.2
+  - @lazysh/mosh-transport@1.4.2
+
 ## 1.4.1
 
 ### Patch Changes

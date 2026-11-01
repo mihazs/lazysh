@@ -1,12 +1,13 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
+import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -243,7 +244,7 @@ test.each(['gradle','reverse','keyboard']).skipIf(process.platform!=='linux')('e
     let stopped=false;
     // Synthetic harness input; this test does not claim actual SSH, APK or WebView execution.
     const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
-      metadata:()=>({name:'owned'}),stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
+      metadata:()=>({name:'owned'}),historyDiagnostic:async()=>{throw new Error('private-diagnostic-error');},stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
     try {
       await expect(androidSshAcceptance(root,fixture)).rejects.toThrow(failure==='keyboard'?'Owned software keyboard requires the image AOSP LatinIME':`Owned fixture failed: ${rejected?'owned emulator command':'actual Android SSH UI instrumentation'}; exit=31`);
       const calls=(await readFile(args,'utf8')).trim().split('\n');
@@ -929,6 +930,61 @@ test('partial passive tap setup failure attempts listener cleanup without exposi
   expect(attached.size).toBe(0);
 });
 
+test('Herdr discovery observation retains only closed state and capped counts',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val discoveryObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)![1]
+    .replaceAll("${'$'}",'$').replace('$childDisconnect',JSON.stringify("button[aria-label='Disconnect owned child']"));
+  const observe=new Function('document',`return (${script.trim()});`);
+  let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
+  let capability='tmux available · Herdr detected · Zellij missing';
+  let endedText:string|undefined,childPresent=true,childSelected=false;
+  const otherSelected={private:'another selected tab must not establish child ownership'};
+  const child={closest:(selector:string)=>selector==='.session-tab'?{
+    querySelector:(selector:string)=>selector==='[role=tab][aria-selected=true]'&&childSelected?{private:'owned selected tab'}:null,
+  }:null};
+  const document={querySelector:(selector:string)=>{
+    if(selector==="button[aria-label='Disconnect owned child']")return childPresent?child:null;
+    if(selector==='.session-body > .panel-empty h3')return endedText===undefined?null:{textContent:endedText};
+    if(selector==='[role=tab][aria-selected=true]')return otherSelected;
+    return null;
+  },querySelectorAll:(selector:string)=>{
+    if(selector==='.multiplexer-panel')return panels;
+    if(selector.includes('aria-current=page'))return [{textContent:'Sessions'}];
+    return Array(17).fill({private:'never retain this'});
+  }};
+  const absent=observe(document);
+  expect(absent).toEqual({panelCount:0,loading:false,inlineError:false,herdrCapability:'unknown',listCount:0,listEnabled:false,
+    sessionsSelected:true,terminalSelected:false,menuCount:8,tabsCount:8,terminalCount:8,childDisconnect:true,endedPlaceholder:false,expectedChildTabSelected:false});
+  for(const ended of [false,true])for(const selected of [false,true]){
+    endedText=ended?'This connection has ended.':undefined;childSelected=selected;
+    expect(observe(document)).toMatchObject({endedPlaceholder:ended,expectedChildTabSelected:selected});
+  }
+  for(const text of ['private receiver output','This connection has ended. private trailing output','private prefix This connection has ended.']){
+    endedText=text;childSelected=false;
+    expect(observe(document)).toMatchObject({endedPlaceholder:false,expectedChildTabSelected:false});
+    expect(JSON.stringify(observe(document))).not.toContain('private');
+  }
+  endedText='This connection has ended.';childSelected=true;childPresent=false;
+  expect(observe(document)).toMatchObject({endedPlaceholder:true,childDisconnect:false,expectedChildTabSelected:false});
+  endedText=undefined;childPresent=true;childSelected=false;
+  const panel={querySelectorAll:()=>buttons,querySelector:(selector:string)=>selector==='p.muted'?{textContent:capability}: {private:'never retain this'}};
+  panels=[panel];
+  const present=observe(document);
+  expect(present).toMatchObject({panelCount:1,loading:true,inlineError:true,herdrCapability:'detected',listCount:1,listEnabled:true});
+  for(const value of ['missing','private path/error and host']){
+    capability=value==='missing'?'Herdr not installed':value;
+    expect(observe(document).herdrCapability).toBe(value==='missing'?'missing':'unknown');
+  }
+  buttons=[{textContent:'List herdr sessions',disabled:true}];
+  expect(observe(document)).toMatchObject({listCount:1,listEnabled:false});
+  buttons=Array(17).fill({textContent:'List herdr sessions',disabled:false});
+  expect(observe(document)).toMatchObject({listCount:8,listEnabled:false});
+  panels=[panel,panel];
+  expect(observe(document)).toMatchObject({panelCount:2,herdrCapability:'unknown',listCount:0});
+  expect(JSON.stringify(observe(document))).not.toContain('private');
+  expect(Object.values(present).every(value=>typeof value==='boolean'||Number.isInteger(value)||['detected','missing','unknown'].includes(value as string))).toBe(true);
+});
+
 async function herdrConfirmationFixture() {
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const source=kotlin.match(/private fun herdrConfirmationObservation\([\s\S]*?val expression = """([\s\S]*?)"""/)!;
@@ -991,6 +1047,38 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
 });
 
 
+test('native continuous finger observation rejects restarts, identity changes, untrusted events and early release',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-herdr-finger.js'),'utf8');
+  const key='owned-finger-probe';
+  function setup() {
+    const callbacks=new Map<string,(event:Record<string,unknown>)=>void>();
+    const canvas={contains:(target:unknown)=>target===screen,addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>callbacks.set(name,fn),
+      removeEventListener:(name:string)=>callbacks.delete(name)};
+    const screen={isConnected:true,textContent:'OLD490OLD491NEW512',closest:()=>canvas};
+    const globalCallbacks=new Map<string,(event:Record<string,unknown>)=>void>();
+    const window={addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>globalCallbacks.set(name,fn),
+      removeEventListener:(name:string)=>globalCallbacks.delete(name)} as unknown as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
+    const install=new Function('window','ownedScreens',`${source};return ownedHerdrObserveFinger(window,${JSON.stringify(key)},ownedScreens);`);
+    expect(install(window,[screen])).toBe(true);expect(install(window,[screen])).toBe(false);
+    const event=(type:string,identifier=3,trusted=true)=>callbacks.get(type)!({type,isTrusted:trusted,target:screen,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier}]});
+    return {screen,window,event,sample:()=>window[key].sample(),dispose:()=>window[key].dispose(),callbacks};
+  }
+  const good=setup();expect(good.sample()).toMatchObject({row:490,newest:true,active:true,held:false,moves:0});
+  good.event('touchstart');good.event('touchmove');good.screen.textContent='OLD480OLD481';
+  expect(good.sample()).toMatchObject({row:480,newest:false,active:true,held:true,moves:1});
+  good.event('touchmove');good.screen.textContent='OLD470OLD471';expect(good.sample().row).toBeLessThan(480);expect(good.sample().moves).toBe(2);
+  good.event('touchend');expect(good.sample().active).toBe(false);
+  good.dispose();expect(good.callbacks.size).toBe(0);
+  for(const bad of ['restart','identity','untrusted','cancel','detached']) {
+    const fixture=setup();fixture.event('touchstart');
+    if(bad==='restart')fixture.event('touchstart');
+    if(bad==='identity')fixture.event('touchmove',4);
+    if(bad==='untrusted')fixture.event('touchmove',3,false);
+    if(bad==='cancel')fixture.event('touchcancel');
+    if(bad==='detached')fixture.screen.isConnected=false;
+    expect(fixture.sample().active).toBe(false);fixture.dispose();expect(fixture.callbacks.size).toBe(0);
+  }
+});
 test('shared Herdr native report requires the completed exact single case, not a skipped or substituted owner',()=>{
   const row='<testcase name="ownedSharedHerdrNavigationThroughRealUi" classname="app.lazysh.client.NativeWorkspaceTest" />';
   const report=`<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite>${row}</testsuite></testsuites>`;
@@ -1014,4 +1102,165 @@ test('shared Herdr result rejects stale, duplicate, oversized and symlink report
     await rm(path);await writeFile(join(directory,'private-target'),report);await symlink('private-target',path);
     await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
   } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('manual attachment receipt binds exact large valid-image dimensions and rejects private or malformed fields',()=>{
+  const nonce='a'.repeat(32),valid={schemaVersion:1,nonce,bytes:462702,width:448,height:320,sha256:'b'.repeat(64)};
+  expect(attachmentReceipt(JSON.stringify(valid),nonce)).toEqual(valid);
+  for(const value of [null,[],{...valid,nonce:'c'.repeat(32)},{...valid,bytes:65536},{...valid,bytes:600*1024+1},{...valid,bytes:462702.1},{...valid,width:8193},{...valid,height:1},{...valid,sha256:'private-secret'},{...valid,extra:'private-secret'}])
+    expect(()=>attachmentReceipt(JSON.stringify(value),nonce)).toThrow('Owned attachment receipt invalid');
+  for(const text of ['private-secret','x'.repeat(1025)])expect(()=>attachmentReceipt(text,nonce)).toThrow('Owned attachment receipt invalid');
+});
+
+test('owned attachment readback detects changed content, inode, size and timestamps and rejects links',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-attachment-oracle-')),path=join(directory,'owned.png');
+  try {
+    await writeFile(path,'original owned bytes',{mode:0o600,flag:'wx'});
+    const original=await attachmentIdentity(path);
+    expect(await attachmentIdentity(path)).toEqual(original);
+    await utimes(path,1,1);
+    const timestampOnly=await attachmentIdentity(path);
+    expect(timestampOnly.sha256).toBe(original.sha256);expect(timestampOnly.bytes).toBe(original.bytes);expect(timestampOnly.identity).not.toBe(original.identity);
+    await writeFile(path,'rewritten owned bytes');
+    const rewritten=await attachmentIdentity(path);
+    expect(rewritten.sha256).not.toBe(original.sha256);expect(rewritten.bytes).not.toBe(original.bytes);expect(rewritten.identity).not.toBe(original.identity);
+    await rename(path,join(directory,'original-kept'));await writeFile(path,'different inode');
+    expect((await attachmentIdentity(path)).identity).not.toBe(original.identity);
+    await symlink(path,join(directory,'link'));
+    await expect(attachmentIdentity(join(directory,'link'))).rejects.toThrow();
+    await expect(attachmentIdentity(directory)).rejects.toThrow('Owned attachment file invalid');
+    await writeFile(path,Buffer.alloc(600*1024+1));
+    await expect(attachmentIdentity(path)).rejects.toThrow('Owned attachment file invalid');
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
+  const root=join(import.meta.dir,'..');
+  const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
+  const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
+  expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')");
+  expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,true)');
+  const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
+  expect(support).toContain('const moshBinary=(moshBackground || attachments)?');
+  expect(support).toContain('privateTtyGroup:true,moshBinary,observeMoshBootstraps:true');
+  expect(support).toContain("attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi'");
+  expect(support).toContain("attachments?'-PlazyshAttachmentAcceptance=true'");
+  expect(support).toContain('retainedPackages=!!herdr || attachments');
+  expect(support).toContain("(herdr || attachments)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
+  expect(support).toContain('(herdrMosh || attachments) && await readFile');
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
+  expect(gradle).toContain('outputs/androidTest-results/attachment-ui');
+  expect(gradle).toContain('lazyshAttachmentAcceptance');
+});
+
+test('background Mosh witness retains its failed stage and original error without publishing private values',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-mosh-diagnostic-'));
+  const original=new Error('private owned witness error');
+  let enter!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;});
+  await writeFile(join(directory,'background-before'),'123 456\n');
+  const observer=observeAndroidMoshBackground({directory,daemon:{async liveIdentity(){enter();throw original;}}});
+  try {
+    await entered;await observer.stop();
+    const sample=observer.diagnostic();
+    expect(sample).toEqual({schemaVersion:1,phase:'before-ownership',beforeValidated:false,beforeAck:false,afterValidated:false,outputValidated:false,afterAck:false,verified:false,stopped:true,failure:'witness-failure'});
+    expect(JSON.stringify(sample)).not.toContain('private');expect(JSON.stringify(sample)).not.toContain(directory);
+    let caught:unknown;try {observer.check();}catch(error){caught=error;}
+    expect(caught).toBe(original);
+    await expect(readFile(join(directory,'background-before-ack'))).rejects.toMatchObject({code:'ENOENT'});
+    await observer.stop();expect(observer.diagnostic()).toEqual(sample);
+  } finally {await observer.stop();await rm(directory,{recursive:true,force:true});}
+},2000);
+
+test('background Mosh document observations distinguish renderer state without retaining text or claiming transport identity',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/MoshBackgroundObservation.kt'),'utf8');
+  const source=kotlin.match(/fun expression[\s\S]*?= """([\s\S]*?)"""/)![1];
+  const name='owned private session',key='owned-key',token='owned-token';
+  const expression=source.replaceAll('$key',JSON.stringify(key)).replaceAll('$token',JSON.stringify(token)).replaceAll('${JSONObject.quote(name)}',JSON.stringify(name));
+  const evaluate=new Function('window','document',`return ${expression}`);
+  const helper={readOnly:true,disabled:false,value:'private terminal input'},composer={value:'private draft'};
+  let helpers:unknown[]=[helper],active:unknown=helper,connected=false,error=true,retained=true;
+  const pane={querySelector:(selector:string)=>selector.includes('textarea')?composer:selector.includes('terminal-edit-review')?{}:null};
+  const terminal={isConnected:true,closest:()=>pane,querySelectorAll:()=>helpers};
+  const tab={querySelector:(selector:string)=>selector==='[role=tab]'?{textContent:name}:{classList:{contains:()=>!connected}}};
+  const document={hasFocus:()=>true,get activeElement(){return active;},querySelector:(selector:string)=>selector==='.terminal-canvas'?terminal:selector==='.session-tab-active'?tab:selector==='.global-error'&&error?{}:null,querySelectorAll:()=>[terminal]};
+  const sample=()=>evaluate({[key]:{token:retained?token:'stale',terminal}},document);
+  expect(sample()).toEqual({retained:true,helperCount:'one',documentFocused:true,activeKind:'terminal',readOnly:true,disabled:false,composerPresent:true,composerEmpty:false,rendererConnected:false,globalError:true,unappliedEdit:true});
+  connected=true;error=false;active=composer;retained=false;helpers=[];
+  expect(sample()).toMatchObject({retained:false,helperCount:'zero',activeKind:'composer',readOnly:null,disabled:null,rendererConnected:true,globalError:false});
+  helpers=[helper,helper];active={matches:()=>true};
+  expect(sample()).toMatchObject({helperCount:'many',activeKind:'control',readOnly:null});
+  expect(JSON.stringify(sample())).not.toContain('private');expect(JSON.stringify(sample())).not.toContain(name);
+});
+
+
+test('board Setup observations cross native JSON callbacks as strict booleans or null',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val expanded = evaluate\(scenario, """([\s\S]*?)"""/)!;
+  expect(script).not.toBeNull();
+  const selector='.agent-panel:not([hidden]) > .tool-bar button[aria-expanded]';
+  const expression=script[1].replaceAll('${JSONObject.quote(setup)}',JSON.stringify(selector));
+  const callback=(attributes:string[])=>JSON.stringify(new Function('document',`return (${expression});`)({querySelectorAll:(value:string)=>{
+    expect(value).toBe(selector);return attributes.map(attribute=>({getAttribute:()=>attribute}));
+  }}));
+  expect(callback(['false'])).toBe('false');expect(callback(['true'])).toBe('true');
+  for(const attributes of [[],['false','true'],['private-unexpected-value'],['']])expect(callback(attributes)).toBe('null');
+});
+
+test('whole-value native clipboard paste selects existing text before paste within its original budget',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=source.match(/private fun pasteOwnedText\([\s\S]*?\n    @Test/)![0];
+  const actions=Array.from(body.matchAll(/(?:withKeyCode\(KeyEvent\.|pressKey\(KeyEvent\.)(KEYCODE_[A-Z_]+)/g),match=>match[1]);
+  expect(actions).toEqual(['KEYCODE_A','KEYCODE_PASTE']);
+  const select=body.indexOf('withKeyCode(KeyEvent.KEYCODE_A)'),paste=body.indexOf('pressKey(KeyEvent.KEYCODE_PASTE)');
+  expect(body.slice(select,paste)).toContain('withCtrlPressed(true)');
+  expect(body.slice(select,paste)).toContain('requireTime()');
+  expect(body).toContain('TimeUnit.SECONDS.toNanos(5)');
+  expect(body).toContain('?.value===${JSONObject.quote(text)}');
+});
+
+async function herdrVisualFixture() {
+  const directory=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest');
+  const source=await readFile(join(directory,'java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val visualObservation = """([\s\S]*?)"""/)![1];
+  const viewport=await readFile(join(directory,'assets/owned-keyboard-viewport.js'),'utf8');
+  const rectangle=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
+  const labels=Array.from({length:3},(_,i)=>({bounds:rectangle(10,10+i*30,80,30+i*30),glyphs:[] as object[],contains:(hit:unknown)=>(hit as {ownedLabel?:number})?.ownedLabel===i,textContent:'private terminal text'}));
+  labels.forEach(label=>label.glyphs=[label.bounds]);
+  const card={getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
+    querySelector:(selector:string)=>labels[['strong',':scope > small','span > small'].indexOf(selector)]};
+  const state={cards:[card],blockers:[] as object[],hit:undefined as object|undefined,live:true};
+  const window={visualViewport:{offsetLeft:0,offsetTop:0,width:411,height:659,scale:1}};
+  const document={querySelectorAll:(selector:string)=>selector.includes('.herdr-navigation-row')?state.cards:state.blockers,
+    elementFromPoint:(_x:number,y:number)=>state.hit??labels.find(label=>y>=label.bounds.top&&y<=label.bounds.bottom),
+    createRange:()=>{let selected=labels[0];return {selectNodeContents:(label:typeof selected)=>{selected=label;},getClientRects:()=>selected.glyphs,getBoundingClientRect:()=>selected.bounds};}};
+  return {labels,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
+}
+
+test('Herdr visual failure observations distinguish viewport and glyph-hit clauses without changing admission',async()=>{
+  const f=await herdrVisualFixture();
+  expect(f.observe()).toMatchObject({state:'observed',liveReady:true,cards:1,cardShown:true,viewportReady:true,blockers:0});
+  f.state.hit=f.card;
+  expect(f.observe().labels[0]).toMatchObject({present:true,glyphs:1,truncated:false,hit:'card',failedRect:[10,10,80,30]});
+  f.state.live=false;f.labels[0].bounds.left=-10;
+  expect(f.observe()).toMatchObject({liveReady:false,viewportReady:false});
+  f.state.cards=[];expect(f.observe()).toMatchObject({cards:0,cardShown:false,cardRect:null,viewportReady:false});
+});
+
+test('Herdr visual observations bound rectangles and counts and discard private DOM and exceptions',async()=>{
+  const f=await herdrVisualFixture();
+  f.state.hit={id:'private-session-id',textContent:'private output'};f.state.cards=Array(80).fill(f.card);
+  f.state.blockers=Array(80).fill({getClientRects:()=>[{}]});f.labels[0].glyphs=Array(80).fill(f.labels[0].bounds);
+  f.labels[0].bounds.left=-1e9;f.labels[1].bounds.right=Infinity;
+  const sample=f.observe();
+  expect(sample).toMatchObject({cards:8,blockers:8,viewportReady:false});
+  expect(sample.labels[0]).toMatchObject({rect:[-65535,10,80,30],glyphs:64,truncated:true,hit:'other'});
+  expect(sample.labels[1].rect).toEqual([10,40,null,60]);
+  expect(JSON.stringify(sample)).not.toMatch(/private|session-id|terminal text/);expect(JSON.stringify(sample).length).toBeLessThan(2048);
+  f.card.getBoundingClientRect=()=>{throw new Error('private host/path');};
+  expect(f.observe()).toEqual({state:'unavailable'});
 });

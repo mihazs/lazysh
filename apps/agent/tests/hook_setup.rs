@@ -18,6 +18,12 @@ mod render;
 mod state;
 use json::{rewrite, Entry, Fault};
 use lazysh_agent::{claude_config, hooks, Error, Result};
+const WHOLE_FILE_AGENTS: [record::Agent; 4] = [
+    record::Agent::Opencode,
+    record::Agent::Cline,
+    record::Agent::Copilot,
+    record::Agent::Amp,
+];
 use serde_json::{json, Value};
 #[path = "support/binary.rs"]
 mod binary;
@@ -154,9 +160,13 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
         Agent::Gemini,
         Agent::Cursor,
         Agent::Opencode,
+        Agent::Cline,
+        Agent::Copilot,
     ] {
         let entries = render::entries(agent, &binary.path).unwrap();
-        let plugin = (agent == Agent::Opencode).then(|| render::plugin(&binary.path).unwrap());
+        let plugin = agent
+            .is_whole_file()
+            .then(|| render::owned_file(agent, &binary.path).unwrap());
         let owned = Owned {
             template_version: 1,
             package_version: env!("CARGO_PKG_VERSION").into(),
@@ -195,7 +205,12 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             Err("HooksModifiedRecord")
         );
         if let Some(plugin) = plugin {
-            assert!(plugin.contains(r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#));
+            assert!(plugin.contains(match agent {
+                Agent::Opencode => r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#,
+                Agent::Cline => r#"childProcess.execFile("/owned/it's a companion", ['ingest'"#,
+                Agent::Copilot => r#""exec": "/owned/it's a companion""#,
+                _ => unreachable!(),
+            }));
             assert!(!plugin.contains("['lazysh-agent'"));
         } else {
             for entry in record.next.unwrap().entries {
@@ -280,36 +295,77 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
 
 #[cfg(unix)]
 #[test]
-fn rendered_opencode_plugin_executes_its_absolute_companion_with_an_empty_path() {
+fn rendered_plugins_execute_their_absolute_companion_with_an_empty_path() {
     use std::{fs, process::Command};
     let runtime = Command::new("bun")
         .args(["-p", "process.execPath"])
         .output()
-        .expect("OpenCode plugin acceptance requires Bun");
+        .expect("plugin acceptance requires Bun");
     assert!(runtime.status.success());
     let runtime = std::path::PathBuf::from(String::from_utf8(runtime.stdout).unwrap().trim());
     assert!(runtime.is_absolute());
-    let directory = tempfile::tempdir().unwrap();
-    let companion = directory.path().join("OpenCode's companion $ with spaces");
-    fs::copy(binary::path(), &companion).unwrap();
-    let plugin = directory.path().join("lazysh.js");
-    fs::write(&plugin, render::plugin(&companion).unwrap()).unwrap();
-    let state = directory.path().join("state");
-    let output=Command::new(runtime).args(["-e",r#"
-        const { LazyshPlugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
-        const hooks = await LazyshPlugin({ directory: '/owned/opencode-project' });
-        await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'owned-plugin', status: { type: 'busy' } } } });
-    "#]).env_clear().env("PATH","").env("LAZYSH_OWNED_PLUGIN",plugin).env("LAZYSH_STATE_DIR",&state).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-    let report = snapshot(&companion, &state);
-    assert_eq!(report["sessions"][0]["sessionId"], "owned-plugin");
-    assert_eq!(report["sessions"][0]["agent"], "OpenCode");
-    assert_eq!(report["sessions"][0]["state"], "working");
+    for (agent, script, expected_agent, expected_session) in [
+        (
+            record::Agent::Opencode,
+            r#"
+            const { LazyshPlugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            const hooks = await LazyshPlugin({ directory: '/owned/opencode-project' });
+            await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'owned-plugin', status: { type: 'busy' } } } });
+        "#,
+            "OpenCode",
+            "owned-plugin".to_string(),
+        ),
+        (
+            record::Agent::Cline,
+            r#"
+            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            plugin.setup({}, { cwd: '/owned/cline-project' });
+            await plugin.hooks.beforeRun({ snapshot: { agentId: 'owned-root', conversationId: 'owned-conversation', runId: 'owned-run' } });
+        "#,
+            "Cline CLI",
+            format!(
+                "cline:{}",
+                record::hash(b"cline-v1\0owned-root\0owned-conversation")
+            ),
+        ),
+        (
+            record::Agent::Amp,
+            r#"
+            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            const callbacks = new Map();
+            plugin({ system: { workspaceRoot: 'file:///owned/amp-project' }, helpers: { filePathFromURI: () => '/owned/amp-project' }, on: (event, callback) => { callbacks.set(event, callback); return { unsubscribe() {} }; }, onDispose() {} });
+            callbacks.get('session.start')({}, { thread: { id: 'owned-amp-thread', state: { subscribe(callback) { callback('running'); return { unsubscribe() {} }; }, get: async () => 'running' } } });
+        "#,
+            "Amp",
+            "owned-amp-thread".to_string(),
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let companion = directory.path().join("Plugin's companion $ with spaces");
+        fs::copy(binary::path(), &companion).unwrap();
+        let plugin = directory.path().join("lazysh.js");
+        fs::write(&plugin, render::owned_file(agent, &companion).unwrap()).unwrap();
+        let state = directory.path().join("state");
+        let output = Command::new(&runtime)
+            .args(["-e", script])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_OWNED_PLUGIN", plugin)
+            .env("LAZYSH_STATE_DIR", &state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        let report = snapshot(&companion, &state);
+        assert_eq!(report["sessions"][0]["sessionId"], expected_session);
+        assert_eq!(report["sessions"][0]["agent"], expected_agent);
+        assert_eq!(report["sessions"][0]["state"], "working");
+    }
 }
 
 fn initial_record(agent: record::Agent) -> record::Record {
@@ -318,8 +374,12 @@ fn initial_record(agent: record::Agent) -> record::Record {
     record.agent = agent;
     let owned = record.next.as_mut().unwrap();
     owned.entries = render::entries(agent, &owned.binary.path).unwrap();
-    record.provider_after_sha256 = Some(if agent == record::Agent::Opencode {
-        let digest = record::hash(render::plugin(&owned.binary.path).unwrap().as_bytes());
+    record.provider_after_sha256 = Some(if agent.is_whole_file() {
+        let digest = record::hash(
+            render::owned_file(agent, &owned.binary.path)
+                .unwrap()
+                .as_bytes(),
+        );
         owned.plugin_sha256 = Some(digest.clone());
         digest
     } else {
@@ -451,44 +511,46 @@ fn update_and_removal_never_infer_success_from_partial_or_edited_owned_entries()
 }
 #[test]
 fn plugin_transitions_use_exact_owned_content_and_reject_contradictory_or_foreign_records() {
-    use state::{classify, Observation};
-    let mut record = initial_record(record::Agent::Opencode);
-    let owned = record.next.as_ref().unwrap();
-    let plugin = render::plugin(&owned.binary.path).unwrap();
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None).unwrap(),
-        Observation::Prepared
-    );
-    assert_eq!(
-        classify(&record, &present(&plugin, 7), Some(&plugin)).unwrap(),
-        Observation::Configured
-    );
-    let foreign = "export const OtherPlugin = () => ({});";
-    assert_eq!(
-        classify(&record, &present(foreign, 8), Some(foreign)).unwrap(),
-        Observation::Conflict
-    );
-    record.previous = record.next.take();
-    record.provider_before = present(&plugin, 7);
-    record.provider_after_sha256 = None;
-    assert_eq!(
-        classify(&record, &record.provider_before, Some(&plugin)).unwrap(),
-        Observation::Prepared
-    );
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None).unwrap(),
-        Observation::Removed
-    );
-    let edited = format!("{plugin}\n// user modification");
-    assert_eq!(
-        classify(&record, &present(&edited, 9), Some(&edited)).unwrap(),
-        Observation::Conflict
-    );
-    record.provider_before = record::FileState::Missing;
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None),
-        Err("HooksInvalidRecord")
-    );
+    for agent in WHOLE_FILE_AGENTS {
+        use state::{classify, Observation};
+        let mut record = initial_record(agent);
+        let owned = record.next.as_ref().unwrap();
+        let plugin = render::owned_file(agent, &owned.binary.path).unwrap();
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None).unwrap(),
+            Observation::Prepared
+        );
+        assert_eq!(
+            classify(&record, &present(&plugin, 7), Some(&plugin)).unwrap(),
+            Observation::Configured
+        );
+        let foreign = "export const OtherPlugin = () => ({});";
+        assert_eq!(
+            classify(&record, &present(foreign, 8), Some(foreign)).unwrap(),
+            Observation::Conflict
+        );
+        record.previous = record.next.take();
+        record.provider_before = present(&plugin, 7);
+        record.provider_after_sha256 = None;
+        assert_eq!(
+            classify(&record, &record.provider_before, Some(&plugin)).unwrap(),
+            Observation::Prepared
+        );
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None).unwrap(),
+            Observation::Removed
+        );
+        let edited = format!("{plugin}\n// user modification");
+        assert_eq!(
+            classify(&record, &present(&edited, 9), Some(&edited)).unwrap(),
+            Observation::Conflict
+        );
+        record.provider_before = record::FileState::Missing;
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None),
+            Err("HooksInvalidRecord")
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -534,12 +596,15 @@ impl ProfileFixture {
     fn apply(&self, action: files::Action, expected: &str) -> Result<commit::Outcome> {
         commit::apply(self.target.clone(), &self.companion, action, expected)
     }
+    fn apply_current(&self, action: files::Action) -> commit::Outcome {
+        self.apply(action, &self.plan(action)).unwrap()
+    }
     fn provider(&self) -> std::path::PathBuf {
-        self.target.profile.join(match self.target.agent {
-            record::Agent::Claude | record::Agent::Gemini => "settings.json",
-            record::Agent::Codex | record::Agent::Droid | record::Agent::Cursor => "hooks.json",
-            record::Agent::Opencode => "plugins/lazysh.js",
-        })
+        let parent = self.target.agent.asset_directory().map_or_else(
+            || self.target.profile.clone(),
+            |name| self.target.profile.join(name),
+        );
+        parent.join(self.target.agent.provider_name())
     }
     fn manifest(&self) -> std::path::PathBuf {
         self.target
@@ -622,16 +687,12 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
         assert!(installed.contains(r#"{ "env" : {"PRIVATE_TOKEN":"foreign-private-value"}"#));
         let provider_identity = fixture.inspect().provider.state;
         let receipt = fs::read(fixture.manifest()).unwrap();
-        let reuse = fixture
-            .apply(Action::Install, &fixture.plan(Action::Install))
-            .unwrap();
+        let reuse = fixture.apply_current(Action::Install);
         assert_eq!(reuse.status, "reused");
         assert!(!reuse.metadata_committed && !reuse.provider_committed);
         assert_eq!(fixture.inspect().provider.state, provider_identity);
         assert_eq!(fs::read(fixture.manifest()).unwrap(), receipt);
-        let removed = fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap();
+        let removed = fixture.apply_current(Action::Remove);
         assert_eq!(removed.status, "removed");
         let clean = fs::read_to_string(fixture.provider()).unwrap();
         assert!(clean.contains(r#"{"type":"command","command":"keep existing"}"#));
@@ -650,37 +711,57 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection() {
-    use files::Action;
-    use std::fs;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    let original = fixture.plan(Action::Install);
-    assert!(!fixture.target.profile.join("plugins").exists());
-    assert_eq!(
-        fixture.apply(Action::Install, &original).unwrap().status,
-        "configured"
-    );
-    fs::write(
-        fixture.target.profile.join("plugins/foreign.js"),
-        "preserve other plugin",
-    )
-    .unwrap();
-    assert_eq!(
-        fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap()
-            .status,
-        "removed"
-    );
-    assert!(!fixture.provider().exists());
-    assert_eq!(
-        fs::read_to_string(fixture.target.profile.join("plugins/foreign.js")).unwrap(),
-        "preserve other plugin"
-    );
-    assert!(fixture.apply(Action::Install, &original).is_err());
-    assert!(
-        fixture.manifest().exists(),
-        "retain the ownership tombstone"
-    );
+    for agent in WHOLE_FILE_AGENTS {
+        use files::Action;
+        use std::fs;
+        let fixture = ProfileFixture::new(agent);
+        let settings = fixture.target.profile.join("settings.json");
+        fs::write(
+            &settings,
+            "{\"disabledPlugins\":[\"lazysh-root-lifecycle\"]}\n",
+        )
+        .unwrap();
+        let original = fixture.plan(Action::Install);
+        assert!(!fixture
+            .target
+            .profile
+            .join(agent.asset_directory().unwrap())
+            .exists());
+        assert_eq!(
+            fixture.apply(Action::Install, &original).unwrap().status,
+            "configured"
+        );
+        fs::write(
+            fixture.provider().parent().unwrap().join("foreign.js"),
+            "preserve other plugin",
+        )
+        .unwrap();
+        assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            fs::read_to_string(&settings).unwrap(),
+            "{\"disabledPlugins\":[\"lazysh-root-lifecycle\"]}\n"
+        );
+        fs::write(fixture.provider(), "foreign plugin").unwrap();
+        assert_eq!(
+            fixture.inspect().observation,
+            Some(state::Observation::Conflict)
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+        assert_eq!(
+            fs::read_to_string(fixture.provider()).unwrap(),
+            "foreign plugin"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.provider().parent().unwrap().join("foreign.js")).unwrap(),
+            "preserve other plugin"
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+        assert!(
+            fixture.manifest().exists(),
+            "retain the ownership tombstone"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -727,9 +808,7 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
             }
             assert!(fixture.apply(Action::Install, &plan).is_err());
         }
-        let resumed = fixture
-            .apply(Action::Install, &fixture.plan(Action::Install))
-            .unwrap();
+        let resumed = fixture.apply_current(Action::Install);
         assert!(matches!(resumed.status, "configured" | "reused"));
         assert_eq!(
             fixture.inspect().observation,
@@ -745,21 +824,21 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone() {
-    use files::Action;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    let original = fixture.plan(Action::Install);
-    fixture.prepare_without_provider(&original);
-    let canceled = fixture
-        .apply(Action::Remove, &fixture.plan(Action::Remove))
-        .unwrap();
-    assert_eq!(canceled.status, "removed");
-    assert!(!canceled.provider_committed);
-    assert!(!fixture.provider().exists());
-    assert_eq!(
-        fixture.inspect().observation,
-        Some(state::Observation::Removed)
-    );
-    assert!(fixture.apply(Action::Install, &original).is_err());
+    for agent in WHOLE_FILE_AGENTS {
+        use files::Action;
+        let fixture = ProfileFixture::new(agent);
+        let original = fixture.plan(Action::Install);
+        fixture.prepare_without_provider(&original);
+        let canceled = fixture.apply_current(Action::Remove);
+        assert_eq!(canceled.status, "removed");
+        assert!(!canceled.provider_committed);
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            fixture.inspect().observation,
+            Some(state::Observation::Removed)
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+    }
 }
 
 #[test]
@@ -864,20 +943,30 @@ fn source_and_profile_replacements_before_provider_commit_cannot_change_the_repl
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_named_root_file() {
-    use files::Action;
-    use std::fs;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    fixture.prepare_without_provider(&fixture.plan(Action::Install));
-    fs::remove_dir(fixture.target.profile.join("plugins")).unwrap();
-    let unrelated = fixture.target.profile.join("lazysh.js");
-    fs::write(&unrelated, "foreign root file").unwrap();
-    let result = fixture
-        .apply(Action::Remove, &fixture.plan(Action::Remove))
+    for agent in WHOLE_FILE_AGENTS {
+        use files::Action;
+        use std::fs;
+        let fixture = ProfileFixture::new(agent);
+        fixture.prepare_without_provider(&fixture.plan(Action::Install));
+        fs::remove_dir(
+            fixture
+                .target
+                .profile
+                .join(agent.asset_directory().unwrap()),
+        )
         .unwrap();
-    assert_eq!(result.status, "removed");
-    assert!(!result.provider_committed);
-    assert!(!fixture.target.profile.join("plugins").exists());
-    assert_eq!(fs::read_to_string(unrelated).unwrap(), "foreign root file");
+        let unrelated = fixture.target.profile.join(agent.provider_name());
+        fs::write(&unrelated, "foreign root file").unwrap();
+        let result = fixture.apply_current(Action::Remove);
+        assert_eq!(result.status, "removed");
+        assert!(!result.provider_committed);
+        assert!(!fixture
+            .target
+            .profile
+            .join(agent.asset_directory().unwrap())
+            .exists());
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "foreign root file");
+    }
 }
 
 #[test]
@@ -1122,6 +1211,9 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Gemini,
         record::Agent::Cursor,
         record::Agent::Opencode,
+        record::Agent::Cline,
+        record::Agent::Copilot,
+        record::Agent::Amp,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -1480,4 +1572,965 @@ fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_rep
     fs::write(fixture.provider(), "{}").unwrap();
     assert!(fixture.apply(files::Action::Install, &plan).is_err());
     assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), "{}");
+}
+
+fn discover_metadata(
+    home: &std::path::Path,
+    path: &std::ffi::OsStr,
+    overrides: &[(&str, &std::ffi::OsStr)],
+) -> Value {
+    discover_metadata_version(home, path, overrides, None)
+}
+fn discover_metadata_version(
+    home: &std::path::Path,
+    path: &std::ffi::OsStr,
+    overrides: &[(&str, &std::ffi::OsStr)],
+    version: Option<u8>,
+) -> Value {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    command
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", path)
+        .args(["hooks", "discover"]);
+    if let Some(version) = version {
+        command.args(["--schema-version", &version.to_string()]);
+    }
+    for (name, value) in overrides {
+        command.env(name, value);
+    }
+    json_output::decode(command.output().unwrap())
+}
+fn metadata_executable(path: &std::path::Path, marker: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nprintf private-executed > '{}'\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+fn metadata_fixture(agent: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    let marker = root.path().join("must-not-execute");
+    metadata_executable(&bin.join(agent), &marker);
+    (root, bin, marker)
+}
+fn discovered<'a>(result: &'a Value, agent: &str) -> &'a Value {
+    result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == agent)
+        .unwrap()
+}
+#[test]
+fn discovery_reports_independent_executable_profile_and_setup_evidence_without_execution() {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin with ' quote");
+    let marker = home.join("must-not-execute");
+    for name in [
+        "codex",
+        "droid",
+        "gemini",
+        "cursor-agent",
+        "opencode",
+        "cline",
+        "kimi",
+        "copilot",
+        "amp",
+        "aider",
+    ] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    for name in [
+        ".claude",
+        ".factory",
+        ".cursor",
+        ".config/opencode",
+        ".cline",
+        "extra",
+        "gemini-home/.gemini",
+    ] {
+        fs::create_dir_all(home.join(name)).unwrap();
+    }
+    fs::write(home.join(".claude/settings.json"), "private-profile-secret").unwrap();
+    let gemini = home.join("gemini-home");
+    let extra = home.join("extra");
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("GEMINI_CLI_HOME", gemini.as_os_str()),
+            ("OPENCODE_CONFIG_DIR", extra.as_os_str()),
+        ],
+    );
+    assert_eq!(result["schemaVersion"], 1);
+    assert_eq!(result["supported"], true);
+    assert_eq!(result["managedSetupSupported"], cfg!(target_os = "linux"));
+    assert_eq!(result["agents"].as_array().unwrap().len(), 11);
+    assert_eq!(result["truncated"], false);
+    assert!(discovered(&result, "claude")["executable"].is_null());
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "directory"
+    );
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "missing"
+    );
+    assert!(!home.join(".codex").exists());
+    assert_eq!(
+        discovered(&result, "gemini")["profiles"][0]["path"],
+        gemini.join(".gemini").to_str().unwrap()
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(discovered(&result, "cline")["setup"], "managed");
+    assert_eq!(
+        discovered(&result, "cline")["profiles"][0]["path"],
+        home.join(".cline").to_str().unwrap()
+    );
+    for (agent, setup) in [
+        ("kimi", "manual"),
+        ("copilot", "manual"),
+        ("amp", "manual"),
+        ("aider", "healthOnly"),
+    ] {
+        assert_eq!(discovered(&result, agent)["setup"], setup);
+        if agent != "kimi" {
+            assert_eq!(discovered(&result, agent)["profiles"], json!([]));
+        }
+    }
+    assert!(!marker.exists());
+    assert!(!result.to_string().contains("private"));
+    let empty = discover_metadata(
+        home,
+        OsStr::new(""),
+        &[("CLAUDE_CONFIG_DIR", OsStr::new("relative"))],
+    );
+    let diagnostic = discovered(&empty, "claude");
+    assert!(diagnostic["executable"].is_null());
+    assert_eq!(
+        diagnostic["profiles"][0],
+        json!({"path":null,"source":"CLAUDE_CONFIG_DIR","state":"invalid"})
+    );
+}
+#[test]
+fn discovery_invalid_nonempty_overrides_never_fall_back_and_empty_overrides_do() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, _) = metadata_fixture("codex");
+    let home = root.path();
+    fs::create_dir(home.join(".codex")).unwrap();
+    for invalid in [
+        OsStr::new("relative"),
+        OsStr::new("~/other"),
+        OsStr::new("/safe/../other"),
+        OsStr::new("/safe/./other"),
+        OsStr::new("/private\nsecret"),
+        OsStr::from_bytes(b"/invalid\xff"),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", invalid)]);
+        let profile = &discovered(&result, "codex")["profiles"][0];
+        assert_eq!(
+            profile,
+            &json!({"path":null,"source":"CODEX_HOME","state":"invalid"})
+        );
+        assert!(!result.to_string().contains("secret"));
+    }
+    for empty in ["", " \t "] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", OsStr::new(empty))]);
+        assert_eq!(
+            discovered(&result, "codex")["profiles"][0]["state"],
+            "directory"
+        );
+        assert_eq!(
+            discovered(&result, "codex")["profiles"][0]["source"],
+            "HOME"
+        );
+    }
+    let absent = home.join("chosen-missing");
+    let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", absent.as_os_str())]);
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "missing"
+    );
+    assert!(!absent.exists());
+}
+#[test]
+fn discovery_kimi_current_and_legacy_profiles_preserve_literal_overrides_without_execution() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("kimi");
+    let home = root.path();
+    let selected = home.join("chosen ");
+    fs::create_dir(&selected).unwrap();
+    for (index, variable, suffix) in [
+        (0, "KIMI_CODE_HOME", ".kimi-code"),
+        (1, "KIMI_SHARE_DIR", ".kimi"),
+    ] {
+        let default = home.join(suffix);
+        let result = discover_metadata(home, bin.as_os_str(), &[]);
+        assert_eq!(result["schemaVersion"], 1);
+        assert_eq!(discovered(&result, "kimi")["setup"], "manual");
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let fallback = json!({"path":default,"source":"HOME","state":"missing"});
+        assert_eq!(discovered(&result, "kimi")["profiles"][index], fallback);
+        assert!(!default.exists());
+        fs::create_dir(&default).unwrap();
+        fs::write(default.join("config.toml"), "not TOML: PRIVATE-KIMI-CONFIG").unwrap();
+        let fallback = json!({"path":default,"source":"HOME","state":"directory"});
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, OsStr::new(""))]);
+        assert_eq!(discovered(&result, "kimi")["profiles"][index], fallback);
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, selected.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"][index],
+            json!({"path":selected,"source":variable,"state":"directory"})
+        );
+        let absent = home.join(format!("missing-{index}"));
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, absent.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"][index],
+            json!({"path":absent,"source":variable,"state":"missing"})
+        );
+        assert!(!absent.exists());
+        for invalid in [
+            OsStr::new(" "),
+            OsStr::new("relative"),
+            OsStr::new("~/chosen"),
+            OsStr::new("/owned/../other"),
+            OsStr::new("/owned/\nother"),
+            OsStr::from_bytes(b"/owned/\xff"),
+        ] {
+            let result = discover_metadata(home, bin.as_os_str(), &[(variable, invalid)]);
+            assert_eq!(
+                discovered(&result, "kimi")["profiles"][index],
+                json!({"path":null,"source":variable,"state":"invalid"})
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(default.join("config.toml")).unwrap(),
+            "not TOML: PRIVATE-KIMI-CONFIG"
+        );
+    }
+    for invalid_home in [
+        OsStr::new(""),
+        OsStr::new("relative"),
+        OsStr::from_bytes(b"/invalid\xff"),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("HOME", invalid_home)]);
+        let profiles = discovered(&result, "kimi")["profiles"].as_array().unwrap();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "identical unavailable dialect roots must not break v1 discovery"
+        );
+        assert_eq!(profiles[0]["path"], Value::Null);
+        assert_eq!(profiles[0]["source"], "HOME");
+    }
+    let result = discover_metadata(home, bin.as_os_str(), &[]);
+    assert!(!result.to_string().contains("PRIVATE-KIMI-CONFIG"));
+    assert!(!marker.exists());
+    assert_eq!(fs::read_dir(home.join(".kimi-code")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(home.join(".kimi")).unwrap().count(), 1);
+}
+
+#[test]
+fn discovery_cline_override_matches_javascript_trim_and_never_selects_a_distinct_whitespace_directory(
+) {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let selected = home.join("selected");
+    fs::create_dir(&selected).unwrap();
+    fs::create_dir(home.join("selected ")).unwrap();
+    fs::create_dir(home.join(".cline")).unwrap();
+    let marker = home.join("must-not-execute");
+    let bin = home.join("bin");
+    metadata_executable(&bin.join("cline"), &marker);
+    let active = json!({"path":selected,"source":"CLINE_DIR","state":"directory"});
+    let fallback = json!({"path":home.join(".cline"),"source":"HOME","state":"directory"});
+    let invalid = json!({"path":null,"source":"CLINE_DIR","state":"invalid"});
+    for (value, expected) in [
+        (format!(" {} ", selected.display()), active.clone()),
+        (format!("{} ", selected.display()), active.clone()),
+        (format!("\u{feff}{}\u{feff}", selected.display()), active),
+        (" ".into(), fallback.clone()),
+        ("\u{feff}".into(), fallback),
+        ("\u{0085}".into(), invalid.clone()),
+        (format!("{}\u{0085}", selected.display()), invalid),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CLINE_DIR", OsStr::new(&value))]);
+        assert_eq!(discovered(&result, "cline")["profiles"][0], expected);
+    }
+    assert!(!marker.exists());
+}
+#[test]
+fn discovery_honors_config_directory_layers_aliases_and_profile_link_boundaries() {
+    use std::{
+        ffi::OsStr,
+        fs,
+        os::unix::fs::{symlink, PermissionsExt},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    let marker = home.join("marker");
+    for name in ["opencode", "cursor-agent", "claude", "codex", "cline"] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    let config = home.join("config");
+    fs::create_dir_all(config.join("opencode")).unwrap();
+    fs::create_dir(config.join("cursor")).unwrap();
+    let ignored = home.join("config-file.json");
+    fs::write(&ignored, "private-file-content").unwrap();
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("XDG_CONFIG_HOME", config.as_os_str()),
+            ("OPENCODE_CONFIG", ignored.as_os_str()),
+            ("CLINE_DIR", config.as_os_str()),
+        ],
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"][0]["path"],
+        config.join("opencode").to_str().unwrap()
+    );
+    assert_eq!(
+        discovered(&result, "cline")["profiles"][0],
+        json!({"path":config,"source":"CLINE_DIR","state":"directory"})
+    );
+    let cursor_profile = json!({"path": home.join(".cursor"), "source":"HOME", "state":"missing"});
+    assert_eq!(
+        &discovered(&result, "cursor")["profiles"][0],
+        &cursor_profile
+    );
+    symlink(&config, home.join(".claude")).unwrap();
+    let broken = home.join("broken");
+    symlink(home.join("absent"), &broken).unwrap();
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("CURSOR_CONFIG_DIR", broken.as_os_str()),
+            ("CODEX_HOME", broken.as_os_str()),
+            ("OPENCODE_CONFIG_DIR", OsStr::new("relative")),
+        ],
+    );
+    assert_eq!(
+        &discovered(&result, "cursor")["profiles"][0],
+        &cursor_profile
+    );
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"][0]["state"],
+        "invalid"
+    );
+    fs::rename(bin.join("claude"), bin.join("target")).unwrap();
+    symlink(bin.join("target"), bin.join("claude")).unwrap();
+    fs::set_permissions(bin.join("opencode"), fs::Permissions::from_mode(0o600)).unwrap();
+    let result = discover_metadata(home, bin.as_os_str(), &[]);
+    assert_eq!(
+        discovered(&result, "claude")["executable"]["source"],
+        "path"
+    );
+    assert!(!result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["agent"] == "opencode"));
+    assert!(!marker.exists());
+}
+#[test]
+fn discovery_bounds_path_scans_and_codex_standalone_entries_without_recursive_search() {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    let marker = home.join("marker");
+    metadata_executable(&bin.join("claude"), &marker);
+    let path = format!(
+        "{}:{}:{}",
+        bin.display(),
+        bin.display(),
+        vec!["relative"; 70].join(":")
+    );
+    let byte_limited = format!(
+        "{}:{}",
+        bin.display(),
+        vec!["/x".repeat(1500); 12].join(":")
+    );
+    for path in [path, byte_limited] {
+        let result = discover_metadata(home, OsStr::new(&path), &[]);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+    }
+    let release = home.join(".codex/packages/standalone/releases/one/bin/codex");
+    metadata_executable(&release, &marker);
+    let result = discover_metadata(home, OsStr::new(""), &[]);
+    assert_eq!(
+        discovered(&result, "codex")["executable"],
+        json!({"path":release,"source":"codexStandalone"})
+    );
+    let releases = home.join(".codex/packages/standalone/releases");
+    for index in 0..20 {
+        fs::create_dir(releases.join(format!("version-{index}"))).unwrap();
+    }
+    let result = discover_metadata(home, OsStr::new(""), &[]);
+    assert_eq!(result["truncated"], true);
+    let long = format!("/{}", "x".repeat(4097));
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[("CLAUDE_CONFIG_DIR", OsStr::new(&long))],
+    );
+    assert_eq!(result["truncated"], true);
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_distinguishes_unavailable_profile_metadata_and_never_searches_cwd() {
+    use std::{ffi::OsStr, fs, os::unix::fs::PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    metadata_executable(&bin.join("claude"), &home.join("marker"));
+    let locked = home.join("locked");
+    let profile = locked.join("profile");
+    fs::create_dir_all(&profile).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o0)).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", "")
+        .env("CLAUDE_CONFIG_DIR", &profile)
+        .args(["hooks", "discover"])
+        .output();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    let result = json_output::decode(output.unwrap());
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "unavailable"
+    );
+    let result = discover_metadata(home, bin.as_os_str(), &[("HOME", OsStr::new(""))]);
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0],
+        json!({"path":null,"source":"HOME","state":"unavailable"})
+    );
+    let relative = discover_metadata(home, OsStr::new(":.:bin"), &[]);
+    assert_eq!(relative["agents"], json!([]));
+    fs::create_dir(bin.join("gemini")).unwrap();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    let result = json_output::decode(
+        command
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", &bin)
+            .args(["hooks", "discover"])
+            .current_dir(&bin)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
+    use std::fs;
+    let outer = tempfile::tempdir().unwrap();
+    let mut home = outer.path().to_path_buf();
+    while home.as_os_str().len() < 3700 {
+        home.push("x".repeat(200));
+    }
+    fs::create_dir_all(&home).unwrap();
+    let bin = home.join("bin");
+    let marker = outer.path().join("never-executed");
+    for name in [
+        "claude",
+        "codex",
+        "droid",
+        "gemini",
+        "cursor-agent",
+        "opencode",
+        "cline",
+        "kimi",
+        "copilot",
+        "amp",
+        "aider",
+    ] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    for suffix in [
+        ".claude",
+        ".codex",
+        ".factory",
+        ".gemini",
+        ".cursor",
+        ".config/opencode",
+        ".cline",
+        "extra",
+    ] {
+        fs::create_dir_all(home.join(suffix)).unwrap();
+    }
+    let extra = home.join("extra");
+    let result = discover_metadata(
+        &home,
+        bin.as_os_str(),
+        &[("OPENCODE_CONFIG_DIR", extra.as_os_str())],
+    );
+    assert_eq!(result["truncated"], true);
+    assert!(result["agents"].as_array().unwrap().len() < 11);
+    assert!(serde_json::to_vec(&result).unwrap().len() <= 65536);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_cursor_aliases_preserve_path_order_and_return_one_unexecuted_row() {
+    let home = tempfile::tempdir().unwrap();
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    let marker = home.path().join("must-not-run-cursor");
+    let path = std::env::join_paths([&first, &second]).unwrap();
+    for executable in [
+        second.join("agent"),
+        first.join("cursor-agent"),
+        first.join("agent"),
+    ] {
+        metadata_executable(&executable, &marker);
+        let result = discover_metadata(home.path(), &path, &[]);
+        assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            discovered(&result, "cursor")["executable"],
+            json!({"path":executable,"source":"path"})
+        );
+        assert_eq!(
+            discovered(&result, "cursor")["profiles"][0]["path"],
+            home.path().join(".cursor").to_str().unwrap()
+        );
+    }
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_keeps_invalid_explicit_override_visible_without_an_executable_or_fallback() {
+    use std::{ffi::OsStr, fs};
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("never-execute");
+    let default = home.path().join(".codex");
+    fs::create_dir(&default).unwrap();
+    metadata_executable(&home.path().join("bin/codex"), &marker);
+    let result = discover_metadata(
+        home.path(),
+        OsStr::new(""),
+        &[("CODEX_HOME", OsStr::new("relative"))],
+    );
+    assert_eq!(
+        result["agents"],
+        json!([{"agent":"codex","setup":"managed","executable":null,
+        "profiles":[{"path":null,"source":"CODEX_HOME","state":"invalid"}]}])
+    );
+    assert_eq!(result["truncated"], false);
+    assert!(!marker.exists());
+    assert!(default.is_dir());
+}
+
+#[test]
+fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("copilot");
+    let home = root.path();
+    let default = home.join(".copilot");
+    fs::create_dir(&default).unwrap();
+    fs::write(default.join("settings.json"), "PRIVATE_NOT_JSON").unwrap();
+    fs::create_dir(home.join("chosen")).unwrap();
+    let legacy = discover_metadata(home, bin.as_os_str(), &[]);
+    assert_eq!(discovered(&legacy, "copilot")["setup"], "manual");
+    assert_eq!(discovered(&legacy, "copilot")["profiles"], json!([]));
+    let current = |overrides: &[(&str, &OsStr)]| {
+        discover_metadata_version(home, bin.as_os_str(), overrides, Some(2))
+    };
+    let result = current(&[]);
+    assert_eq!(result["schemaVersion"], 2);
+    assert_eq!(discovered(&result, "copilot")["setup"], "managed");
+    let fallback = current(&[("COPILOT_HOME", OsStr::new(""))]);
+    assert_eq!(
+        discovered(&fallback, "copilot")["profiles"][0],
+        json!({"path":default,"source":"HOME","state":"directory"})
+    );
+    assert_eq!(
+        discover_metadata_version(home, bin.as_os_str(), &[], Some(1)),
+        legacy
+    );
+    for suffix in ["chosen ", "chosen\u{00a0}", "chosen\u{feff}"] {
+        let literal = home.join(suffix);
+        fs::create_dir(&literal).unwrap();
+        assert_eq!(
+            discover_metadata(
+                home,
+                bin.as_os_str(),
+                &[("COPILOT_HOME", literal.as_os_str())]
+            ),
+            legacy
+        );
+        let result = current(&[("COPILOT_HOME", literal.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "copilot")["profiles"][0],
+            json!({"path":literal,"source":"COPILOT_HOME","state":"directory"})
+        );
+    }
+    for invalid in [
+        OsStr::new(" "),
+        OsStr::new("relative"),
+        OsStr::new("~/chosen"),
+        OsStr::new("/owned/../profile"),
+        OsStr::new("/owned/\nprofile"),
+        OsStr::from_bytes(b"/owned/\xff"),
+    ] {
+        let result = current(&[("COPILOT_HOME", invalid)]);
+        assert_eq!(
+            discovered(&result, "copilot")["profiles"][0],
+            json!({"path":null,"source":"COPILOT_HOME","state":"invalid"})
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(default.join("settings.json")).unwrap(),
+        "PRIVATE_NOT_JSON"
+    );
+    assert!(!marker.exists());
+    assert!(!result.to_string().contains("PRIVATE"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_hooks() {
+    use files::Action;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::Copilot);
+    let hooks = fixture.target.profile.join("hooks");
+    fs::create_dir(&hooks).unwrap();
+    let preserved = [
+        (
+            fixture.target.profile.join("config.json"),
+            "// JSONC remains opaque\n{}",
+        ),
+        (
+            fixture.target.profile.join("settings.json"),
+            r#"{"disableAllHooks":true}"#,
+        ),
+        (
+            fixture.target.profile.join("providers.json"),
+            "PRIVATE_OWNED_PROVIDER",
+        ),
+        (
+            hooks.join("foreign.json"),
+            r#"{"version":1,"disableAllHooks":true,"hooks":{}}"#,
+        ),
+    ];
+    for (path, bytes) in &preserved {
+        fs::write(path, bytes).unwrap();
+    }
+    let manual = render::owned_file(record::Agent::Copilot, &fixture.companion).unwrap();
+    fs::write(fixture.provider(), &manual).unwrap();
+    assert!(matches!(
+        fixture.inspect().plan(Action::Install),
+        Err(Error::Installation("HooksForeignPlugin"))
+    ));
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), manual);
+    fs::remove_file(fixture.provider()).unwrap();
+    let plan = fixture.plan(Action::Install);
+    assert_eq!(
+        fixture.apply(Action::Install, &plan).unwrap().status,
+        "configured"
+    );
+    assert_eq!(fixture.provider(), hooks.join("lazysh.json"));
+    let asset: Value = serde_json::from_slice(&fs::read(fixture.provider()).unwrap()).unwrap();
+    assert_eq!(asset["version"], 1);
+    assert_eq!(asset["hooks"].as_object().unwrap().len(), 6);
+    assert!(asset["hooks"].get("PreToolUse").is_none());
+    let command = &asset["hooks"]["UserPromptSubmit"][0];
+    assert_eq!(command["exec"], fixture.companion.to_str().unwrap());
+    assert_eq!(command["args"], json!(["ingest", "--agent", "copilot"]));
+    assert_eq!(command["timeoutSec"], 5);
+    let state = fixture._root.path().join("state");
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-copilot-render","cwd":"/owned/copilot"});
+    let mut child = std::process::Command::new(command["exec"].as_str().unwrap());
+    child
+        .args(["ingest", "--agent", "copilot"])
+        .env_clear()
+        .env("PATH", "")
+        .env("LAZYSH_STATE_DIR", &state);
+    assert!(
+        process::run(&mut child, &serde_json::to_vec(&payload).unwrap())
+            .status
+            .success()
+    );
+    assert_eq!(
+        snapshot(&fixture.companion, &state)["sessions"][0]["state"],
+        "working"
+    );
+    assert_eq!(fixture.apply_current(Action::Install).status, "reused");
+    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+    assert!(!fixture.provider().exists());
+    for (path, bytes) in &preserved {
+        assert_eq!(fs::read_to_string(path).unwrap(), *bytes);
+    }
+    fs::write(fixture.provider(), serde_json::to_vec(&asset).unwrap()).unwrap();
+    let inspect = fixture.inspect();
+    assert_eq!(inspect.observation, Some(state::Observation::Conflict));
+    assert!(inspect.plan(Action::Install).is_err());
+}
+
+#[test]
+fn discovery_v3_amp_preserves_raw_xdg_and_never_promotes_old_schemas() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("amp");
+    let home = root.path();
+    let default = home.join(".config/amp");
+    fs::create_dir_all(&default).unwrap();
+    fs::write(default.join("settings.json"), "PRIVATE_DO_NOT_READ").unwrap();
+    for version in [1, 2] {
+        let legacy = discover_metadata_version(home, bin.as_os_str(), &[], Some(version));
+        assert_eq!(discovered(&legacy, "amp")["setup"], "manual");
+        assert_eq!(discovered(&legacy, "amp")["profiles"], json!([]));
+    }
+    let inspect = |raw: Option<&OsStr>| {
+        let overrides = raw
+            .map(|value| vec![("XDG_CONFIG_HOME", value)])
+            .unwrap_or_default();
+        discover_metadata_version(home, bin.as_os_str(), &overrides, Some(3))
+    };
+    let result = inspect(None);
+    assert_eq!(result["schemaVersion"], 3);
+    let amp = discovered(&result, "amp");
+    assert_eq!(amp["setup"], "managed");
+    assert_eq!(
+        amp["profiles"][0],
+        json!({"path":default,"source":"HOME","state":"directory"})
+    );
+    assert_eq!(inspect(Some(OsStr::new(""))), result);
+    for suffix in ["literal", "literal "] {
+        let base = home.join(suffix);
+        fs::create_dir_all(base.join("amp")).unwrap();
+        let selected = inspect(Some(base.as_os_str()));
+        assert_eq!(
+            discovered(&selected, "amp")["profiles"][0],
+            json!({"path":base.join("amp"),"source":"XDG_CONFIG_HOME","state":"directory"})
+        );
+    }
+    for raw in [
+        OsStr::new(" "),
+        OsStr::new("relative"),
+        OsStr::new("~/config"),
+        OsStr::new("/owned/../config"),
+        OsStr::new("/owned/\nconfig"),
+        OsStr::from_bytes(b"/owned/\xff"),
+    ] {
+        let invalid = inspect(Some(raw));
+        assert_eq!(
+            discovered(&invalid, "amp")["profiles"][0],
+            json!({"path":null,"source":"XDG_CONFIG_HOME","state":"invalid"})
+        );
+    }
+    assert!(!result.to_string().contains("PRIVATE"));
+    assert_eq!(
+        fs::read_to_string(default.join("settings.json")).unwrap(),
+        "PRIVATE_DO_NOT_READ"
+    );
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
+    use files::Action;
+    use std::{fs, os::unix::fs::symlink};
+    for kind in ["typescript", "directory", "symlink"] {
+        let fixture = ProfileFixture::new(record::Agent::Amp);
+        assert_eq!(fixture.apply_current(Action::Install).status, "configured");
+        let remove_before = fixture
+            .inspect()
+            .plan(Action::Remove)
+            .unwrap()
+            .digest()
+            .unwrap();
+        let plugins = fixture.provider().parent().unwrap().to_owned();
+        let shadow = plugins.join(if kind == "typescript" {
+            "lazysh.ts"
+        } else {
+            "lazysh"
+        });
+        match kind {
+            "typescript" => fs::write(&shadow, "foreign source unchanged").unwrap(),
+            "directory" => fs::create_dir(&shadow).unwrap(),
+            _ => symlink("missing-foreign-target", &shadow).unwrap(),
+        }
+        let identity = files::identity(&fs::symlink_metadata(&shadow).unwrap());
+        assert!(matches!(
+            fixture.inspect().plan(Action::Install),
+            Err(Error::Installation("HooksAmpShadow"))
+        ));
+        assert!(matches!(
+            fixture.apply(Action::Remove, &remove_before),
+            Err(Error::Installation("HooksStalePlan"))
+        ));
+        let status = fixture.cli("status", None);
+        assert_eq!(status["state"], "configured");
+        assert_eq!(status["reason"], "HooksAmpShadow");
+        assert!(status["installPlan"].is_null());
+        let plan = status["removePlan"].as_str().unwrap();
+        assert_eq!(
+            fixture.apply(Action::Remove, plan).unwrap().status,
+            "removed"
+        );
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            files::identity(&fs::symlink_metadata(&shadow).unwrap()),
+            identity
+        );
+        if kind == "typescript" {
+            assert_eq!(
+                fs::read_to_string(shadow).unwrap(),
+                "foreign source unchanged"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_removable() {
+    use files::Action;
+    use std::fs;
+    for point in [
+        commit::Boundary::BeforeRecord,
+        commit::Boundary::BeforeProvider,
+    ] {
+        for change in [
+            "install-add",
+            "remove-add",
+            "remove-delete",
+            "remove-replace",
+            "remove-aba",
+        ] {
+            let fixture = ProfileFixture::new(record::Agent::Amp);
+            let action = if change == "install-add" {
+                fs::create_dir(fixture.provider().parent().unwrap()).unwrap();
+                Action::Install
+            } else {
+                fixture.apply_current(Action::Install);
+                Action::Remove
+            };
+            let shadow = fixture.provider().parent().unwrap().join("lazysh.ts");
+            let initial_shadow = !change.ends_with("add");
+            if initial_shadow {
+                fs::write(&shadow, "foreign unchanged").unwrap();
+            }
+            let retained = initial_shadow.then(|| fs::File::open(&shadow).unwrap());
+            let original = fs::read(fixture.provider()).ok();
+            let expected = fixture.plan(action);
+            let changed_path = shadow.clone();
+            interrupt(move |boundary| {
+                if boundary == point {
+                    let _keep_inode_alive = &retained;
+                    if initial_shadow {
+                        fs::remove_file(&changed_path)?;
+                    }
+                    if change != "remove-delete" {
+                        fs::write(
+                            &changed_path,
+                            if change == "remove-replace" {
+                                "foreign replacement"
+                            } else {
+                                "foreign unchanged"
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            });
+            let outcome = fixture.apply(action, &expected);
+            clear_interrupt();
+            if point == commit::Boundary::BeforeRecord {
+                assert!(matches!(
+                    outcome,
+                    Err(Error::Installation("HooksStalePlan"))
+                ));
+            } else {
+                let result = outcome.unwrap();
+                assert_eq!(result.status, "uncertain");
+                assert_eq!(result.reason, Some("HooksStalePlan"));
+                assert!(!result.provider_committed);
+            }
+            assert_eq!(fs::read(fixture.provider()).ok(), original);
+            assert_eq!(shadow.exists(), change != "remove-delete");
+            let removal = fixture.apply_current(Action::Remove);
+            assert!(matches!(removal.status, "removed" | "absent"));
+            assert_eq!(shadow.exists(), change != "remove-delete");
+            if shadow.exists() {
+                assert_eq!(
+                    fs::read_to_string(shadow).unwrap(),
+                    if change == "remove-replace" {
+                        "foreign replacement"
+                    } else {
+                        "foreign unchanged"
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_record_shapes() {
+    for agent in WHOLE_FILE_AGENTS {
+        let fixture = ProfileFixture::new(agent);
+        let plan = fixture.inspect().plan(files::Action::Install).unwrap();
+        let value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            value.get("ampShadows").is_some(),
+            agent == record::Agent::Amp
+        );
+        let encoded = plan.transition.unwrap().encode().unwrap();
+        let record = record::Record::decode(&encoded).unwrap();
+        assert_eq!(record.encode().unwrap(), encoded);
+        assert!(!String::from_utf8(encoded).unwrap().contains("ampShadows"));
+    }
 }

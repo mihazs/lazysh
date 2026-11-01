@@ -1,6 +1,7 @@
 //! Explicit, profile-scoped lifecycle hook setup; configuration is not reporting evidence.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod commit;
+mod discovery;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -25,6 +26,9 @@ pub enum AgentProfile {
     Gemini,
     Cursor,
     Opencode,
+    Cline,
+    Copilot,
+    Amp,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
@@ -36,6 +40,9 @@ impl AgentProfile {
             Self::Gemini => record::Agent::Gemini,
             Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
+            Self::Cline => record::Agent::Cline,
+            Self::Copilot => record::Agent::Copilot,
+            Self::Amp => record::Agent::Amp,
         }
     }
 }
@@ -43,12 +50,18 @@ impl AgentProfile {
 pub struct Target {
     #[arg(long, value_enum)]
     pub agent: AgentProfile,
-    /// Existing, explicitly selected per-user provider configuration directory.
+    /// Existing, explicitly selected provider configuration directory.
     #[arg(long)]
     pub profile_root: PathBuf,
 }
 #[derive(Subcommand)]
 pub enum Command {
+    /// Discover known installed executables and profile directories without reading configuration.
+    Discover {
+        /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3))]
+        schema_version: u8,
+    },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
     Preview {
         #[arg(long, value_enum)]
@@ -75,19 +88,32 @@ pub enum Command {
     },
 }
 pub fn run(command: Command) -> Result<Value> {
-    if let Command::Preview { agent } = command {
-        return preview(agent);
+    match command {
+        Command::Discover { schema_version } => Ok(discovery::run(schema_version)),
+        Command::Preview { agent } => preview(agent),
+        other => manage(other),
     }
-    manage(command)
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn preview(agent: AgentProfile) -> Result<Value> {
     let source = std::env::current_exe()?;
     let agent = agent.agent();
-    let (asset, dialect) = if agent == record::Agent::Opencode {
+    let (asset, dialect) = if agent == record::Agent::Copilot {
+        let text = render::owned_file(agent, &source).map_err(Error::Installation)?;
         (
-            Value::String(render::plugin(&source).map_err(Error::Installation)?),
-            "bun-javascript",
+            serde_json::from_str(&text).map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
+            "shell-free-exec",
+        )
+    } else if agent.is_whole_file() {
+        (
+            Value::String(render::owned_file(agent, &source).map_err(Error::Installation)?),
+            if agent == record::Agent::Amp {
+                "amp-javascript"
+            } else if agent == record::Agent::Cline {
+                "cline-javascript"
+            } else {
+                "bun-javascript"
+            },
         )
     } else {
         let entries = render::entries(agent, &source).map_err(Error::Installation)?;
@@ -119,6 +145,15 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         AgentProfile::Droid => (crate::hooks::droid_config(), "posix-shell"),
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
+        AgentProfile::Copilot => (crate::hooks::copilot_config(), "shell-free-exec"),
+        AgentProfile::Cline => (
+            crate::hooks::cline_plugin()["content"].clone(),
+            "cline-javascript",
+        ),
+        AgentProfile::Amp => (
+            crate::hooks::amp_plugin()["content"].clone(),
+            "amp-javascript",
+        ),
         AgentProfile::Opencode => (
             crate::hooks::opencode_plugin()["content"].clone(),
             "bun-javascript",
@@ -135,7 +170,7 @@ fn manage(command: Command) -> Result<Value> {
         Command::Status { target } => (target, None),
         Command::Install { target, .. } => (target, Some(files::Action::Install)),
         Command::Remove { target, .. } => (target, Some(files::Action::Remove)),
-        Command::Preview { .. } => unreachable!(),
+        Command::Preview { .. } | Command::Discover { .. } => unreachable!(),
     };
     let selected = files::Target {
         agent: target.agent.agent(),
@@ -168,8 +203,15 @@ fn manage(command: Command) -> Result<Value> {
             json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked"}),
         );
     }
-    let install = inspected.plan(files::Action::Install)?;
     let remove = inspected.plan(files::Action::Remove)?;
+    let install = match inspected.plan(files::Action::Install) {
+        Err(Error::Installation("HooksAmpShadow")) => {
+            return Ok(
+                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked"}),
+            );
+        }
+        other => other?,
+    };
     Ok(
         json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked"}),
     )

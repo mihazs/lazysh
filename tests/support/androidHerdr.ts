@@ -1,4 +1,5 @@
-import {mkdir,open,readFile,stat,writeFile} from 'node:fs/promises';
+import {mkdir,open,readFile,stat,writeFile,lstat,realpath} from 'node:fs/promises';
+import {createConnection} from 'node:net';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
@@ -25,6 +26,8 @@ export class HerdrFixture {
   private receiver:OwnedPid|undefined;
   private agent:ReportedAgent|undefined;
   private agentContext:string|undefined;
+  private historyPane:ReportedAgent|undefined;
+  private historyReceiver:OwnedPid|undefined;
   private stopped=false;
   private navigationReceivers:{directory:string;receiver:OwnedPid}[]=[];
   private navigation: {source:ReportedAgent & {marker:string;label:string};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string};workspaceLabel:string}|undefined;
@@ -88,14 +91,34 @@ export class HerdrFixture {
       owned.agentContext=ownedHerdrContext(reported,owned.agent,source.cwd,ssh.directory);
       await owned.expectBytes(Buffer.alloc(0));
       if(navigation)await owned.prepareNavigation();
+      else {
+        const created=JSON.parse(await owned.run(['tab','create','--workspace',row.workspace_id,'--cwd',ssh.directory,'--label','OWNED_SCROLL','--no-focus'])).result;
+        const history=created?.root_pane;
+        if(!history || typeof history.pane_id!=='string' || !/^w[0-9]+:p[0-9]+$/.test(history.pane_id)
+          || history.pane_id.length>50 || history.workspace_id!==row.workspace_id
+          || typeof history.tab_id!=='string' || !/^w[0-9]+:t[0-9]+$/.test(history.tab_id) || history.tab_id.length>50
+          || history.tab_id!==created.tab?.tab_id || !history.tab_id.startsWith(row.workspace_id+':')
+          || !history.pane_id.startsWith(row.workspace_id+':') || history.pane_id===pane || history.tab_id===row.tab_id
+          || typeof history.terminal_id!=='string' || !history.terminal_id || history.terminal_id.length>256
+          || /[\x00-\x1f\x7f-\x9f]/.test(history.terminal_id) || history.terminal_id===row.terminal_id)
+          throw new Error('Owned history identity invalid');
+        owned.historyPane={paneId:history.pane_id,tabId:history.tab_id,workspaceId:history.workspace_id,terminalId:history.terminal_id};
+        const directory=join(ssh.directory,'scroll');await mkdir(directory,{mode:0o700});
+        owned.historyReceiver=await owned.startReceiver(history.pane_id,directory,undefined,
+          `i=0; while [ "$i" -lt 512 ]; do printf 'OLD%03d\\n' "$i"; i=$((i+1)); done; printf 'NEW512\\n'; `);
+        const initial=await owned.history();
+        if(initial.offset!==0 || initial.max<=0 || initial.rows>=512 || !initial.newTail
+          || JSON.parse(await owned.run(['api','snapshot'])).result.snapshot.focused_pane_id!==pane)
+          throw new Error('Owned history initial state invalid');
+      }
       return owned;
     } catch(error) {
       try{await owned.stop();}catch{console.error('Owned Herdr startup cleanup also failed');}
       throw error;
     }
   }
-  private async startReceiver(pane:string,directory:string,marker?:string) {
-    const command=(marker?"printf '\\033[2J\\033[H%s' "+quote(marker)+"; ":'')+'exec '+quote(join(this.ssh.directory,'bin/owned-terminal-receiver'))+' '+quote(directory);
+  private async startReceiver(pane:string,directory:string,marker?:string,prefix='') {
+    const command=prefix+(marker?"printf '\\033[2J\\033[H%s' "+quote(marker)+"; ":'')+'exec '+quote(join(this.ssh.directory,'bin/owned-terminal-receiver'))+' '+quote(directory);
     await this.run(['pane','run',pane,command]);
     const deadline=performance.now()+3000;
     while(true) {
@@ -172,16 +195,90 @@ export class HerdrFixture {
     }
     if(!await this.receiverAlive(receiver))throw new Error('Owned receiver identity changed');
   }
+  private async historyRead(offset?:number):Promise<any> {
+    const pane=this.historyPane;
+    if(!pane || !await this.server?.liveIdentity())throw new Error('Owned history unavailable');
+    const paths=await Promise.all(['herdr','herdr-dev'].map(async flavor=>{
+      const path=join(this.ssh.directory,'config',flavor,'sessions',this.name,'herdr.sock');
+      const info=await lstat(path).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;});
+      if(!info)return;
+      if(!info.isSocket() || info.isSymbolicLink() || info.uid!==process.getuid!() || await realpath(path)!==path)
+        throw new Error('Owned history socket identity invalid');
+      return path;
+    }));
+    const sockets=paths.filter((path):path is string=>!!path);
+    if(sockets.length!==1)throw new Error('Owned history socket unavailable');
+    return new Promise((resolve,reject)=>{
+      const socket=createConnection(sockets[0]);let bytes=Buffer.alloc(0),settled=false;
+      const finish=(value?:unknown)=>{
+        if(settled)return;settled=true;clearTimeout(timer);socket.destroy();
+        if(value)resolve(value);else reject(new Error('Owned history API failed'));
+      };
+      const timer=setTimeout(()=>finish(),3000);
+      socket.on('error',()=>finish());socket.on('end',()=>finish());
+      socket.on('connect',()=>socket.write(JSON.stringify({id:'owned-history',
+        method:offset===undefined?'pane.read':'pane.scroll',params:offset===undefined?
+          {pane_id:pane.paneId,source:'visible',lines:1000,format:'text',strip_ansi:true}:
+          {pane_id:pane.paneId,offset_from_bottom:offset}})+'\n'));
+      socket.on('data',data=>{
+        if(typeof data==='string' || bytes.length+data.length>65536 || data.includes(0)){finish();return;}
+        bytes=Buffer.concat([bytes,data]);
+        const end=bytes.indexOf(10);if(end<0)return;
+        try {
+          if(end!==bytes.length-1)throw new Error();
+          const frame=JSON.parse(bytes.subarray(0,end).toString('utf8'));
+          if(frame.id!=='owned-history' || frame.error || frame.result?.type!==(offset===undefined?'pane_read':'pane_info'))throw new Error();
+          finish(frame.result);
+        } catch {finish();}
+      });
+    });
+  }
+  // Offset writes are for the real host contract owner only, never the Android swipe action.
+  async history(offset?:number) {
+    const pane=this.historyPane;
+    if(!pane || (offset!==undefined && (!Number.isSafeInteger(offset) || offset<0 || offset>512)))
+      throw new Error('Owned history request invalid');
+    if(offset!==undefined)await this.historyRead(offset);
+    const info=JSON.parse(await this.run(['pane','get',pane.paneId])).result?.pane;
+    const read=(await this.historyRead()).read;
+    if(!info || info.pane_id!==pane.paneId || info.terminal_id!==pane.terminalId || info.tab_id!==pane.tabId
+      || info.workspace_id!==pane.workspaceId || !read || read.pane_id!==pane.paneId || read.tab_id!==pane.tabId
+      || read.workspace_id!==pane.workspaceId || read.source!=='visible' || read.format!=='text' || read.truncated!==false
+      || typeof read.text!=='string' || Buffer.byteLength(read.text)>65536
+      || !info.scroll || ![info.scroll.offset_from_bottom,info.scroll.max_offset_from_bottom,info.scroll.viewport_rows]
+        .every(value=>Number.isSafeInteger(value) && value>=0 && value<=65536)
+      || info.scroll.viewport_rows===0 || info.scroll.offset_from_bottom>info.scroll.max_offset_from_bottom)
+      throw new Error('Owned history observation invalid');
+    await this.expectBytes(Buffer.alloc(0),join(this.ssh.directory,'scroll','received-bytes'),this.historyReceiver);
+    const rows=read.text.split('\n').map((line:string)=>line.trim());
+    return {offset:info.scroll.offset_from_bottom,max:info.scroll.max_offset_from_bottom,rows:info.scroll.viewport_rows,
+      oldRows:rows.filter((line:string)=>/^OLD[0-9]{3}$/.test(line)).length,newTail:rows.includes('NEW512')};
+  }
+  async historyDiagnostic() {
+    try {
+      const {offset,max,rows,oldRows,newTail}=await this.history();
+      const focused=JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id;
+      return {state:'available',offset,max,rows,oldRows,newTail,
+        focusHistory:typeof focused==='string' && focused===this.historyPane?.paneId,
+        focusOriginal:typeof focused==='string' && focused===this.agent?.paneId};
+    } catch {return {state:'unavailable'};}
+  }
+  async expectHistoryScrolled() {
+    const sample=await this.history();
+    if(sample.offset<=0 || sample.oldRows===0 || sample.newTail
+      || JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id!==this.agent?.paneId)
+      throw new Error('Owned remote history did not scroll and restore');
+  }
   metadata() {
     if(!this.agent || !this.agentContext)throw new Error('Owned Herdr agent report required');
-    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft,agent:this.agent,agentContext:this.agentContext,...(this.navigation?{navigation:this.navigation}:{})};
+    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft,agent:this.agent,agentContext:this.agentContext,...(this.navigation?{navigation:this.navigation}:{history:this.historyPane})};
   }
   async stop() {
     if(this.stopped)return;
     let failure:unknown;
     try {
       if(this.server)await stopOwnedTree(this.server,'Herdr',true);
-      if(await this.receiverAlive() || (await Promise.all(this.navigationReceivers.map(({receiver})=>this.receiverAlive(receiver)))).some(Boolean))throw new Error('Owned Herdr receiver survived teardown');
+      if(await this.receiverAlive() || await this.receiverAlive(this.historyReceiver) || (await Promise.all(this.navigationReceivers.map(({receiver})=>this.receiverAlive(receiver)))).some(Boolean))throw new Error('Owned Herdr receiver survived teardown');
     } catch(error){failure=error;}
     try{await this.ssh.stop();}catch(error){failure??=error;}
     if(failure)throw failure;
