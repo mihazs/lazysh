@@ -13,6 +13,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useId,
   useState,
   type ReactNode,
 } from "react";
@@ -1173,6 +1174,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const pickerOwner=useRef({source:'',visible:false,revision:0});
   const [pickerState,setPickerState]=useState<{owner:object;busy:boolean}>();
   const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
+  const agentScroll=useRef<HTMLDivElement>(null),liveAgentContent=useRef<HTMLDivElement>(null),reportedAgentContent=useRef<HTMLDivElement>(null);
+  const agentContentId=useId();
   useEffect(()=>{
     if(typeof window.matchMedia!=='function')return;
     const media=window.matchMedia('(max-width: 600px)');
@@ -1274,6 +1277,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
     if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
+  }
+  function jumpAgentContent(section:'live'|'activity') {
+    const scroller=agentScroll.current,target=section==='live'?liveAgentContent.current:reportedAgentContent.current;
+    if(!agentsVisible || !lease.current() || !scroller || !target)return;
+    scroller.scrollTop=Math.max(0,scroller.scrollTop+target.getBoundingClientRect().top-scroller.getBoundingClientRect().top-scroller.clientTop);
+    target.focus({preventScroll:true});
   }
   function rememberContext(){
     if(!active)return;
@@ -1892,8 +1901,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
-        <div className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
-        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
+        <nav className="agent-section-jumps" hidden={!agentsVisible} aria-label={t('agentsSections')}>
+          <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
+          <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
+        </nav>
+        <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
+        {remoteActive && active && <div ref={liveAgentContent} id={`${agentContentId}-live`} role="group" aria-label={t('herdrAgentsTitle')} tabIndex={-1}><HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div> }
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           <h3>{t('navigationLiveSessions')}</h3>
           <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
@@ -1909,7 +1922,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
         </div>}
-        {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
+        {active?.connected && !active.local && navigationEntry.agents && <div ref={reportedAgentContent} id={`${agentContentId}-activity`} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!agentsVisible}>
           <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>

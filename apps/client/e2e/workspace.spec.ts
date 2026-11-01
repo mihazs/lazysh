@@ -93,7 +93,7 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -104,7 +104,11 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
+      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.agentCount>1){
+        const pane=tree.panes[0],agent=tree.agents[0];
+        tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
+        tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
+      }if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
@@ -112,7 +116,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         return {schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
       }
       if(command==='agent_snapshot'){
-        if(geometry)return {schemaVersion:1,sessions:[]};
+        if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
         if(!state.installed)throw {message:'Synthetic missing host companion'};
         return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
       }
@@ -132,6 +136,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       throw new Error(`Unexpected navigation fixture request: ${command}`);
     };
   },geometry);
+}
+
+async function openClockedNavigation(page:Page) {
+  await page.clock.install();await installWorkspaceNavigation(page);await page.goto('/');
 }
 
 async function connectPasswordHost(page:Page,name='Navigation host'){
@@ -163,9 +171,7 @@ function nativeHerdrNavigationReady(label:string,context?:string){
 }
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
-  await page.clock.install();
-  await installWorkspaceNavigation(page);
-  await page.goto('/');
+  await openClockedNavigation(page);
   const phone=testInfo.project.name==='phone';
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -567,4 +573,58 @@ test('usage returns to its exact terminal and Agents context without expanding m
   expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
+});
+
+
+for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':'reported'} activity behind many live agents without changing owners`,async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  const phone=testInfo.project.name==='phone';if(phone)await page.setViewportSize({width:393,height:852});
+  await page.evaluate(empty=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number;empty:boolean}}).workspaceNavigationState;state.installed=true;state.agentCount=80;state.empty=empty;},empty);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  const canvas=page.locator('.terminal-canvas').first(),originalCanvas=await canvas.elementHandle();
+  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  const jumps=sidebar.getByRole('navigation',{name:'Agent sections',exact:true});
+  const activity=sidebar.getByRole('group',{name:'Reported agent activity',exact:true});
+  const board=activity.getByRole('region',{name:'Agent activity',exact:true}),originalBoard=await board.elementHandle();
+  const live=sidebar.getByRole('region',{name:'Herdr navigation',exact:true});
+  await expect(live.locator('.herdr-navigation-row')).toHaveCount(80);
+  await expect(live).toHaveAttribute('aria-busy','false');await expect(board.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+  if(empty)await expect(board.getByRole('button',{name:'Agent hook setup',exact:true})).toHaveCount(1);
+  else await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
+  const scroller=sidebar.locator('.workspace-navigation-scroll');
+  await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).not.toBeInViewport();
+  const calls=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  const before=await calls(),windowScroll=await page.evaluate(()=>({x:scrollX,y:scrollY}));
+  const jumpActivity=jumps.getByRole('button',{name:'Reported agent activity',exact:true});
+  await expect(jumpActivity).toBeInViewport({ratio:0.9});
+  if(phone)await jumpActivity.tap();else{await jumpActivity.focus();await page.keyboard.press('Enter');}
+  await expect(activity).toBeFocused();await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).toBeInViewport({ratio:0.9});
+  expect(await scroller.evaluate(node=>node.scrollTop)).toBeGreaterThan(2000);
+  expect(await page.evaluate(()=>({x:scrollX,y:scrollY}))).toEqual(windowScroll);expect(await calls()).toEqual(before);
+  await expect(jumps.getByRole('button',{name:'Live Herdr agents',exact:true})).toBeInViewport({ratio:0.9});
+  await page.screenshot({path:testInfo.outputPath('direct-activity.png'),animations:'disabled'});
+  const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
+  await board.getByRole('button',{name:'Setup',exact:true}).click();
+  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
+  await board.getByRole('button',{name:'Setup',exact:true}).click();
+  await jumps.getByRole('button',{name:'Live Herdr agents',exact:true}).click();
+  await expect(sidebar.getByRole('group',{name:'Live Herdr agents',exact:true})).toBeFocused();
+  expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
+  await expect(live.locator('.herdr-navigation-row').first()).toBeInViewport({ratio:0.75});
+  await jumpActivity.click();await expect(search).toHaveValue('/nav');
+  await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
+  await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
+  await expect(sidebar.getByRole('button',{name:'Agents navigation',exact:true})).toHaveAttribute('aria-current','page');
+  // #665: released mobile Back resets drawer scroll; this jump adds no restoration state.
+  await expect(jumpActivity).toBeInViewport({ratio:0.9});await expect(search).toHaveValue('/nav');
+  await jumpActivity.click();
+  await board.getByRole('button',{name:'Setup',exact:true}).click();await expect(settings).not.toBeChecked();
+  expect(await originalBoard!.evaluate(node=>node.isConnected)).toBe(true);expect(await originalCanvas!.evaluate(node=>node.isConnected)).toBe(true);
+  const after=await calls();expect(after.filter(command=>['disconnect','write_stdin','install_companion','companion_hooks','attach_multiplexer','herdr_action'].includes(command))).toEqual([]);
+  expect(after.filter(command=>command==='connect')).toHaveLength(1);
+  expect(after.filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
