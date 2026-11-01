@@ -1410,6 +1410,7 @@ export const english = {
   agentsRefreshing: "Refreshing…",
   agentsReportedHint: "Last reported events from this host. Respond to agent prompts in the terminal.",
   agentsConnect: "Connect your agents.",
+  agentsSetupAction: "Setup",
   agentsSetup: "Install the optional lazysh-agent companion on this host and enable its lifecycle hooks. Your terminal works independently.",
   agentsSetupDocs: "See {{path}} in the lazysh repository for setup.",
   agentsReading: "Reading events over SSH…",
