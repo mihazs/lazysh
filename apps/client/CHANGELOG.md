@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.5.2
+
+### Patch Changes
+
+- 11187d3: Refine mobile connected navigation with full-width agent/workspace views, compact accessible Herdr actions and progressive activity details while preserving terminal and session behavior.
+- @lazysh/account-usage@1.5.2
+  - @lazysh/common@1.5.2
+  - @lazysh/display-idle@1.5.2
+  - @lazysh/et-transport@1.5.2
+  - @lazysh/mosh-transport@1.5.2
+
 ## 1.5.1
 
 ### Patch Changes
