@@ -2,6 +2,11 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  agentsSections: ["Seções de agentes", "Secciones de agentes"],
+  agentsJumpLive: ["Agentes ativos", "Agentes activos"],
+  agentsJumpActivity: ["Atividade", "Actividad"],
+  agentsReportedActivity: ["Atividade informada dos agentes", "Actividad informada de agentes"],
+
   appConnectionOptions: ['Opções de conexão', 'Opciones de conexión'],
   preferencesCategoryLanguage: ["Idioma e região", "Idioma y región"],
   preferencesCategoryAppearance: ["Aparência e fontes", "Apariencia y fuentes"],
@@ -65,6 +70,21 @@ const translations = {
   accountUsageDisconnected: ["A conexão para uso da conta está fechada. Restaure as ferramentas do servidor para atualizar.", "La conexión para el uso de la cuenta está cerrada. Restaura las herramientas del servidor para actualizar."],
   accountUsageTimeout: ["A atualização de uso da conta excedeu o tempo limite.", "La actualización del uso de la cuenta agotó el tiempo de espera."],
   accountUsageUnavailable: ["O uso da conta está indisponível. Verifique os logins dos provedores e a configuração de uso da conta nesta máquina.", "El uso de la cuenta no está disponible. Revisa las sesiones de los proveedores y la configuración de uso de la cuenta en esta máquina."],
+  hooksDetected: ["Agentes detectados no servidor", "Agentes detectados en el servidor"],
+  hooksDetecting: ["Detectando agentes no servidor…", "Detectando agentes en el servidor…"],
+  hooksDetectionUnavailable: ["Detecção indisponível. Atualize o companion ou escolha um perfil manualmente.", "Detección no disponible. Actualiza el companion o elige un perfil manualmente."],
+  hooksNoneDetected: ["Nenhum agente detectado neste ambiente SSH.", "No se detectaron agentes en este entorno SSH."],
+  hooksExecutableFound: ["Executável instalado", "Ejecutable instalado"],
+  hooksExecutableMissing: ["Executável não detectado", "Ejecutable no detectado"],
+  hooksProfileFound: ["Perfil encontrado", "Perfil encontrado"],
+  hooksProfileMissing: ["Perfil ausente", "Falta el perfil"],
+  hooksProfileUnavailable: ["Perfil indisponível", "Perfil no disponible"],
+  hooksManualOnly: ["Configuração manual", "Configuración manual"],
+  hooksHealthOnly: ["Somente saúde do callback", "Solo estado del callback"],
+  hooksDiscoveryTruncated: ["Alguns locais não foram verificados. Use um caminho manual se necessário.", "No se revisaron algunas ubicaciones. Usa una ruta manual si hace falta."],
+  hooksManualPath: ["Escolha um perfil detectado ou informe o caminho no servidor abaixo.", "Elige un perfil detectado o introduce su ruta del servidor abajo."],
+  hooksProfilePlaceholder: ["/perfil/absoluto/no/servidor", "/perfil/absoluto/en/servidor"],
+  hooksChooseProvider: ["Escolha um provedor", "Elige un proveedor"],
   hooksTitle: ["Configurar hooks dos agentes", "Configurar hooks de agentes"],
   hooksProvider: ["Provedor do hook", "Proveedor del hook"],
   hooksProfile: ["Diretório do perfil no servidor", "Directorio del perfil del servidor"],
@@ -127,6 +147,8 @@ const translations = {
 
   clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
   clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
+  workspaceMoreTools: ["Mais ferramentas", "Más herramientas"],
+  workspaceApplicationOptions: ["Opções do aplicativo", "Opciones de la aplicación"],
   navigationUsageShortcut: ["Abrir uso pela navegação", "Abrir uso desde navegación"],
   navigationContext: ["Navegação da ferramenta", "Navegación de herramientas"],
   navigationBack: ["Voltar", "Atrás"],

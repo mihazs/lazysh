@@ -71,7 +71,8 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-pre:focus-visible {
+pre:focus-visible,
+.workspace-navigation-scroll > [tabindex="-1"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -1826,7 +1827,21 @@ button svg {
 .context-navigation { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--theme-border); flex-shrink: 0; }
 .context-navigation > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-navigation > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; flex-shrink: 0; }
+
+.dialog:has(> .workspace-tools-content) { display: flex; flex-direction: column; overflow: hidden; }
+.dialog:has(> .workspace-tools-content) > .dialog-heading { flex-shrink: 0; }
+.workspace-tools-content { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: 10px; padding: 12px; }
+.workspace-tools-content > details > summary { min-height: 44px; padding: 10px 12px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-control); cursor: pointer; list-style-position: inside; }
+.workspace-tools-content > details[open] > summary { margin-bottom: 8px; }
+.workspace-tools-group { display: grid; gap: 8px; }
+.workspace-tools-group > button, .workspace-tools-end { min-height: 44px; }
+.workspace-tools-danger { border-top: 1px solid var(--theme-border); padding-top: 10px; }
+.workspace-tools-end { width: 100%; text-align: left; }
 .preferences-content .preferences-category, .preferences-panel > .preferences-category { margin: 0; border-bottom: 1px solid var(--border); }
 .preferences-category > summary { min-height: 52px; padding: 14px 0; cursor: pointer; font-weight: 600; }
 .preferences-panel > .preferences-category > label { display: flex; gap: 12px; align-items: center; min-height: 44px; margin: 14px 0; flex-wrap: wrap; }
 .preferences-content .preferences-panel { overflow: visible; }
+
+.agent-section-jumps { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; padding: 0 0 8px; flex-shrink: 0; }
+.agent-section-jumps[hidden] { display: none; }
+.agent-section-jumps button { min-width: 0; min-height: 44px; }

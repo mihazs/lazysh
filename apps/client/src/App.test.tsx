@@ -2,7 +2,7 @@ import {LocalUiError} from './i18n/localError';
 import {t,uiI18n} from './i18n/core';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host, TransportMode } from "./bridge";
 import type {DesktopMux} from './useDesktopLaunch';
@@ -166,7 +166,7 @@ it('restores the actual Agents origin when returning from usage',async()=>{
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
-it.each(['success','failure','same-snapshot-failure','server','mode','viewport','lock','session','same-mode','inbox-entry','double-back'] as const)('restores only a fresh same-owner mobile Agents read: %s',async outcome=>{
+it.each(['success','failure','same-snapshot-failure','server','mode','viewport','lock','session','same-mode','inbox-entry','jump-live','double-back'] as const)('restores only a fresh same-owner mobile Agents read: %s',async outcome=>{
   const media={matches:false,addEventListener:vi.fn<(event:string,callback:(event:{matches:boolean})=>void)=>void>(),removeEventListener:vi.fn()};
   vi.stubGlobal('matchMedia',vi.fn(()=>media));
   let finish!:(value:unknown)=>void,fail!:(reason:Error)=>void,reads=0;
@@ -197,6 +197,7 @@ it.each(['success','failure','same-snapshot-failure','server','mode','viewport',
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
   if(outcome==='same-mode')await user.click(screen.getByRole('button',{name:t('navigationAgents')}));
   if(outcome==='inbox-entry')act(()=>window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'scroll-origin'}})));
+  if(outcome==='jump-live')await user.click(within(screen.getByRole('navigation',{name:t('agentsSections')})).getByRole('button',{name:t('herdrAgentsTitle')}));
   if(outcome==='double-back')act(()=>mocks.backButton?.({canGoBack:false}));
   expect(scroller.scrollTop).toBe(0); // The retained old receipt cannot restore while a fresh read is held.
   if(outcome==='failure')await act(async()=>fail(new Error('Owned fresh read failed')));
@@ -1539,10 +1540,30 @@ it('restores Auto by probing transports again rather than restoring its last SSH
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
 });
 
+it('starts Workspace tools with six primary destinations and explicit closed action groups',async()=>{
+  const user=await connectForNavigation('short-tools');
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
+  const primary=within(dialog).getByRole('navigation',{name:'Session views'});
+  expect(within(primary).getAllByRole('button').map(button=>button.textContent)).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  const groups=Array.from(dialog.querySelectorAll('details'));
+  expect(groups.map(group=>group.open)).toEqual([false,false,false]);
+  expect(groups.map(group=>group.querySelector('summary')?.textContent)).toEqual(['More tools','Connections','Application options']);
+  const end=within(dialog).getByRole('button',{name:'End Home connection'});
+  expect(end.closest('details')).toBeNull();expect(end.classList.contains('danger-button')).toBe(true);
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByText('More tools',{selector:'summary'}));
+  expect(groups[0].open).toBe(true);
+  await user.click(within(groups[0]).getByRole('button',{name:'Transcript'}));
+  expect(screen.queryByRole('dialog',{name:'Workspace tools'})).toBeNull();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
 it('exposes remote push settings from Workspace tools',async()=>{
   const user=userEvent.setup();
   render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByText('Application options',{selector:'summary'}));
   await user.click(screen.getByRole('button',{name:'Remote push settings'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
@@ -2005,6 +2026,7 @@ it('opens the active host multiplexer setting directly from workspace tools with
   await user.click(screen.getByRole('button',{name:'Connect'}));
   const terminal=await screen.findByText('Live SSH terminal');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByText('Connections',{selector:'summary'}));
   await user.click(screen.getByRole('button',{name:'Default multiplexer'}));
   const editor=await screen.findByRole('dialog',{name:'Edit host'});
   const setting=within(editor).getByLabelText('Default multiplexer');
@@ -2039,7 +2061,7 @@ it('retires a late default child after its connection dialog closes',async()=>{
   expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-bootstrap'});
   expect(mocks.api.adoptSession).not.toHaveBeenCalled();
 });
-it('keeps one agent owner beside the owned terminal and suspends it through navigation without losing drafts',async()=>{
+it('keeps one agent owner beside the owned terminal and suspends it through navigation without losing drafts',async({onTestFinished})=>{
   reportedHistoryApp(reportedAppMetadata);mocks.api.connect.mockResolvedValue({sessionId:'nav-agents'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
@@ -2047,17 +2069,36 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
   await user.click(screen.getByRole('button',{name:'Setup'}));
   const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
+  const jumps=screen.getByRole('navigation',{name:'Agent sections'});
+  const activity=screen.getByRole('group',{name:'Reported agent activity'}),live=screen.getByRole('group',{name:'Live Herdr agents'});
+  const scroller=activity.closest('.workspace-navigation-scroll') as HTMLDivElement;
+  vi.spyOn(scroller,'getBoundingClientRect').mockReturnValue(new DOMRect(0,20,300,400));
+  vi.spyOn(activity,'getBoundingClientRect').mockReturnValue(new DOMRect(0,230,300,400));
+  vi.spyOn(live,'getBoundingClientRect').mockReturnValue(new DOMRect(0,-300,300,400));
+  const pageScroll=vi.spyOn(window,'scrollTo');onTestFinished(()=>{pageScroll.mockRestore();});scroller.scrollTop=30;
+  const readsBeforeJump=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
+  const activityButton=within(jumps).getByRole('button',{name:'Reported agent activity'});
+  fireEvent.click(activityButton);expect(document.activeElement).toBe(activity);expect(scroller.scrollTop).toBeGreaterThan(30);
+  fireEvent.click(within(jumps).getByRole('button',{name:'Live Herdr agents'}));
+  expect(document.activeElement).toBe(live);expect(scroller.scrollTop).toBe(0);expect(pageScroll).not.toHaveBeenCalled();
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(readsBeforeJump);
+  expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(settings).toHaveProperty('checked',false);
+
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
   expect(screen.getAllByRole('region',{name:'Agent activity'})).toHaveLength(1);
   await user.click(screen.getByRole('button',{name:'Connections'}));
   expect(screen.queryByRole('region',{name:'Agent activity'})).toBeNull();
   const reads=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
+  const focusBeforeHiddenJump=document.activeElement;fireEvent.click(activityButton);expect(document.activeElement).toBe(focusBeforeHiddenJump);
   await user.click(screen.getByRole('button',{name:'Agents navigation'}));
   await screen.findByRole('searchbox',{name:'Search reported agents'});expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(search).toHaveProperty('value','/project');
   expect(settings).toHaveProperty('checked',false);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'Workspaces'}));
+  expect(screen.getByRole('group',{name:'Spaces'})).toBe(live);
+  expect(screen.queryByRole('group',{name:'Live Herdr agents'})).toBeNull();
 });
 it('keeps late picker cleanup scoped while a new source is busy, then admits queued CLI intent once the wide picker is idle',async()=>{
   enableHostLaunch({...host,defaultMultiplexer:{kind:'tmux',name:'work'}});mocks.hostLaunchReceipt=null;
