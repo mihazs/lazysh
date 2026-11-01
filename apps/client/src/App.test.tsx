@@ -772,6 +772,7 @@ describe("connection flow", () => {
     await act(async()=>finish(true));
     expect(await screen.findByLabelText('Use saved credentials')).toHaveProperty('checked',false);
     expect(screen.getByLabelText('Password')).toHaveProperty('value','manual-entry');
+    expect(document.activeElement).toBe(screen.getByLabelText('Password'));
     await user.click(screen.getByRole('button',{name:'Connect'}));
     await screen.findByText('Live SSH terminal');
     expect(mocks.api.connect).toHaveBeenCalledExactlyOnceWith('home',{password:'manual-entry'},expect.any(Function));

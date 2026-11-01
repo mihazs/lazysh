@@ -48,28 +48,55 @@ test('Preferences trap excludes hidden, inert and disabled controls while follow
   await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(opener).toBeFocused();
 });
 
-test('credential dialog initially focuses its visible password and cancels without authentication',async({page})=>{
+for(const {saved,transport} of [{saved:false,transport:'mosh'},{saved:true,transport:'mosh'},{saved:true,transport:'auto'}] as const)test(`saved host ${transport} ${saved?'with':'without'} credentials prioritizes connecting and keeps options explicit`,async({page},testInfo)=>{
   await installNativeBridge(page);
-  await page.addInitScript(()=>{
+  await page.addInitScript(({saved,transport})=>{
     const calls:string[]=[];(window as unknown as {dialogNativeCalls:string[]}).dialogNativeCalls=calls;
     window.nativeFixtureInvoke=async(command:string)=>{
       calls.push(command);
-      if(command==='list_hosts')return [{id:'dialog-host',name:'Dialog fixture',hostname:'fixture.invalid',username:'fixture-user',port:22}];
+      if(command==='list_hosts')return [{id:'dialog-host',name:'Dialog fixture',hostname:'fixture.invalid',username:'fixture-user',port:22,transport,mosh:{serverPath:'/fixture/mosh-server',portMin:61000,portMax:61010}}];
       if(command==='local_capability'||command==='mosh_capability'||command==='et_capability')return {available:false,reason:'Synthetic dialog-only capability'};
-      if(command==='has_credentials')return false;
+      if(command==='transport_capabilities')return transport==='auto'?new Promise(resolve=>{(window as unknown as {dialogResolveTransport:()=>void}).dialogResolveTransport=()=>resolve({mosh:true,et:true});}):{mosh:true,et:true};
+      if(command==='has_credentials')return saved;
       if(command==='cancel_credential_auth'||command.startsWith('plugin:event|'))return;
       throw new Error(`Unexpected dialog fixture command: ${command}`);
     };
-  });
+  },{saved,transport});
   await page.goto('/');const phone=(page.viewportSize()?.width??1280)<=600;
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const opener=page.getByRole('button',{name:'Connect to Dialog fixture',exact:true});await opener.click();
   const dialog=page.getByRole('dialog',{name:'Connect to Dialog fixture',exact:true});
-  await expect(dialog.getByLabel('Password',{exact:true})).toBeFocused();
+  const connect=dialog.getByRole('button',{name:'Connect',exact:true});
+  const initial=saved?connect:dialog.getByLabel('Password',{exact:true});
+  if(transport==='auto') {
+    await expect(connect).toBeDisabled();
+    await expect(dialog.locator('.destination')).toBeFocused();
+    await page.evaluate(()=>(window as unknown as {dialogResolveTransport:()=>void}).dialogResolveTransport());
+  }
+  await expect(initial).toBeFocused();
+  await expect(connect).toBeInViewport();
+  await page.screenshot({path:testInfo.outputPath('saved-connection.png')});
+  const options=dialog.locator('details').filter({hasText:'Connection options'});
+  await expect(options).not.toHaveAttribute('open','');
+  await expect(options.locator('summary')).toContainText('Mosh');
+  const server=dialog.getByLabel('Mosh server path',{exact:true});
+  await expect(server).not.toBeVisible();
+  await options.locator('summary').click();await expect(server).toBeVisible();
+  await expect(server).toHaveValue('/fixture/mosh-server');
+  await expect(dialog.getByLabel('First UDP port',{exact:true})).toHaveValue('61000');
+  await expect(dialog.getByLabel('Last UDP port',{exact:true})).toHaveValue('61010');
+  if(saved) {
+    await server.fill('');await options.locator('summary').click();await connect.click();
+    await expect(options).toHaveAttribute('open','');await expect(server).toBeFocused();
+    await server.fill('/fixture/mosh-server');
+  }
   await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
   if(!phone)await expect(opener).toBeFocused();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await opener.click();await expect(dialog.getByLabel('Password',{exact:true})).toBeFocused();
+  await opener.click();
+  if(transport==='auto')await page.evaluate(()=>(window as unknown as {dialogResolveTransport:()=>void}).dialogResolveTransport());
+  await expect(initial).toBeFocused();
+  await expect(options).not.toHaveAttribute('open','');
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await expect(dialog).toHaveCount(0);
   if(!phone)await expect(opener).toBeFocused();
   expect(await page.evaluate(()=>(window as unknown as {dialogNativeCalls:string[]}).dialogNativeCalls)).not.toContain('connect');

@@ -591,6 +591,7 @@ export const english = {
   "appConnecting": "Connecting…",
   "appTrustKeyAndConnect": "Trust key and connect",
   "appTransport": "Transport",
+  "appConnectionOptions": "Connection options",
   "appUnavailableForThisConnection": " — unavailable for this connection",
   "appBastion": "Bastion:",
   "appUseBastionSSavedCredentials": "Use bastion’s saved credentials",
