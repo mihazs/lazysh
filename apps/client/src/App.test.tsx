@@ -1496,10 +1496,30 @@ it('restores Auto by probing transports again rather than restoring its last SSH
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
 });
 
+it('starts Workspace tools with six primary destinations and explicit closed action groups',async()=>{
+  const user=await connectForNavigation('short-tools');
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
+  const primary=within(dialog).getByRole('navigation',{name:'Session views'});
+  expect(within(primary).getAllByRole('button').map(button=>button.textContent)).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  const groups=Array.from(dialog.querySelectorAll('details'));
+  expect(groups.map(group=>group.open)).toEqual([false,false,false]);
+  expect(groups.map(group=>group.querySelector('summary')?.textContent)).toEqual(['More tools','Connections','Application options']);
+  const end=within(dialog).getByRole('button',{name:'End Home connection'});
+  expect(end.closest('details')).toBeNull();expect(end.classList.contains('danger-button')).toBe(true);
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByText('More tools',{selector:'summary'}));
+  expect(groups[0].open).toBe(true);
+  await user.click(within(groups[0]).getByRole('button',{name:'Transcript'}));
+  expect(screen.queryByRole('dialog',{name:'Workspace tools'})).toBeNull();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
 it('exposes remote push settings from Workspace tools',async()=>{
   const user=userEvent.setup();
   render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByText('Application options',{selector:'summary'}));
   await user.click(screen.getByRole('button',{name:'Remote push settings'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
@@ -1962,6 +1982,7 @@ it('opens the active host multiplexer setting directly from workspace tools with
   await user.click(screen.getByRole('button',{name:'Connect'}));
   const terminal=await screen.findByText('Live SSH terminal');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByText('Connections',{selector:'summary'}));
   await user.click(screen.getByRole('button',{name:'Default multiplexer'}));
   const editor=await screen.findByRole('dialog',{name:'Edit host'});
   const setting=within(editor).getByLabelText('Default multiplexer');

@@ -1,5 +1,39 @@
 # @lazysh/client
 
+## 1.4.2
+
+### Patch Changes
+
+- cf4b9f3: Qualify compact settings and workspace navigation through visible browser acceptance preconditions while retaining existing locale, display ownership, QR privacy and stale dictation assertions.
+- 8d7a15d: Show concise provider-specific verification guidance after inspected hook configuration without changing trust, loading or reporting status.
+- 0844aa3: Keep Workspace tools short by default with explicit session-tool, connection and application disclosures, preserving existing guarded actions and touch targets.
+- @lazysh/account-usage@1.4.2
+  - @lazysh/common@1.4.2
+  - @lazysh/display-idle@1.4.2
+  - @lazysh/et-transport@1.4.2
+  - @lazysh/mosh-transport@1.4.2
+
+## 1.4.1
+
+### Patch Changes
+
+- 137bb78: Keep the native branded cover until the current renderer acknowledges its workspace commit when app lock is disabled, including after recreation. Preserve native unlock controls for confirmed locks. Physical-device launch-frame qualification remains pending.
+- 4c31c91: Return from usage and workspace tools to their opening context without replacing the terminal session, and dismiss local overlays before Android Back navigates.
+- 16460c7: Open the existing hook inspection workflow directly from empty Activity without automatically installing hooks or asserting live reporting.
+- 08210fc: Prioritize agents over optional setup in healthy workspaces, retaining visible repairs and pending approvals.
+- 8bc9f45: Collapse healthy selected Herdr setup even when other servers are available. Preserve explicit alternate selection and automatic setup for missing or unhealthy selections.
+- fb2b45d: Refine frosted navigation and short action sheets using the active theme colors. Keep long forms and terminal output opaque and preserve reduced-transparency and forced-color fallbacks.
+- 8d9f8b7: Publish the Android workspace UX critique and fresh Moshi/Termish benchmark, with inspected screenshots, issue links and observable redesign acceptance criteria. This research checkpoint does not claim the reported UX or agent-activity failures are fixed.
+- dd2c945: Retain the one native notification-permission action budget separately from later menu queries and record only the first measured expiry operation, without changing deadlines, input or permissions.
+- c9265d1: Start Preferences at a compact category list without focusing text input, preserving settings drafts and operations.
+- 8fb1c57: Collapse saved-host connection options and focus credentials or Connect without opening advanced Mosh fields.
+- a928587: Distinguish terminal input queue saturation from channel closure and add bounded, content-free caller/ownership diagnostics. This improves diagnosis; it does not claim the Android navigation failure is fixed.
+- @lazysh/account-usage@1.4.1
+  - @lazysh/common@1.4.1
+  - @lazysh/display-idle@1.4.1
+  - @lazysh/et-transport@1.4.1
+  - @lazysh/mosh-transport@1.4.1
+
 ## 1.4.0
 
 ### Minor Changes

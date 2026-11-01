@@ -4,6 +4,13 @@
 
 - Make touch scrolling in mouse-tracking terminals depend on finger travel rather than touch-event frequency. Accumulate partial movement, keep the original pane and clear pending distance when the gesture ends.
 - Keep the terminal canvas anchored when the keyboard resizes the available space and the browser reveals its input. Terminal history continues to scroll inside xterm's viewport.
+
+- Detect installed host agents and known profile locations when opening Agent hook setup, with no provider preselected. Select a detected target or enter a manual profile before inspecting and installing hooks; discovery does not install hooks, create profiles or change trust settings. Executable discovery and live activity remain separate.
+
+- Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
+
+- Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+
 - Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 
 - Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.
