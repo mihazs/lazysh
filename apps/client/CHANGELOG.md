@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.8.1
+
+### Patch Changes
+
+- d36533a: Retain fixed test-only startup stage breadcrumbs when owned Mosh multiplexer acceptance fails, without changing connection errors or runtime behavior.
+- f9150ac: Forward the pinned disposable Secret Service executable through the native GUI Turbo task and give Android raw-input acceptance fixtures an owned SSH root, preserving strict environment filtering and receiver ownership checks.
+- 14597f5: Retain one closed distributor UI snapshot only after the native ntfy trust-topic flow fails, preserving the original navigation timing, action, deadline and failure.
+- @lazysh/account-usage@1.8.1
+  - @lazysh/common@1.8.1
+  - @lazysh/display-idle@1.8.1
+  - @lazysh/et-transport@1.8.1
+  - @lazysh/mosh-transport@1.8.1
+
 ## 1.8.0
 
 ### Minor Changes
