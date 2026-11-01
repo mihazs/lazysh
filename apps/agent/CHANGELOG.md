@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.5.4
+
+### Patch Changes
+
+- 9bb174c: Finish Copilot child reports with a separate validated session identity while preserving parent state and shared-session completion guards.
+- @lazysh/account-usage@1.5.4
+  - @lazysh/common@1.5.4
+  - @lazysh/notification-client@1.5.4
+
 ## 1.5.3
 
 ### Patch Changes
