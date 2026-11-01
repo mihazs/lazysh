@@ -1,4 +1,4 @@
-import {insideStandardRoot,readStandardDiagnostic,standardDiagnosticStage} from './windows-standard-progress';
+import {insideStandardRoot,readStandardDiagnostic,publishStandardProgress,standardDiagnosticStage,standardDiagnosticIdentity} from './windows-standard-progress';
 export {insideStandardRoot,readStandardDiagnostic,publishStandardProgress} from './windows-standard-progress';
 import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
@@ -227,12 +227,15 @@ export function standardWorkerEnvironment(current:NodeJS.ProcessEnv,configured:R
   const selected=Object.fromEntries(Object.entries(current).filter(([key,value])=>inheritedStandardKeys.has(key.toUpperCase())&&value!==undefined));
   return {...selected,...configured};
 }
-export const standardWorker=String.raw`
+export function standardWorker(fixture:string,source:string,binary:string){return String.raw`
 import {readFile,writeFile} from 'node:fs/promises';
 import {publishStandardProgress} from './.changeset/windows-standard-progress';
 import {fileURLToPath} from 'node:url';
-const config=JSON.parse(await readFile(new URL('./owner.json',import.meta.url),'utf8'));
 const root=fileURLToPath(new URL('.',import.meta.url));
+const expected=${JSON.stringify(standardDiagnosticIdentity(fixture,source,binary)??null)};
+if(expected)await publishStandardProgress(root,expected.source,expected.binary,'WORKER_ENTERED',expected.fixture);
+const config=JSON.parse(await readFile(new URL('./owner.json',import.meta.url),'utf8'));
+if(expected)await publishStandardProgress(root,expected.source,expected.binary,'CONFIG_READ',expected.fixture);
 await publishStandardProgress(root,config.environment.GITHUB_SHA,config.binaryHash,'WORKER_STARTED');
 const {windowsInstallation,windowsInstallerFailure}=await import('./.changeset/release-platform');
 const {standardWorkerEnvironment}=await import('./.changeset/windows-standard-user');
@@ -254,7 +257,7 @@ try{
 await writeFile(new URL('./work/result.json',import.meta.url),JSON.stringify({result,source:config.environment.GITHUB_SHA,binary:config.binaryHash,...(failure?{failure}:{})}),{flag:'wx'});
 await publishStandardProgress(root,config.environment.GITHUB_SHA,config.binaryHash,'RESULT_WRITTEN');
 if(result!=='PASSED')process.exitCode=1;
-`;
+`;}
 export const standardBrokerScript=String.raw`$ErrorActionPreference='Stop';try{Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$result=[OwnedMediumGui]::RunStandard($env:LAZYSH_WINDOWS_STANDARD_ROOT,(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'bin/bun.exe'),(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'worker.ts'),$env:LAZYSH_STANDARD_IMAGE_HASH,([Environment]::TickCount64+[long]$env:LAZYSH_STANDARD_REMAINING));[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$result)}catch{$code=$_.Exception.GetBaseException().Message;if($code -ceq 'TOKEN_UNAVAILABLE'){$code=[OwnedMediumGui]::StandardTokenFailure()};if($code -cnotin @(${standardCodes.map(code=>"'"+code+"'").join(',')}) -and !($code -cmatch '\ACLEANUP_UNVERIFIED:([A-Z_]+)\z' -and $matches[1] -cin @('UNVERIFIED',${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>"'"+code+"'").join(',')}))){$code='UNVERIFIED'};[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$code)}`;
 export async function windowsStandardInstallation(installer:string,binary:string,version:string){
   const root=hostedStandardScope(process.env),started=Date.now(),deadline=started+650000;
@@ -275,8 +278,9 @@ export async function windowsStandardInstallation(installer:string,binary:string
     await copyStandardClosure(driverRoot,join(root,'tools'),driverRoot);
     const binaryHash=(await digestFile(join(root,'binary.exe'))).sha256;
     const environment={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'mihazs/lazysh',GITHUB_SHA:process.env.GITHUB_SHA!,RUNNER_TEMP:join(root,'work'),TEMP:join(root,'work','temp'),TMP:join(root,'work','temp'),PATH:[join(root,'bin'),dirname(pwsh),join(process.env.SystemRoot!,'System32')].join(';'),LAZYSH_TEST_WINDOWS_GUI:'1',LAZYSH_GUI_DRIVER:join(root,'tools','bin','tauri-driver.exe'),LAZYSH_GUI_EDGE:join(root,'tools','edge','msedgedriver.exe')};
-    await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker,{flag:'wx'});
-    await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'PREPARED'}),{flag:'wx'}).catch(()=>{});
+    await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker(basename(root),process.env.GITHUB_SHA!,binaryHash),{flag:'wx'});
+    await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'UNKNOWN'}),{flag:'wx'}).catch(()=>{});
+    await publishStandardProgress(root,process.env.GITHUB_SHA!,binaryHash,'PREPARED');
     const prepared=await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash);
     const remaining=deadline-Date.now()-1000;if(remaining<=15000)throw new Error('Standard owner setup exhausted its budget');
     const script=standardBrokerScript;

@@ -1502,7 +1502,8 @@ test('Windows standard progress is private, fixture-bound and never a result aut
   expect(await read()).toBe('UNKNOWN');
   await publishStandardProgress(root,source,binary,'WORKER_STARTED');
   expect(await Bun.file(path).exists()).toBe(false);
-  await writeFile(path,JSON.stringify({...record,stage:'PREPARED'}));expect(await read()).toBe('PREPARED');
+  await writeFile(path,JSON.stringify({...record,stage:'UNKNOWN'}));expect(await read()).toBe('UNKNOWN');
+  await publishStandardProgress(root,source,binary,'PREPARED');expect(await read()).toBe('PREPARED');
   await publishStandardProgress(root,source,binary,'IMPORTS_READY');expect(await read()).toBe('IMPORTS_READY');
   await writeFile(path,JSON.stringify(record));expect(await read()).toBe('VALIDATION_ENTERED');
   await publishStandardProgress(root,source,binary,'RESULT_WRITTEN');expect(await read()).toBe('RESULT_WRITTEN');
@@ -1524,6 +1525,20 @@ test('Windows standard progress is private, fixture-bound and never a result aut
   expect(standardOwnerRejection('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:private',undefined,undefined)).toBe('Standard native owner rejected: UNVERIFIED prepared=UNKNOWN progress=UNKNOWN cleanup=UNKNOWN');
 }));
 
+test('Windows standard worker marks entry before invalid config without trusting baked diagnostic identity',async()=>fixture(async parent=>{
+  const deadline=performance.now()+10000,root=join(parent,'lazysh-standard-126-1'),work=join(root,'work'),modules=join(root,'.changeset');await mkdir(work,{recursive:true});await mkdir(modules);
+  const source='a'.repeat(40),binary='b'.repeat(64),worker=join(root,'worker.ts'),record={fixture:'lazysh-standard-126-1',source,binary,stage:'PREPARED'};
+  await writeFile(join(root,'owner.json'),'{');await writeFile(join(modules,'windows-standard-progress.ts'),await readFile(new URL('../.changeset/windows-standard-progress.ts',import.meta.url)));
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');
+  for(const [fixture,expectedSource,expectedBinary,stage,configText='{'] of [[record.fixture,source,binary,'WORKER_ENTERED'],[record.fixture,source,binary,'CONFIG_READ','{}'],['lazysh-standard-999-1',source,binary,'PREPARED'],[record.fixture,'c'.repeat(40),binary,'PREPARED'],[record.fixture,source,'c'.repeat(64),'PREPARED'],[record.fixture,'private diagnostic input',binary,'PREPARED']]){
+    await writeFile(join(root,'owner.json'),configText);await writeFile(join(work,'standard-progress.json'),JSON.stringify(record));const text=standardWorker(fixture,expectedSource,expectedBinary);expect(text).not.toContain('private diagnostic input');await writeFile(worker,text);
+    const remaining=Math.floor(deadline-performance.now()-2000);if(remaining<=0)throw new Error('Invalid-config worker fixture exhausted its shared budget');
+    const pending=promisify(execFile)(process.execPath,['run',worker],{cwd:root,env:{PATH:process.env.PATH},timeout:Math.min(8000,remaining),killSignal:'SIGKILL',maxBuffer:1024});
+    try{const failed=await pending.then(()=>false,error=>Number.isInteger(error.code)&&error.code!==0&&error.killed!==true);expect(failed).toBe(true);expect(await readStandardDiagnostic(root,source,binary)).toBe(stage);expect(await Bun.file(join(work,'result.json')).exists()).toBe(false);}
+    finally{if(pending.child.exitCode===null&&pending.child.signalCode===null)pending.child.kill('SIGKILL');await pending.catch(()=>{});}
+  }
+}),15000);
+
 test('Windows standard worker records entry before a held business import and never reports failed imports ready',async()=>fixture(async parent=>{
   const deadline=performance.now()+10000,root=join(parent,'lazysh-standard-125-1'),work=join(root,'work'),modules=join(root,'.changeset');
   await mkdir(work,{recursive:true});await mkdir(modules);
@@ -1533,7 +1548,7 @@ test('Windows standard worker records entry before a held business import and ne
   await writeFile(join(modules,'windows-standard-progress.ts'),await readFile(new URL('../.changeset/windows-standard-progress.ts',import.meta.url)));
   await writeFile(join(modules,'release-platform.ts'),"console.info('OWNED_IMPORT_HELD');await Bun.stdin.text();throw new Error('OWNED_IMPORT_FAILED');export const windowsInstallation=undefined,windowsInstallerFailure=undefined;");
   await writeFile(join(modules,'windows-standard-user.ts'),"export const standardWorkerEnvironment=()=>{throw new Error('ENVIRONMENT_MUST_NOT_RUN');};export {publishStandardProgress} from './windows-standard-progress';");
-  await writeFile(worker,standardWorker);expect(standardSourceFiles).toContain('.changeset/windows-standard-progress.ts');
+  await writeFile(worker,standardWorker('lazysh-standard-999-1',source,binary));expect(standardSourceFiles).toContain('.changeset/windows-standard-progress.ts');
   const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');
   const remaining=Math.floor(deadline-performance.now()-2000);if(remaining<=0)throw new Error('Worker fixture setup exhausted its budget');
   const pending=promisify(execFile)(process.execPath,['run',worker],{cwd:root,env:{PATH:process.env.PATH},timeout:Math.min(8000,remaining),killSignal:'SIGKILL',maxBuffer:1024});
