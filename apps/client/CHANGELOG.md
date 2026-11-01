@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.5.5
+
+### Patch Changes
+
+- da17fde: Qualify closing one SSH relay stream through its owned server subtree for Android upload-recovery testing. Refuse stale, missing or ambiguous server attribution and preserve the original Mosh UDP daemon. Android recovery UI acceptance remains separate.
+- @lazysh/account-usage@1.5.5
+  - @lazysh/common@1.5.5
+  - @lazysh/display-idle@1.5.5
+  - @lazysh/et-transport@1.5.5
+  - @lazysh/mosh-transport@1.5.5
+
 ## 1.5.4
 
 ### Patch Changes
