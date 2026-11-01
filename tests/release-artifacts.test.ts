@@ -1548,7 +1548,7 @@ test('Windows standard owner keeps output closed and staging inside its public d
   const retirement=windowsStandardUserSource.slice(windowsStandardUserSource.indexOf('bool clean=!creationAttempted'));
   expect(retirement.indexOf('owned.Stop(')).toBeLessThan(retirement.indexOf('RetireDesktop(root)'));
   expect(retirement.indexOf('RetireDesktop(root)')).toBeLessThan(retirement.indexOf('state[4]="RETIRED"'));
-  expect(windowsStandardUserSource).toContain('OpenWindowStation("WinSta0",false,0x60000)');
+  expect(windowsStandardUserSource).toContain('OpenWindowStation("WinSta0",false,0x60002)');
   expect(windowsStandardUserSource).toContain('OpenDesktop("Default",0,false,0x60081)');
   expect(windowsStandardUserSource).toContain('file.Flush(true)');
   expect(windowsStandardUserSource).not.toMatch(/AdjustTokenPrivileges|ChangeServiceConfig|StartService|SwitchDesktop|SetUserObjectSecurity|LOGON_NETCREDENTIALS_ONLY/);

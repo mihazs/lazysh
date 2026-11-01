@@ -117,7 +117,7 @@ public sealed partial class OwnedMediumGui {
     DesktopName(opened?station:GetProcessWindowStation(),opened,true);DesktopName(opened?desktop:GetThreadDesktop(GetCurrentThreadId()),opened,false);
   }
   static void DesktopHandles(Action<IntPtr,IntPtr> use){
-    IntPtr station=IntPtr.Zero,desktop=IntPtr.Zero;try{DesktopNames(false);station=OpenWindowStation("WinSta0",false,0x60000);desktop=OpenDesktop("Default",0,false,0x60081);Need(station!=IntPtr.Zero,"WINSTA_OPEN_UNAVAILABLE");Need(desktop!=IntPtr.Zero,"DESKTOP_OPEN_UNAVAILABLE");DesktopNames(true,station,desktop);use(station,desktop);}finally{bool closed=true;if(desktop!=IntPtr.Zero)closed&=CloseDesktop(desktop);if(station!=IntPtr.Zero)closed&=CloseWindowStation(station);Need(closed,"CLEANUP_UNVERIFIED");}
+    IntPtr station=IntPtr.Zero,desktop=IntPtr.Zero;try{DesktopNames(false);station=OpenWindowStation("WinSta0",false,0x60002);desktop=OpenDesktop("Default",0,false,0x60081);Need(station!=IntPtr.Zero,"WINSTA_OPEN_UNAVAILABLE");Need(desktop!=IntPtr.Zero,"DESKTOP_OPEN_UNAVAILABLE");DesktopNames(true,station,desktop);use(station,desktop);}finally{bool closed=true;if(desktop!=IntPtr.Zero)closed&=CloseDesktop(desktop);if(station!=IntPtr.Zero)closed&=CloseWindowStation(station);Need(closed,"CLEANUP_UNVERIFIED");}
   }
   static bool AclJournalExists(string root){string path=System.IO.Path.Combine(root,"desktop.owner");PlainOwned(path,root);try{System.IO.File.GetAttributes(path);return true;}catch(System.IO.FileNotFoundException){return false;}}
   static void DurableAclJournal(string root,string[] data,bool create){
