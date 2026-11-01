@@ -1,3 +1,4 @@
+import {openThemeImport} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 
 declare global {interface Window {themeLinkFixture:{offer:(code:string)=>void;reads:number;acks:string[]}}}
@@ -33,8 +34,7 @@ test('incoming link keeps the manual draft, requires review/apply, survives relo
     }});
   });
   await page.goto('/');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Import and share theme',{exact:true}).click();
+  await openThemeImport(page);
   const input=page.getByLabel('Theme JSON or share code',{exact:true});await input.fill('unfinished manual draft');
   await page.evaluate(value=>window.themeLinkFixture.offer(value),code);
   await expect(page.getByRole('button',{name:'Review linked theme'})).toBeVisible();

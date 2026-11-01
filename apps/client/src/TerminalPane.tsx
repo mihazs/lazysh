@@ -19,6 +19,8 @@ import "@xterm/xterm/css/xterm.css";
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
 const labels: Partial<Record<ToolbarKey, string>> = {left: "←", up: "↑", down: "↓", right: "→"};
+type InputCaller = 'terminal-user' | 'terminal-nonuser' | 'named-key' | 'chord' | 'gesture';
+type InputOwner = {session: LiveSession; disposed: boolean};
 
 export function terminalWebUrl(value: string): string | undefined {
   if (value.length > 4096 || /[\s\x00-\x1f\x7f-\x9f\\]/.test(value) || !/^https?:\/\//i.test(value)) return;
@@ -30,12 +32,13 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget }: {
+export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget, onBackChange }: {
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
   onOpenAttachments?: () => void;
   controlsTarget?: HTMLElement | null;
+  onBackChange?: (sessionId:string, close:(()=>boolean)|null)=>void;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -45,6 +48,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const fit = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
+  const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
   const zellijBusy = useRef(false);
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
@@ -79,6 +83,24 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [pasteBusy, setPasteBusy] = useState(false);
   const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
   pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
+  function writeInput(caller: InputCaller, data: string | string[], owner = inputOwner.current) {
+    const snapshot = () => {
+      const sameView = !!owner && pasteView.current.id === owner.session.id && pasteView.current.terminal === owner.session.terminal;
+      return {active: activeRef.current, connected: sameView ? pasteView.current.connected : !!owner?.session.connected,
+        disposed: !owner || owner.disposed, currentOwner: !!owner && inputOwner.current === owner && sameView};
+    };
+    const dispatch = snapshot();
+    const utf16Units = Math.min(65536, typeof data === 'string' ? data.length : data.reduce((size, step) => Math.min(65536, size + step.length), 0));
+    const pending = typeof data === 'string' ? api.write(session.id, data) : api.writeSequence(session.id, data);
+    return pending.catch(error => {
+      const kind = error && typeof error === 'object' && 'kind' in error ? error.kind : undefined;
+      const cause = kind === 'backpressure' ? 'queue-full' : kind === 'input_closed' ? 'channel-closed' : 'other';
+      // Never retain terminal content, identifiers, or raw errors in this receipt.
+      try {console.warn('lazysh-terminal-input ' + JSON.stringify({caller, cause, utf16Units, dispatch, receipt: snapshot()}));}
+      catch {/* Optional diagnostics cannot change delivery or error visibility. */}
+      throw error;
+    });
+  }
   useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
   const [link, setLink] = useState<string | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
@@ -88,6 +110,20 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  useEffect(()=>{
+    const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen);
+    onBackChange?.(session.id,available?()=>{
+      if(!activeRef.current || !mounted.current || !access.current())return false;
+      if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
+      else if(link!==null)setLink(null);
+      else if(searching)setSearching(false);
+      else if(composing)setComposing(false);
+      else setDpadOpen(false);
+      return true;
+    }:null);
+    return()=>onBackChange?.(session.id,null);
+  },[active,composing,searching,clipboard,link,dpadOpen,session.id,onBackChange]);
+
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const [toolbarOverride, setToolbarOverride] = useState<boolean | null>(null);
@@ -238,6 +274,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     pointerEvents.forEach(name => document.addEventListener(name, pointerLane, true));
     const acceptsInput = () => activeRef.current && mounted.current && access.current() && pasteView.current.connected
       && pasteView.current.id === session.id && pasteView.current.terminal === terminal;
+    const owner: InputOwner = {session, disposed: false};
+    inputOwner.current = owner;
     const output = observeTerminalInput(terminal, (data, userInput) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
@@ -257,7 +295,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         }
         if (!pointerInput) inputLane.current = null;
       }
-      if (session.connected) void api.write(session.id, value).catch(error => reportError(captureUiError(error)));
+      if (session.connected) void writeInput(userInput ? 'terminal-user' : 'terminal-nonuser', value, owner).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output;
     setModifierInput(output.available);
@@ -280,6 +318,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     addon.fit();
     focusTerminal();
     return () => {
+      owner.disposed = true;
+      if (inputOwner.current === owner) inputOwner.current = null;
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
@@ -308,7 +348,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (imeInput.current?.flush() === false) return;
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
-    try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(captureUiError(error)));}
+    try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(captureUiError(error)));}
     catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return;}
     consumeModifiers();
     if (key === "Tab") {modifierState.current.shift = false; setShift(false);}
@@ -384,7 +424,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     try {
       const steps = parseChordSteps(keys);
       if (imeInput.current?.flush() === false) return false;
-      void api.writeSequence(session.id, steps).catch(error => {if (current()) reportError(errorMessage(error));});
+      void writeInput('chord', steps).catch(error => {if (current()) reportError(errorMessage(error));});
       return true;
     } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
@@ -412,7 +452,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     }
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
-      if (keys && session.connected && imeInput.current?.flush() !== false) {void api.write(session.id, keys).catch(error => reportError(captureUiError(error)));}
+      if (keys && session.connected && imeInput.current?.flush() !== false) {void writeInput('gesture', keys).catch(error => reportError(captureUiError(error)));}
     }
   }
   function cancelTaps() {

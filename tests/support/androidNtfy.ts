@@ -182,16 +182,21 @@ export function firstLaunchObservation(text:string) {
 }
 export function permissionActionObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy first-launch action[').length!==2)return;
-  const match=/Ntfy first-launch action\[stage=(none|foreground|allow|deny|toolbar|prompt|menu|click) before=(unavailable|positive|expired) after=(unavailable|positive|expired) action=(none|calling|returned|threw) snapshot=(unavailable|beforeAction|afterAction) permission=(granted|denied|unavailable)\]/.exec(text);
+  const match=/Ntfy first-launch action\[stage=(none|foreground|allow|deny|toolbar|prompt|menu|click) before=(unavailable|positive|expired) after=(unavailable|positive|expired) action=(none|calling|returned|threw) snapshot=(unavailable|beforeAction|afterAction) permission=(granted|denied|unavailable)(?: clickBefore=(unavailable|positive|expired) clickAfter=(unavailable|positive|expired) firstExpiry=(none|between|foreground|allow|deny|toolbar|prompt|menu|click))?\]/.exec(text);
   if(!match)return;
-  const [,stage,before,after,action,snapshot,permission]=match;
+  const [,stage,before,after,action,snapshot,permission,clickBefore,clickAfter,firstExpiry]=match;
   if((stage==='none')!==(before==='unavailable') ||
     (stage==='none' && (after!=='unavailable' || action!=='none' || snapshot!=='unavailable')) ||
     (stage==='click' && action==='none') ||
     ((action==='calling' || action==='threw') && (stage!=='click' || after!=='unavailable')) ||
     (stage==='click' && action==='returned' && after==='unavailable') ||
     (snapshot==='afterAction' && action!=='returned'))return;
-  return {stage,before,after,action,snapshot,permission};
+  if(clickBefore!==undefined && (
+    (action==='none' && (clickBefore!=='unavailable' || clickAfter!=='unavailable')) ||
+    (action!=='none' && clickBefore==='unavailable') ||
+    (action==='returned' ? clickAfter==='unavailable' : clickAfter!=='unavailable') ||
+    (stage==='click' && (clickBefore!==before || clickAfter!==after))))return;
+  return {stage,before,after,action,snapshot,permission,...(clickBefore===undefined?{}:{clickBefore,clickAfter,firstExpiry})};
 }
 export function nativeFailureStage(failure:string) {
   const stages=[['Distributor menu','distributor_menu'],['Distributor settings','distributor_settings'],

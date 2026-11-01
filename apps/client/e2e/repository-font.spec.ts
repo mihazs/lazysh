@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {mountFileReview} from './fixtures/FileReviewHarness';
@@ -7,6 +8,7 @@ declare global{interface Window{repositoryFontFixture:ReturnType<typeof mountFil
 test('repository diff uses loaded terminal fonts and changes family without losing the review',async({page})=>{
   await openLocalizedApp(page,'en');
   await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts',{exact:true}).click();
   await page.getByLabel('Import font file').setInputFiles(new URL('./fixtures/LiberationMono-Regular.ttf',import.meta.url).pathname);
   const fonts=page.getByRole('combobox',{name:'Imported terminal font',exact:true});

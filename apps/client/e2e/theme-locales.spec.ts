@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {installThemeLocaleBridge} from './fixtures/themeLocaleBridge';
@@ -6,8 +7,8 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} theme causes/n
   await installThemeLocaleBridge(page);const external=await openLocalizedApp(page,initial==='en-XA'?'en':initial);
   const locale=async(value:string)=>page.evaluate(async value=>{const{uiI18n}=await import('/src/i18n/core.ts');if(value==='en-XA'){const{enablePseudoLocale}=await import('/src/test/pseudoLocale.ts');await enablePseudoLocale(uiI18n);}else await uiI18n.changeLanguage(value);},value);
   const labels=()=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {preferences:t('appPreferences'),summary:t('themeImportAndShareTheme'),source:t('themeThemeJSONOrShareCode'),name:t('themeThemeName'),preview:t('themePreviewTheme'),previewRegion:t('themeThemePreview'),read:t('themeReadThemeFromClipboard'),apply:t('themeApplyToAppAndTerminal'),applied:t('themeThemeAppliedToAppAndTerminal'),export:t('themeExportThemeLink'),output:t('themeExportedTheme'),exported:t('themeSelectTheExportedTextToCopyIt'),invalid:t('validationInvalidThemeColorValue1',{value1:'{{<color>}}'}),link:t('themeLinkThemeLink'),linkReview:t('themeLinkReviewLinkedTheme'),linkApply:t('themeLinkApplyLinkedTheme'),linkApplied:t('themeLinkLinkedThemeAppliedToAppAndTerminal'),ackError:t('appTheLinkedThemeIsAlreadyAppliedButItsPending')};});
-  await locale(initial);let names=await labels();await page.getByRole('button',{name:names.preferences,exact:true}).click();await page.getByText(names.summary,{exact:true}).click();
-  const details=page.locator('details').filter({has:page.locator('textarea[maxlength="16384"]')});
+  await locale(initial);let names=await labels();await page.getByRole('button',{name:names.preferences,exact:true}).click();await openPreferenceCategory(page,'Appearance');await page.getByText(names.summary,{exact:true}).click();
+  const details=page.locator('details:not(.preferences-category)').filter({has:page.locator('textarea[maxlength="16384"]')});
   const rawName='RAW <name> {{key}} 中文';const theme={v:1,name:rawName,mode:'light',colors:{background:'#fafafa',foreground:'#121212'}};
   await page.getByLabel(names.name,{exact:true}).fill('RAW fallback {{name}}');
   const source=page.getByLabel(names.source,{exact:true});const invalid=JSON.stringify({background:'#000',foreground:'#fff','{{<color>}}':'#fff'});
