@@ -1,7 +1,8 @@
-import {workspaceControl} from './workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './workspaceControl';
 import {expect, type Page} from '@playwright/test';
 export async function openGestureSettings(page: Page) {
   await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Terminal touch gestures',{exact:true}).click();
 }
 export async function saveAdvancedGesture(page: Page, slot: string, keys: string) {
