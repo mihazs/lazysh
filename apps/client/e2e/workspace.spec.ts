@@ -15,6 +15,7 @@ test('browser preview is honest, usable at phone width and keyboard navigable', 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   if ((page.viewportSize()?.width || 1200) <= 600) {
     await page.getByRole('button', {name:'Workspace tools',exact:true}).click();
+    await openWorkspaceGroup(page,'application');
     await expect(page.getByRole('button',{name:'Open encrypted sync'})).toBeVisible();
     await expect(page.getByRole('button',{name:'Open shareable uploads'})).toBeDisabled();
     await expect(page.getByRole('button',{name:'Open notification inbox'})).toBeVisible();
@@ -89,6 +90,11 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await connection.getByLabel('Password',{exact:true}).fill('browser-only-draft');
   await page.screenshot({path:testInfo.outputPath('default-multiplexer-connect.png')});
 });
+
+async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'application'){
+  const selector={more:'workspace-more-tools',connections:'workspace-connection-actions',application:'workspace-application-options'}[group];
+  await page.getByRole('dialog',{name:'Workspace tools',exact:true}).locator(`details.${selector} > summary`).click();
+}
 
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
@@ -405,18 +411,25 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     const more=page.getByRole('dialog',{name:'Workspace tools',exact:true});
     const sessionViews=more.getByRole('navigation',{name:'Session views',exact:true});
-    expect(await sessionViews.getByRole('button').count()).toBeGreaterThan(8);
+    expect(await sessionViews.getByRole('button').allTextContents()).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
     for(const button of await sessionViews.getByRole('button').all()){
       await button.scrollIntoViewIfNeeded();expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
+    await openWorkspaceGroup(page,'more');
+    const secondary=more.getByRole('navigation',{name:'More tools',exact:true});
+    for(const button of await secondary.getByRole('button').all()){await button.scrollIntoViewIfNeeded();expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);}
+    await openWorkspaceGroup(page,'more');
+    await openWorkspaceGroup(page,'connections');
     await more.getByRole('button',{name:'New connection',exact:true}).click();
     await expect(more).toHaveCount(0);await expect(page.getByRole('dialog')).toBeVisible();
     await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     await expect(more.getByRole('button',{name:'End Focus workstation with a long host name connection',exact:true})).toBeVisible();
+    await openWorkspaceGroup(page,'connections');
     await expect(more.getByRole('button',{name:'Restore previous workspace',exact:true})).toBeVisible();
     await more.getByRole('button',{name:'Dismiss',exact:true}).click();
     await expect(more.getByRole('region',{name:'Restore previous workspace',exact:true})).toHaveCount(0);
+    await openWorkspaceGroup(page,'application');
     await more.getByRole('button',{name:'Preferences',exact:true}).click();
     await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
@@ -434,6 +447,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   }
   if(phone){
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+    await openWorkspaceGroup(page,'connections');
     await page.getByRole('dialog',{name:'Workspace tools',exact:true}).getByRole('button',{name:'Default multiplexer',exact:true}).click();
     const editor=page.getByRole('dialog',{name:'Edit host',exact:true});
     const defaultMux=editor.getByRole('combobox',{name:'Default multiplexer',exact:true});
@@ -529,4 +543,35 @@ test('usage returns to its exact terminal and Agents context without expanding m
   expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
+});
+
+test('Workspace tools is a short default sheet with explicit reachable expansions at 393px',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Measured mobile sheet');
+  await page.setViewportSize({width:393,height:852});
+  await installWorkspaceNavigation(page);await page.goto('/');
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  const primary=dialog.getByRole('navigation',{name:'Session views',exact:true});
+  await expect(primary.getByRole('button')).toHaveText(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  await expect(dialog.locator('details[open]')).toHaveCount(0);
+  const metrics=await dialog.evaluate(node=>({height:node.getBoundingClientRect().height,content:node.scrollHeight,viewport:node.clientHeight}));
+  expect(metrics.height).toBeLessThan(600);expect(metrics.content).toBeLessThanOrEqual(metrics.viewport+1);
+  const end=dialog.getByRole('button',{name:'End Navigation host connection',exact:true});
+  for(const target of [...await primary.getByRole('button').all(),end]){
+    const box=(await target.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.y).toBeGreaterThanOrEqual(0);expect(box.y+box.height).toBeLessThanOrEqual(852);
+    expect(await target.evaluate(node=>{const box=node.getBoundingClientRect();return document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)?.closest('button')===node;})).toBe(true);
+  }
+  await page.screenshot({path:testInfo.outputPath('workspace-tools-default-393.png')});
+  await testInfo.attach('default-sheet-measurement',{body:JSON.stringify({viewport:{width:393,height:852},...metrics}),contentType:'application/json'});
+  for(const group of ['more','connections','application'] as const)await openWorkspaceGroup(page,group);
+  await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toBeVisible();
+  await page.setViewportSize({width:393,height:393});
+  await dialog.evaluate(node=>{for(const control of node.querySelectorAll<HTMLElement>('button, summary'))control.style.fontSize='24px';});
+  expect(await dialog.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+  await end.scrollIntoViewIfNeeded();await expect(end).toBeInViewport({ratio:1});
+  expect((await end.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({path:testInfo.outputPath('workspace-tools-expanded-short-large-text.png')});
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
 });

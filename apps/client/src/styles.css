@@ -1826,3 +1826,11 @@ button svg {
 .context-navigation { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--theme-border); flex-shrink: 0; }
 .context-navigation > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-navigation > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; flex-shrink: 0; }
+
+.workspace-tools-content { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.workspace-tools-content > details > summary { min-height: 44px; padding: 10px 12px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-control); cursor: pointer; list-style-position: inside; }
+.workspace-tools-content > details[open] > summary { margin-bottom: 8px; }
+.workspace-tools-group { display: grid; gap: 8px; }
+.workspace-tools-group > button, .workspace-tools-end { min-height: 44px; }
+.workspace-tools-danger { border-top: 1px solid var(--theme-border); padding-top: 10px; }
+.workspace-tools-end { width: 100%; text-align: left; }
