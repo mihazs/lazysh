@@ -1,12 +1,12 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1014,4 +1014,58 @@ test('shared Herdr result rejects stale, duplicate, oversized and symlink report
     await rm(path);await writeFile(join(directory,'private-target'),report);await symlink('private-target',path);
     await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
   } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('manual attachment receipt binds exact large valid-image dimensions and rejects private or malformed fields',()=>{
+  const nonce='a'.repeat(32),valid={schemaVersion:1,nonce,bytes:462702,width:448,height:320,sha256:'b'.repeat(64)};
+  expect(attachmentReceipt(JSON.stringify(valid),nonce)).toEqual(valid);
+  for(const value of [null,[],{...valid,nonce:'c'.repeat(32)},{...valid,bytes:65536},{...valid,bytes:600*1024+1},{...valid,bytes:462702.1},{...valid,width:8193},{...valid,height:1},{...valid,sha256:'private-secret'},{...valid,extra:'private-secret'}])
+    expect(()=>attachmentReceipt(JSON.stringify(value),nonce)).toThrow('Owned attachment receipt invalid');
+  for(const text of ['private-secret','x'.repeat(1025)])expect(()=>attachmentReceipt(text,nonce)).toThrow('Owned attachment receipt invalid');
+});
+
+test('owned attachment readback detects changed content, inode, size and timestamps and rejects links',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-attachment-oracle-')),path=join(directory,'owned.png');
+  try {
+    await writeFile(path,'original owned bytes',{mode:0o600,flag:'wx'});
+    const original=await attachmentIdentity(path);
+    expect(await attachmentIdentity(path)).toEqual(original);
+    await utimes(path,1,1);
+    const timestampOnly=await attachmentIdentity(path);
+    expect(timestampOnly.sha256).toBe(original.sha256);expect(timestampOnly.bytes).toBe(original.bytes);expect(timestampOnly.identity).not.toBe(original.identity);
+    await writeFile(path,'rewritten owned bytes');
+    const rewritten=await attachmentIdentity(path);
+    expect(rewritten.sha256).not.toBe(original.sha256);expect(rewritten.bytes).not.toBe(original.bytes);expect(rewritten.identity).not.toBe(original.identity);
+    await rename(path,join(directory,'original-kept'));await writeFile(path,'different inode');
+    expect((await attachmentIdentity(path)).identity).not.toBe(original.identity);
+    await symlink(path,join(directory,'link'));
+    await expect(attachmentIdentity(join(directory,'link'))).rejects.toThrow();
+    await expect(attachmentIdentity(directory)).rejects.toThrow('Owned attachment file invalid');
+    await writeFile(path,Buffer.alloc(600*1024+1));
+    await expect(attachmentIdentity(path)).rejects.toThrow('Owned attachment file invalid');
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
+  const root=join(import.meta.dir,'..');
+  const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
+  const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
+  expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')");
+  expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,true)');
+  const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
+  expect(support).toContain('const moshBinary=(moshBackground || attachments)?');
+  expect(support).toContain('privateTtyGroup:true,moshBinary,observeMoshBootstraps:true');
+  expect(support).toContain("attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi'");
+  expect(support).toContain("attachments?'-PlazyshAttachmentAcceptance=true'");
+  expect(support).toContain('retainedPackages=!!herdr || attachments');
+  expect(support).toContain("(herdr || attachments)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
+  expect(support).toContain('(herdrMosh || attachments) && await readFile');
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
+  expect(gradle).toContain('outputs/androidTest-results/attachment-ui');
+  expect(gradle).toContain('lazyshAttachmentAcceptance');
 });

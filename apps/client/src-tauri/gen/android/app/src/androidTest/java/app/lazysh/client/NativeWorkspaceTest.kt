@@ -1727,6 +1727,7 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
+    @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
 
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
@@ -1784,6 +1785,73 @@ class NativeWorkspaceTest {
             view("Terminal")
             println("lazysh clipboard UI: PNG/JPEG preview without upload and non-content/oversize rejection verified")
         }
+    }
+
+    private fun verifyManualAttachmentUpload(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val nonce = fixture.getString("nonce")
+        selectOwnedConnection(scenario, fixture.getString("name"), true)
+        awaitDocument(scenario, "one selected owned Mosh attachment terminal", "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0).length===1")
+        val owned = fixture.getJSONObject("attachments")
+        require(owned.getString("newName") == "owned-upload-$nonce.png" && owned.getString("collisionName") == "owned-collision-$nonce.png")
+        val uri = Uri.parse("content://app.lazysh.client.test.clipboardfixture/large-png")
+        val image = checkNotNull(context.contentResolver.openInputStream(uri)).use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            while (true) {
+                val count = input.read(chunk)
+                if (count < 0) break
+                require(output.size() + count <= 600 * 1024) { "Owned PNG exceeds its fixture bound" }
+                output.write(chunk, 0, count)
+            }
+            output.toByteArray()
+        }
+        require(image.size in 400 * 1024..600 * 1024) { "Owned PNG must cross multiple upload chunks" }
+        val bitmap = checkNotNull(android.graphics.BitmapFactory.decodeByteArray(image, 0, image.size))
+        try { assertEquals(448, bitmap.width); assertEquals(320, bitmap.height) } finally {bitmap.recycle()}
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val receipt = JSONObject().put("schemaVersion", 1).put("nonce", nonce).put("bytes", image.size)
+            .put("width", 448).put("height", 320).put("sha256", digest)
+        java.io.File(context.filesDir, "owned-attachment-$nonce.json").writeText(receipt.toString())
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val panel = ".attachment-panel"
+        val destination = "$panel label:has(input:not([type]):not([readonly])) input"
+        fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        fun stage(name: String) {
+            sessionView(scenario, "Attach")
+            awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
+            instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
+            click("Paste clipboard image")
+            awaitDocument(scenario, "large protected clipboard image staged without upload", "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]') && !document.querySelector('$panel [role=alert]')")
+            pasteOwnedText(scenario, destination, "./$name", label)
+            closeSoftKeyboard()
+            assertEquals("Exact owned relative upload path", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
+            assertEquals("One enabled manual upload action", "true", evaluate(scenario,
+                "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
+            click("Upload attachment")
+        }
+        stage(owned.getString("newName"))
+        awaitDocument(scenario, "manual large image upload completed", """
+            (()=>{const fields=document.querySelectorAll('$panel input[readonly]');return fields.length===1 &&
+              fields[0].value.endsWith(${JSONObject.quote("/"+owned.getString("newName")+"'")}) &&
+              !document.querySelector('$panel [role=alert]') &&
+              document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
+        """)
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
+        stage(owned.getString("collisionName"))
+        awaitDocument(scenario, "fresh existing-path SFTP rejection", """
+            (()=>{const alerts=document.querySelectorAll('$panel [role=alert]');return alerts.length===1 &&
+              alerts[0].textContent.trim()==='Failure: Failure' && !document.querySelector('$panel input[readonly]') &&
+              document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
+        """)
+        sessionView(scenario, "Terminal")
+        selectOwnedConnection(scenario, fixture.getString("name"), true)
+        println("lazysh manual attachment: large valid protected PNG uploaded; pre-existing destination rejected with SFTP Failure; original Mosh display selected")
     }
 
     private fun ownedWakeLockHeld(power: String, uid: Int, pid: Int): Boolean {
@@ -2015,10 +2083,11 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false) {
+        require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
         require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
-        val useMosh = requireMoshBackground || requireHerdrMosh
+        val useMosh = requireMoshBackground || requireHerdrMosh || requireAttachments
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
@@ -2042,6 +2111,7 @@ class NativeWorkspaceTest {
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
+        require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -2294,7 +2364,7 @@ class NativeWorkspaceTest {
             clickButton("Trust key and connect")
             if (requireMoshBackground) {
                 verifyMoshBackground(scenario, fixture, name, label)
-            } else if (!requireHerdrMosh) {
+            } else if (!requireHerdrMosh && !requireAttachments) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
             if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
@@ -2309,6 +2379,8 @@ class NativeWorkspaceTest {
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (requireAttachments) {
+                verifyManualAttachmentUpload(scenario, fixture, label)
             } else if (!requireMoshBackground) {
                 clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
