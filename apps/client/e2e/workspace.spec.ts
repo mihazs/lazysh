@@ -75,6 +75,7 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await editor.getByRole('button',{name:'Save host',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Direct workspace',exact:true}).click();
   const connection=page.getByRole('dialog',{name:'Connect to Direct workspace',exact:true});
+  await connection.locator('.connection-options > summary').click();
   const transport=connection.getByRole('combobox',{name:'Transport',exact:true});
   await expect(transport).toHaveValue('mosh');
   await expect(transport).toBeEnabled();
