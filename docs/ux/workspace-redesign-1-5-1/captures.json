@@ -61,5 +61,23 @@
     ],
     "safeArea": {},
     "source": "Synthetic real-application browser fixture; not native acceptance"
+  },
+  {
+    "file": "report-clear-visible-phone.png",
+    "sha256": "9d5f51d6da85fc6343f86969d1d2fcec546c86717aa9aaeec8cc0a3f423c4044",
+    "viewport": [
+      393,
+      852
+    ],
+    "source": "Actual AgentPanel with 30 synthetic reports; focused row at least95% in viewport after clearing details"
+  },
+  {
+    "file": "report-clear-visible-desktop.png",
+    "sha256": "2bee678aa5ab7f2b3bb4286bb92b42a7601e6569f6f6430e69b4fafae55223eb",
+    "viewport": [
+      1280,
+      850
+    ],
+    "source": "Actual AgentPanel with 30 synthetic reports; focused row at least95% in viewport after clearing details"
   }
 ]

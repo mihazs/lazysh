@@ -179,7 +179,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
       {ready && !error && <p className="agent-result-count" role="status">{t('agentsResultCount',{shown:formatNumber(visible.length),total:formatNumber(reports.length)})}</p>}
       {(query!=='' || filter!=='all') && <button className="subtle-button" onClick={()=>{setQuery('');setFilter('all');}}>{t('agentsClearFilters')}</button>}
       {selected && <section ref={selectedReport} tabIndex={-1} className="agent-selected-report" aria-label={t('agentsSelectedReport')}>
-        <div className="tool-bar"><h4>{t('agentsSelectedReport')}</h4><button className="subtle-button" onClick={()=>{setSelection(null);reportTrigger.current?.focus({preventScroll:true});}}>{t('agentsClearSelection')}</button></div>
+        <div className="tool-bar"><h4>{t('agentsSelectedReport')}</h4><button className="subtle-button" onClick={()=>{setSelection(null);reportTrigger.current?.focus();}}>{t('agentsClearSelection')}</button></div>
         <strong>{selected.agent}</strong><p>{selected.summary}</p>
         <dl><dt>{t('agentsReportProject')}</dt><dd><code>{selected.project}</code></dd><dt>{t('agentsFilterStatus')}</dt><dd>{t(names[selected.state])}</dd></dl>
         <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}</dl></details>

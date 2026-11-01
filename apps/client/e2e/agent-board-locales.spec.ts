@@ -82,3 +82,23 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} reported discovery keeps
   await page.screenshot({path:testInfo.outputPath('reported-agent-discovery.png')});
   expect(await root.locator('img,script').count()).toBe(0);
 });
+
+test('clearing report details visibly restores the selected row in a long activity list',async({page},testInfo)=>{
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async()=>{
+    const {mountAgentBoard}=await import('/e2e/fixtures/AgentBoardHarness.tsx');
+    const {agentBoardRecord}=await import('/src/test/agentBoardData.ts');
+    window.agentBoard=mountAgentBoard();
+    window.agentBoard.setReports(Array.from({length:30},(_,index)=>({...agentBoardRecord,sessionId:`long-report-${index}`,agent:'Codex',state:'working',project:`/work/${index}`,summary:`Synthetic work ${index}`})));
+  });
+  const row=page.getByRole('button',{name:'View Codex report for /work/29',exact:true});
+  await row.click();
+  const details=page.getByRole('region',{name:'Selected report',exact:true});
+  await expect(details).toBeFocused();
+  await expect(details).toBeInViewport();
+  await details.getByRole('button',{name:'Clear selection',exact:true}).click();
+  await expect(details).toHaveCount(0);
+  await expect(row).toBeFocused();
+  await expect(row).toBeInViewport({ratio:0.95});
+  await page.screenshot({path:testInfo.outputPath('report-clear-visible-row.png')});
+});
