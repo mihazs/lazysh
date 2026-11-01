@@ -33,6 +33,49 @@ const fixtureCase='ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallb
 const fixtureCases=['ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy',
   'ownedUnifiedPushEventParserAndKeystoreReplayStateFailClosed',fixtureCase];
 const invalid=()=>new Error('Owned ntfy acceptance admission failed');
+type NtfyClockPoint={wall:number;before:bigint;after:bigint};
+type NtfyClockComparison={
+  status:'observed'|'commandFailed'|'malformed'|'outOfBounds'|'hostDiscontinuity';
+  offset:'behind'|'ahead'|'overlapsZero'|'unavailable';
+  magnitude:'oneToFiveSeconds'|'fiveToThirtySeconds'|'atLeastThirtySeconds'|'crossesBand'|'unavailable';
+  uncertainty:'atMostTwoSeconds'|'twoToFiveSeconds'|'overFiveSeconds'|'unavailable';
+  hostProgress:'consistentWithinMillisecond'|'wallAhead'|'wallBehind'|'unavailable';
+};
+const unavailableClock=(status:NtfyClockComparison['status']):NtfyClockComparison=>
+  ({status,offset:'unavailable',magnitude:'unavailable',uncertainty:'unavailable',hostProgress:'unavailable'});
+export function ntfyClockComparison(raw:string,before:NtfyClockPoint,after:NtfyClockPoint):NtfyClockComparison {
+  const match=/^(0|[1-9][0-9]{0,12})\n?$/.exec(raw);
+  if(raw.length>14 || !match || match[0]!==raw)return unavailableClock('malformed');
+  const valid=(point:NtfyClockPoint)=>Number.isSafeInteger(point.wall) && point.wall>=0 && point.wall<8_640_000_000_000_000 &&
+    typeof point.before==='bigint' && typeof point.after==='bigint' && point.before>=0n && point.after>=point.before && point.after<=9_223_372_036_854_775_807n;
+  const guest=BigInt(match[1])*1000n;
+  if(!valid(before)||!valid(after)||after.before<before.after||guest>=8_640_000_000_000_000n)return unavailableClock('outOfBounds');
+  const wall=BigInt(after.wall-before.wall)*1_000_000n;
+  const hostProgress=after.wall<before.wall||wall<after.before-before.after-1_000_000n?'wallBehind':
+    wall>after.after-before.before+1_000_000n?'wallAhead':'consistentWithinMillisecond';
+  if(hostProgress!=='consistentWithinMillisecond')return {...unavailableClock('hostDiscontinuity'),hostProgress};
+  // date +%s represents [second, second+1); Date.now() has millisecond quantization.
+  // The guest sample occurred somewhere inside this entire command bracket.
+  const lower=guest-BigInt(after.wall)-1n,upper=guest+1000n-BigInt(before.wall);
+  const offset=upper<=0n?'behind':lower>=0n?'ahead':'overlapsZero';
+  const low=offset==='behind'?-upper:lower,high=offset==='behind'?-lower:upper;
+  const magnitude=offset==='overlapsZero'?'crossesBand':low>=1000n&&high<=5000n?'oneToFiveSeconds':low>=5000n&&high<=30000n?'fiveToThirtySeconds':
+    low>=30000n?'atLeastThirtySeconds':'crossesBand';
+  const width=upper-lower;
+  return {status:'observed',offset,magnitude,uncertainty:width<=2000n?'atMostTwoSeconds':width<=5000n?'twoToFiveSeconds':'overFiveSeconds',hostProgress};
+}
+function sampleNtfyHostClock():NtfyClockPoint {
+  const before=process.hrtime.bigint(),wall=Date.now();
+  return {wall,before,after:process.hrtime.bigint()};
+}
+export async function observeNtfyClock(read:()=>Promise<string>,check:()=>Promise<void>,sample=sampleNtfyHostClock):Promise<NtfyClockComparison> {
+  await check();
+  const before=sample();let raw:string|undefined;
+  try{raw=await read();}catch{/* Diagnostic unavailability never replaces the original acceptance flow. */}
+  const after=sample();
+  await check(); // Lost emulator identity must still fail closed, even after a failed read.
+  return raw===undefined?unavailableClock('commandFailed'):ntfyClockComparison(raw,before,after);
+}
 export function privateInputCommand(nonce:string) {
   if(!/^[a-f\d]{32}$/.test(nonce))throw invalid();
   return `umask 077 && [ ! -L files ] && if [ ! -e files ]; then mkdir -m 700 files; fi && [ -d files ] && [ "$(stat -c %u files)" = "$(id -u)" ] && chmod 700 files && [ "$(stat -c %a files)" = 700 ] && set -C && cat > files/.lazysh-ntfy-${nonce}.json`;
@@ -260,6 +303,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   const children:OwnedProcess[]=[],reverses:string[]=[];
   let primary=false;
   let phase='owned admission';
+  let clockComparison=unavailableClock('commandFailed');
   const run=async(stage:string,program:string,args:string[],milliseconds=10_000)=>{
     phase=stage;
     await owned.check();
@@ -294,6 +338,8 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await child.finish('normal APK trust and FOSS absence',120_000);
   };
   try {
+    clockComparison=await observeNtfyClock(()=>new OwnedProcess(adb,['-s',serial,'shell','date','+%s'],root)
+      .finish('owned host-device clock observation',2000),()=>owned.check());
     for(const name of packages)if((await shell('fixture package absence',['shell','pm','list','packages',name])).trim())throw new Error('Native ntfy acceptance requires absent fixture packages');
     const pins=JSON.parse(await readFile(join(root,'apps/client/src-tauri/fixtures/ntfy-provenance.json'),'utf8'));
     for(const [name,pin] of [['server',pins.server],['distributor',pins.android]] as const){
@@ -376,7 +422,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       source[path]=createHash('sha256').update(await boundedFile(join(root,path),1024*1024)).digest('hex');
     }
     await mkdir(finite,{recursive:true});
-    await writeFile(join(finite,'receipt.json'),JSON.stringify({schemaVersion:1,head,source,...native,serverVersion:pins.server.version,
+    await writeFile(join(finite,'receipt.json'),JSON.stringify({schemaVersion:1,head,source,...native,clockComparison,serverVersion:pins.server.version,
       distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
       distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
       activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
@@ -386,7 +432,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;
     try {
       await mkdir(finite,{recursive:true});
-      await writeFile(join(finite,'failure.json'),JSON.stringify({schemaVersion:1,phase,exit:code?Number(code[1]):null,
+      await writeFile(join(finite,'failure.json'),JSON.stringify({schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,
         ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false})+'\n');
     }catch{console.error('Finite ntfy failure receipt could not be retained');}
     // Framework/private protocol errors may contain values. Keep only the fixed
