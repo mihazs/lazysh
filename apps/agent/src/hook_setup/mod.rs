@@ -1,6 +1,7 @@
 //! Explicit, profile-scoped lifecycle hook setup; configuration is not reporting evidence.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod commit;
+mod discovery;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod files;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -49,6 +50,8 @@ pub struct Target {
 }
 #[derive(Subcommand)]
 pub enum Command {
+    /// Discover known installed executables and profile directories without reading configuration.
+    Discover,
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
     Preview {
         #[arg(long, value_enum)]
@@ -75,10 +78,11 @@ pub enum Command {
     },
 }
 pub fn run(command: Command) -> Result<Value> {
-    if let Command::Preview { agent } = command {
-        return preview(agent);
+    match command {
+        Command::Discover => Ok(discovery::run()),
+        Command::Preview { agent } => preview(agent),
+        other => manage(other),
     }
-    manage(command)
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn preview(agent: AgentProfile) -> Result<Value> {
@@ -135,7 +139,7 @@ fn manage(command: Command) -> Result<Value> {
         Command::Status { target } => (target, None),
         Command::Install { target, .. } => (target, Some(files::Action::Install)),
         Command::Remove { target, .. } => (target, Some(files::Action::Remove)),
-        Command::Preview { .. } => unreachable!(),
+        Command::Preview { .. } | Command::Discover => unreachable!(),
     };
     let selected = files::Target {
         agent: target.agent.agent(),

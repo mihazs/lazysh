@@ -122,6 +122,16 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         if(!state.installed)throw {message:'Synthetic missing host companion'};
         return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
       }
+      if(command==='companion_hook_discovery'){
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).join(',')!=='sessionId')throw new Error('Wrong discovery source');
+        return {schemaVersion:1,supported:true,managedSetupSupported:true,truncated:false,agents:[
+          {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
+          {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
+          ...['droid','gemini','cursor','opencode'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
+          {agent:'cline',setup:'manual',executable:{path:'/owned/bin/cline',source:'path'},profiles:[]},
+          {agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]},
+        ]};
+      }
       if(command==='companion_hooks'){
         const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
         if(args.sessionId!=='owned-navigation-ssh' || request.agent!=='codex' || request.profileRoot!=='/owned/profile')throw new Error('Wrong owned hook inspection target');
@@ -529,11 +539,29 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
   const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
-  await expect(provider).toBeFocused();await expect(provider).toBeInViewport();
+  const setup=board.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
+  await expect(setup).toBeFocused();await expect(setup).toBeInViewport();
   const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
   expect(await actions()).toEqual([]);
   await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
-  await board.getByLabel('Host profile directory',{exact:true}).fill('/owned/profile');
+  await expect(provider).toHaveValue('');
+  const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
+  const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
+  await expect(codex).toHaveAttribute('aria-pressed','false');
+  await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
+  await expect(detected.getByRole('button',{name:/Cline.*Manual setup/})).toBeDisabled();
+  await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
+  expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
+  expect(await detected.evaluate(node=>node.scrollHeight>node.clientHeight&&node.clientHeight<=260)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('detected-agent-list.png')});
+  await codex.click();await expect(provider).toHaveValue('codex');
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
+  await expect(board.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
+  expect(await actions()).toEqual([]);
+  for(const row of await detected.getByRole('button').all())expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({path:testInfo.outputPath('detected-agent-selection.png')});
   await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
   await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status']);
