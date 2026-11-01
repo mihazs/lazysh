@@ -1,5 +1,11 @@
 # @lazysh/credential-vault
 
+## 1.4.0
+
+### Patch Changes
+
+- 6026586: Show branded Android startup content until the native access policy is known.
+
 ## 1.3.3
 
 No changes in this release.
