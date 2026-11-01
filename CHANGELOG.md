@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit V3 discovery and inspected managed Amp system-plugin setup with absolute companion binding. Setup tries V3 metadata with one bounded V2 compatibility fallback; V1/V2 provider mappings stay unchanged. Same-name foreign plugins block installation while fresh exact-owned removal remains available; settings, trust and live reporting are not enabled or verified.
+
 - Add an owned Android manual Mosh attachment checkpoint for a large valid protected-clipboard PNG and exclusive creation against a pre-existing destination. Closed-control recovery and physical-device/file-picker/camera acceptance remain unverified; no upload defaults change.
 
 - Add explicit version-2 hook discovery and inspected managed Copilot setup for selected existing Linux profiles, with shell-free absolute companion handlers and protected file ownership. Default version-1 discovery keeps its seven managed providers and Copilot manual; settings, disabled hooks, trust and live reporting remain unchanged.

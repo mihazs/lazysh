@@ -19,7 +19,8 @@ Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI,
 Cline CLI and Droid on qualified Linux filesystems. `lazysh-agent hooks discover`
 lists version-1 installation metadata without executing agents or changing profiles.
 Copilot managed setup requires explicit `hooks discover --schema-version 2` and
-an updated companion; default discovery keeps Copilot manual for older clients. Let
+an updated companion. Amp managed setup requires explicit version 3; default V1
+and explicit V2 retain their original provider mappings. Let
 the user select the intended target; inspect its exact existing profile with
 `lazysh-agent hooks status`; install/update or remove only after reviewing its
 returned plan, using the corresponding expected plan hash. Droid requires an
@@ -46,6 +47,14 @@ files conflict rather than being adopted. `COPILOT_HOME` is a nonempty literal
 override; do not trim it or infer the active profile from SSH metadata. Start a
 new Copilot session with that profile and review `/hooks`; preserve trust,
 disabled-hook policy and foreign settings. Configuration is not live reporting.
+
+Amp setup binds only the system profile's `plugins/lazysh.js` and ownership
+receipt. Select `<XDG_CONFIG_HOME>/amp` only for a nonempty safe absolute raw
+configuration base; otherwise use `~/.config/amp` when unset/empty, never when
+an explicit override is invalid. Same-name TypeScript or directory/link plugins
+block installation but must not prevent exact-owned removal with a fresh plan.
+Preserve foreign files and policy. Workspace plugins may mask the system file;
+configured status does not establish loading or native root/child behavior.
 
 The companion must resolve in the hook's environment. Never bypass provider
 trust, enable plugins implicitly, answer permission requests or install separate

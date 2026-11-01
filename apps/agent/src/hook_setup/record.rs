@@ -15,6 +15,7 @@ pub(super) enum Agent {
     Opencode,
     Cline,
     Copilot,
+    Amp,
 }
 impl Agent {
     pub(super) fn is_whole_file(self) -> bool {
@@ -22,7 +23,7 @@ impl Agent {
     }
     pub(super) fn asset_directory(self) -> Option<&'static str> {
         match self {
-            Self::Opencode | Self::Cline => Some("plugins"),
+            Self::Opencode | Self::Cline | Self::Amp => Some("plugins"),
             Self::Copilot => Some("hooks"),
             _ => None,
         }
@@ -31,7 +32,7 @@ impl Agent {
         match self {
             Self::Claude | Self::Gemini => "settings.json",
             Self::Codex | Self::Droid | Self::Cursor => "hooks.json",
-            Self::Opencode | Self::Cline => "lazysh.js",
+            Self::Opencode | Self::Cline | Self::Amp => "lazysh.js",
             Self::Copilot => "lazysh.json",
         }
     }
@@ -45,6 +46,7 @@ impl Agent {
             Self::Opencode => "opencode",
             Self::Cline => "cline",
             Self::Copilot => "copilot",
+            Self::Amp => "amp",
         }
     }
 }
@@ -155,7 +157,7 @@ impl Record {
                 return Err("HooksInvalidRecord");
             }
             match self.agent {
-                Agent::Opencode | Agent::Cline | Agent::Copilot
+                Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp
                     if owned.entries.is_empty()
                         && owned
                             .plugin_sha256

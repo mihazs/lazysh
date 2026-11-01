@@ -3,7 +3,7 @@ const invoke=vi.hoisted(()=>vi.fn().mockResolvedValue(undefined));
 vi.mock('@tauri-apps/api/core',()=>({invoke,isTauri:()=>true,Channel:class {onmessage?:unknown;}}));
 import {api} from './bridge';
 import {registerSessionOutput,disposeSessionOutput} from './pendingSessions';
-import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus } from './access';
+import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus, bindProtectedApi, captureAccess, StaleAccessError } from './access';
 beforeEach(()=>invoke.mockClear());
 it('passes typed Mosh entry separately from transport options on the owned native channel',async()=>{
   invoke.mockResolvedValueOnce({sessionId:'composed-mosh'});
@@ -76,4 +76,21 @@ it.each(['files','hostTools'] as const)('restores %s through a guarded ordinary 
   expect(invoke).toHaveBeenLastCalledWith(purpose==='files'?'restore_file_transfer':'restore_host_tools',{sessionId:'original-mosh',privateKey:'owned-ephemeral-key',useSavedCredentials:false},expect.anything());
   expect(invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty('events');
   disposeSessionOutput('original-mosh');expect(original).toHaveBeenCalledOnce();
+});
+
+it('preserves native discovery rejection identity through both guarded layers and lets revocation win',async()=>{
+  const generation=BigInt(accessSnapshot().status?.generation??'0')+1n;
+  const unlocked={initialized:true,supported:true,enabled:true,locked:false,reason:'',generation:String(generation),nonce:'c'.repeat(64)};
+  applyAccessStatus(unlocked);
+  const guarded=bindProtectedApi(api,captureAccess());
+  const failure=Object.freeze({kind:'remote_command_failed',message:'owned unsupported schema'});
+  invoke.mockRejectedValueOnce(failure);
+  await expect(guarded.companionHookDiscovery('owned-discovery',2)).rejects.toBe(failure);
+  expect(invoke).toHaveBeenLastCalledWith('companion_hook_discovery',{sessionId:'owned-discovery',schemaVersion:2},expect.anything());
+  let reject!:(value:unknown)=>void;
+  invoke.mockImplementationOnce(()=>new Promise((_,fail)=>{reject=fail;}));
+  const pending=expect(guarded.companionHookDiscovery('owned-discovery',2)).rejects.toBeInstanceOf(StaleAccessError);
+  applyAccessStatus({...unlocked,locked:true,generation:String(generation+1n),nonce:undefined});
+  reject(failure);await pending;
+  applyAccessStatus({...unlocked,generation:String(generation+2n)});
 });

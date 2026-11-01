@@ -1199,6 +1199,7 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         ("cursor", "posix-shell"),
         ("opencode", "bun-javascript"),
         ("copilot", "shell-free-exec"),
+        ("amp", "amp-javascript"),
     ] {
         let output = run(
             directory.path(),
@@ -1301,7 +1302,7 @@ fn cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows(
 #[test]
 fn hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles() {
     let directory = tempfile::tempdir().unwrap();
-    for version in ["0", "3", "-1", "latest", "256"] {
+    for version in ["0", "4", "-1", "latest", "256"] {
         let output = run(
             directory.path(),
             &["hooks", "discover", "--schema-version", version],

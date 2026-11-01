@@ -11,6 +11,7 @@ pub enum Agent {
     Opencode,
     Cline,
     Copilot,
+    Amp,
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,6 +50,7 @@ impl Request {
             Agent::Opencode => "opencode",
             Agent::Cline => "cline",
             Agent::Copilot => "copilot",
+            Agent::Amp => "amp",
         };
         let suffix = match (&self.action, &self.expected_plan) {
             (Action::Status, None) => String::new(),
@@ -128,6 +130,7 @@ fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
     match schema_version {
         None | Some(1) => Ok("lazysh-agent hooks discover"),
         Some(2) => Ok("lazysh-agent hooks discover --schema-version 2"),
+        Some(3) => Ok("lazysh-agent hooks discover --schema-version 3"),
         _ => Err(error(
             "invalid_request",
             "Unsupported hook discovery schema",
@@ -159,7 +162,7 @@ fn parse_response(text: &str) -> Result<serde_json::Value> {
 mod tests {
     use super::*;
     #[test]
-    fn hook_discovery_defaults_to_v1_and_only_explicit_v2_changes_the_command() {
+    fn hook_discovery_defaults_to_v1_and_only_explicit_versions_change_the_command() {
         for version in [None, Some(1)] {
             assert_eq!(
                 discovery_command(version).unwrap(),
@@ -170,7 +173,11 @@ mod tests {
             discovery_command(Some(2)).unwrap(),
             "lazysh-agent hooks discover --schema-version 2"
         );
-        for version in [0, 3, u8::MAX] {
+        assert_eq!(
+            discovery_command(Some(3)).unwrap(),
+            "lazysh-agent hooks discover --schema-version 3"
+        );
+        for version in [0, 4, u8::MAX] {
             assert!(discovery_command(Some(version)).is_err());
         }
     }
@@ -201,6 +208,7 @@ mod tests {
             (Agent::Cline, "cline"),
             (Agent::Droid, "droid"),
             (Agent::Copilot, "copilot"),
+            (Agent::Amp, "amp"),
         ] {
             request.agent = agent;
             assert!(request.command().unwrap().starts_with(&format!(

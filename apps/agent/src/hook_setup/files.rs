@@ -75,6 +75,8 @@ pub(super) struct Plan {
     pub manifest: FileState,
     pub binary: Binary,
     pub transition: Option<Record>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amp_shadows: Option<[Option<Identity>; 2]>,
 }
 impl Plan {
     pub(super) fn digest(&self) -> Result<String> {
@@ -201,6 +203,36 @@ pub(super) struct Inspection {
     pub record: Option<Record>,
     pub observation: Option<Observation>,
     pub binary: Binary,
+    pub amp_shadows: Option<[Option<Identity>; 2]>,
+}
+/// Metadata only: do not traverse or read a foreign same-name plugin.
+pub(super) fn amp_shadows(
+    agent: Agent,
+    directory: Option<&Directory>,
+) -> Result<Option<[Option<Identity>; 2]>> {
+    if agent != Agent::Amp {
+        return Ok(None);
+    }
+    let Some(directory) = directory else {
+        return Ok(Some([None, None]));
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut snapshot = [None, None];
+        for (slot, name) in snapshot.iter_mut().zip(["lazysh.ts", "lazysh"]) {
+            *slot = match directory.open_file(name, libc::O_PATH) {
+                Ok(file) => Some(identity(&file.metadata()?)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+        }
+        Ok(Some(snapshot))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = directory;
+        Err(rejected("HooksAclUnsupported"))
+    }
 }
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
@@ -239,7 +271,16 @@ impl Inspection {
     pub(super) fn plan(&self, action: Action) -> Result<Plan> {
         let previous = self.previous()?;
         let next = match action {
-            Action::Install => Some(self.desired()?),
+            Action::Install => {
+                if self
+                    .amp_shadows
+                    .as_ref()
+                    .is_some_and(|items| items.iter().any(Option::is_some))
+                {
+                    return Err(rejected("HooksAmpShadow"));
+                }
+                Some(self.desired()?)
+            }
             Action::Remove => None,
         };
         if self.target.agent.is_whole_file()
@@ -280,6 +321,7 @@ impl Inspection {
             manifest: self.manifest.state.clone(),
             binary: self.binary.clone(),
             transition,
+            amp_shadows: self.amp_shadows.clone(),
         })
     }
     pub(super) fn after(
@@ -377,6 +419,7 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         })
         .transpose()?;
     let binary = binary(source)?;
+    let amp_shadows = amp_shadows(target.agent, plugins.as_ref())?;
     directory_admission(&profile)?;
     if let Some(plugins) = &plugins {
         directory_admission(plugins)?;
@@ -390,5 +433,6 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         record,
         observation,
         binary,
+        amp_shadows,
     })
 }

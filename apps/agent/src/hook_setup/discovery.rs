@@ -133,14 +133,23 @@ mod metadata {
                 None => self.home(&format!(".config/{suffix}")),
             }
         }
+        fn amp_profile(&mut self) -> Value {
+            match (self.environment)("XDG_CONFIG_HOME") {
+                Some(value) if !value.is_empty() => {
+                    self.profile(Some(value), "XDG_CONFIG_HOME", "amp")
+                }
+                _ => self.home(".config/amp"),
+            }
+        }
         fn profiles(&mut self, agent: &str) -> Vec<Value> {
             vec![match agent {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
                 "cline" => self.cline_profile(),
-                "copilot" if self.schema_version == 2 => {
+                "copilot" if matches!(self.schema_version, 2 | 3) => {
                     self.literal_profile("COPILOT_HOME", ".copilot")
                 }
+                "amp" if self.schema_version == 3 => self.amp_profile(),
                 "kimi" => {
                     let mut profiles = vec![
                         self.literal_profile("KIMI_CODE_HOME", ".kimi-code"),
@@ -287,7 +296,9 @@ mod metadata {
             ("aider", "aider", "healthOnly"),
         ] {
             let profiles = scan.profiles(agent);
-            let setup = if agent == "copilot" && schema_version == 2 {
+            let setup = if (agent == "copilot" && matches!(schema_version, 2 | 3))
+                || (agent == "amp" && schema_version == 3)
+            {
                 "managed"
             } else {
                 setup
