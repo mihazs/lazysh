@@ -13,7 +13,7 @@
     },
     "apps/agent": {
       "name": "@lazysh/agent",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
@@ -25,7 +25,7 @@
     },
     "apps/client": {
       "name": "@lazysh/client",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
@@ -67,7 +67,7 @@
     },
     "apps/notification-service": {
       "name": "@lazysh/notification-service",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
         "@lazysh/notification-client": "workspace:*",
@@ -75,76 +75,76 @@
     },
     "apps/share-service": {
       "name": "@lazysh/share-service",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "apps/transcription-service": {
       "name": "@lazysh/transcription-service",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/account-usage": {
       "name": "@lazysh/account-usage",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
     "packages/apple-speech": {
       "name": "@lazysh/apple-speech",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/apple-status": {
       "name": "@lazysh/apple-status",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/common": {
       "name": "@lazysh/common",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
     "packages/credential-vault": {
       "name": "@lazysh/credential-vault",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
     "packages/display-idle": {
       "name": "@lazysh/display-idle",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
     "packages/et-transport": {
       "name": "@lazysh/et-transport",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/mosh-transport": {
       "name": "@lazysh/mosh-transport",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
     "packages/notification-client": {
       "name": "@lazysh/notification-client",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/parakeet-runtime": {
       "name": "@lazysh/parakeet-runtime",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
     },
     "packages/push-registration": {
       "name": "@lazysh/push-registration",
-      "version": "1.5.3",
+      "version": "1.5.4",
     },
   },
   "packages": {
