@@ -394,6 +394,7 @@ const FAILED_TESTS: &[&str] = &[
     "concurrent_ingest_recovers_after_a_transient_database_lock",
     "config_is_print_only_and_contains_supported_hooks",
     "additional_native_agents_report_only_their_actual_lifecycle_contracts",
+    "copilot_distinct_children_complete_without_retiring_the_parent",
     "unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent",
     "codex_hooks_preserve_main_turn_while_subagents_finish",
     "opencode_native_events_keep_exact_sessions_and_bounded_metadata",

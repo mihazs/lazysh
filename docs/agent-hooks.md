@@ -331,9 +331,18 @@ provider request and ordinary session-only folder consent; no question answer or
 tool approval was sent. [Issue #704](https://github.com/mihazs/lazysh/issues/704)
 retains binary/source bindings, receipt hashes and earlier failed attempts.
 
-Setup remains manual. Child identity, real-provider/account behavior, public
-companion artifacts and Android delivery are unqualified by these local checks;
-no managed installation or discovery capability is added.
+A separate Linux 1.0.105 no-tools child probe used a passive producer observer
+and a local companion from [`2435d50c`](https://github.com/mihazs/lazysh/commit/2435d50ca61709940a583874b4ee0089d2ebd7d7)
+to verify child `done` before the parent's final response, while the parent stayed
+`working`. Tagged completion requires `session_id == agent_id` and a valid,
+distinct `parent_agent_id`; shared-parent callbacks remain ignored. Native child
+`Stop` was exercised; child `SessionEnd` has CLI contract coverage. See
+[#713](https://github.com/mihazs/lazysh/issues/713) for the preserved stale-child
+baseline and candidate replay.
+
+Setup remains manual. Other child configurations, real-provider/account behavior,
+public companion artifacts and Android delivery remain unqualified; no managed
+installation or discovery capability is added.
 
 ## Cursor CLI, Amp and Aider
 
