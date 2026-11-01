@@ -1054,7 +1054,9 @@ test('native continuous finger observation rejects restarts, identity changes, u
     const canvas={contains:(target:unknown)=>target===screen,addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>callbacks.set(name,fn),
       removeEventListener:(name:string)=>callbacks.delete(name)};
     const screen={isConnected:true,textContent:'OLD490OLD491NEW512',closest:()=>canvas};
-    const window={} as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
+    const globalCallbacks=new Map<string,(event:Record<string,unknown>)=>void>();
+    const window={addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>globalCallbacks.set(name,fn),
+      removeEventListener:(name:string)=>globalCallbacks.delete(name)} as unknown as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
     const install=new Function('window','ownedScreens',`${source};return ownedHerdrObserveFinger(window,${JSON.stringify(key)},ownedScreens);`);
     expect(install(window,[screen])).toBe(true);expect(install(window,[screen])).toBe(false);
     const event=(type:string,identifier=3,trusted=true)=>callbacks.get(type)!({type,isTrusted:trusted,target:screen,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier}]});

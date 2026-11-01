@@ -162,18 +162,42 @@ test('passive finger observer keeps exact touch identity while bounding wheel ob
   const listeners=new Map<string,(event:any)=>void>(),options:unknown[]=[];
   const canvas={contains:()=>true,addEventListener:(type:string,handler:(event:any)=>void,option:unknown)=>{listeners.set(type,handler);options.push(option);},
     removeEventListener:(type:string,handler:unknown,capture:boolean)=>{expect(listeners.get(type)).toBe(handler);expect(capture).toBe(true);listeners.delete(type);}};
-  const screen={closest:()=>canvas,textContent:'OLD500',isConnected:true},window:Record<string,any>={};
+  const globalListeners=new Map<string,(event:any)=>void>();
+  const surface={},textarea={},terminal={querySelector:(selector:string)=>selector==='.xterm-viewport'?surface:textarea};
+  const screen={closest:()=>canvas,parentElement:terminal,textContent:'OLD500',isConnected:true},window:Record<string,any>={
+    addEventListener:(type:string,handler:(event:any)=>void,option:unknown)=>{expect(option).toEqual({capture:true,passive:true});globalListeners.set(type,handler);},
+    removeEventListener:(type:string,handler:unknown,capture:boolean)=>{expect(globalListeners.get(type)).toBe(handler);expect(capture).toBe(true);globalListeners.delete(type);}};
   expect(observe(window,'owned',[screen])).toBe(true);
   expect(observe(window,'owned',[screen])).toBe(false);
   expect(options).toEqual(Array(5).fill({capture:true,passive:true}));
+  const globalEvent=(type:string,extra:Record<string,unknown>={})=>globalListeners.get(type)!({type,isTrusted:true,eventPhase:1,target:screen,pointerId:9,clientX:50,clientY:100,getCoalescedEvents:()=>[],...extra});
+  globalEvent('pointerdown');globalEvent('pointermove',{cancelable:true,defaultPrevented:true,getCoalescedEvents:()=>Array(40).fill({})});
+  // Global delivery alone cannot satisfy the unchanged canvas touch/MOVE oracle.
+  expect(window.owned.sample()).toMatchObject({moves:0,active:true,held:false});
   const touch=(type:string,identifier=7)=>listeners.get(type)!({type,isTrusted:true,target:screen,touches:[{identifier}]});
   touch('touchstart');touch('touchmove');touch('touchmove');
   for(let i=0;i<80;i++)listeners.get('wheel')!({deltaY:-165});
   listeners.get('wheel')!({deltaY:165});listeners.get('wheel')!({deltaY:0});listeners.get('wheel')!({deltaY:NaN});
-  expect(window.owned.sample()).toEqual({row:500,newest:false,active:true,held:true,moves:2,wheels:64,wheelUp:64,wheelDown:1,wheelZero:1,wheelInvalid:1});
+  expect(window.owned.sample()).toMatchObject({row:500,newest:false,active:true,held:true,moves:2,wheels:64,wheelUp:64,wheelDown:1,wheelZero:1,wheelInvalid:1});
+  expect(window.owned.sample().global).toMatchObject({state:'observed',overflow:false});
   touch('touchmove',8);expect(window.owned.sample().active).toBe(false);
   screen.textContent='OLD999 NEW512';expect(window.owned.sample()).toMatchObject({row:999,newest:true});
-  window.owned.dispose();expect(listeners.size).toBe(0);
+  const before=window.owned.sample();globalEvent('touchmove',{changedTouches:[{identifier:4,clientX:NaN,clientY:Infinity}]});
+  expect(window.owned.sample().moves).toBe(before.moves);
+  expect(window.owned.sample().global.events[1]).toMatchObject({type:'pointermove',target:'screen',trusted:true,cancelable:true,defaultPrevented:true,phase:1,identityMatches:true,coalescedCount:8,point:[50,100]});
+  expect(window.owned.sample().global.events[2]).toMatchObject({point:[null,null],identityMatches:false});
+  expect(window.owned.sample().global.events[0]).toMatchObject({cancelable:false,defaultPrevented:false});
+  globalEvent('lostpointercapture',{target:{id:'private-session-id',textContent:'private terminal output'},clientX:1e9,clientY:-1e9,eventPhase:99});
+  expect(window.owned.sample().global.events[3]).toMatchObject({target:'other',point:[65535,-65535],phase:-1});
+  expect(JSON.stringify(window.owned.sample().global)).not.toMatch(/private|session-id|terminal output/);
+  for(const [target,kind] of [[canvas,'canvas'],[terminal,'terminal'],[surface,'viewport'],[textarea,'textarea'],[null,'none']] as const){
+    globalEvent('pointercancel',{target});expect(window.owned.sample().global.events.at(-1).target).toBe(kind);
+  }
+  globalEvent('pointermove',{getCoalescedEvents:()=>{throw new Error('private observer failure');}});
+  expect(window.owned.sample().global.state).toBe('unavailable');expect(window.owned.sample().moves).toBe(before.moves);
+  for(let i=0;i<30;i++)globalEvent('pointermove');
+  expect(window.owned.sample().global.events).toHaveLength(24);expect(window.owned.sample().global.overflow).toBe(true);
+  window.owned.dispose();expect(listeners.size).toBe(0);expect(globalListeners.size).toBe(0);
 });
 
 test('failure history projects only bounded owned readback and focus booleans and redacts observation errors',async()=>{

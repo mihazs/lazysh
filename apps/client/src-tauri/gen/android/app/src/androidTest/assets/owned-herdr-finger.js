@@ -41,6 +41,28 @@ function ownedHerdrObserveFinger(window, key, screens) {
   if(!canvas) return false;
   let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
   let wheels=0,wheelUp=0,wheelDown=0,wheelZero=0,wheelInvalid=0;
+  const terminal=screen.parentElement,surface=terminal?.querySelector('.xterm-viewport'),textarea=terminal?.querySelector('.xterm-helper-textarea');
+  const globalEvents=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture','touchstart','touchmove','touchend','touchcancel'];
+  const trace=[],began=performance.now();
+  let traceAvailable=true,overflow=false,pointerIdentity=null,touchIdentity=null;
+  const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
+  const targetKind=target=>target==null?'none':target===textarea?'textarea':target===surface?'viewport':
+    target===screen || screen.contains?.(target)?'screen':target===canvas?'canvas':target===terminal?'terminal':'other';
+  const globalRecord=event=>{
+    try {
+      if(trace.length===24){overflow=true;return;}
+      const touch=event.type.startsWith('touch'),point=touch?(event.changedTouches?.[0]??event.touches?.[0]):event;
+      if(event.type==='pointerdown' && canvas.contains(event.target))pointerIdentity=event.pointerId;
+      if(event.type==='touchstart' && canvas.contains(event.target))touchIdentity=point?.identifier;
+      trace.push({type:globalEvents.includes(event.type)?event.type:'other',target:targetKind(event.target),trusted:event.isTrusted===true,
+        cancelable:event.cancelable===true,defaultPrevented:event.defaultPrevented===true,
+        phase:Number.isInteger(event.eventPhase)&&event.eventPhase>=0&&event.eventPhase<=3?event.eventPhase:-1,
+        atMs:Math.max(0,Math.min(65535,performance.now()-began)),point:[bounded(point?.clientX),bounded(point?.clientY)],
+        identityMatches:touch?touchIdentity!=null&&point?.identifier===touchIdentity:pointerIdentity!=null&&event.pointerId===pointerIdentity,
+        coalescedCount:typeof event.getCoalescedEvents==='function'?Math.min(8,event.getCoalescedEvents().length):-1});
+    } catch {traceAvailable=false;}
+  };
+  globalEvents.forEach(type=>window.addEventListener(type,globalRecord,{capture:true,passive:true}));
   const wheel=event=>{
     wheels=Math.min(64,wheels+1);
     if(!Number.isFinite(event.deltaY))wheelInvalid=Math.min(64,wheelInvalid+1);
@@ -65,7 +87,7 @@ function ownedHerdrObserveFinger(window, key, screens) {
       const match=screen.textContent.match(/OLD([0-9]{3})/);
       return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512'),
         active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
-        held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid};
-    },dispose:()=>{events.forEach(type=>canvas.removeEventListener(type,record,true));canvas.removeEventListener('wheel',wheel,true);}}});
+        held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice()}};
+    },dispose:()=>{events.forEach(type=>canvas.removeEventListener(type,record,true));canvas.removeEventListener('wheel',wheel,true);globalEvents.forEach(type=>window.removeEventListener(type,globalRecord,true));}}});
   return true;
 }

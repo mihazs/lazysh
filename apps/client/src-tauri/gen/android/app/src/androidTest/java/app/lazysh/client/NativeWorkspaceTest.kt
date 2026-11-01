@@ -141,18 +141,32 @@ private class NtfyFirstLaunch(started: Long) {
     private var after="unavailable"
     private var action="none"
     private var snapshot="unavailable"
+    private var clickBefore="unavailable"
+    private var clickAfter="unavailable"
+    private var firstExpiry="none"
     private fun budget(now:Long)=if(active(now))"positive" else "expired"
     fun start(stage:String,now:Long) {
         require(stage in listOf("foreground","allow","deny","toolbar","prompt","menu","click"))
         this.stage=stage;before=budget(now);after="unavailable"
-        if(stage=="click")action="calling"
+        if(firstExpiry=="none" && before=="expired")firstExpiry="between"
+        if(stage=="click") {
+            if(clickBefore=="unavailable")clickBefore=before
+            action="calling"
+        }
     }
-    fun finish(now:Long) {after=budget(now);if(stage=="click")action="returned"}
+    fun finish(now:Long) {
+        after=budget(now)
+        if(firstExpiry=="none" && before=="positive" && after=="expired")firstExpiry=stage
+        if(stage=="click") {
+            if(clickAfter=="unavailable")clickAfter=after
+            action="returned"
+        }
+    }
     fun failed() {if(action=="calling")action="threw"}
     fun sampled() {snapshot=if(action=="none")"beforeAction" else "afterAction"}
     fun observation(permission:String):String {
         require(permission in listOf("granted","denied","unavailable"))
-        return "Ntfy first-launch action[stage=$stage before=$before after=$after action=$action snapshot=$snapshot permission=$permission]"
+        return "Ntfy first-launch action[stage=$stage before=$before after=$after action=$action snapshot=$snapshot permission=$permission clickBefore=$clickBefore clickAfter=$clickAfter firstExpiry=$firstExpiry]"
     }
 }
 private class NtfySettingsScroll(started: Long) {
@@ -849,6 +863,7 @@ class NativeWorkspaceTest {
         assertEquals("Discard must preserve the theme", "true", evaluate(scenario, appearance("forest")))
 
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Appearance and fonts']")).perform(webClick())
         onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Import and share theme']")).perform(webClick())
         val draftSelector = "textarea[aria-label='Theme JSON or share code']"
         val draft = "unfinished native theme draft"
@@ -878,6 +893,7 @@ class NativeWorkspaceTest {
         assertEquals("Replacement review/discard must preserve the manual draft", "true", evaluate(scenario, draftKept))
         // Only this isolated acceptance's own appearance state is changed. Reset
         // through the actual UI before the ordinary native workspace suite.
+        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Reset settings']")).perform(webClick())
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
@@ -1168,6 +1184,7 @@ class NativeWorkspaceTest {
             var capture = observe()
             awaitDocument(scenario, "QR workspace ready", "Boolean(document.querySelector('button[aria-label=Preferences]'))")
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label=Preferences]")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Appearance and fonts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
             awaitDocument(scenario, "explicit QR controls", available)
             typeInto(scenario, draftSelector, draft)
@@ -1725,7 +1742,7 @@ class NativeWorkspaceTest {
             fingerView.isAttachedToWindow && fingerView.isShown && fingerView.hasWindowFocus() &&
             (fingerWindow == null || fingerActivity.window.callback === fingerWindow) &&
             (startFrame == null || fingerFrame(fingerView) == startFrame)
-        fun fingerPoint(view: View, fraction: Double): FloatArray {
+        fun fingerPoint(view: View, fraction: Double, dispatch: JSONObject): FloatArray {
             val frame = fingerFrame(view)
             if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
             val density = view.resources.displayMetrics.density.toDouble()
@@ -1743,6 +1760,7 @@ class NativeWorkspaceTest {
             val clear = swipeViewClearOfIme(imeVisible, bottom, top, view.height, view.rootView.height)
             val imeState = when (imeVisible) { true -> "visible"; false -> "hidden"; null -> "unavailable" }
             val imeGeometry = listOf(top, view.height, view.rootView.height, bottom ?: -1).map { it.coerceIn(-1, 65535) }
+            dispatch.put("ime", imeState).put("imeClear", clear).put("imeGeometry", JSONArray(imeGeometry))
             assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState clear=$clear geometry=$imeGeometry",
                 predicates.values.all { it } && clear)
             val scaleX = view.width / visible[2]
@@ -1788,7 +1806,7 @@ class NativeWorkspaceTest {
             dispatches.put(dispatch)
             // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
             instrumentation.runOnMainSync {
-                lastPoint = fingerPoint(fingerView, fraction)
+                lastPoint = fingerPoint(fingerView, fraction, dispatch)
                 val global = Rect(); val visibleWindow = Rect()
                 dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
                 fingerView.getWindowVisibleDisplayFrame(visibleWindow)
@@ -2657,6 +2675,8 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".connection-options > summary"))
+                .perform(webScrollIntoView()).perform(webClick())
             if (requireCompanion || requireHerdrMosh) {
                 closeSoftKeyboard()
                 // The real Add Host chooser saved this preference; do not invoke
@@ -2942,15 +2962,25 @@ class NativeWorkspaceTest {
         assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
         assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
         val trace=NtfyFirstLaunch(0)
-        assertEquals("Ntfy first-launch action[stage=none before=unavailable after=unavailable action=none snapshot=unavailable permission=unavailable]",trace.observation("unavailable"))
+        assertEquals("Ntfy first-launch action[stage=none before=unavailable after=unavailable action=none snapshot=unavailable permission=unavailable clickBefore=unavailable clickAfter=unavailable firstExpiry=none]",trace.observation("unavailable"))
         trace.start("menu",TimeUnit.SECONDS.toNanos(4));trace.finish(TimeUnit.SECONDS.toNanos(5));trace.sampled()
         assertTrue("A sampled prompt before the one action is not a post-action observation",trace.observation("denied").contains("snapshot=beforeAction"))
         assertTrue("Observation does not consume admission",trace.allow(TimeUnit.SECONDS.toNanos(5),true))
         trace.start("click",TimeUnit.SECONDS.toNanos(5));trace.finish(TimeUnit.SECONDS.toNanos(6))
-        assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted]",trace.observation("granted"))
+        assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("granted"))
         assertTrue("A returned action does not extend the original deadline or allowance",!trace.active(TimeUnit.SECONDS.toNanos(6)) && !trace.allow(TimeUnit.SECONDS.toNanos(5),true))
         trace.start("menu",TimeUnit.SECONDS.toNanos(6));trace.finish(TimeUnit.SECONDS.toNanos(7));trace.sampled()
-        assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied]",trace.observation("denied"))
+        assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied clickBefore=positive clickAfter=expired firstExpiry=click]",trace.observation("denied"))
+        val postClick=NtfyFirstLaunch(0)
+        assertTrue(postClick.allow(TimeUnit.SECONDS.toNanos(1),true))
+        postClick.start("click",TimeUnit.SECONDS.toNanos(1));postClick.finish(TimeUnit.SECONDS.toNanos(2))
+        postClick.start("prompt",TimeUnit.SECONDS.toNanos(5));postClick.finish(TimeUnit.SECONDS.toNanos(6))
+        postClick.start("menu",TimeUnit.SECONDS.toNanos(6));postClick.finish(TimeUnit.SECONDS.toNanos(7));postClick.sampled()
+        assertEquals("Later menu expiry must not replace the positive click samples or the first crossing operation",
+            "Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied clickBefore=positive clickAfter=positive firstExpiry=prompt]",postClick.observation("denied"))
+        val between=NtfyFirstLaunch(0)
+        between.start("menu",TimeUnit.SECONDS.toNanos(6));between.finish(TimeUnit.SECONDS.toNanos(7))
+        assertTrue("Expiry outside a measured operation must remain unattributed",between.observation("denied").contains("firstExpiry=between"))
         val thrown=NtfyFirstLaunch(0)
         assertTrue(thrown.allow(1,true));thrown.start("click",1);thrown.failed()
         assertTrue("Original action exceptions retain an incomplete stage",thrown.observation("unavailable").contains("after=unavailable action=threw"))

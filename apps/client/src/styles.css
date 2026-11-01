@@ -100,6 +100,7 @@ textarea {
 }
 select { width: auto; max-width: 100%; }
 fieldset { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.connection-options > summary { min-height: 44px; padding: 10px 0; cursor: pointer; }
 input[type="checkbox"],
 input[type="radio"] {
   width: auto;
@@ -1698,15 +1699,23 @@ button svg {
 
 .font-license { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
 
-/* Glass belongs to navigation and sheets; terminal output stays opaque. */
+/* Glass belongs to chrome and short sheets, not long reading surfaces. */
 @supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
-  .sidebar, .workspace-header, .dialog {
+  .workspace-header, [data-mobile-presentation="sheet"] > .dialog {
+    background: color-mix(in srgb, var(--theme-panel) 84%, transparent);
+    backdrop-filter: blur(16px) saturate(120%);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  }
+  .sidebar {
     background: color-mix(in srgb, var(--theme-panel) 94%, transparent);
     backdrop-filter: blur(16px) saturate(120%);
   }
+  .workspace-navigation-modes button[aria-current="page"] {
+    background: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-control));
+  }
 }
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
-  .sidebar, .workspace-header, .dialog { background: var(--theme-panel); backdrop-filter: none; }
+  .sidebar, .workspace-header, [data-mobile-presentation="sheet"] > .dialog { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   button, .sidebar { transition: none; }
@@ -1814,3 +1823,11 @@ button svg {
 .terminal-edit-review p { margin: 6px 0; }
 .terminal-edit-review pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 80px; overflow: auto; }
 .terminal-edit-review button { margin-inline-end: 8px; }
+
+.context-navigation { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--theme-border); flex-shrink: 0; }
+.context-navigation > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-navigation > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; flex-shrink: 0; }
+.preferences-content .preferences-category, .preferences-panel > .preferences-category { margin: 0; border-bottom: 1px solid var(--border); }
+.preferences-category > summary { min-height: 52px; padding: 14px 0; cursor: pointer; font-weight: 600; }
+.preferences-panel > .preferences-category > label { display: flex; gap: 12px; align-items: center; min-height: 44px; margin: 14px 0; flex-wrap: wrap; }
+.preferences-content .preferences-panel { overflow: visible; }

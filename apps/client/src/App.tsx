@@ -1,6 +1,7 @@
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {appVersion} from './version';
+import {onBackButtonPress} from '@tauri-apps/api/app';
 import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -9,6 +10,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -24,6 +26,7 @@ import {
   Bot,
   Activity,
   ChevronRight,
+  ArrowLeft,
   Command,
   FolderOpen,
   GitCompareArrows,
@@ -293,11 +296,13 @@ function Dialog({
   children,
   close,
   mobilePresentation = "sheet",
+  initialFocus,
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
   mobilePresentation?: "page" | "sheet";
+  initialFocus?: () => HTMLElement | null;
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -308,7 +313,7 @@ function Dialog({
     const focusable = () => focusableWithin(ref.current);
     const controls = focusable();
     (
-      controls.find((control) => control.matches("input, textarea")) ??
+      initialFocus?.() ?? controls.find((control) => control.matches("input, textarea")) ??
       controls[0]
     )?.focus();
     const keydown = (event: KeyboardEvent) => {
@@ -319,8 +324,14 @@ function Dialog({
       cycleFocus(event,focusable());
     };
     const current = ref.current;
+    const back = (event: Event) => {
+      if (Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1) !== current) return;
+      event.preventDefault();closeRef.current();
+    };
+    window.addEventListener('lazysh-workspace-back', back);
     current?.addEventListener("keydown", keydown);
     return () => {
+      window.removeEventListener('lazysh-workspace-back', back);
       current?.removeEventListener("keydown", keydown);
       previous?.focus();
     };
@@ -636,6 +647,8 @@ export function ConnectDialog({
   const [passphrase, setPassphrase] = useState("");
   const [rememberCredentials, setRememberCredentials] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(false);
+  const [credentialsReady, setCredentialsReady] = useState(false);
+  const destination = useRef<HTMLParagraphElement>(null);
   const [storedCredentials, setStoredCredentials] = useState(
     host.credentialsStored === true,
   );
@@ -660,6 +673,7 @@ export function ConnectDialog({
   const [moshServer, setMoshServer] = useState(host.mosh?.serverPath ?? defaultMosh.serverPath);
   const [moshPortMin, setMoshPortMin] = useState(host.mosh?.portMin ?? defaultMosh.portMin);
   const [moshPortMax, setMoshPortMax] = useState(host.mosh?.portMax ?? defaultMosh.portMax);
+  const transportLabel = transport === 'auto' ? t(defaultMultiplexer ? 'defaultMuxAuto' : 'appAutoMoshThenETThenSSH') : transport === 'et' ? 'Eternal Terminal' : transport === 'mosh' ? 'Mosh' : 'SSH';
   const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
@@ -702,7 +716,8 @@ export function ConnectDialog({
       .then((saved) => {
         if (alive.current) setSavedCredentials(saved === true);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive.current) setCredentialsReady(true); });
     return () => {
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
@@ -711,6 +726,13 @@ export function ConnectDialog({
       connectingSessions.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!credentialsReady || document.activeElement !== destination.current) return;
+    const form = destination.current?.closest('form');
+    (focusableWithin(form ?? null).find(control => control.matches('input[required], textarea[required]'))
+      ?? form?.querySelector<HTMLButtonElement>('button[type="submit"]'))?.focus();
+  }, [credentialsReady, capabilitiesReady]);
 
   async function connect(accept = false) {
     if (connecting.current || (transport === 'auto' && !capabilitiesReady)) return;
@@ -814,6 +836,7 @@ export function ConnectDialog({
   return (
     <Dialog
       mobilePresentation={trust ? "sheet" : "page"}
+      initialFocus={() => destination.current}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -855,11 +878,13 @@ export function ConnectDialog({
             void connect();
           }}
         >
-          <p className="destination">
+          <p ref={destination} tabIndex={-1} className="destination">
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
-          {!recovery && <label>{t("appTransport")}<select
+          {!recovery && <details className="connection-options" onInvalidCapture={event => { event.currentTarget.open = true; }}>
+            <summary>{t('appConnectionOptions')} · {transportLabel}</summary>
+            <label>{t("appTransport")}<select
               value={transport}
               disabled={busy || !!launch?.mux}
               onChange={(event) =>
@@ -876,12 +901,13 @@ export function ConnectDialog({
                 {!etAvailable || defaultMultiplexer ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
-          </label>}
+          </label>
+            <TransportOptions mode={transport} busy={busy}
+              options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
+              change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
+          </details>}
           {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
           {defaultMultiplexer && <p className="security-note">{t('defaultMuxConnecting',{kind:defaultMultiplexer.kind,name:defaultMultiplexer.name})} {t('defaultMuxSsh')}</p>}
-          {!recovery && <TransportOptions mode={transport} busy={busy}
-            options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
-            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />}
           {!recovery && host.jumpHostId && (
             <fieldset>
               <legend>{t("appBastion")}{" "}
@@ -1062,7 +1088,7 @@ export function ConnectDialog({
           )}
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
-            <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
+            <button type="submit" className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
               {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
@@ -1102,6 +1128,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
+  const trail = useRef<{sessionId:string;view:View;sidebar:boolean;mode:NavigationMode}[]>([]);
+  const [backCount,setBackCount] = useState(0);
+  const terminalBack = useRef<{sessionId:string;close:()=>boolean}|null>(null);
+  const [terminalHasBack,setTerminalHasBack] = useState(false);
+  const bindTerminalBack = useCallback((sessionId:string,close:(()=>boolean)|null)=>{
+    if(close)terminalBack.current={sessionId,close};
+    else if(terminalBack.current?.sessionId===sessionId)terminalBack.current=null;
+    setTerminalHasBack(terminalBack.current!==null);
+  },[]);
+
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
@@ -1171,7 +1207,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function openReportedHistory(source:ReportedHistorySource) {
     if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.agents
       || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
-    setReportedHistory(source);setView('chat');setSidebar(false);
+    setReportedHistory(source);visitView('chat');
   }
   const directContext = useRef({sessionId:activeId,generation:0});
   if(directContext.current.sessionId!==activeId)
@@ -1202,7 +1238,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
       || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
       || !sessionsRef.current.includes(session))return;
-    setView('attachments');setSidebar(false);
+    visitView('attachments');
   }
   function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
     const current=()=>mounted.current && lease.current() && !document.hidden
@@ -1236,9 +1272,48 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(mode==='agents' && !remoteActive)return;
     const id=activeId??'';
     setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
-    if(mode!=='connections')setView('terminal');
+    if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
   }
+  function rememberContext(){
+    if(!active)return;
+    trail.current=[...trail.current,{sessionId:active.id,view,sidebar,mode:navigationEntry.mode}].slice(-32);
+    setBackCount(trail.current.length);
+  }
+  function visitView(next:View) {
+    if(!active || (view===next && !sidebar))return;
+    rememberContext();setView(next);setSidebar(false);
+  }
+  function returnToContext(terminal=false) {
+    if(!lease.current() || pendingMuxRequest)return;
+    let destination:typeof trail.current[number]|undefined;
+    while(trail.current.length){
+      const candidate=trail.current.pop()!;
+      if(sessionsRef.current.some(session=>session.id===candidate.sessionId && session.connected && !session.disposed) && (!terminal || candidate.view==='terminal')){destination=candidate;break;}
+    }
+    setBackCount(trail.current.length);
+    if(destination){
+      setActiveId(destination.sessionId);setView(terminal?'terminal':destination.view);setSidebar(!terminal && destination.sidebar);
+      setNavigation(previous=>({...previous,[destination.sessionId]:{mode:destination.mode,agents:destination.mode==='agents'||previous[destination.sessionId]?.agents===true}}));
+    }else{setView('terminal');setSidebar(false);}
+  }
+  const canHandleBack=navigationCovered || (!wideSidebar && sidebar) || terminalHasBack || backCount>0 || (!!active && view!=='terminal');
+  const handleBack = useRef(()=>{});
+  handleBack.current=()=>{
+    if(!lease.current())return;
+    if(!window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))return;
+    if(!wideSidebar && sidebar){if(navigationEntry.mode!=='connections' && trail.current.length)returnToContext();else setSidebar(false);return;}
+    if(terminalBack.current?.sessionId===activeId && terminalBack.current.close())return;
+    returnToContext();
+  };
+  useEffect(()=>{
+    if(!native || !canHandleBack)return;
+    let alive=true;let unregister:(()=>Promise<void>)|undefined;
+    void onBackButtonPress(()=>{if(alive)handleBack.current();}).then(listener=>{
+      if(alive)unregister=()=>listener.unregister();else void listener.unregister();
+    }).catch(()=>{});
+    return()=>{alive=false;void unregister?.();};
+  },[canHandleBack]);
   function chooseLiveSession(id:string) {
     if(pendingMuxRequest || !sessionsRef.current.some(session=>session.id===id && session.connected))return;
     setActiveId(id);setView('terminal');setSidebar(false);
@@ -1724,6 +1799,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <span>
             lazysh<small>{t("appYourAgentsWithinReach")}</small>
           </span>
+          {active?.connected && navigationEntry.mode!=='connections' && <button type="button" className="icon-button" aria-label={t('navigationUsageShortcut')} title={t('appUsage')} onClick={()=>visitView('usage')}><Activity size={18} aria-hidden="true"/></button>}
           <button
             className="icon-button sidebar-close"
             aria-label={t("appCloseHosts")}
@@ -1825,7 +1901,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {!sessions.some(session=>session.connected) && <p>{t('navigationNoSessions')}</p>}
           </div>
           {remoteActive && <>
-            <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>{setView('sessions');setSidebar(false);}}>{t('navigationManageSessions')}</button>
+            <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
             {active?.attached?.kind!=='tmux' && <p className="muted">{t('navigationManagerHint')}</p>}
             {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
           </>}
@@ -1860,7 +1936,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className={`workspace${compactTerminal ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
+      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         <header className="workspace-header">
           <button
@@ -2010,7 +2086,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={id}
                     aria-current={(id==='agents'?agentsVisible:view===id) ? "page" : undefined}
                     disabled={id==='agents' && pendingMuxRequest}
-                    onClick={() => id==='agents'?showNavigation('agents'):setView(id)}
+                    onClick={() => id==='agents'?showNavigation('agents'):visitView(id)}
                   >
                     <Icon size={15} />
                     <span>{label}</span>
@@ -2029,6 +2105,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             </div>
             {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
             {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
+            {view!=='terminal' && <nav className="context-navigation" aria-label={t('navigationContext')}>
+              <button type="button" className="subtle-button" disabled={pendingMuxRequest} onClick={()=>returnToContext()}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
+              <span>{sessionViews.find(item=>item.id===view)?.label}</span>
+              <button type="button" className="icon-button" title={t('navigationReturnTerminal')} aria-label={t('navigationReturnTerminal')} disabled={pendingMuxRequest} onClick={()=>returnToContext(true)}><TerminalSquare size={18} aria-hidden="true"/></button>
+            </nav>}
             <div className="session-body">
               <Suspense
                 fallback={
@@ -2041,6 +2122,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
@@ -2099,7 +2181,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </Suspense>
             </div>
             <footer className="workspace-footer">
-              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>{setView('usage');setSidebar(false);}}/>}
+              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>visitView('usage')}/>}
               <span>
                 {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}
                 {active.destination}
@@ -2235,15 +2317,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          {native && <section aria-label={t('defaultMuxLabel')}>
+          {native && <details className="preferences-category"><summary>{t('preferencesCategoryConnections')}</summary><section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
             {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
-          </section>}
+          </section></details>}
           <PreferencesPanel />
-          <AccessPanel />
-          <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+          <details className="preferences-category"><summary>{t("preferencesCategorySecurity")}</summary><AccessPanel /></details>
+          <details className="preferences-category"><summary>{t("preferencesCategoryNotifications")}</summary><button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button></details>
           </div>
         </Dialog>
       )}
@@ -2276,7 +2358,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div className="form-stack">
             {active && <>
               <nav className="mobile-session-views" aria-label={t('appSessionViews')}>
-                {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else setView(id);}}><Icon size={16}/><span>{label}</span></button>)}
+                {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>)}
               </nav>
               <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
               {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}

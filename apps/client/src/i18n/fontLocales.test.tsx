@@ -6,6 +6,8 @@ import {t,uiI18n} from './core';
 afterEach(async()=>{cleanup();await uiI18n.changeLanguage('en');});
 it('retranslates an already-visible local font validation failure without retrying the import',async()=>{
   render(<PreferencesPanel/>);
+  fireEvent.click(screen.getByText(t('preferencesCategoryAppearance')));
+  fireEvent.click(screen.getByText(t('preferencesImportedFonts')));
   fireEvent.change(screen.getByLabelText(t('preferencesImportFontFile')),{target:{files:[new File(['bad'],'RAW {{file}}.ttf')]}});
   await screen.findByRole('alert');
   await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
