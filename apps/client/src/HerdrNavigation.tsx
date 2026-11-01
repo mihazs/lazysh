@@ -64,13 +64,18 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
+      <details className="herdr-server-setup" open={mode!=='agents' || data.servers.length!==1 || !data.loaded || !data.server || failure?.host===sessionId || agentFailure?.host===sessionId ? true : undefined}>
+      <summary hidden={mode!=='agents'}>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>
         <p className="muted">{t('herdrNavigationShared')}</p>
+        <button className="subtle-button" disabled={working} onClick={()=>void open()}>{t('muxAttachKind',{kind:'Herdr',name:data.server})}</button>
+      </>}
+      </details>
+      {data.server && <>
         <h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3>
         <label>{t('herdrNavigationSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
-        <button className="subtle-button" disabled={working} onClick={()=>void open()}>{t('muxAttachKind',{kind:'Herdr',name:data.server})}</button>
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;

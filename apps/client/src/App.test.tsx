@@ -324,6 +324,13 @@ it('keeps the current build version on the same About action through locale chan
   } finally { await act(async () => { await uiI18n.changeLanguage('en'); }); }
 });
 
+async function selectConnectionTransport(user:ReturnType<typeof userEvent.setup>, value:TransportMode) {
+  const control = screen.getByLabelText('Transport');
+  const options = control.closest('details');
+  if (options && !options.open) await user.click(options.querySelector('summary')!);
+  await user.selectOptions(control, value);
+}
+
 async function openConnection(onStep?:(stage:'render-app'|'open-host-dialog'|'type-password')=>void) {
   onStep?.('render-app');
   const user = userEvent.setup();
@@ -641,7 +648,7 @@ it('tears down known pending bootstrap IDs on lock while retaining an adopted te
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');await waitFor(()=>expect(mocks.api.adoptSession).toHaveBeenCalledWith('adopted-live-lock-test'));
   await user.click(screen.getByRole('button',{name:'Connect to Home'}));
-  await user.type(screen.getByLabelText('Password'),'second-secret');await user.selectOptions(screen.getByLabelText('Transport'),'auto');
+  await user.type(screen.getByLabelText('Password'),'second-secret');await selectConnectionTransport(user, 'auto');
   await user.click(screen.getByRole('button',{name:'Connect'}));await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalled());
   await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
   expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'pending-bootstrap-lock-test'});
@@ -772,6 +779,7 @@ describe("connection flow", () => {
     await act(async()=>finish(true));
     expect(await screen.findByLabelText('Use saved credentials')).toHaveProperty('checked',false);
     expect(screen.getByLabelText('Password')).toHaveProperty('value','manual-entry');
+    expect(document.activeElement).toBe(screen.getByLabelText('Password'));
     await user.click(screen.getByRole('button',{name:'Connect'}));
     await screen.findByText('Live SSH terminal');
     expect(mocks.api.connect).toHaveBeenCalledExactlyOnceWith('home',{password:'manual-entry'},expect.any(Function));
@@ -1207,7 +1215,7 @@ it("hands a verified SSH connection to Mosh before exposing terminal input", asy
   verifiedMoshControl();
   mocks.api.connectMosh.mockResolvedValue({ sessionId: "mosh-terminal" });
   const user = await openConnection();
-  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await selectConnectionTransport(user, "mosh");
   await user.click(screen.getByRole("button", { name: "Connect" }));
   expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
   expect(mocks.api.connectMosh).toHaveBeenCalledWith(
@@ -1233,7 +1241,7 @@ it("closes the SSH bootstrap when forced Mosh fails without falling back", async
     new Error("Mosh UDP connection failed"),
   );
   const user = await openConnection();
-  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await selectConnectionTransport(user, "mosh");
   await user.click(screen.getByRole("button", { name: "Connect" }));
   expect(await screen.findByText("Mosh UDP connection failed")).toBeTruthy();
   expect(screen.queryByText("Live SSH terminal")).toBeNull();
@@ -1251,7 +1259,7 @@ it("cancels the SSH control session during Mosh bootstrap and closes a late resu
       }),
   );
   const user = await openConnection();
-  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await selectConnectionTransport(user, "mosh");
   await user.click(screen.getByRole("button", { name: "Connect" }));
   await waitFor(() => expect(mocks.api.connectMosh).toHaveBeenCalled());
   await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -1266,7 +1274,7 @@ it("opens a fresh ET transport through verified SSH and preserves only reconnect
   mocks.api.connect.mockResolvedValue({sessionId:'ssh-control'});
   mocks.api.connectEt.mockResolvedValue({sessionId:'et-terminal'});
   const user=await openConnection();
-  await user.selectOptions(screen.getByLabelText('Transport'),'et');
+  await selectConnectionTransport(user, 'et');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   expect(mocks.api.connectEt).toHaveBeenCalledWith('ssh-control',{serverPath:'etterminal',port:2022},expect.any(Function));
@@ -1285,7 +1293,7 @@ function enableTransports() {
 }
 async function connectAuto() {
   const user = await openConnection();
-  await user.selectOptions(screen.getByLabelText('Transport'),'auto');
+  await selectConnectionTransport(user, 'auto');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   return user;
 }
@@ -1381,7 +1389,7 @@ it('forced ET fails visibly without falling back to SSH',async()=>{
   enableTransports();
   mocks.api.connectEt.mockRejectedValue({kind:'et_unreachable',message:'ET port unreachable'});
   const user=await openConnection();
-  await user.selectOptions(screen.getByLabelText('Transport'),'et');
+  await selectConnectionTransport(user, 'et');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   expect(await screen.findByText('ET port unreachable')).toBeTruthy();
   expect(screen.queryByText('Live SSH terminal')).toBeNull();
@@ -1491,7 +1499,7 @@ it('waits for native capabilities before starting Auto discovery',async()=>{
   mocks.api.connect.mockResolvedValue({sessionId:'verified-control'});
   mocks.api.connectMosh.mockResolvedValue({sessionId:'ready-mosh'});
   const user=await openConnection();
-  await user.selectOptions(screen.getByLabelText('Transport'),'auto');
+  await selectConnectionTransport(user, 'auto');
   expect((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled).toBe(true);
   expect(mocks.api.connect).not.toHaveBeenCalled();
   await act(async()=>resolveCapabilities?.({mosh:true,et:true}));
@@ -1877,7 +1885,7 @@ it('opens the active host multiplexer setting directly from workspace tools with
   mocks.api.connect.mockResolvedValue({sessionId:'settings-current'});
   mocks.api.saveHost.mockResolvedValue(undefined);
   const user=await openConnection();
-  await user.selectOptions(screen.getByLabelText('Transport'),'ssh');
+  await selectConnectionTransport(user, 'ssh');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   const terminal=await screen.findByText('Live SSH terminal');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
@@ -1921,6 +1929,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
   await user.click(screen.getByRole('button',{name:'Agents'}));
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
+  await user.click(screen.getByRole('button',{name:'Setup'}));
   const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
   expect(screen.getAllByRole('region',{name:'Agent activity'})).toHaveLength(1);

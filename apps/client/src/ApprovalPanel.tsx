@@ -51,7 +51,7 @@ export function parseApprovals(value: unknown): Approval[] {
     return item as Approval;
   });
 }
-export default function ApprovalPanel({ sessionId, visible=true }: { sessionId: string; visible?:boolean }) {
+export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false }: { sessionId: string; visible?:boolean; compactEmpty?:boolean }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
@@ -125,6 +125,7 @@ export default function ApprovalPanel({ sessionId, visible=true }: { sessionId: 
       }
     }
   }
+  if(compactEmpty && requests.length===0 && !error)return null;
   return (
     <section hidden={!visible} style={visible?undefined:{display:'none'}} aria-label={t('approvalsTitle')} className="approval-panel">
       <div className="tool-bar">
