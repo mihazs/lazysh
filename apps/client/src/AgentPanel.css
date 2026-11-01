@@ -24,3 +24,6 @@
 .herdr-agents :is(select,input) { width: 100%; min-width: 0; min-height: 44px; }
 .herdr-agents p { font-size: 12px; line-height: 1.6; }
 .herdr-agents .live-agent-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 12px; }
+
+.agent-panel .agent-configuration > h3 { margin: 18px; }
+.herdr-server-setup > summary { min-height: 44px; align-content: center; cursor: pointer; }
