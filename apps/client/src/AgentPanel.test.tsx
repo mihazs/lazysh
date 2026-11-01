@@ -369,10 +369,10 @@ it('keeps the companion empty state stable during polling and retains an error u
 
 describe('live Herdr discovery',()=>{
 
-  it('shares the selected server reader across Spaces and live Agents without treating reports as navigation authority',()=>pollingClock(async invoke=>{
-    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+  it.each([1,2])('shares the selected reader and collapses healthy setup with %s servers',count=>pollingClock(async invoke=>{
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},...(count===2?[{name:'review'}]:[])]:tree);
     const navigate=vi.fn(async()=>{}),attach=vi.fn(async()=>{}),close=vi.fn();
-    const props={sessionId:'navigation-host',hostLabel:'Owned host',visible:true,onNavigate:navigate,onAttach:attach,onClose:close};
+    const props={sessionId:'navigation-host',hostLabel:'Owned host',herdrSession:'default',visible:true,onNavigate:navigate,onAttach:attach,onClose:close};
     const view=render(<HerdrNavigation {...props} mode="spaces"/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
@@ -381,6 +381,11 @@ describe('live Herdr discovery',()=>{
     const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
     expect(browser.getByText('builder')).toBeTruthy();
     view.rerender(<HerdrNavigation {...props} mode="agents"/>);
+    const chooser=browser.getByText(`${t('herdrAgentsServer')} · default`).closest('details')!;
+    expect(chooser.open).toBe(false);
+    fireEvent.click(chooser.querySelector('summary')!);
+    expect(chooser.open).toBe(true);
+    expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
     expect(browser.getByRole('heading',{name:t('herdrAgentsTitle')})).toBeTruthy();
     expect(browser.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','codex');
     expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_tree')).toHaveLength(1);
@@ -525,6 +530,9 @@ describe('live Herdr discovery',()=>{
     const view=render(<AgentPanel sessionId="attached-host" herdrSession="attached"/>);
     await screen.findByText('builder-attached');
     const live=within(screen.getByRole('region',{name:t('herdrAgentsTitle')}));
+    const chooser=live.getByText(`${t('herdrAgentsServer')} · attached`).closest('details')!;
+    expect(chooser.open).toBe(false);
+    fireEvent.click(chooser.querySelector('summary')!);
     const select=live.getByRole('combobox',{name:t('herdrAgentsServer')});
     expect(select).toHaveProperty('value','attached');
     fireEvent.change(select,{target:{value:'first'}});

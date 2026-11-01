@@ -14,7 +14,7 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,onResto
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={busy || !visible || !lease.current()} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {data && <>
       {data.servers.length===0?<p>{t('herdrAgentsNoServers')}</p>:<>
-        <details className="herdr-server-setup" open={data.servers.length!==1 || !data.loaded || !data.server || failure?.host===sessionId ? true : undefined}>
+        <details className="herdr-server-setup" open={!data.loaded || !data.server || failure?.host===sessionId ? true : undefined}>
         <summary>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
         <p>{t('herdrAgentsHint')}</p>
         <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy} onChange={event=>selectServer(event.target.value)}>
