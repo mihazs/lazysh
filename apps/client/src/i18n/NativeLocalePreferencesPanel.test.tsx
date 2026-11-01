@@ -23,6 +23,7 @@ it('reconciles the visible Preferences language error after a failed save and co
   });
   savePreferences({...defaults,uiLanguage:'en'});
   render(<Settings/>);
+  fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
   const language=await screen.findByRole<HTMLSelectElement>('combobox',{name:'App language'});
   await waitFor(()=>expect(language.disabled).toBe(false));
   fireEvent.change(language,{target:{value:'pt-BR'}});
@@ -36,6 +37,7 @@ it('reconciles the visible Preferences language error after a failed save and co
   expect(screen.queryByText(message)).toBeNull();
   saving=Promise.resolve({nativeAuthority:true,choice:'system',resolvedLocale:'en-GB',revision:'22222222-2222-2222-2222-222222222222'});
   const write=vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new Error('Owned settings storage failure');});
+  fireEvent.click(screen.getByText(t('preferencesCategoryReset')));
   fireEvent.click(screen.getByRole('button',{name:t('preferencesResetPreferences')}));
   await waitFor(()=>expect(nativeLocale.snapshot().native?.choice).toBe('system'));
   await screen.findByText(t('preferencesSettingsCouldNotBeSavedOnThisDevice'));

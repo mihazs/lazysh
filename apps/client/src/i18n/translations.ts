@@ -2,6 +2,16 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  appConnectionOptions: ['Opções de conexão', 'Opciones de conexión'],
+  preferencesCategoryLanguage: ["Idioma e região", "Idioma y región"],
+  preferencesCategoryAppearance: ["Aparência e fontes", "Apariencia y fuentes"],
+  preferencesCategoryTerminal: ["Terminal e acessibilidade", "Terminal y accesibilidad"],
+  preferencesCategoryInput: ["Teclado e gestos", "Teclado y gestos"],
+  preferencesCategoryReset: ["Redefinir configurações", "Restablecer configuración"],
+  preferencesCategoryConnections: ["Conexões", "Conexiones"],
+  preferencesCategorySecurity: ["Segurança e bloqueio", "Seguridad y bloqueo"],
+  preferencesCategoryNotifications: ["Notificações", "Notificaciones"],
+
   terminalEditAnnouncement: ['Edição não enviada', 'Edición no enviada'],
   terminalEditNotSent: ['Edição não enviada · Revisar', 'Edición no enviada · Revisar'],
   terminalEditContext: ['Contexto de entrada local não aplicado. O terminal permanece inalterado.', 'Contexto de entrada local sin aplicar. El terminal no cambió.'],
@@ -114,6 +124,10 @@ const translations = {
 
   clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
   clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
+  navigationUsageShortcut: ["Abrir uso pela navegação", "Abrir uso desde navegación"],
+  navigationContext: ["Navegação da ferramenta", "Navegación de herramientas"],
+  navigationBack: ["Voltar", "Atrás"],
+  navigationReturnTerminal: ["Voltar ao terminal", "Volver al terminal"],
   navigationAgents: ["Navegação de agentes", "Navegación de agentes"],
   navigationTitle: ["Navegação do espaço de trabalho", "Navegación del espacio de trabajo"],
   navigationConnections: ["Conexões", "Conexiones"],
@@ -1410,6 +1424,7 @@ const translations = {
   agentsRefreshing: ["Atualizando…", "Actualizando…"],
   agentsReportedHint: ["Últimos eventos informados por este servidor. Responda às solicitações dos agentes no terminal.", "Últimos eventos comunicados por este servidor. Responde a las solicitudes de los agentes en el terminal."],
   agentsConnect: ["Conecte seus agentes.", "Conecta tus agentes."],
+  agentsSetupAction: ["Configurar", "Configurar"],
   agentsSetup: ["Instale o companion opcional lazysh-agent neste servidor e ative seus hooks de ciclo de vida. O terminal funciona de forma independente.", "Instala el companion opcional lazysh-agent en este servidor y activa sus hooks de ciclo de vida. El terminal funciona de forma independiente."],
   agentsSetupDocs: ["Consulte {{path}} no repositório lazysh para configurar.", "Consulta {{path}} en el repositorio de lazysh para configurarlo."],
   agentsReading: ["Lendo eventos por SSH…", "Leyendo eventos por SSH…"],
