@@ -182,6 +182,34 @@ private class NtfySettingsScroll(started: Long) {
     }
 }
 
+private enum class NtfyReturnRole { settings, defaultDialog, add, certificate, allow, deny, ime }
+private data class NtfyReturnSnapshot(val foreground:String,val roles:Map<NtfyReturnRole,Boolean?>) {
+    init {require(foreground in listOf("ntfy","permission","lazysh","aospIme","other","unavailable"))}
+    fun closed()="foreground=$foreground "+NtfyReturnRole.entries.joinToString(" ") { "$it=${roles[it]?.toString() ?: "unavailable"}" }
+    companion object {
+        fun observe(foreground:()->String?,role:(NtfyReturnRole)->Boolean):NtfyReturnSnapshot {
+            val name=runCatching { foreground() }.getOrNull()
+            val closed=when(name) {
+                null -> "unavailable"
+                "io.heckel.ntfy" -> "ntfy"
+                "com.android.permissioncontroller" -> "permission"
+                "app.lazysh.client" -> "lazysh"
+                "com.android.inputmethod.latin" -> "aospIme"
+                else -> "other"
+            }
+            return NtfyReturnSnapshot(closed,NtfyReturnRole.entries.associateWith { runCatching { role(it) }.getOrNull() })
+        }
+    }
+}
+private fun ntfyReturnFailure(primary:Throwable,snapshot:()->NtfyReturnSnapshot) {
+    // Observation/report failures must never replace the original action failure.
+    runCatching {
+        val unavailable=NtfyReturnSnapshot("unavailable",emptyMap())
+        val state=runCatching(snapshot).getOrDefault(unavailable)
+        primary.addSuppressed(AssertionError("Ntfy return state[${state.closed()}]"))
+    }
+}
+
 @RunWith(AndroidJUnit4::class)
 class NativeWorkspaceTest {
     private fun webView(view: View): WebView? {
@@ -3380,6 +3408,38 @@ class NativeWorkspaceTest {
         println("lazysh bound event policy: closedParser=true undecryptedInert=true keystoreRoundtrip=true unreadableFailClosed=true privateContentsLogged=false")
     }
 
+    @Test fun ntfyReturnObservationIsClosedAndCannotReplaceThePrimaryFailure() {
+        val roles=NtfyReturnRole.entries
+        for((input,expected) in listOf(null to "unavailable","io.heckel.ntfy" to "ntfy",
+            "com.android.permissioncontroller" to "permission","app.lazysh.client" to "lazysh",
+            "com.android.inputmethod.latin" to "aospIme","private-origin/path" to "other")) {
+            var calls=0
+            val sample=NtfyReturnSnapshot.observe({input}) { calls++;it==NtfyReturnRole.ime }
+            assertEquals(expected,sample.foreground);assertEquals(roles.size,calls)
+            assertTrue("No raw foreground values retained",!sample.closed().contains("private-origin"))
+        }
+        for(failed in roles) {
+            val sample=NtfyReturnSnapshot.observe({throw IllegalStateException("private")}) {
+                if(it==failed)throw IllegalStateException("private") else true
+            }
+            assertEquals("unavailable",sample.foreground)
+            assertEquals(null,sample.roles[failed]);assertEquals(roles.size-1,sample.roles.values.count {it==true})
+            assertTrue(!sample.closed().contains("private"))
+        }
+        val sample=NtfyReturnSnapshot.observe({"io.heckel.ntfy"}) {false}
+        val primary=AssertionError("Owned TLS trust topic")
+        ntfyReturnFailure(primary) {sample}
+        assertEquals(1,primary.suppressed.size)
+        assertEquals("Ntfy return state[${sample.closed()}]",primary.suppressed.single().message)
+        val original=AssertionError("original")
+        var calls=0
+        ntfyReturnFailure(original) {calls++;error("private")}
+        assertEquals("original",original.message);assertEquals(1,original.suppressed.size)
+        assertEquals(1,calls)
+        assertTrue(original.suppressed.single().message.orEmpty().contains("foreground=unavailable"))
+        assertTrue(!original.suppressed.single().message.orEmpty().contains("private"))
+    }
+
     @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
         val arguments=InstrumentationRegistry.getArguments()
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",arguments.getString("lazyshNtfyAcceptance")=="true")
@@ -3484,9 +3544,26 @@ class NativeWorkspaceTest {
             settingsForeground && settingsToolbar && preferenceList && preference!=null && settings.active(System.nanoTime()))
         checkNotNull(preference).click()
         node(ntfyResource("default_server_dialog_url"),"Default server field").text=data.getString("ntfyOrigin")
-        node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
-        device.pressBack()
-        node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
+        fun returnSnapshot()=NtfyReturnSnapshot.observe({device.currentPackageName}) { role ->
+            device.hasObject(when(role) {
+                NtfyReturnRole.settings -> ntfyResource("toolbar").hasDescendant(By.text("Settings"))
+                NtfyReturnRole.defaultDialog -> ntfyResource("default_server_dialog_url")
+                NtfyReturnRole.add -> By.pkg("io.heckel.ntfy").desc("Add subscription")
+                NtfyReturnRole.certificate -> ntfyResource("trusted_certificate_fingerprint")
+                NtfyReturnRole.allow -> By.res("com.android.permissioncontroller","permission_allow_button")
+                NtfyReturnRole.deny -> By.res("com.android.permissioncontroller","permission_deny_button")
+                NtfyReturnRole.ime -> By.pkg("com.android.inputmethod.latin")
+            })
+        }
+        // Observe only after failure; preserve the original navigation timing.
+        try {
+            node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
+            device.pressBack()
+            node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
+        } catch(primary:Throwable) {
+            ntfyReturnFailure(primary) {returnSnapshot()}
+            throw primary
+        }
         node(ntfyResource("add_dialog_subscribe_topic_text"),"Owned trust topic field").text="lazysh-$nonce"
         node(ntfyResource("add_dialog_action_button").enabled(true),"Review owned TLS certificate").click()
         val fingerprint=node(ntfyResource("trusted_certificate_fingerprint"),"Certificate fingerprint review")
