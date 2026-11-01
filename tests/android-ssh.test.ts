@@ -1,5 +1,5 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -1361,7 +1361,7 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
-  expect(support).toContain("rawInput?{privateTtyGroup:true}");
+  expect(support).toContain("rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}");
   expect(support).toContain("ime?'-PlazyshSshImeAcceptance=true'");
   expect(support).toContain("ime?'ownedSshImeTransactionsThroughRealUi'");
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
@@ -1422,4 +1422,104 @@ test('native D-pad count and neutral observations execute the embedded source wi
   padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
   buttonCount=3;expect(counts(document)).toBeNull();buttonCount=4;text=`PRIVATE_CONTEXT D_${nonce}_99_2_2_2`;expect(counts(document)).toBeNull();
   text='PRIVATE_CONTEXT_WITHOUT_A_RECEIVER_STATE';expect(counts(document)).toBeNull();
+});
+
+test.each([
+  {privateTtyGroup:false},
+  {privateTtyGroup:true,companion:true},
+  {privateTtyGroup:true,moshBinary:'/owned-not-executed'},
+  {privateTtyGroup:true,sharedNavigation:true},
+])('owned receiver root denies incompatible fixture scope before any process $privateTtyGroup $companion $moshBinary $sharedNavigation',async options=>{
+  const spawn=spyOn(childProcess,'spawn').mockImplementation(()=>{throw new Error('No fixture process admitted');});
+  try {
+    await expect(SshFixture.start(undefined,{...options,ownedReceiverRoot:true})).rejects.toThrow('Owned receiver root requires its isolated private TTY fixture');
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {spawn.mockRestore();}
+});
+
+test('owned receiver root refuses tool identity before any process',async()=>{
+  const spawn=spyOn(childProcess,'spawn').mockImplementation(()=>{throw new Error('No fixture process admitted');});
+  try {
+    await expect(SshFixture.start({} as never,{privateTtyGroup:true,ownedReceiverRoot:true})).rejects.toThrow('Owned receiver root requires its isolated private TTY fixture');
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {spawn.mockRestore();}
+});
+
+test('owned receiver root reuses protected mounts only for raw Android input fixtures',async()=>{
+  const fixture=await readFile(new URL('./support/sshFixture.ts',import.meta.url),'utf8');
+  const support=await readFile(new URL('./support/androidSsh.ts',import.meta.url),'utf8');
+  expect(fixture).toContain('const ownedRoot=!!tools || options.ownedReceiverRoot===true');
+  expect(fixture).toContain('if(ownedRoot) {');
+  expect(fixture).toContain("if(tools)toolNamespace=[...namespace,'--proc','/proc']");
+  expect(fixture).toContain(":ownedRoot?['--proc','/proc']:[]");
+  expect(support.match(/ownedReceiverRoot:true/g)?.length).toBe(1);
+  expect(support).toContain('rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}');
+});
+
+test('owned receiver metadata uses its actual bounded CRLF and LF parser',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const expression=source.match(/const metadata=\(\)=>client!\.stdout\.match\((new RegExp\(marker\+'[^']+'\))\);/)?.[1];
+  expect(expression!==undefined).toBe(true);
+  const marker='ROOT_'+'0'.repeat(32)+':';
+  const parser=Function('marker',`return ${expression}`)(marker) as RegExp;
+  for(const ending of ['\r\n','\n'])expect((marker+'1000:65534:0:1000'+ending).match(parser)?.slice(1)).toEqual(['1000','65534','0','1000']);
+  for(const value of [marker+'1000:65534:0:1000',marker+'1000:65534::1000\n',marker+'1000:65534:0:no\n',marker+'1000:65534:0:12345678901\n',"printf 'ROOT_%s:%s:%s:%s:%s\\n' '"+'0'.repeat(32)+"'\r\n"])
+    expect(parser.test(value)).toBe(false);
+  expect(source).toContain("'owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery'");
+  expect(source).toContain('(image.mode&0o100)!==0 && (image.mode&0o022)===0');
+  expect(source).toContain("writeFile(binary,bytes,{mode:0o500,flag:'wx'})");
+});
+
+
+test('owned receiver source admits Cargo hardlinks but execution copies stay private',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const sourceExpression=source.match(/const sourceAdmitted=([^;]+);/)?.[1];
+  const copyExpression=source.match(/const copyAdmitted=([^;]+);/)?.[1];
+  expect(sourceExpression!==undefined && copyExpression!==undefined).toBe(true);
+  const admitsSource=Function('image','bytes',`return ${sourceExpression}`) as (image:Awaited<ReturnType<typeof lstat>>,bytes:Buffer)=>boolean;
+  const admitsCopy=Function('copy',`return ${copyExpression}`) as (copy:Awaited<ReturnType<typeof lstat>>)=>boolean;
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-receiver-admission-'));
+  const cargo=join(directory,'cargo'),alias=join(directory,'cargo-alias'),copy=join(directory,'copy');
+  const bytes=Buffer.from('owned-nonexecuted-fixture');
+  try {
+    await writeFile(cargo,bytes,{mode:0o755,flag:'wx'});await link(cargo,alias);
+    const image=await lstat(cargo);expect(image.nlink).toBe(2);
+    expect(admitsSource(image,bytes)).toBe(true);expect(admitsCopy(image)).toBe(false);
+    await writeFile(copy,bytes,{mode:0o500,flag:'wx'});
+    expect(admitsCopy(await lstat(copy))).toBe(true);
+    expect((await readFile(copy)).equals(bytes)).toBe(true);
+    await chmod(cargo,0o775);expect(admitsSource(await lstat(cargo),bytes)).toBe(false);
+    await chmod(cargo,0o655);expect(admitsSource(await lstat(cargo),bytes)).toBe(false);
+    await symlink(copy,join(directory,'symlink'));
+    expect(admitsSource(await lstat(join(directory,'symlink')),bytes)).toBe(false);
+    expect(admitsCopy(await lstat(join(directory,'symlink')))).toBe(false);
+    expect(admitsSource(image,Buffer.alloc(1024*1024))).toBe(false);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('owned receiver probe diagnostic exports closed classifiers without captured values',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const body=source.match(/function receiverProbeErrors\(text:string\) \{([\s\S]+?)\n\}/)?.[1];
+  expect(body!==undefined).toBe(true);
+  const classify=Function('text',body!) as (text:string)=>Record<string,boolean>;
+  const categories=['auth','key','hostkey','pty','channel','shell','fs','proc','accountLocked','accountMissing','uidSwitch','authorizedKeyRead','ownership','sandbox','accountDenied','unknown'];
+  for(const [text,expected] of [['Permission denied (publickey)','auth'],['Load key private-fixture: invalid format','key'],['Host key verification failed','hostkey'],['PTY allocation request failed','pty'],['channel 0: open failed','channel'],['shell request failed','shell'],['No such file or directory','fs'],['cannot mount /proc/owned','proc'],['User private-fixture not allowed because account is locked','accountLocked'],['Invalid user private-fixture','accountMissing'],['setresuid private-fixture: Operation not permitted','uidSwitch'],["Could not open user 'private-fixture' authorized keys 'private-path': Permission denied",'authorizedKeyRead'],['Authentication refused: bad ownership or modes for private-path','ownership'],['safe_path private-path: fatal','ownership'],['sandbox private-path failed','sandbox'],['seccomp violation private-fixture','sandbox'],['PAM account management error for private-fixture','accountDenied'],['User private-fixture not allowed because shell private-path does not exist','accountDenied'],['private-fixture-secret','unknown']]) {
+    const result=classify(text);
+    expect(Object.keys(result)).toEqual(categories);
+    expect(Object.values(result).every(value=>typeof value==='boolean')).toBe(true);
+    expect(result[expected]).toBe(true);
+    expect(JSON.stringify(result).includes('private-fixture')).toBe(false);
+  }
+  expect(Object.values(classify('')).some(Boolean)).toBe(false);
+  expect(classify('Permission denied (publickey)').fs).toBe(false);
+  expect(classify('open private-path: Permission denied').fs).toBe(true);
+  for(const text of ['ordinary account private-fixture','sandbox ordinary','seccomp ordinary','safe_path ordinary','getpwnam ordinary']) {
+    const result=classify(text);
+    expect(result.unknown).toBe(true);
+    expect(Object.entries(result).filter(([key])=>key!=='unknown').some(([,value])=>value)).toBe(false);
+  }
+  expect(source).toContain("stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery'");
+  expect(source).toContain("lane:ownedReceiverRoot?'owned':'legacy'");
+  expect(source).toContain("catch{return {state:'observation-unavailable',exitCode:null};}");
 });

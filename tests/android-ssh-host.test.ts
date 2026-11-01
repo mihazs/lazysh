@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {chmod,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess} from './support/androidSsh';
@@ -7,6 +7,7 @@ import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {sshCommand} from './support/sshFixture';
+import {identity} from './support/ownedProcess';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -276,3 +277,100 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
   } finally {await owned.stop();}
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },20_000);
+
+
+function receiverProbeErrors(text:string) {
+  const flags={auth:/Permission denied|Authentication failed/i.test(text),key:/Load key|bad permissions|invalid format/i.test(text),
+    hostkey:/Host key verification failed|REMOTE HOST IDENTIFICATION/i.test(text),pty:/PTY allocation|openpty|pseudo-terminal/i.test(text),
+    channel:/channel [0-9]+:|session request failed|connection (?:closed|reset|refused)/i.test(text),
+    shell:/shell request failed|Could not chdir|exec.*(?:shell|sh).*failed/i.test(text),
+    fs:/No such file|Read-only file system|(?:open|stat|access|mkdir|chdir)[^\r\n]{0,160}: Permission denied/i.test(text),proc:/procfs|\/proc\/|proc mount/i.test(text),
+    accountLocked:/account is locked/i.test(text),accountMissing:/Invalid user|(?:getpwnam|getpwuid)[^\r\n]{0,80}(?:failed|not found)/i.test(text),
+    uidSwitch:/(?:setresuid|setresgid|seteuid|setegid|initgroups)[^\r\n]{0,80}(?:failed|Operation not permitted|Invalid argument)/i.test(text),
+    authorizedKeyRead:/Could not open user[^\r\n]{0,160}authorized keys|auth_openkeyfile[^\r\n]{0,80}(?:failed|denied)/i.test(text),
+    ownership:/Authentication refused|bad ownership or modes|safe_path[^\r\n]{0,80}(?:fatal|failed|unsafe)/i.test(text),
+    sandbox:/sandbox[^\r\n]{0,80}(?:failed|denied|violation)|seccomp[^\r\n]{0,80}(?:failed|denied|violation|killed)/i.test(text),
+    accountDenied:/PAM[^\r\n]{0,80}(?:denied|failure|error)|account[^\r\n]{0,80}(?:expired|denied)|not allowed because shell/i.test(text)};
+  return {...flags,unknown:text.length>0 && !Object.values(flags).some(Boolean)};
+}
+
+test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{
+  const source=process.env.LAZYSH_TEST_RECEIVER_BIN!;
+  const image=await lstat(source),bytes=await readFile(source);
+  expect(await realpath(source)===source).toBe(true);
+  const sourceAdmitted=image.isFile() && image.uid===process.getuid?.() && (image.mode&0o100)!==0 && (image.mode&0o022)===0 && bytes.length<1024*1024;
+  expect(sourceAdmitted).toBe(true);
+  const hash=createHash('sha256').update(bytes).digest('hex');
+  const groups=await readFile('/etc/group');
+  for(const ownedReceiverRoot of [false,true]) {
+    const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,ownedReceiverRoot});
+    let client:OwnedProcess|undefined,primary:unknown;
+    try {
+      const binary=join(fixture.directory,'receiver'),output=join(fixture.directory,'raw');
+      await writeFile(binary,bytes,{mode:0o500,flag:'wx'});await mkdir(output,{mode:0o700});
+      const copy=await lstat(binary);
+      const copyAdmitted=copy.isFile() && copy.nlink===1 && copy.uid===process.getuid?.() && (copy.mode&0o777)===0o500;
+      expect(copyAdmitted && createHash('sha256').update(await readFile(binary)).digest('hex')===hash).toBe(true);
+      client=await fixture.client();
+      const wait=async(stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery',predicate:()=>boolean)=>{
+        const deadline=performance.now()+5000;
+        while(!predicate()) {
+          if(client!.child.exitCode!==null || performance.now()>=deadline) {
+            const primary=new Error('Owned receiver probe stage unavailable');
+            const diagnostic=async(process:OwnedProcess)=>{try{return await process.startupDiagnostic();}catch{return {state:'observation-unavailable',exitCode:null};}};
+            console.error(JSON.stringify({stage,lane:ownedReceiverRoot?'owned':'legacy',client:await diagnostic(client!),daemon:await diagnostic(fixture.daemon),
+              clientErrors:receiverProbeErrors(client!.stderr),daemonErrors:receiverProbeErrors(fixture.daemon.stderr)}));
+            throw primary;
+          }
+          await Bun.sleep(10);
+        }
+      };
+      await wait('prompt',()=>client!.stdout.includes(fixture.prompt));
+      const marker=`ROOT_${fixture.nonce}:`;
+      client.child.stdin!.write(`printf 'ROOT_%s:%s:%s:%s:%s\n' '${fixture.nonce}' "$(id -u)" "$(stat -c %u /)" "$(stat -c %u /tmp)" "$(stat -c %u '${output}')"\n`);
+      const metadata=()=>client!.stdout.match(new RegExp(marker+'([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10})\\r?\n'));
+      await wait('metadata',()=>metadata()!==null);
+      const ids=metadata()!.slice(1).map(Number),admitted=(owner:number)=>owner===0 || owner===ids[0];
+      expect(ids.every(Number.isSafeInteger)).toBe(true);
+      expect(admitted(ids[1])).toBe(ownedReceiverRoot);
+      expect(ids[3]===ids[0]).toBe(true);
+      if(ownedReceiverRoot)expect(admitted(ids[2])).toBe(true);
+      const ready=`IME_${fixture.nonce}_READY`,delivered=`IME_${fixture.nonce}_DELIVERED`;
+      const exited=`EXIT_${fixture.nonce}:1`;
+      client.child.stdin!.write(`'${binary}' '${output}' --ime-transactions '${fixture.nonce}'; printf 'EXIT_%s:%s\n' '${fixture.nonce}' "$?"\n`);
+      if(!ownedReceiverRoot) {
+        await wait('rejection',()=>client!.stdout.includes(exited));
+        expect(client.stdout.includes('Owned terminal receiver failed') && !client.stdout.includes(ready)).toBe(true);
+        for(const name of ['receiver-pid','received-bytes'])expect(await lstat(join(output,name)).then(()=>false,error=>{if(error.code==='ENOENT')return true;throw error;})).toBe(true);
+      } else {
+        await wait('ready',()=>client!.stdout.includes(ready));
+        const text=await readFile(join(output,'receiver-pid'),'utf8');
+        expect(/^[1-9][0-9]{0,9}\n$/.test(text)).toBe(true);
+        const saved=await identity(Number(text.trim()));
+        expect(saved!==undefined).toBe(true);
+        let parent=saved,owned=false;
+        for(let depth=0;parent && depth<16;depth++) {
+          if(parent.pid===fixture.daemon.child.pid){owned=true;break;}
+          parent=await identity(parent.parent);
+        }
+        expect(owned).toBe(true);
+        expect(createHash('sha256').update(await readFile(`/proc/${saved!.pid}/exe`)).digest('hex')===hash).toBe(true);
+        const wire=Buffer.from(`there\x7f\x7ftheowned-current-${fixture.nonce}`);
+        client.child.stdin!.write(wire);
+        await wait('delivery',()=>client!.stdout.includes(delivered));
+        expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
+        expect((await identity(saved!.pid))?.start===saved!.start).toBe(true);
+      }
+    } catch(error){primary=error;}
+    finally {
+      for(const cleanup of [()=>client?.stop(),()=>fixture.stop()])try{await cleanup();}catch(error){if(primary)console.error('Owned receiver probe cleanup failed after original failure');else primary=error;}
+    }
+    if(primary)throw primary;
+    expect(await listening(fixture.port)).toBe(false);
+    expect(await lstat(fixture.directory).then(()=>false,error=>{if(error.code==='ENOENT')return true;throw error;})).toBe(true);
+  }
+  expect((await readFile('/etc/group')).equals(groups)).toBe(true);
+  const after=await lstat(source);
+  expect(after.dev===image.dev && after.ino===image.ino && after.nlink===image.nlink && after.mode===image.mode && after.size===image.size && after.uid===image.uid).toBe(true);
+  expect(createHash('sha256').update(await readFile(source)).digest('hex')===hash).toBe(true);
+},15_000);
