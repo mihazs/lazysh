@@ -525,6 +525,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   expect(await actions()).toEqual(['status']);
   await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
   await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(board.getByText('Open /hooks in Codex and review the lazysh hooks, then start a new turn. Existing disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);
   expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
