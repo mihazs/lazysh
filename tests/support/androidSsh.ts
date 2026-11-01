@@ -399,7 +399,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const evidence=companion?await publishedCompanion():undefined;
   const moshBinary=(moshBackground || attachments)?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
   const rawInput=ime || dpad,rawKind=ime?'ime':'dpad';
-  const fixture=herdr?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true}:companion?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
+  const fixture=herdr?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:companion?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
   const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`};
   let imeObserved:Awaited<ReturnType<typeof identity>>|undefined;
   let imeImageHash:string|undefined;
