@@ -93,7 +93,7 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -115,6 +115,14 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         if(geometry)return {schemaVersion:1,sessions:[]};
         if(!state.installed)throw {message:'Synthetic missing host companion'};
         return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+      }
+      if(command==='companion_hooks'){
+        const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
+        if(args.sessionId!=='owned-navigation-ssh' || request.agent!=='codex' || request.profileRoot!=='/owned/profile')throw new Error('Wrong owned hook inspection target');
+        state.hookActions.push(request.action);
+        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked'};
+        if(request.action==='install' && request.expectedPlan==='a'.repeat(64)){state.hooksConfigured=true;return {schemaVersion:1,outcome:{status:'configured'},trust:'notChecked',reporting:'notChecked'};}
+        throw new Error('Uninspected hook mutation');
       }
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
@@ -493,6 +501,36 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
     await page.screenshot({path:testInfo.outputPath(`herdr-drawer-${height}.png`)});
   }
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
+});
+
+
+test('empty Activity opens inspected hook repair without inventing reports',async({page},testInfo)=>{
+  await installWorkspaceNavigation(page,true);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});
+  await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
+  await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
+  const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
+  await expect(provider).toBeFocused();await expect(provider).toBeInViewport();
+  const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
+  expect(await actions()).toEqual([]);
+  await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
+  await board.getByLabel('Host profile directory',{exact:true}).fill('/owned/profile');
+  await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
+  await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
+  expect(await actions()).toEqual(['status']);
+  await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
+  await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  expect(await actions()).toEqual(['status','install','status']);
+  await expect(board.locator('.agent-card')).toHaveCount(0);
+  expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  const source=await page.request.get('/src/AgentPanel.tsx');
+  expect(await source.text()).toContain('setHookSetupRequest');
+  await page.screenshot({path:testInfo.outputPath('empty-activity-hook-setup.png')});
 });
 
 test('usage returns to its exact terminal and Agents context without expanding mobile chrome',async({page},testInfo)=>{
