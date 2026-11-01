@@ -3107,6 +3107,7 @@ async fn mosh_entry_child(
     )
     .unwrap();
     let (events, receiver) = super::test_support::json_events();
+    eprintln!("owned-mosh-startup stage=fixture-connect-begin");
     let result = connect_mosh(
         lease.clone(),
         app.state(),
@@ -3127,6 +3128,7 @@ async fn mosh_entry_child(
     })
     .into_inner()
     .unwrap();
+    eprintln!("owned-mosh-startup stage=fixture-connect-ok");
     (result, receiver)
 }
 async fn retire_bootstrap(state: &AppState, source: &Connected, parent: &Session) {
