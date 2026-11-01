@@ -369,6 +369,47 @@ it('keeps the companion empty state stable during polling and retains an error u
 
 describe('live Herdr discovery',()=>{
 
+  it('reports only DOM-committed current Herdr reads and preserves receipt identity across visibility',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();let held=false;
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:held?pending.promise:tree);
+    const settled=vi.fn(receipt=>{
+      expect(screen.getByRole('region',{name:t('herdrNavigationTitle')})).toBeTruthy();
+      if(!receipt.failed)expect(screen.getByRole('button',{name:/^builder/})).toBeTruthy();
+    });
+    const props={sessionId:'receipt-owner',hostLabel:'Owned host',visible:true,mode:'agents' as const,onNavigate:vi.fn(),onAttach:vi.fn(),onClose:vi.fn(),onContentSettled:settled};
+    const view=render(<HerdrNavigation {...props}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const first=settled.mock.lastCall![0];expect(first).toMatchObject({host:'receipt-owner',server:'default',mode:'agents',failed:false});
+    held=true;view.rerender(<HerdrNavigation {...props} visible={false}/>);
+    expect(settled.mock.lastCall![0]).toBe(first);
+    view.rerender(<HerdrNavigation {...props}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    // A fast resume may expose the old committed receipt; it cannot represent the held fresh read.
+    expect(settled.mock.calls.every(([receipt])=>receipt.identity===first.identity)).toBe(true);
+    await act(async()=>pending.resolve({...tree}));
+    expect(settled.mock.lastCall![0].identity).not.toBe(first.identity);
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'receipt-owner',server:'default',failed:false});
+  }));
+  it.each(['agents','spaces'] as const)('qualifies an unsupported agent list as a failed receipt only in %s mode',mode=>pollingClock(async invoke=>{
+    const unsupported={...tree,agents:undefined};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:unsupported);
+    const settled=vi.fn();
+    render(<HerdrNavigation sessionId="unsupported-receipt" hostLabel="Owned host" visible mode={mode} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()} onContentSettled={settled}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'unsupported-receipt',server:'default',mode,identity:unsupported,failed:mode==='agents'});
+  }));
+  it('reports a current failed read without publishing hidden or retired-host results',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:pending.promise);
+    const settled=vi.fn(),props={sessionId:'failed-receipt',hostLabel:'Owned host',visible:true,mode:'agents' as const,onNavigate:vi.fn(),onAttach:vi.fn(),onClose:vi.fn(),onContentSettled:settled};
+    const view=render(<HerdrNavigation {...props}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    expect(settled).not.toHaveBeenCalled();await act(async()=>pending.reject(new Error('Owned read failed')));
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'failed-receipt',server:'default',mode:'agents',failed:true});
+    const count=settled.mock.calls.length;view.rerender(<HerdrNavigation {...props} visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(settled).toHaveBeenCalledTimes(count);
+  }));
+
+
   it.each([1,2])('shares the selected reader and collapses healthy setup with %s servers',count=>pollingClock(async invoke=>{
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},...(count===2?[{name:'review'}]:[])]:tree);
     const navigate=vi.fn(async()=>{}),attach=vi.fn(async()=>{}),close=vi.fn();

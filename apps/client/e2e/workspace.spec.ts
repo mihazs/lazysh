@@ -93,7 +93,7 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,agentCount:1,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -104,7 +104,11 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
+      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.agentCount>1){
+        const pane=tree.panes[0],agent=tree.agents[0];
+        tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
+        tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
+      }if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
@@ -132,6 +136,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       throw new Error(`Unexpected navigation fixture request: ${command}`);
     };
   },geometry);
+}
+
+async function openClockedNavigation(page:Page) {
+  await page.clock.install();await installWorkspaceNavigation(page);await page.goto('/');
 }
 
 async function connectPasswordHost(page:Page,name='Navigation host'){
@@ -163,9 +171,7 @@ function nativeHerdrNavigationReady(label:string,context?:string){
 }
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
-  await page.clock.install();
-  await installWorkspaceNavigation(page);
-  await page.goto('/');
+  await openClockedNavigation(page);
   const phone=testInfo.project.name==='phone';
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -568,4 +574,29 @@ test('usage returns to its exact terminal and Agents context without expanding m
   expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
+});
+
+for(const shorter of [false,true])test(`Activity scroll returns to the same mobile drawer owner (shorter=${shorter})`,async({page},testInfo)=>{
+  test.skip(shorter && testInfo.project.name!=='phone','Mobile restoration clamp');
+  await openClockedNavigation(page);const phone=testInfo.project.name==='phone';
+  if(phone)await page.setViewportSize({width:393,height:852});
+  await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number}}).workspaceNavigationState;state.installed=true;state.agentCount=80;});
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  const scroller=sidebar.locator('.workspace-navigation-scroll'),board=sidebar.getByRole('region',{name:'Agent activity',exact:true});
+  await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(80);
+  await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
+  const original=await board.elementHandle();await board.getByRole('heading',{name:'Agent activity',exact:true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:testInfo.outputPath('activity-before-usage.png'),animations:'disabled'});
+  const before=await scroller.evaluate(node=>node.scrollTop);expect(before).toBeGreaterThan(2000);
+  await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
+  if(shorter)await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{agentCount:number}}).workspaceNavigationState.agentCount=1;});
+  await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
+  await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(shorter?1:80);
+  const after=await scroller.evaluate(node=>node.scrollTop),retained=await original!.evaluate(node=>node.isConnected);
+  console.log(JSON.stringify({project:testInfo.project.name,before,after,retained}));
+  await page.screenshot({path:testInfo.outputPath('activity-after-return.png'),animations:'disabled'});
+  expect(retained).toBe(true);expect(after).toBe(shorter?await scroller.evaluate((node,top)=>Math.min(top,node.scrollHeight-node.clientHeight),before):before);
 });

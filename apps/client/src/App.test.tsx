@@ -166,6 +166,49 @@ it('restores the actual Agents origin when returning from usage',async()=>{
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
+it.each(['success','failure','same-snapshot-failure','server','mode','viewport','lock','session','same-mode','inbox-entry','double-back'] as const)('restores only a fresh same-owner mobile Agents read: %s',async outcome=>{
+  const media={matches:false,addEventListener:vi.fn<(event:string,callback:(event:{matches:boolean})=>void)=>void>(),removeEventListener:vi.fn()};
+  vi.stubGlobal('matchMedia',vi.fn(()=>media));
+  let finish!:(value:unknown)=>void,fail!:(reason:Error)=>void,reads=0;
+  const reported={...herdrNavigationTree,agents:herdrNavigationTree.agents as typeof herdrNavigationTree.agents|undefined};
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:outcome==='server' && reads>0?'replacement':'default'}]);
+    if(command==='herdr_tree')return ++reads===1?Promise.resolve(reported):new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+    return original(command,args);
+  });
+  const user=await connectForNavigation('scroll-origin');
+  const resize=(matches:boolean)=>act(()=>{media.matches=matches;for(const [event,callback] of media.addEventListener.mock.calls)if(event==='change')callback({matches});});
+  resize(true);await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('button',{name:'Agents'}));await screen.findByRole('button',{name:/^builder/});
+  const scroller=document.querySelector<HTMLDivElement>('.workspace-navigation-scroll')!;scroller.scrollTop=731;
+  await user.click(screen.getByRole('button',{name:'Open usage from navigation'}));scroller.scrollTop=0;
+  if(outcome==='viewport')resize(false);
+  if(outcome==='lock')await act(async()=>mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined}}));
+  if(outcome==='session'){
+    mocks.api.connect.mockResolvedValue({sessionId:'other-scroll-source'});
+    await user.click(screen.getByRole('button',{name:t('navigationConnections')}));
+    await user.click(screen.getByRole('button',{name:'Connect to Home'}));await user.type(screen.getByLabelText('Password'),'owned');await user.click(screen.getByRole('button',{name:'Connect'}));
+  }
+  if(outcome==='mode'){
+    await user.click(screen.getByRole('button',{name:t('navigationWorkspaces')}));
+  }else if(outcome!=='lock' && outcome!=='session')await user.click(screen.getByRole('button',{name:'Back'}));
+  if(outcome==='lock'||outcome==='session'){expect(scroller.scrollTop).toBe(0);return;}
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  if(outcome==='same-mode')await user.click(screen.getByRole('button',{name:t('navigationAgents')}));
+  if(outcome==='inbox-entry')act(()=>window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'scroll-origin'}})));
+  if(outcome==='double-back')act(()=>mocks.backButton?.({canGoBack:false}));
+  expect(scroller.scrollTop).toBe(0); // The retained old receipt cannot restore while a fresh read is held.
+  if(outcome==='failure')await act(async()=>fail(new Error('Owned fresh read failed')));
+  else if(outcome==='same-snapshot-failure')await act(async()=>{reported.agents=undefined;finish(reported);});
+  else await act(async()=>finish({...herdrNavigationTree}));
+  expect(scroller.scrollTop).toBe(outcome==='success'?731:0);
+  if(outcome==='failure'||outcome==='same-snapshot-failure'){
+    await user.click(screen.getByRole('button',{name:t('herdrRefresh')}));await act(async()=>finish({...herdrNavigationTree}));expect(scroller.scrollTop).toBe(0);
+  }
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
 it('dismisses the top dialog before navigating and releases native Back at the root',async()=>{
   const user=await connectForNavigation('back-owner');
   await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
