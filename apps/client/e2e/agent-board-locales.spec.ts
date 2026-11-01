@@ -1,5 +1,6 @@
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
+import {openAgentSetup} from './fixtures/workspaceControl';
 import type {mountAgentBoard} from './fixtures/AgentBoardHarness';
 import {agentApproval,agentBoardRecord,agentBoardSession} from '../src/test/agentBoardData';
 declare global {interface Window {agentBoard:ReturnType<typeof mountAgentBoard>;}}
@@ -8,6 +9,7 @@ for(const locale of ['pt-BR','es','en'])test(`${locale} agent board preserves dr
   await page.evaluate(async()=>{const {mountAgentBoard}=await import('/e2e/fixtures/AgentBoardHarness.tsx');window.agentBoard=mountAgentBoard();});
   const root=page.locator('.agent-board-fixture');const card=root.locator('.agent-card');const request=root.locator('.approval-panel article');
   await expect(card).toContainText(agentBoardRecord.summary);await expect(request.locator('pre')).toHaveText(JSON.stringify(agentApproval().toolInput,null,2));
+  await openAgentSetup(page);
   const usageLabel=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('companionUsage');});const usage=root.getByRole('checkbox',{name:usageLabel,exact:true});await usage.uncheck();await usage.focus();
   const originalCard=await card.elementHandle();const originalSwitch=await usage.elementHandle();const originalRequest=await request.elementHandle();
   const commandsBefore=await page.evaluate(()=>window.agentBoard.calls);

@@ -15,6 +15,7 @@ test('browser preview is honest, usable at phone width and keyboard navigable', 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   if ((page.viewportSize()?.width || 1200) <= 600) {
     await page.getByRole('button', {name:'Workspace tools',exact:true}).click();
+    await openWorkspaceGroup(page,'application');
     await expect(page.getByRole('button',{name:'Open encrypted sync'})).toBeVisible();
     await expect(page.getByRole('button',{name:'Open shareable uploads'})).toBeDisabled();
     await expect(page.getByRole('button',{name:'Open notification inbox'})).toBeVisible();
@@ -90,6 +91,11 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await page.screenshot({path:testInfo.outputPath('default-multiplexer-connect.png')});
 });
 
+async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'application'){
+  const selector={more:'workspace-more-tools',connections:'workspace-connection-actions',application:'workspace-application-options'}[group];
+  await page.getByRole('dialog',{name:'Workspace tools',exact:true}).locator(`details.${selector} > summary`).click();
+}
+
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.addInitScript((geometry)=>{
@@ -119,6 +125,16 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
         if(!state.installed)throw {message:'Synthetic missing host companion'};
         return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+      }
+      if(command==='companion_hook_discovery'){
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).join(',')!=='sessionId')throw new Error('Wrong discovery source');
+        return {schemaVersion:1,supported:true,managedSetupSupported:true,truncated:false,agents:[
+          {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
+          {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
+          ...['droid','gemini','cursor','opencode'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
+          {agent:'cline',setup:'manual',executable:{path:'/owned/bin/cline',source:'path'},profiles:[]},
+          {agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]},
+        ]};
       }
       if(command==='companion_hooks'){
         const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
@@ -419,18 +435,25 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     const more=page.getByRole('dialog',{name:'Workspace tools',exact:true});
     const sessionViews=more.getByRole('navigation',{name:'Session views',exact:true});
-    expect(await sessionViews.getByRole('button').count()).toBeGreaterThan(8);
+    expect(await sessionViews.getByRole('button').allTextContents()).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
     for(const button of await sessionViews.getByRole('button').all()){
       await button.scrollIntoViewIfNeeded();expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
+    await openWorkspaceGroup(page,'more');
+    const secondary=more.getByRole('navigation',{name:'More tools',exact:true});
+    for(const button of await secondary.getByRole('button').all()){await button.scrollIntoViewIfNeeded();expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);}
+    await openWorkspaceGroup(page,'more');
+    await openWorkspaceGroup(page,'connections');
     await more.getByRole('button',{name:'New connection',exact:true}).click();
     await expect(more).toHaveCount(0);await expect(page.getByRole('dialog')).toBeVisible();
     await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     await expect(more.getByRole('button',{name:'End Focus workstation with a long host name connection',exact:true})).toBeVisible();
+    await openWorkspaceGroup(page,'connections');
     await expect(more.getByRole('button',{name:'Restore previous workspace',exact:true})).toBeVisible();
     await more.getByRole('button',{name:'Dismiss',exact:true}).click();
     await expect(more.getByRole('region',{name:'Restore previous workspace',exact:true})).toHaveCount(0);
+    await openWorkspaceGroup(page,'application');
     await more.getByRole('button',{name:'Preferences',exact:true}).click();
     await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
@@ -448,6 +471,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   }
   if(phone){
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+    await openWorkspaceGroup(page,'connections');
     await page.getByRole('dialog',{name:'Workspace tools',exact:true}).getByRole('button',{name:'Default multiplexer',exact:true}).click();
     const editor=page.getByRole('dialog',{name:'Edit host',exact:true});
     const defaultMux=editor.getByRole('combobox',{name:'Default multiplexer',exact:true});
@@ -521,16 +545,35 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
   const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
-  await expect(provider).toBeFocused();await expect(provider).toBeInViewport();
+  const setup=board.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
+  await expect(setup).toBeFocused();await expect(setup).toBeInViewport();
   const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
   expect(await actions()).toEqual([]);
   await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
-  await board.getByLabel('Host profile directory',{exact:true}).fill('/owned/profile');
+  await expect(provider).toHaveValue('');
+  const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
+  const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
+  await expect(codex).toHaveAttribute('aria-pressed','false');
+  await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
+  await expect(detected.getByRole('button',{name:/Cline.*Manual setup/})).toBeDisabled();
+  await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
+  expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
+  expect(await detected.evaluate(node=>node.scrollHeight>node.clientHeight&&node.clientHeight<=260)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('detected-agent-list.png')});
+  await codex.click();await expect(provider).toHaveValue('codex');
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
+  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
+  await expect(board.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
+  expect(await actions()).toEqual([]);
+  for(const row of await detected.getByRole('button').all())expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({path:testInfo.outputPath('detected-agent-selection.png')});
   await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
   await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status']);
   await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
   await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(board.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);
   expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
@@ -627,4 +670,47 @@ for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':
   expect(after.filter(command=>command==='connect')).toHaveLength(1);
   expect(after.filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('Workspace tools is a short default sheet with explicit reachable expansions at 393px',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Measured mobile sheet');
+  await page.setViewportSize({width:393,height:852});
+  await installWorkspaceNavigation(page);await page.goto('/');
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page);
+  const canvas=page.locator('.terminal-canvas:visible');
+  await expect(canvas).toHaveCount(1);await expect(canvas.locator('.xterm-screen')).toBeVisible();
+  await expect(page.getByText('Opening terminal…',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  const primary=dialog.getByRole('navigation',{name:'Session views',exact:true});
+  await expect(primary.getByRole('button')).toHaveText(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  await expect(dialog.locator('details[open]')).toHaveCount(0);
+  const metrics=await dialog.evaluate(node=>({height:node.getBoundingClientRect().height,content:node.scrollHeight,viewport:node.clientHeight}));
+  expect(metrics.height).toBeLessThan(600);expect(metrics.content).toBeLessThanOrEqual(metrics.viewport+1);
+  const end=dialog.getByRole('button',{name:'End Navigation host connection',exact:true});
+  for(const target of [...await primary.getByRole('button').all(),end]){
+    const box=(await target.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.y).toBeGreaterThanOrEqual(0);expect(box.y+box.height).toBeLessThanOrEqual(852);
+    expect(await target.evaluate(node=>{const box=node.getBoundingClientRect();return document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)?.closest('button')===node;})).toBe(true);
+  }
+  await page.screenshot({path:testInfo.outputPath('workspace-tools-default-393.png')});
+  await testInfo.attach('default-sheet-measurement',{body:JSON.stringify({viewport:{width:393,height:852},...metrics}),contentType:'application/json'});
+  for(const group of ['more','connections','application'] as const)await openWorkspaceGroup(page,group);
+  await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toBeVisible();
+  await page.setViewportSize({width:393,height:393});
+  await dialog.evaluate(node=>{for(const control of node.querySelectorAll<HTMLElement>('button, summary'))control.style.fontSize='24px';});
+  const content=dialog.locator('.workspace-tools-content');
+  expect(await content.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+  expect(await dialog.evaluate(node=>node.scrollHeight<=node.clientHeight+1)).toBe(true);
+  await end.scrollIntoViewIfNeeded();await expect(end).toBeInViewport({ratio:1});
+  expect((await end.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const close=dialog.getByRole('button',{name:'Close Workspace tools',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Workspace tools',exact:true})).toBeInViewport({ratio:.9});
+  await expect(close).toBeInViewport({ratio:.9});
+  await page.screenshot({path:testInfo.outputPath('workspace-tools-expanded-short-large-text.png')});
+  await close.click();await expect(dialog).toHaveCount(0);await expect(canvas).toHaveCount(1);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})));
+  await expect(dialog).toHaveCount(0);await expect(canvas).toHaveCount(1);
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
 });
