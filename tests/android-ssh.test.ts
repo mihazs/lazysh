@@ -5,6 +5,7 @@ import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
+import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
 import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
@@ -1101,4 +1102,44 @@ test('shared Herdr result rejects stale, duplicate, oversized and symlink report
     await rm(path);await writeFile(join(directory,'private-target'),report);await symlink('private-target',path);
     await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
   } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('background Mosh witness retains its failed stage and original error without publishing private values',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-mosh-diagnostic-'));
+  const original=new Error('private owned witness error');
+  let enter!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;});
+  await writeFile(join(directory,'background-before'),'123 456\n');
+  const observer=observeAndroidMoshBackground({directory,daemon:{async liveIdentity(){enter();throw original;}}});
+  try {
+    await entered;await observer.stop();
+    const sample=observer.diagnostic();
+    expect(sample).toEqual({schemaVersion:1,phase:'before-ownership',beforeValidated:false,beforeAck:false,afterValidated:false,outputValidated:false,afterAck:false,verified:false,stopped:true,failure:'witness-failure'});
+    expect(JSON.stringify(sample)).not.toContain('private');expect(JSON.stringify(sample)).not.toContain(directory);
+    let caught:unknown;try {observer.check();}catch(error){caught=error;}
+    expect(caught).toBe(original);
+    await expect(readFile(join(directory,'background-before-ack'))).rejects.toMatchObject({code:'ENOENT'});
+    await observer.stop();expect(observer.diagnostic()).toEqual(sample);
+  } finally {await observer.stop();await rm(directory,{recursive:true,force:true});}
+},2000);
+
+test('background Mosh document observations distinguish renderer state without retaining text or claiming transport identity',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/MoshBackgroundObservation.kt'),'utf8');
+  const source=kotlin.match(/fun expression[\s\S]*?= """([\s\S]*?)"""/)![1];
+  const name='owned private session',key='owned-key',token='owned-token';
+  const expression=source.replaceAll('$key',JSON.stringify(key)).replaceAll('$token',JSON.stringify(token)).replaceAll('${JSONObject.quote(name)}',JSON.stringify(name));
+  const evaluate=new Function('window','document',`return ${expression}`);
+  const helper={readOnly:true,disabled:false,value:'private terminal input'},composer={value:'private draft'};
+  let helpers:unknown[]=[helper],active:unknown=helper,connected=false,error=true,retained=true;
+  const pane={querySelector:(selector:string)=>selector.includes('textarea')?composer:selector.includes('terminal-edit-review')?{}:null};
+  const terminal={isConnected:true,closest:()=>pane,querySelectorAll:()=>helpers};
+  const tab={querySelector:(selector:string)=>selector==='[role=tab]'?{textContent:name}:{classList:{contains:()=>!connected}}};
+  const document={hasFocus:()=>true,get activeElement(){return active;},querySelector:(selector:string)=>selector==='.terminal-canvas'?terminal:selector==='.session-tab-active'?tab:selector==='.global-error'&&error?{}:null,querySelectorAll:()=>[terminal]};
+  const sample=()=>evaluate({[key]:{token:retained?token:'stale',terminal}},document);
+  expect(sample()).toEqual({retained:true,helperCount:'one',documentFocused:true,activeKind:'terminal',readOnly:true,disabled:false,composerPresent:true,composerEmpty:false,rendererConnected:false,globalError:true,unappliedEdit:true});
+  connected=true;error=false;active=composer;retained=false;helpers=[];
+  expect(sample()).toMatchObject({retained:false,helperCount:'zero',activeKind:'composer',readOnly:null,disabled:null,rendererConnected:true,globalError:false});
+  helpers=[helper,helper];active={matches:()=>true};
+  expect(sample()).toMatchObject({helperCount:'many',activeKind:'control',readOnly:null});
+  expect(JSON.stringify(sample())).not.toContain('private');expect(JSON.stringify(sample())).not.toContain(name);
 });

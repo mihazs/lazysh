@@ -1,5 +1,10 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  agentsSections: "Agent sections",
+  agentsJumpLive: "Live agents",
+  agentsJumpActivity: "Activity",
+  agentsReportedActivity: "Reported agent activity",
+
   terminalEditAnnouncement: 'Edit not sent',
   terminalEditNotSent: 'Edit not sent · Review',
   terminalEditContext: 'Unapplied local input context. The terminal is unchanged.',
