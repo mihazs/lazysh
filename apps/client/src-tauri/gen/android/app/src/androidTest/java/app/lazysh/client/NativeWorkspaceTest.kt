@@ -1331,8 +1331,24 @@ class NativeWorkspaceTest {
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
-                .perform(webScrollIntoView()).perform(webClick())
+            val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
+            val expanded = evaluate(scenario, """
+                (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
+                  return buttons.length===1?buttons[0].getAttribute('aria-expanded'):'unavailable';})()
+            """)
+            assertTrue("One current board Setup disclosure is required", expanded == "true" || expanded == "false")
+            if (expanded == "false") {
+                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR, setup))
+                button.perform(webScrollIntoView())
+                assertEquals("Current board Setup must be hit-testable", "true", evaluate(scenario,
+                    workspaceButtonVisible(".agent-panel:not([hidden]) > .tool-bar", "Setup")))
+                button.perform(webClick())
+            }
+            val control = onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
+            control.perform(webScrollIntoView())
+            assertEquals("Current keep-awake checkbox must be hit-testable", "true", evaluate(scenario,
+                workspaceElementVisible(checkbox, true)))
+            control.perform(webClick())
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
         fun awaitActive(stage: String) {
