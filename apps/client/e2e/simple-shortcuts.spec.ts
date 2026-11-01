@@ -1,4 +1,4 @@
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
@@ -36,6 +36,38 @@ async function fixture(page:Page) {
   await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
+
+test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page},testInfo)=>{
+  await fixture(page);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toHaveCount(1);
+  await page.evaluate(()=>{
+    const request=window.requestAnimationFrame,frames:FrameRequestCallback[]=[];
+    window.requestAnimationFrame=callback=>frames.push(callback);
+    Object.assign(window,{
+      restoreTerminalFrames:()=>{window.requestAnimationFrame=request;},
+      flushTerminalFrames:()=>{for(const callback of frames.splice(0))callback(performance.now());},
+    });
+    (document.querySelector('button[aria-label="Compose"]') as HTMLButtonElement).click();
+  });
+  await expect(page.getByLabel('Compose text',{exact:true})).toBeVisible();
+  await page.evaluate(()=>Reflect.get(window,'restoreTerminalFrames')());
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
+  const field=page.getByRole('spinbutton',{name:'Font size',exact:true});
+  await field.fill('17');
+  await page.evaluate(()=>Reflect.get(window,'flushTerminalFrames')());
+  await expect(field).toBeFocused();
+  await page.keyboard.press('ArrowUp');await expect(field).toHaveValue('18');
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  await page.getByRole('button',{name:'Close composer',exact:true}).click();
+  await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+  await page.keyboard.type('owned-after-modal');
+  expect((await page.evaluate(()=>window.simpleShortcutWrites)).join('')).toBe('owned-after-modal');
+});
 
 test('momentary terminal touch feedback clears after release while modifiers remain intentional',async({page},testInfo)=>{
   await page.emulateMedia({reducedMotion:'reduce'});

@@ -4,6 +4,8 @@
 
 - Prioritize connected app sessions above discovered Herdr spaces, disclose healthy server setup on demand, and refine compact themed navigation. Keep shared-focus warnings visible and preserve session identity, reader drafts, contextual return, authentication and transport defaults.
 
+- Keep delayed terminal, composer and search focus inside their pane from taking focus away from an open credential or other modal dialog. Preserve terminal protocol replies, sessions and explicit input after dismissal; no authentication or transport defaults change.
+
 - Add explicit V3 discovery and inspected managed Amp system-plugin setup with absolute companion binding. Setup tries V3 metadata with one bounded V2 compatibility fallback; V1/V2 provider mappings stay unchanged. Same-name foreign plugins block installation while fresh exact-owned removal remains available; settings, trust and live reporting are not enabled or verified.
 
 - Add an owned Android manual Mosh attachment checkpoint for a large valid protected-clipboard PNG and exclusive creation against a pre-existing destination. Closed-control recovery and physical-device/file-picker/camera acceptance remain unverified; no upload defaults change.
