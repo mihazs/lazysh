@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/parakeet-runtime",
-  "version": "1.7.8",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",

@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.8.0
+
+### Minor Changes
+
+- 35722cf: Add held-pointer panning and paced arrow repeats to the expanded terminal D-pad, preserving single taps and stopping input on interruption or session replacement.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.0
+  - @lazysh/common@1.8.0
+  - @lazysh/display-idle@1.8.0
+  - @lazysh/et-transport@1.8.0
+  - @lazysh/mosh-transport@1.8.0
+
 ## 1.7.8
 
 ### Patch Changes
