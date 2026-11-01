@@ -319,8 +319,21 @@ permissionRequest because that fires before automatic rules and does not prove
 that a human prompt is waiting. No approval decision or additional context is
 returned. This targets Copilot CLI; notification and shell-free execution
 support differ in the cloud agent. Contracts follow the current
-[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference);
-authenticated Copilot CLI acceptance remains unverified.
+[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference).
+
+On Linux, CLI **1.0.105** loaded the manually placed printed hooks with a local
+companion built from [`91d6f8ba`](https://github.com/mihazs/lazysh/commit/91d6f8ba7f800170939a1946dae18322c5569ac9).
+Isolated mock-provider turns verified root `working` → `done` with `Turn finished`
+and native response readback, and root `working` → `needs_attention` while an
+elicitation question and both choices remained visible and unanswered. The latter
+is an attention notice, not a valid actionable approval. Each case used one
+provider request and ordinary session-only folder consent; no question answer or
+tool approval was sent. [Issue #704](https://github.com/mihazs/lazysh/issues/704)
+retains binary/source bindings, receipt hashes and earlier failed attempts.
+
+Setup remains manual. Child identity, real-provider/account behavior, public
+companion artifacts and Android delivery are unqualified by these local checks;
+no managed installation or discovery capability is added.
 
 ## Cursor CLI, Amp and Aider
 
@@ -388,7 +401,7 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Codex](https://learn.chatgpt.com/docs/hooks) | UserPromptSubmit/tool events; PermissionRequest; Stop/Interrupt/SessionEnd | Native adapter and print-only configuration; contract fixtures |
 | [OpenCode](https://opencode.ai/docs/plugins/) | session.status busy/retry; permission.asked/question.asked; status idle/session.deleted | Native plugin and adapter; contract fixtures |
 | [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter, print-only fragment and explicit Linux managed setup; contract fixtures |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Manual shell-free hooks; Linux 1.0.105 mock-provider root completion and unanswered elicitation attention qualified |
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter, standalone printer and explicit existing-file Linux setup; contract fixtures, native runtime unverified |
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
