@@ -10,7 +10,7 @@ const inspected={schemaVersion:1,supported:true,state:null,installPlan:'a'.repea
 let epoch=1000;
 beforeEach(async()=>{hooks.mockReset();discover.mockReset().mockResolvedValue({schemaVersion:1,supported:true,managedSetupSupported:true,agents:[],truncated:false});await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++epoch),nonce:'d'.repeat(64)});});
 afterEach(cleanup);
-function selectProfile(){fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:'codex'}});fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:'/owned/profile'}});}
+function selectProfile(agent='codex'){fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:'/owned/profile'}});}
 it('refuses unsafe plans and treats conflicts and unsupported filesystems as non-writable',()=>{
   expect(parseHookStatus(inspected).installPlan).toBe(inspected.installPlan);
   for(const patch of [{schemaVersion:2},{installPlan:'foreign'},{trust:'trusted'},{reporting:'verified'},{state:'other'}])expect(()=>parseHookStatus({...inspected,...patch})).toThrow();
@@ -55,7 +55,7 @@ it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor'],['droid
 
 it('explains required native Droid standalone setup without enabling mutation',async()=>{
   hooks.mockResolvedValue({schemaVersion:1,supported:false,reason:'HooksDroidStandaloneRequired',reporting:'notChecked',trust:'notChecked'});
-  render(<CompanionHooksPanel sessionId="droid-fallback" visible/>);selectProfile();fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  render(<CompanionHooksPanel sessionId="droid-fallback" visible/>);selectProfile('droid');fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
   expect(await screen.findByText('Create standalone hooks.json in Droid’s /hooks UI, then inspect again. Existing settings and legacy hooks are not migrated.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(1);
 });
@@ -163,4 +163,31 @@ it('unselects a pressed detected row and retires its inspected plan without hook
   expect(screen.getByLabelText('Hook provider')).toHaveProperty('value','');expect(screen.getByLabelText('Host profile directory')).toHaveProperty('value','');
   expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',true);expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();
   expect(hooks).toHaveBeenCalledExactlyOnceWith('unselect-profile',{agent:'codex',action:'status',profileRoot:'/owned/custom profile'});
+});
+
+it.each([
+  ['codex','Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.'],
+  ['claude','Start a new Claude Code session with this profile, open /hooks to inspect loaded hooks, then start a turn. Existing hook restrictions still apply.'],
+  ['opencode','Plugins load when the OpenCode server starts with this profile. Start a new turn to verify reporting.'],
+] as const)('guides configured %s reporting without executing provider commands',async(agent,guide)=>{
+  hooks.mockResolvedValue({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="owned-guide" visible/>);
+  selectProfile(agent);
+  expect(screen.queryByText(guide)).toBeNull();expect(hooks).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(await screen.findByText(guide)).toBeTruthy();
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
+  expect(hooks.mock.calls).toEqual([['owned-guide',{agent,action:'status',profileRoot:'/owned/profile'}]]);
+  fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:'/owned/other-profile'}});
+  expect(screen.queryByText(guide)).toBeNull();expect(hooks).toHaveBeenCalledTimes(1);
+});
+
+it('retains generic trust guidance for other configured providers',async()=>{
+  hooks.mockResolvedValue({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="owned-fallback" visible/>);
+  selectProfile('gemini');
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  await screen.findByText('Hooks configured. Live reporting has not been verified.');
+  expect(screen.getByText('Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.')).toBeTruthy();
+  expect(hooks).toHaveBeenCalledTimes(1);
 });

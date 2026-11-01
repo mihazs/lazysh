@@ -125,6 +125,6 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {status?.supported && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
-    <p className="agent-note">{t('hooksTrust')}</p>
+    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':'hooksTrust' : 'hooksTrust')}</p>
   </details>;
 }
