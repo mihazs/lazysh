@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.5.3
+
+### Patch Changes
+
+- cd969ee: Correct native Android fixture Setup-state reads and whole-value clipboard replacement, and retain bounded visual-readiness observations without changing gesture or transport acceptance.
+- @lazysh/account-usage@1.5.3
+  - @lazysh/common@1.5.3
+  - @lazysh/display-idle@1.5.3
+  - @lazysh/et-transport@1.5.3
+  - @lazysh/mosh-transport@1.5.3
+
 ## 1.5.2
 
 ### Patch Changes
