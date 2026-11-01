@@ -1706,7 +1706,7 @@ button svg {
     backdrop-filter: blur(16px) saturate(120%);
     box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
   }
-  .sidebar {
+  .sidebar > .brand {
     background: color-mix(in srgb, var(--theme-panel) 94%, transparent);
     backdrop-filter: blur(16px) saturate(120%);
   }
@@ -1715,13 +1715,18 @@ button svg {
   }
 }
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
-  .sidebar, .workspace-header, [data-mobile-presentation="sheet"] > .dialog { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
+  .sidebar, .sidebar > .brand, .workspace-header, [data-mobile-presentation="sheet"] > .dialog { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   button, .sidebar { transition: none; }
 }
 
-/* Connected navigation uses the existing sidebar and mobile drawer. */
+/* Connected navigation keeps reading surfaces solid and chrome compact. */
+.sidebar:not([data-navigation="connections"]) { padding-top: 16px; }
+.sidebar:not([data-navigation="connections"]) .brand { margin-bottom: 8px; font-size: 19px; }
+.sidebar:not([data-navigation="connections"]) .brand > span { flex: 1; min-width: 0; }
+.sidebar:not([data-navigation="connections"]) .sidebar-bottom { padding-top: 0; }
+.sidebar:not([data-navigation="connections"]) .sidebar-bottom > div { display: none; }
 .workspace-navigation-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 12px 0; }
 .workspace-navigation-modes button { min-height: 44px; min-width: 0; padding: 5px; font-size: 11px; white-space: normal; }
 .workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { border-color: var(--accent); }
@@ -1741,7 +1746,7 @@ button svg {
 .workspace-navigation-agents .agent-note { margin-left: 12px; margin-right: 12px; }
 .sidebar[data-navigation="agents"], .sidebar[data-navigation="workspaces"] { width: clamp(300px, 32vw, 420px); }
 @media (max-width: 600px) {
-  .sidebar[data-navigation="agents"], .sidebar[data-navigation="workspaces"] { width: min(360px, calc(100vw - 20px)); }
+  .sidebar[data-navigation="agents"], .sidebar[data-navigation="workspaces"] { width: 100%; padding-top: max(12px, env(safe-area-inset-top)); padding-bottom: max(4px, env(safe-area-inset-bottom)); }
 }
 
 .workspace-navigation-agents > .agent-panel:not([hidden]) { display: block; overflow: visible; }

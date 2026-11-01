@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Give mobile Agents and Workspaces full-width working views, compact Herdr navigation actions and selectable reported-activity rows with focused details. Reduce repeated navigation chrome while preserving terminal space, session state, setup disclosure and explicit live/reported distinctions. Label recorded attention neutrally instead of implying a valid pending request. No connection, permission or input defaults change.
+
 - Correct packaged agent-reporting guidance for read-only discovery and explicit managed Cline setup. Preserve plugin restrictions and separate installation from loaded reporting; no installation or trust defaults change.
 
 - Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.

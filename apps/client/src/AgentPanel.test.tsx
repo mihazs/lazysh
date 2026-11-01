@@ -167,13 +167,30 @@ it('searches agent, project and summary locally with matching status counts and 
   expect(search).toHaveProperty('value','');expect(document.querySelectorAll('.agent-card')).toHaveLength(3);
   expect(invoke.mock.calls.length).toBe(before);
 });
+it.each([
+  ['en','Attention','Needs you'],['pt-BR','Atenção','Precisa de você'],['es','Atención','Te necesita'],
+])('labels recorded attention neutrally in %s without changing inbox wording',async(locale,attention,inbox)=>{
+  await act(async()=>{await uiI18n.changeLanguage(locale);});
+  try {
+    await historyFixture(reported);render(<AgentPanel sessionId="neutral-attention"/>);
+    expect(await screen.findByRole('region',{name:attention})).toBeTruthy();
+    expect(t('inboxNeedsYou')).toBe(inbox);
+    expect(screen.queryByRole('button',{name:/approve|allow|permitir/i})).toBeNull();
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
 it('keeps selected reported context, search focus and draft through locale updates, then retires a filtered row',async()=>{
   await historyFixture(reported,discoveryRows());render(<AgentPanel sessionId="selection"/>);
-  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
-  const selected=screen.getByRole('region',{name:'Selected report'});
+  const trigger=await screen.findByRole('button',{name:'View Claude Code report for /work'});
+  fireEvent.click(trigger);
+  let selected=screen.getByRole('region',{name:'Selected report'});
+  expect(document.activeElement).toBe(selected);
   fireEvent.click(within(selected).getByText('Report details'));
   expect(within(selected).getByText('%1')).toBeTruthy();expect(within(selected).getByText('a')).toBeTruthy();
   expect(within(selected).queryByRole('button',{name:/jump|attach|approve/i})).toBeNull();
+  fireEvent.click(within(selected).getByRole('button',{name:'Clear selection'}));
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);selected=screen.getByRole('region',{name:'Selected report'});
+  expect(document.activeElement).toBe(selected);
   const search=screen.getByRole('searchbox');fireEvent.change(search,{target:{value:'Permission'}});search.focus();
   try {
     await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
@@ -231,9 +248,10 @@ it('keeps distinct literal report keys separate',async()=>{
   expect(within(screen.getByRole('region',{name:'Selected report'})).getByText('b:c')).toBeTruthy();
 });
 it('keeps the selected identity and focused search draft when explicit refresh updates its report',async()=>{
-  const rows=[session];await historyFixture(reported,rows);render(<AgentPanel sessionId="updated-report"/>);
+  const rows=[{...session,state:'working'}];await historyFixture(reported,rows);render(<AgentPanel sessionId="updated-report"/>);
   fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
   const details=screen.getByRole('region',{name:'Selected report'}),search=screen.getByRole('searchbox');
+  const originalRow=screen.getByRole('button',{name:'View Claude Code report for /work'});
   fireEvent.change(search,{target:{value:'/work'}});search.focus();
   rows[0]={...session,state:'done',eventCount:9,summary:'Completed permission review'};
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
@@ -241,6 +259,21 @@ it('keeps the selected identity and focused search draft when explicit refresh u
   expect(screen.getByRole('region',{name:'Selected report'})).toBe(details);
   expect(within(details).getByText('Done')).toBeTruthy();expect(within(details).getByText('9')).toBeTruthy();
   expect(search).toHaveProperty('value','/work');expect(document.activeElement).toBe(search);
+  const currentRow=screen.getByRole('button',{name:'View Claude Code report for /work'});
+  expect(originalRow.isConnected).toBe(false);expect(currentRow).not.toBe(originalRow);
+  fireEvent.click(within(details).getByRole('button',{name:'Clear selection'}));
+  expect(document.activeElement).toBe(currentRow);
+});
+it.each(['hidden','locked'] as const)('does not move focus for queued report selection in a %s panel',async condition=>{
+  await historyFixture(reported);const view=render(<AgentPanel sessionId="guarded-focus"/>);
+  const row=await screen.findByRole('button',{name:'View Claude Code report for /work'});
+  const draft=document.createElement('input');document.body.append(draft);
+  try {
+    if(condition==='hidden')view.rerender(<AgentPanel sessionId="guarded-focus" visible={false}/>);
+    else act(()=>access(true));
+    draft.focus();fireEvent.click(row);
+    expect(document.activeElement).toBe(draft);
+  } finally {draft.remove();}
 });
 it('suspends the same board while preserving its query and settings draft, then explicitly resumes its source',async()=>{
   const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
@@ -720,7 +753,7 @@ describe('Herdr reported-session details',()=>{
     expect(await screen.findByText('Unverified reference; may be stale.')).toBeTruthy();
     expect(screen.getByText('Project:')).toBeTruthy();
     expect(screen.queryByText(/Referenced by/)).toBeNull();
-    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.getByText('Attention')).toBeTruthy();
     expect(screen.queryByRole('button',{name:/send|approve|history/i})).toBeNull();
   });
   it('distinguishes missing reports from unavailable, expired and other-host reports',async()=>{

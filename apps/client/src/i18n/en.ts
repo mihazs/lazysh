@@ -1447,7 +1447,7 @@ export const english = {
   voiceDeliveryUnicode: "Direct dictation contains invalid Unicode. Edit the draft instead.",
   voiceDeliveryLimit: "Direct dictation exceeds 64 KiB including Enter. Shorten or stage the draft instead.",
   agentsTitle: "Agent activity",
-  agentsNeedsYou: "Needs you",
+  agentsNeedsYou: "Attention",
   agentsWorking: "Working",
   agentsDone: "Done",
   agentsRefresh: "Refresh",
