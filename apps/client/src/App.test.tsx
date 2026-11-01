@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => ({
   accountUsageDisconnected: false,
   accountUsageCompanionRequired: false,
   terminalPaneProps: vi.fn(),
+  backButton: undefined as undefined | ((payload:{canGoBack:boolean})=>void),
+  unregisterBack: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
   realAgents:false,
@@ -69,6 +71,10 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   if(name==='lazysh-app-lock')mocks.lockEvent=callback;
   if(name==='lazysh-desktop-launch')mocks.launchEvent=callback;
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
+})}));
+vi.mock('@tauri-apps/api/app',async original=>({...await original<typeof import('@tauri-apps/api/app')>(),onBackButtonPress:vi.fn(async handler=>{
+  mocks.backButton=handler;
+  return {unregister:async()=>{mocks.unregisterBack();if(mocks.backButton===handler)mocks.backButton=undefined;}};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
@@ -136,16 +142,75 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('opens AI account usage for the exact connected terminal from the existing footer',async()=>{
-  mocks.api.connect.mockResolvedValue({sessionId:'usage-owner'});
-  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
-  await screen.findByText('Live SSH terminal');
+it('opens AI account usage for the exact connected terminal and returns without duplicate history',async()=>{
+  const user=await connectForNavigation('usage-owner');
+  const owner=mocks.terminalPaneProps.mock.lastCall?.[0].session;
   expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('usage-owner');
   const bar=screen.getByRole('button',{name:'Open AI account usage'});
-  expect(bar.closest('.workspace-footer')).not.toBeNull();await user.click(bar);
+  expect(bar.closest('.workspace-footer')).not.toBeNull();await user.click(bar);await user.click(bar);
   expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
-  expect(await screen.findByRole('button',{name:'Use latest report for Watch'})).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Back'}));
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+  expect(mocks.terminalPaneProps.mock.lastCall?.[0]).toMatchObject({session:owner,active:true});
+  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('restores the actual Agents origin when returning from usage',async()=>{
+  const user=await connectForNavigation('agent-origin');
+  await user.click(screen.getByRole('button',{name:t('navigationAgents')}));
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(await screen.findByRole('button',{name:'Back'}));
+  expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByText('Agent companion').closest('[hidden]')).toBeNull();
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1);expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
+it('dismisses the top dialog before navigating and releases native Back at the root',async()=>{
+  const user=await connectForNavigation('back-owner');
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await waitFor(()=>expect(mocks.backButton).toBeTypeOf('function'));
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await screen.findByRole('dialog',{name:'Workspace tools'});
+  act(()=>mocks.backButton?.({canGoBack:false}));
+  expect(screen.queryByRole('dialog')).toBeNull();expect(screen.getByRole('region',{name:'AI account usage'})).toBeTruthy();
+  const retired=mocks.backButton;
+  act(()=>mocks.backButton?.({canGoBack:false}));
+  await screen.findByText('Live SSH terminal');
+  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
+  act(()=>retired?.({canGoBack:false}));
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
+it('gives a visible dialog priority over the terminal local Back callback',async()=>{
+  const user=await connectForNavigation('local-back');
+  const publish=mocks.terminalPaneProps.mock.lastCall?.[0].onBackChange;
+  const close=vi.fn(()=>true);act(()=>publish('local-back',close));
+  await waitFor(()=>expect(mocks.backButton).toBeTypeOf('function'));
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  act(()=>mocks.backButton?.({canGoBack:false}));
+  expect(screen.queryByRole('dialog')).toBeNull();expect(close).not.toHaveBeenCalled();
+  act(()=>mocks.backButton?.({canGoBack:false}));expect(close).toHaveBeenCalledTimes(1);
+  act(()=>publish('local-back',null));
+  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
+it.each([false,true])('returns to the opening session or skips its closed origin: %s',async closeOrigin=>{
+  const user=await connectForNavigation('origin');
+  mocks.api.connect.mockResolvedValue({sessionId:'other'});
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));
+  await user.type(screen.getByLabelText('Password'),'temporary-secret');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  await user.click(screen.getAllByRole('tab')[0]);
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(screen.getAllByRole('tab')[1]);
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('other');
+  if(closeOrigin){await user.click(within(screen.getAllByRole('tab')[0].closest('.session-tab') as HTMLElement).getByRole('button',{name:'Disconnect Home'}));await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(1));}
+  await user.click(screen.getByRole('button',{name:'Return to terminal'}));
+  expect(screen.getAllByRole('tab')[0].getAttribute('aria-selected')).toBe('true');
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith(closeOrigin?'other':'origin');
+  expect(mocks.api.connect).toHaveBeenCalledTimes(2);expect(mocks.api.disconnect).toHaveBeenCalledTimes(closeOrigin?1:0);
 });
 
 it('opens the existing Agents sidebar installer from account usage setup without starting installation',async()=>{
@@ -341,6 +406,14 @@ async function openConnection(onStep?:(stage:'render-app'|'open-host-dialog'|'ty
   );
   onStep?.('type-password');
   await user.type(screen.getByLabelText("Password"), "temporary-secret");
+  return user;
+}
+
+async function connectForNavigation(sessionId:string){
+  mocks.api.connect.mockResolvedValue({sessionId});
+  const user=await openConnection();
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
   return user;
 }
 

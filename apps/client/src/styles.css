@@ -1822,3 +1822,7 @@ button svg {
 .terminal-edit-review p { margin: 6px 0; }
 .terminal-edit-review pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 80px; overflow: auto; }
 .terminal-edit-review button { margin-inline-end: 8px; }
+
+.context-navigation { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--theme-border); flex-shrink: 0; }
+.context-navigation > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-navigation > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; flex-shrink: 0; }

@@ -32,12 +32,13 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget }: {
+export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget, onBackChange }: {
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
   onOpenAttachments?: () => void;
   controlsTarget?: HTMLElement | null;
+  onBackChange?: (sessionId:string, close:(()=>boolean)|null)=>void;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -109,6 +110,20 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  useEffect(()=>{
+    const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen);
+    onBackChange?.(session.id,available?()=>{
+      if(!activeRef.current || !mounted.current || !access.current())return false;
+      if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
+      else if(link!==null)setLink(null);
+      else if(searching)setSearching(false);
+      else if(composing)setComposing(false);
+      else setDpadOpen(false);
+      return true;
+    }:null);
+    return()=>onBackChange?.(session.id,null);
+  },[active,composing,searching,clipboard,link,dpadOpen,session.id,onBackChange]);
+
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const [toolbarOverride, setToolbarOverride] = useState<boolean | null>(null);
