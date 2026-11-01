@@ -163,7 +163,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   }, [session.id, reportError]);
 
   useEffect(() => {
-    if (composing && active && draft) composerInput.current?.focus();
+    if (composing && active && draft) focusTerminal(composerInput.current);
   }, [composing, active, draft]);
 
   useEffect(() => {
@@ -260,7 +260,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     terminal.attachCustomKeyEventHandler(event => {
       if (event.type === "keydown" && !event.isComposing && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
         setSearching(true);
-        requestAnimationFrame(() => searchInput.current?.focus());
+        requestAnimationFrame(() => focusTerminal(searchInput.current));
         return false;
       }
       const state = modifierState.current;
@@ -347,12 +347,13 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   }, [preferences, fonts, session, active]);
 
   useEffect(() => {
-    if (active) requestAnimationFrame(() => { fit.current?.fit(); if (composing) composerInput.current?.focus(); else focusTerminal(); });
+    if (active) requestAnimationFrame(() => { fit.current?.fit(); if (composing) focusTerminal(composerInput.current); else focusTerminal(); });
   }, [active, session, composing]);
 
-  function focusTerminal() {
-    if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
-    imeInput.current?.resume(); session.terminal.focus();
+  function focusTerminal(target?: HTMLElement | null) {
+    if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+    if (target !== undefined) target?.focus();
+    else {imeInput.current?.resume(); session.terminal.focus();}
   }
   function sendNamed(key: string, physical?: KeyboardEvent) {
     if (!activeRef.current || !session.connected || !mounted.current || !access.current()) return;
@@ -452,7 +453,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         .finally(() => {zellijBusy.current = false;});
       return;
     }
-    if (action === "find") {setSearching(true); requestAnimationFrame(() => searchInput.current?.focus());}
+    if (action === "find") {setSearching(true); requestAnimationFrame(() => focusTerminal(searchInput.current));}
     else if (action === "compose") setComposing(true);
     else if (action === "keyboard") focusTerminal();
     else if (action === "hideKeyboard") session.terminal.blur();
@@ -624,7 +625,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       })}
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
-      <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>{t('terminalFind')}</button>
+      <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
       <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
     </div>}
   </div>;

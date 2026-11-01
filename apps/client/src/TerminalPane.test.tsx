@@ -68,6 +68,26 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+it.each(['terminal','composer','search'])('keeps a credential dialog focused when delayed %s focus runs',mode=>{
+  const frames:Array<()=>void>=[];
+  vi.stubGlobal('requestAnimationFrame',(callback:()=>void)=>{frames.push(callback);return frames.length;});
+  const owner=mountInputOwner();
+  screen.getByLabelText('Terminal for Host').append(owner.textarea);
+  if(mode==='composer')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  if(mode==='search')fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  const dialog=document.createElement('div'),password=document.createElement('input');
+  dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');password.type='password';
+  dialog.append(password);document.body.append(dialog);password.focus();terminal.focus.mockClear();
+  try {
+    act(()=>frames.splice(0).forEach(callback=>callback()));
+    expect(document.activeElement).toBe(password);
+    expect(terminal.focus).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled();
+  } finally {dialog.remove();}
+  fireEvent.click(screen.getByRole('button',{name:'tab'}));
+  expect(terminal.focus).toHaveBeenCalledOnce();
+  expect(mocks.write).toHaveBeenLastCalledWith('ssh','\t');
+});
 it.each(['terminal-user','terminal-nonuser','named-key','chord','gesture'] as const)('records content-free %s input failures without hiding the cause',async caller=>{
   const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
   const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
