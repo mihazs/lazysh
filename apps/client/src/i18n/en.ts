@@ -170,7 +170,7 @@ export const english = {
   navigationLiveSessions: "Live app sessions",
   navigationNoSessions: "Connect to a host or open a local terminal to see your app sessions.",
   navigationManageSessions: "Open session manager",
-  navigationManagerHint: "Use the existing session manager to discover and manage tmux, Herdr or Zellij. Live pane navigation here requires an attached tmux display.",
+  navigationManagerHint: "Use the session manager to discover and manage tmux, Herdr or Zellij sessions.",
   navigationManagerOpen: "The session manager is open in the workspace.",
   agentsReportTechnicalDetails: "Report details",
 

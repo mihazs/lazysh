@@ -1,0 +1,113 @@
+{
+  "baselineCommit": "2c8c774f967c6363c9dbda94b11899aff40305a1",
+  "captures": [
+    {
+      "file": "workspaces-phone-before.png",
+      "sha256": "f46a65f2e7908b686b09a9f2c9c4acf92072b039dba8101019ffd3632ce683e5",
+      "viewport": [
+        393,
+        852
+      ],
+      "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
+      "clientVersion": "1.7.1",
+      "source": "Real client, synthetic browser fixture; not native acceptance"
+    },
+    {
+      "file": "workspaces-desktop-before.png",
+      "sha256": "dd2459cad8e6144088c72701a9b18aa511e2520fb46a147bb94b1c73a1400406",
+      "viewport": [
+        1280,
+        850
+      ],
+      "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
+      "clientVersion": "1.7.1",
+      "source": "Real client, synthetic browser fixture; not native acceptance"
+    },
+    {
+      "file": "workspaces-phone-after.png",
+      "sha256": "6c6bd4b9a5e6ed645517cb7bd91840e8f79da5e5d60fa3d5cd4022e90c049100",
+      "viewport": [
+        393,
+        852
+      ],
+      "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
+      "clientVersion": "1.7.1 + uncommitted refinement",
+      "source": "Real client, synthetic browser fixture; not native acceptance"
+    },
+    {
+      "file": "workspaces-desktop-after.png",
+      "sha256": "9dacf93b8247a23b40afd2cadfd6f9af0a47588017278e7fc515d746534b63e2",
+      "viewport": [
+        1280,
+        850
+      ],
+      "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
+      "clientVersion": "1.7.1 + uncommitted refinement",
+      "source": "Real client, synthetic browser fixture; not native acceptance"
+    }
+  ],
+  "references": [
+    {
+      "url": "https://getmoshi.app/docs/agents-usages",
+      "sha256": "aaa72d47d13657219fc756b4fbc06feafa7e2a4d85bbe5325a6841a63c30c5b2"
+    },
+    {
+      "url": "https://getmoshi.app/docs/chat-view",
+      "sha256": "325d05558a220daf2ec963768f21f76ff5c069a8c21bd359b213b5ac1e2b2850"
+    },
+    {
+      "url": "https://termish.dev/",
+      "sha256": "01b94035c293229179a6620e5fdf3171c0a2428937ca59174c4382e208680998"
+    },
+    {
+      "url": "https://github.com/farlume/termish",
+      "sha256": "e51b36bc50239373b62cd62ae5bb016d09735d6e56d761973a7c86a42c95d532"
+    },
+    {
+      "url": "https://cmux.com/docs/concepts",
+      "sha256": "71b9b8f9aebc1a810d10ee9b4464935dd343231cd8459b5746283ae9e5e80a86"
+    },
+    {
+      "url": "https://cmux.com/docs/notifications",
+      "sha256": "ba31a7ab43a404a21e73c901636f860657f51acbdc44853362d4f951dc379653"
+    },
+    {
+      "url": "https://docs.warp.dev/terminal/windows/vertical-tabs/",
+      "sha256": "093ec2264faffa647ba2cd4291fba6ec0c07402731049b6caff1040380209535"
+    },
+    {
+      "url": "https://www.conductor.build/docs/concepts/workflow",
+      "sha256": "44658c611af04c706d10131edd0ab2fac58f6693360119d24cc4e61159f1e68d"
+    },
+    {
+      "url": "https://docs.paradev.com/agent-status",
+      "sha256": "52b6c1a6c91fffda838df4de4db4e305f090449ab58a04a9a91ba7fd39e4ecfd"
+    },
+    {
+      "url": "https://docs.waveterm.dev/workspaces",
+      "sha256": "ef992bac7b3f874453abe8c40d9f52950485e487cad22ebcb961d4352e62ea89"
+    },
+    {
+      "url": "https://docs.termius.com/terminal/workspaces",
+      "sha256": "da6ae85fd2be0507f0ac4cc2a3a75a1fcc4ad25de4ebafa03b66095e20b36218"
+    },
+    {
+      "url": "https://opencode.ai/docs/web/",
+      "sha256": "74d3c52043b1731c7bd86e2cfbdba8180058608d70e2534aee0637e78e01af7c"
+    },
+    {
+      "url": "https://docs.blink.sh/",
+      "sha256": "be7f093a0d5dd986ed69f83699990151dffd62789f5c9e97d9394d4fcff3d081"
+    },
+    {
+      "url": "https://getmoshi.app/videos/features/agent-view.mp4",
+      "sha256": "caf24bed52de53962077013d124c062d18ee5b7036d4d9118c278e220b7eefc9",
+      "evidence": "Downloaded and frame-decoded in this run; not native execution"
+    },
+    {
+      "url": "https://getmoshi.app/videos/features/chat-view.mp4",
+      "sha256": "829ccfbd75cf2ab7688fa226e3304d9b0a75af31b75a80dabaf5d7452b120e6f",
+      "evidence": "Downloaded and frame-decoded in this run; not native execution"
+    }
+  ]
+}

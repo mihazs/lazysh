@@ -819,3 +819,93 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
   const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
   expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
 });
+
+test('Workspaces prioritizes current app sessions and discloses healthy server setup',async({page},testInfo)=>{
+  await openClockedNavigation(page);const phone=testInfo.project.name==='phone';
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  const original=await page.locator('.terminal-canvas:visible').elementHandle();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page,'Other navigation host');
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  const sessions=page.getByRole('group',{name:'Live app sessions',exact:true});
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  await expect(sessions.getByRole('button')).toHaveCount(2);
+  await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{installed:boolean}}).workspaceNavigationState.installed=true);
+  const activity=page.getByRole('region',{name:'Agent activity',exact:true,includeHidden:true});
+  const reader=await activity.elementHandle(),terminal=await page.locator('.terminal-canvas:visible').elementHandle();
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  const draft=activity.getByRole('searchbox',{name:'Search reported agents',exact:true});await draft.fill('preserved query');
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  expect(await reader!.evaluate(node=>node.isConnected)).toBe(true);
+  expect(await terminal!.evaluate(node=>node.isConnected)).toBe(true);
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await expect(draft).toHaveValue('preserved query');
+  expect(await reader!.evaluate(node=>node===document.querySelector('.agent-panel'))).toBe(true);
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  const first=sessions.getByRole('button').first(),second=sessions.getByRole('button').last();
+  await expect(second).toHaveAttribute('aria-current','location');
+  expect(await sessions.evaluate(node=>!!(node.compareDocumentPosition(document.querySelector('.herdr-navigation')!)&Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  expect((await sessions.boundingBox())!.y).toBeLessThan((await live.boundingBox())!.y);
+  await first.focus();await page.keyboard.press('Tab');await expect(second).toBeFocused();
+  await page.keyboard.press('Tab');await expect(live.getByRole('button',{name:'Refresh Herdr tree',exact:true})).toBeFocused();
+  const setup=live.locator('.herdr-server-setup');
+  await expect(setup).not.toHaveAttribute('open');
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
+  const warning=live.getByText('Shared focus changes focus for other connections to this server.',{exact:true});
+  await expect(warning).toHaveCount(1);await expect(warning).toBeVisible();
+  await setup.locator('summary').click();
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
+  await expect(warning).toHaveCount(1);await setup.locator('summary').click();
+  await first.click();
+  expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  await expect(sessions.getByRole('button').first()).toHaveAttribute('aria-current','location');
+  await expect(live.getByText('fixture@fixture.invalid',{exact:true})).toBeVisible();
+  const commands=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(commands.filter(command=>command==='connect')).toHaveLength(2);
+  expect(commands.filter(command=>['herdr_action','attach_multiplexer','write_stdin','disconnect'].includes(command))).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('workspace-session-priority.png')});
+  await page.evaluate(()=>{
+    const original=window.nativeFixtureInvoke;
+    window.nativeFixtureInvoke=async(command,args)=>command==='multiplexer_sessions'?[{name:'default'},{name:'review'}]:original(command,args);
+  });
+  await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
+  const selector=live.getByRole('combobox',{name:'Herdr server',exact:true});
+  await expect(setup).toHaveAttribute('open','');
+  await expect(selector).toBeVisible();await expect(selector).toHaveValue('');
+  await expect(live.locator('.herdr-navigation-tree')).toHaveCount(0);await expect(warning).toHaveCount(0);
+  await selector.selectOption('default');await expect(setup).not.toHaveAttribute('open');await expect(warning).toBeVisible();
+  await page.evaluate(()=>{
+    const original=window.nativeFixtureInvoke;
+    Object.assign(window,{restoreNavigationReader:()=>{window.nativeFixtureInvoke=original;}});
+    window.nativeFixtureInvoke=async(command,args)=>{if(command==='herdr_tree')throw new Error('Synthetic navigation unavailable');return original(command,args);};
+  });
+  await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
+  await expect(live.getByRole('status')).toContainText('Synthetic navigation unavailable');
+  await expect(setup).toHaveAttribute('open','');await expect(selector).toBeVisible();await expect(warning).toHaveCount(1);
+  await page.screenshot({path:testInfo.outputPath('workspace-unhealthy-setup.png')});
+  await page.evaluate(()=>Reflect.get(window,'restoreNavigationReader')());
+  await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
+  await expect(setup).not.toHaveAttribute('open');
+  for(const [locale,hint] of [
+    ['pt-BR','Use o gerenciador de sessões para descobrir e gerenciar sessões tmux, Herdr ou Zellij.'],
+    ['es','Usa el gestor de sesiones para descubrir y gestionar sesiones tmux, Herdr o Zellij.'],
+    ['en','Use the session manager to discover and manage tmux, Herdr or Zellij sessions.'],
+  ]){
+    await page.evaluate(async locale=>{const {uiI18n}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(locale);},locale);
+    await expect(page.getByText(hint,{exact:true})).toBeVisible();
+  }
+  for(const width of (phone?[320,600]:[768,1280])){
+    await page.setViewportSize({width,height:420});
+    await modes.evaluate(node=>{for(const button of node.querySelectorAll('button'))button.style.fontSize='20px';});
+    expect(await modes.evaluate(node=>Array.from(node.querySelectorAll('button')).every(button=>{
+      const bounds=button.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(button);
+      return bounds.height>=44&&Array.from(range.getClientRects()).every(rect=>rect.left>=bounds.left&&rect.right<=bounds.right);
+    }))).toBe(true);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  }
+});
