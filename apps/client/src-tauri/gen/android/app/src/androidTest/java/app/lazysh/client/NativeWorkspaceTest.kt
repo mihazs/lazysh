@@ -1334,7 +1334,9 @@ class NativeWorkspaceTest {
             val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
             val expanded = evaluate(scenario, """
                 (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
-                  return buttons.length===1?buttons[0].getAttribute('aria-expanded'):'unavailable';})()
+                  if(buttons.length!==1)return null;
+                  const state=buttons[0].getAttribute('aria-expanded');
+                  return state==='true'?true:state==='false'?false:null;})()
             """)
             assertTrue("One current board Setup disclosure is required", expanded == "true" || expanded == "false")
             if (expanded == "false") {
@@ -1397,6 +1399,35 @@ class NativeWorkspaceTest {
                 val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
                     .also { require(it.size <= 2048) { "Viewport oracle bound" } }.toString(Charsets.UTF_8)
+                val visualObservation = """
+                    (()=>{try {
+                      const cards=document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row'), card=cards[0];
+                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
+                      const box=rect=>rect?[rect.left,rect.top,rect.right,rect.bottom].map(bounded):null;
+                      const viewport=window.visualViewport;
+                      const kind=(hit,label)=>!hit?'none':hit===label?'label':label.contains(hit)?'label-descendant':hit===card?'card':card.contains(hit)?'card-descendant':'other';
+                      const observed=labels.map(label=>{
+                        if(!label)return {present:false,rect:null,glyphs:0,truncated:false,failedRect:null,hit:'none'};
+                        const range=document.createRange();range.selectNodeContents(label);
+                        const rectangles=Array.from(range.getClientRects()), failed=rectangles.slice(0,64).find(rect=>{
+                          const hit=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
+                          return hit!==label&&!label.contains(hit);
+                        });
+                        const hit=failed?document.elementFromPoint((failed.left+failed.right)/2,(failed.top+failed.bottom)/2):label;
+                        return {present:true,rect:box(range.getBoundingClientRect()),glyphs:Math.min(64,rectangles.length),
+                          truncated:rectangles.length>64,failedRect:box(failed),hit:kind(hit,label)};
+                      });
+                      $viewportOracle
+                      return {state:'observed',liveReady:Boolean($liveHerdr),cards:Math.min(8,cards.length),
+                        cardShown:!!card?.getClientRects().length,cardRect:box(card?.getBoundingClientRect()),
+                        viewport:viewport?[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale].map(bounded):null,
+                        viewportReady:!!card&&observed.every(label=>label.present)&&ownedKeyboardViewportContains(viewport,
+                          [card.getBoundingClientRect(),...labels.map(label=>{const range=document.createRange();range.selectNodeContents(label);return range.getBoundingClientRect();})]),
+                        blockers:Math.min(8,Array.from(document.querySelectorAll('[role=dialog], main[inert]')).filter(node=>node.getClientRects().length>0).length),
+                        labels:observed};
+                    } catch {return {state:'unavailable'};}})()
+                """.trimIndent()
                 awaitDocument(scenario, "owned live Herdr report visually ready over empty companion reports", """
                     (()=>{
                       if(!($liveHerdr)) return false;
@@ -1414,7 +1445,9 @@ class NativeWorkspaceTest {
                           return hit===labels[index] || labels[index].contains(hit);
                         }));
                     })()
-                """, deadline = boardDeadline)
+                """, deadline = boardDeadline, observe = { remaining ->
+                    runCatching { evaluate(scenario, visualObservation, remaining) }.getOrDefault("unavailable")
+                })
                 assertTrue("Owned live Herdr visual admission exceeded the original board deadline", System.nanoTime() < boardDeadline)
                 println("lazysh live Herdr navigation: owned Codex row visible with exact server and host-readback context over empty companion reports")
             }
@@ -1744,6 +1777,9 @@ class NativeWorkspaceTest {
             }
             clipboard.setPrimaryClip(clip)
         }
+        requireTime()
+        onView(isAssignableFrom(WebView::class.java)).perform(
+            pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()))
         requireTime()
         onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
         requireTime()
