@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Complete independently identified Copilot child reports while preserving the parent's state and ignoring ambiguous child completion callbacks. No installation, permission or input defaults change.
+
 - Document Linux Copilot CLI 1.0.105 manual-hook completion and unanswered elicitation attention qualification, with explicit runtime limits (#704).
 
 - Give mobile Agents and Workspaces full-width working views, compact Herdr navigation actions and selectable reported-activity rows with focused details. Reduce repeated navigation chrome while preserving terminal space, session state, setup disclosure and explicit live/reported distinctions. Label recorded attention neutrally instead of implying a valid pending request, and visibly return focus to the selected row when closing its details. No connection, permission or input defaults change.
