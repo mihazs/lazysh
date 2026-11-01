@@ -1834,3 +1834,7 @@ button svg {
 .workspace-tools-group > button, .workspace-tools-end { min-height: 44px; }
 .workspace-tools-danger { border-top: 1px solid var(--theme-border); padding-top: 10px; }
 .workspace-tools-end { width: 100%; text-align: left; }
+.preferences-content .preferences-category, .preferences-panel > .preferences-category { margin: 0; border-bottom: 1px solid var(--border); }
+.preferences-category > summary { min-height: 52px; padding: 14px 0; cursor: pointer; font-weight: 600; }
+.preferences-panel > .preferences-category > label { display: flex; gap: 12px; align-items: center; min-height: 44px; margin: 14px 0; flex-wrap: wrap; }
+.preferences-content .preferences-panel { overflow: visible; }

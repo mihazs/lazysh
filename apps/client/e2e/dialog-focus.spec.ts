@@ -23,7 +23,9 @@ test('closed About notices wrap through visible summaries and restore their open
 test('Preferences trap excludes hidden, inert and disabled controls while following natural links and summaries',async({page})=>{
   await page.goto('/');const opener=page.getByRole('button',{name:'Preferences',exact:true});await opener.click();
   const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
-  await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeFocused();
+  await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();
+  expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
   await dialog.evaluate(element=>{
     const fixture=document.createElement('div');fixture.id='dialog-focus-fixture';
     fixture.innerHTML='<details open><summary>Fixture section</summary><a href="#fixture-target">Fixture link</a></details><button disabled tabindex="0">Disabled button</button><fieldset disabled><button>Disabled fieldset child</button></fieldset><div hidden><button>Hidden child</button></div><div style="display:none"><button>No layout child</button></div><button style="visibility:hidden">Invisible button</button><div inert><button>Inert child</button></div><button tabindex="-1">Programmatic only</button><input type="hidden">';

@@ -12,3 +12,16 @@ export async function workspaceControl(page:Page,name:string) {
   await expect(revealed).toBeVisible();
   return revealed;
 }
+
+/** Open the visible category through its ordinary disclosure, in the current locale. */
+export async function openPreferenceCategory(page: Page, category: 'Language'|'Appearance'|'Terminal'|'Input'|'Reset'|'Connections'|'Security'|'Notifications') {
+  const label=await page.evaluate(async category=>{const {t}=await import('/src/i18n/core.ts');return t(`preferencesCategory${category}`);},category);
+  const summary=page.locator('.preferences-category > summary').filter({hasText:label});
+  if(!await summary.evaluate(node=>(node.parentElement as HTMLDetailsElement).open))await summary.click();
+}
+
+export async function openThemeImport(page: Page) {
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
+  await page.getByText('Import and share theme',{exact:true}).click();
+}

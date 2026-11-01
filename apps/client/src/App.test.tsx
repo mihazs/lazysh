@@ -2138,6 +2138,15 @@ it('uses the existing guarded dialog shell for long mobile tasks and keeps choic
   const dialog=screen.getByRole('dialog',{name:'Preferences'});
   expect(dialog.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
   expect(dialog.querySelector('.dialog-content')).not.toBeNull();
+  const connections=within(dialog).getByText('Connections',{exact:true});
+  expect(connections.closest('details')).toHaveProperty('open',false);
+  await user.click(connections);
+  expect(within(dialog).getByRole('region',{name:'Default multiplexer'})).toBeTruthy();
+  const security=within(dialog).getByText('Security and app lock');
+  expect(security.closest('details')).toHaveProperty('open',false);
+  await user.click(security);
+  expect(within(dialog).getByRole('region',{name:'App lock settings'})).toBeTruthy();
+  expect(within(dialog).getByText(/Require device authentication when returning/)).toBeTruthy();
   within(dialog).getByRole('button',{name:'Close Preferences'}).focus();
   await user.keyboard('{Escape}'); expect(screen.queryByRole('dialog')).toBeNull();
   expect(document.activeElement).toBe(preferences);
