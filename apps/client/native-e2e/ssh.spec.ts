@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {OwnedSshRelay} from './sshRelay';
+import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
@@ -97,7 +98,7 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
 });
 
-it('keeps the owned Mosh UDP daemon alive after only its attributed SSH stream closes and retires the entire namespace',async()=>{
+it.each(['client','server'] as const)('keeps the owned Mosh UDP daemon alive after %s-attributed SSH closure and retires the entire namespace',async attribution=>{
   const ssh=await ownedMoshFixture();
   const relay=await OwnedSshRelay.start(ssh.port),relayPort=relay.port;
   let root:OwnedPid|undefined;
@@ -129,17 +130,45 @@ it('keeps the owned Mosh UDP daemon alive after only its attributed SSH stream c
     const controlOwner=await control.liveIdentity();expect(controlOwner).toBeDefined();
     await expect(relay.closeOwned({...controlOwner!,start:'stale'})).rejects.toThrow('identity retired');
     expect(relay.active).toBe(2);
-    await relay.closeOwned(controlOwner!);
+    if(attribution==='server') {
+      await expect(relay.closeOwnedServer({...root!,start:'stale'})).rejects.toThrow('identity retired');
+      await expect(relay.closeOwnedServer(root!)).rejects.toThrow('Exactly one live owned SSH server stream required');
+      expect(relay.active).toBe(2);
+      observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer.finish('ambiguous SSH observer retires explicitly',3000)).toContain(ssh.expected);observer=undefined;
+      await vi.waitFor(()=>expect(relay.active).toBe(1),{timeout:1000,interval:10});
+      await expect(relay.closeOwnedServer(controlOwner!)).rejects.toThrow('Exactly one live owned SSH server stream required');
+      const attribute=socketOwners.acceptedConnectionOwner;let checks=0,arrived=false;
+      const recheck=vi.spyOn(socketOwners,'acceptedConnectionOwner').mockImplementation(async(...args)=>{
+        const result=await attribute(...args);
+        if(++checks===2) {
+          observer=await ssh.client(true,undefined,relayPort);
+          await vi.waitFor(()=>{expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+          arrived=true;console.info('Owned second SSH stream arrived during selected-server recheck');
+        }
+        return result;
+      });
+      try {await expect(relay.closeOwnedServer(root!)).rejects.toThrow('Owned SSH server stream retired');}
+      finally {recheck.mockRestore();}
+      expect(arrived).toBe(true);expect(checks).toBe(2);expect(relay.active).toBe(2);
+      expect(await control.liveIdentity()).toEqual(controlOwner);
+      observer!.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer!.finish('racing SSH observer retires explicitly',3000)).toContain(ssh.expected);observer=undefined;
+      await vi.waitFor(()=>expect(relay.active).toBe(1),{timeout:1000,interval:10});
+      await relay.closeOwnedServer(root!);
+    } else await relay.closeOwned(controlOwner!);
     await expect(control.finish('selected SSH closure',3000)).rejects.toThrow('Owned fixture failed: selected SSH closure');control=undefined;
-    expect(relay.active).toBe(1);expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
+    expect(relay.active).toBe(attribution==='server'?0:1);expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
     expect(await udp()).toBe(true);expect((await identity(daemons[0].pid))?.start).toBe(daemons[0].start);
-    observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
-    expect(await observer.finish('unselected SSH stream remains usable',3000)).toContain(ssh.expected);observer=undefined;
+    if(observer) {
+      observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer.finish('unselected SSH stream remains usable',3000)).toContain(ssh.expected);observer=undefined;
+    }
     const fresh=await ssh.client(true,'printf RECOVERED',relayPort);
     expect(await fresh.finish('fresh owned SSH connection after closure',3000)).toBe('RECOVERED');
     expect(await udp()).toBe(true);
     members=await descendants(root!);
-    console.info('Owned Mosh lifecycle: attributed SSH pair retired; unselected and fresh SSH usable; UDP daemon retained');
+    console.info(`Owned Mosh lifecycle: ${attribution}-attributed SSH pair retired; fresh SSH usable; UDP daemon retained`);
   } finally {
     const failures:unknown[]=[];
     for(const step of [()=>control?.stop(),()=>observer?.stop(),()=>relay.stop(),()=>ssh.stop()])try{await step();}catch(error){failures.push(error);}

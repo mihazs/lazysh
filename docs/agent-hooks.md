@@ -372,9 +372,17 @@ distinct `parent_agent_id`; shared-parent callbacks remain ignored. Native child
 [#713](https://github.com/mihazs/lazysh/issues/713) for the preserved stale-child
 baseline and candidate replay.
 
-These native turn checks used manually loaded files; they do not by themselves
-qualify managed installation. Other child configurations, real-provider/account
-behavior, public companion artifacts and Android delivery remain unqualified.
+Those earlier checks used manually loaded files. Separately, a local **1.5.4**
+companion built from [`3ea4ef20`](https://github.com/mihazs/lazysh/commit/3ea4ef20369905601bc7636f7c0000d249b42a84)
+installed the six absolute-executable hooks using an inspected managed plan.
+Fresh Linux CLI **1.0.105** sessions then verified the same root completion,
+unanswered attention and no-tools child behavior with isolated mock providers.
+The child case retained its separately labeled passive producer observer. Hook,
+ownership-receipt and provider files remained unchanged; process, socket and
+terminal cleanup passed. [Issue #717](https://github.com/mihazs/lazysh/issues/717)
+retains the source/binary bindings and separate case receipts. Other child
+configurations, real-provider/account behavior, public companion artifacts and
+Android delivery remain unqualified.
 
 ## Cursor CLI, Amp and Aider
 
