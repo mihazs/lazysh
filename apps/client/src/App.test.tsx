@@ -87,7 +87,8 @@ vi.mock("./TerminalPane", () => ({
 }));
 vi.mock('./AgentPanel',async original=>{
   const actual=await original<typeof import('./AgentPanel')>();
-  return {...actual,default:(props:React.ComponentProps<typeof actual.AgentPanel>)=>mocks.realAgents?<actual.AgentPanel {...props}/>:<div>Agent companion</div>};
+  const {captureAccess}=await import('./access');
+  return {...actual,default:(props:React.ComponentProps<typeof actual.AgentPanel>)=>mocks.realAgents?<actual.AgentPanel {...props}/>:<>{props.renderNavigation?.({host:undefined,available:false,rows:[],lease:captureAccess()})}<div ref={props.activityRef} id={props.activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} hidden={!props.visible}>Agent companion</div></>};
 });
 vi.mock('./PushSettingsPanel',()=>({default:()=> <div>Native push registration controls</div>}));
 vi.mock('./AppleStatusPanel',async()=>{
@@ -1884,7 +1885,8 @@ it('opens Agents on the attached default Herdr session among several running ser
   const companion=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'other'},{name:'named-work'}]);
-    if(command==='herdr_tree')return Promise.resolve({workspaces:[],tabs:[],panes:[],agents:[]});
+    if(command==='herdr_tree')return Promise.resolve({...herdrNavigationTree,agents:[{...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'owned-reference'}}]});
+    if(command==='agent_snapshot')return Promise.resolve({schemaVersion:1,sessions:[{...reportedAgent,agent:'Codex',sessionId:'owned-reference'}]});
     return companion(command,args);
   });
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
@@ -1892,6 +1894,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'agents-child'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
+  expect(mocks.invoke.mock.calls.filter(([command])=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command))).toEqual([]);
   await user.click(screen.getByRole('button',{name:'Agents'}));
   const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
   await waitFor(()=>expect(select).toHaveProperty('disabled',false));
@@ -1899,6 +1902,13 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='herdr_tree')).toEqual([
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
+  const live=screen.getByRole('region',{name:t('herdrNavigationTitle')});
+  const summary=within(live).getByText('Reported session');
+  await user.click(summary);
+  expect(within(live).getByText('/project')).toBeTruthy();
+  expect(within(live).getByText('Unverified reference; may be stale.')).toBeTruthy();
+  await user.click(summary);
+  expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
 it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{

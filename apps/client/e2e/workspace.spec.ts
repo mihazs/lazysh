@@ -98,19 +98,20 @@ async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'applicat
 
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
+  await page.clock.install();
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
-      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
+      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];
       if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
-      if(command==='connect')return {sessionId:'owned-navigation-ssh'};
+      if(command==='connect')return {sessionId:++state.connects===1?'owned-navigation-ssh':'other-navigation-ssh'};
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.agentCount>1){
+      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle',agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'r'.repeat(256)}}]};if(state.agentCount>1){
         const pane=tree.panes[0],agent=tree.agents[0];
         tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
@@ -124,7 +125,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='agent_snapshot'){
         if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
         if(!state.installed)throw {message:'Synthetic missing host companion'};
-        return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+        if(args.sessionId==='other-navigation-ssh')return {schemaVersion:1,sessions:[]};
+        const report={schemaVersion:1,sessions:[{sessionId:'r'.repeat(256),agent:'Codex',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+        if(state.holdReport)return new Promise(resolve=>{Object.assign(window,{finishOldReport:()=>{state.holdReport=false;resolve(report);}});});
+        return report;
       }
       if(command==='companion_hook_discovery'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).join(',')!=='sessionId')throw new Error('Wrong discovery source');
@@ -216,6 +220,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.screenshot({path:testInfo.outputPath('session-toolbar.png')});
   await views.evaluate(node=>{for(const button of node.querySelectorAll('button'))button.style.fontSize='';});
   await views.getByRole('button').first().scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command)))).toEqual([]);
   await page.getByRole('button',{name:'Agents',exact:true}).click();
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
@@ -246,6 +251,16 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(live.getByRole('button',{name:/^codex-builder/})).toBeInViewport({ratio:0.75});
   await page.screenshot({path:testInfo.outputPath('healthy-agents-first-row.png')});
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
+  const details=live.locator('details').filter({has:page.getByText('Reported session',{exact:true})});
+  await expect(details).not.toHaveAttribute('open');
+  await details.locator('summary').click();
+  await expect(details.getByText('/nav/project',{exact:true})).toBeVisible();
+  await expect(details.getByText('Unverified reference; may be stale.',{exact:true})).toBeVisible();
+  expect(await details.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('herdr-reported-session.png')});
+  await details.locator('summary').click();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_action','herdr_chat','write_stdin','attach_multiplexer'].includes(command)))).toEqual([]);
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Development / Codex tasks / /nav/codex'))).toHaveCount(1);
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Idle'))).toHaveCount(0);
   const steadyRow=live.getByRole('button',{name:/^codex-builder/}),originalRow=await steadyRow.elementHandle();
@@ -307,8 +322,27 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await expect(board).toBeVisible();
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
+  await board.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishOldReport?:()=>void}).finishOldReport)).toBe('function');
+  await modes.getByRole('button',{name:'Connections',exact:true}).click();
+  await page.getByRole('button',{name:'Connect to Other navigation host',exact:true}).click();
+  await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
+  await page.getByRole('button',{name:'Connect',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await live.getByText('Reported session',{exact:true}).click();
+  await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
+  await page.evaluate(()=>(window as unknown as {finishOldReport:()=>void}).finishOldReport());
+  await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
+  await expect(live.locator('details').getByText('/nav/project',{exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;delete (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead;});
   if(phone){
+    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
     await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();
     await page.getByRole('dialog',{name:'Switch terminal session',exact:true}).locator('.session-choice').filter({has:page.getByText('Navigation host',{exact:true})}).click();
   }else await page.getByRole('tab',{name:'Navigation host',exact:true}).click();

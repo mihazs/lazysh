@@ -1,5 +1,6 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import type {AccessLease} from './access';
+import {useAccessSnapshot,type AccessLease} from './access';
+import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
@@ -9,14 +10,15 @@ import './HerdrNavigation.css';
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
-  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
+  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
   onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
 }) {
   useUi();
+  useAccessSnapshot();
   const model=useHerdrNavigation({sessionId,herdrSession,visible});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
@@ -35,6 +37,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       settledCallback.current?.({host:sessionId,server:data?.server??'',mode,identity:settledIdentity,failed:settledFailed});
   },[sessionId,visible,busy,lease,mode,data?.server,settledIdentity,settledFailed]);
   const tree=data?.snapshot;
+  const referenceCounts=reportedSessionCounts(data?.rows??[]);
   const term=query.trim().toLocaleLowerCase();
   const match=(...values:(string|null|undefined)[])=>values.some(value=>value?.toLocaleLowerCase().includes(term));
   const working=actionBusy || (busy && !data?.loaded);
@@ -100,7 +103,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         })}</ul>}
         {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div>{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}</div>)}</section>;
+          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
     </>}

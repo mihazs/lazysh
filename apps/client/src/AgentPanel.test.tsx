@@ -3,7 +3,7 @@ import {StrictMode} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
-import {applyAccessStatus} from './access';
+import {applyAccessStatus,captureAccess} from './access';
 import HerdrAgentsPanel,{parseHerdrAgents} from './HerdrAgentsPanel';
 import HerdrNavigation from './HerdrNavigation';
 import {herdrNavigationTree as tree} from './test/herdrNavigation';
@@ -695,6 +695,99 @@ describe('live Herdr discovery',()=>{
     await act(async()=>{access(true);complete([{name:'default'}]);});
     expect(screen.queryByText('builder')).toBeNull();
     expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions']);
+  });
+
+});
+
+
+describe('Herdr reported-session details',()=>{
+  const report={...session,state:'needs_attention' as const};
+  const reference={source:'herdr:codex',agent:'codex',kind:'id',value:'session_ABC-1'};
+  const referenced={...tree,agents:[{...tree.agents[0],agent_session:reference}]};
+  it('projects only closed provider IDs and omits private, path, malformed and conflicting references',()=>{
+    expect(parseHerdrAgents(referenced)[0].agent_session).toEqual(reference);
+    for(const change of [{kind:'path',value:'/private/profile'},{value:'/private/profile'},{value:'a'.repeat(257)},{value:'é'},{value:'ID\n'},{value:''},{source:'other'},{agent:'claude',source:'herdr:claude'}]){
+      const row=parseHerdrAgents({...referenced,agents:[{...referenced.agents[0],agent_session:{...reference,...change,private:'never retain'}}]})[0];
+      expect(row.agent_session).toBeUndefined();
+      expect(JSON.stringify(row)).not.toContain('never retain');
+    }
+  });
+  it.each(['codex','claude','opencode'])('matches exact %s IDs without granting actions',async agent=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const labels={codex:'Codex',claude:'Claude Code',opencode:'OpenCode'};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:[{...tree.agents[0],agent,agent_session:{...reference,agent,source:`herdr:${agent}`}}]});
+    render(<HerdrAgentsPanel sessionId="host" visible reports={{lease:captureAccess(),host:'host',available:true,rows:[{...report,sessionId:reference.value,agent:labels[agent as keyof typeof labels]}]}}/>);
+    expect(await screen.findByText('Unverified reference; may be stale.')).toBeTruthy();
+    expect(screen.getByText('Project:')).toBeTruthy();
+    expect(screen.queryByText(/Referenced by/)).toBeNull();
+    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/send|approve|history/i})).toBeNull();
+  });
+  it('distinguishes missing reports from unavailable, expired and other-host reports',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:referenced);
+    const props={sessionId:'host',visible:true};
+    const {rerender}=render(<HerdrAgentsPanel {...props} reports={{lease:captureAccess(),host:'host',available:true,rows:[]}}/>);
+    expect(await screen.findByText('No matching report')).toBeTruthy();
+    for(const reports of [{host:'host',available:false,rows:[]},{host:'old-host',available:true,rows:[{...report,sessionId:reference.value,agent:'Codex'}]},{host:'host',available:true,rows:[]}]){
+      rerender(<HerdrAgentsPanel {...props} reports={{...reports,lease:captureAccess()}}/>);
+      if(reports.available && reports.host==='host')expect(screen.getByText('No matching report')).toBeTruthy();
+      else expect(screen.getByText('Reports unavailable')).toBeTruthy();
+    }
+    rerender(<HerdrAgentsPanel {...props} reports={{lease:captureAccess(),host:'host',available:true,rows:[]}}/>);
+    act(()=>access(true));
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
+  });
+  it('keeps expanded details stable during passive reads and removes a failed companion association',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();let reads=0;
+    vi.mocked(invoke).mockImplementation(command=>{
+      if(command==='multiplexer_sessions')return Promise.resolve([{name:'default'}]);
+      if(command==='herdr_tree')return Promise.resolve(referenced);
+      if(command==='agent_snapshot')return ++reads===1?Promise.resolve({schemaVersion:1,sessions:[{...report,agent:'Codex',sessionId:reference.value}]}):pending.promise;
+      return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+    });
+    await act(async()=>{render(<AgentPanel sessionId="host"/>);});
+    const details=screen.getByText('Reported session').closest('details')!;
+    details.open=true;
+    expect(within(details).getByText('Project:')).toBeTruthy();
+    await act(async()=>vi.advanceTimersByTimeAsync(5000));
+    expect(screen.getByText('Reported session').closest('details')).toBe(details);
+    expect(details.open).toBe(true);
+    expect(within(details).queryByText('Reports unavailable')).toBeNull();
+    await act(async()=>pending.reject(new Error('read failed')));
+    expect(screen.getByText('Reported session').closest('details')).toBe(details);
+    expect(within(details).getByText('Reports unavailable')).toBeTruthy();
+    expect(within(details).queryByText('Project:')).toBeNull();
+  }));
+  it('does not associate an old host reply with a new host and clears details after report failure',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const old=deferredRead(),fresh=deferredRead();
+    vi.mocked(invoke).mockImplementation((command,args)=>{
+      if(command==='multiplexer_sessions')return Promise.resolve([{name:'default'}]);
+      if(command==='herdr_tree')return Promise.resolve(referenced);
+      if(command==='agent_snapshot')return (args && 'sessionId' in args && args.sessionId==='old'?old:fresh).promise;
+      return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+    });
+    const {rerender}=render(<AgentPanel sessionId="old"/>);
+    await screen.findByText('Reports unavailable');
+    rerender(<AgentPanel sessionId="new"/>);
+    await act(async()=>old.resolve({schemaVersion:1,sessions:[{...report,sessionId:reference.value,agent:'Codex',project:'/old-private'}]}));
+    expect(screen.queryByText('/old-private')).toBeNull();
+    await screen.findByText('Reports unavailable');
+    await act(async()=>fresh.reject(new Error('report unavailable')));
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
+    expect(screen.queryByText('No matching report')).toBeNull();
+  });
+  it('counts shared references before search filtering and refuses ambiguous reports',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const second={...referenced.agents[0],terminal_id:'term-other',pane_id:'w1:p4',name:'other'};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:{...referenced,agents:[referenced.agents[0],second],panes:[...tree.panes,{...tree.panes[0],pane_id:second.pane_id,terminal_id:second.terminal_id}]});
+    const matching={...report,agent:'Codex',sessionId:reference.value};
+    render(<HerdrAgentsPanel sessionId="host" visible reports={{lease:captureAccess(),host:'host',available:true,rows:[matching,matching]}}/>);
+    expect((await screen.findAllByText('Referenced by 2 panes here.')).length).toBe(2);
+    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'other'}});
+    expect(screen.getAllByText('Referenced by 2 panes here.').length).toBe(1);
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
   });
 
 });
