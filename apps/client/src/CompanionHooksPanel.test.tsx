@@ -109,6 +109,25 @@ it('validates bounded discovery and refuses unknown providers, capabilities and 
   const original=detected.agents[0];
   for(const patch of [{agent:'unknown'},{setup:'manual'},{executable:{path:'/owned/codex',source:'other'}},{profiles:[{path:null,source:'default',state:'directory'}]},{profiles:[{path:'/owned/../foreign',source:'default',state:'directory'}]},{executable:{path:'relative/codex',source:'path'}},{privateContents:'refused'},{profiles:[{path:'/owned/profile',source:'default',state:'configured'}]},{profiles:[{path:'x'.repeat(4097),source:'default',state:'missing'}]},{profiles:[{path:'/owned/profile',source:'default\nprivate',state:'directory'}]},{profiles:Array(9).fill(original.profiles[0])}])expect(()=>parseHookDiscovery({...detected,agents:[{...original,...patch}]})).toThrow();
 });
+it('accepts current and legacy Kimi metadata in frozen v1 while retaining seven managed providers',()=>{
+  const profiles=[{path:'/owned/.kimi-code',source:'HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'missing'}];
+  const kimi={agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles};
+  expect(parseHookDiscovery({...detected,agents:[kimi]}).agents[0].profiles).toEqual(profiles);
+  for(const [index,source] of ['KIMI_CODE_HOME','KIMI_SHARE_DIR'].entries()){
+    for(const profile of [{path:'/owned/current-or-legacy ',source,state:'directory'},{path:'/owned/missing',source,state:'missing'},{path:null,source,state:'invalid'}]){
+      const selected=profiles.map((entry,i)=>i===index?profile:entry);
+      expect(parseHookDiscovery({...detected,agents:[{...kimi,profiles:selected}]}).agents[0].profiles).toEqual(selected);
+    }
+  }
+  for(const agent of ['claude','codex','droid','gemini','cursor','opencode','cline'])expect(parseHookDiscovery({...detected,agents:[{...detected.agents[0],agent}]}).agents[0].setup).toBe('managed');
+  for(const state of ['unavailable','invalid']){
+    const fallback={path:null,source:'HOME',state};
+    expect(parseHookDiscovery({...detected,agents:[{...kimi,profiles:[fallback]}]}).agents[0].profiles).toEqual([fallback]);
+    expect(()=>parseHookDiscovery({...detected,agents:[{...kimi,profiles:[fallback,fallback]}]})).toThrow();
+  }
+  expect(()=>parseHookDiscovery({...detected,agents:[{...kimi,setup:'managed'}]})).toThrow();
+  expect(()=>parseHookDiscovery({...detected,schemaVersion:2,agents:[kimi]})).toThrow();
+});
 it('detects only opened visible setup and requires an explicit profile selection and inspected install',async()=>{
   discover.mockResolvedValue(detected);hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
   const view=render(<CompanionHooksPanel sessionId="discovered-host" visible/>);
@@ -123,10 +142,10 @@ it('detects only opened visible setup and requires an explicit profile selection
   expect(hooks.mock.calls[1]).toEqual(['discovered-host',{agent:'codex',action:'install',profileRoot:'/owned/custom profile',expectedPlan:inspected.installPlan}]);
 });
 it('keeps installed executable, missing profile, manual setup and health-only capabilities separate',async()=>{
-  discover.mockResolvedValue({...detected,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
+  discover.mockResolvedValue({...detected,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'KIMI_CODE_HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
   const view=render(<CompanionHooksPanel sessionId="capabilities" visible/>);openDiscovery(view.container);
   expect(await screen.findByRole('button',{name:/Codex.*Profile missing/})).toHaveProperty('disabled',true);
-  expect(screen.getByRole('button',{name:/Kimi.*Manual setup/})).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:/Aider.*Callback health only/})).toHaveProperty('disabled',true);
+  for(const row of screen.getAllByRole('button',{name:/Kimi.*Manual setup/}))expect(row).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:/Aider.*Callback health only/})).toHaveProperty('disabled',true);
   expect(screen.getByText('Some locations were not checked. Use a manual path if needed.')).toBeTruthy();expect(hooks).not.toHaveBeenCalled();
   selectProfile();expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',false);
 });
