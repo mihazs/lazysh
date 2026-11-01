@@ -139,6 +139,9 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
     )
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::copy(&executable, directory.join("bin/copilot")).unwrap();
+    let copilot_profile = directory.join(".copilot");
+    fs::create_dir(&copilot_profile).unwrap();
     let detected_profile = directory.join(".codex");
     fs::create_dir(&detected_profile).unwrap();
     let discovery = crate::companion::hooks::discover(session, lease)
@@ -160,8 +163,32 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         !marker.exists() && !detected_profile.join("hooks.json").exists(),
         "Discovery must not execute the agent or install hooks"
     );
+    let legacy_copilot = discovery["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == "copilot")
+        .unwrap();
+    assert_eq!(legacy_copilot["setup"], "manual");
+    assert_eq!(legacy_copilot["profiles"], serde_json::json!([]));
+    let v2 = crate::companion::hooks::discover_version(session, lease, 2)
+        .await
+        .unwrap();
+    assert_eq!(v2["schemaVersion"], 2);
+    let managed = v2["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == "copilot")
+        .unwrap();
+    assert_eq!(managed["setup"], "managed");
+    assert_eq!(
+        managed["profiles"][0]["path"],
+        copilot_profile.to_str().unwrap()
+    );
+    assert!(!marker.exists());
     for agent in [
-        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline",
+        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline", "copilot",
     ] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
@@ -182,6 +209,10 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             let request = serde_json::from_value(serde_json::json!({"agent":agent,"action":action,"profileRoot":profile,"expectedPlan":plan})).unwrap();
             crate::companion::hooks::execute(session, request, lease)
         };
+        let opaque = profile.join("config.json");
+        if agent == "copilot" {
+            fs::write(&opaque, "// preserve opaque Copilot config\n{}").unwrap();
+        }
         let before = invoke("status", None).await.unwrap();
         let configured = invoke("install", before["installPlan"].as_str())
             .await
@@ -199,6 +230,20 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
                 1
             );
         }
+        if agent == "copilot" {
+            let config: serde_json::Value =
+                serde_json::from_slice(&fs::read(profile.join("hooks/lazysh.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                config["hooks"]["Stop"][0]["exec"],
+                current["binary"]["path"]
+            );
+            assert_eq!(
+                config["hooks"]["Stop"][0]["args"],
+                serde_json::json!(["ingest", "--agent", "copilot"])
+            );
+            assert_eq!(config["hooks"]["Stop"][0]["timeoutSec"], 5);
+        }
         let removed = invoke("remove", current["removePlan"].as_str())
             .await
             .unwrap();
@@ -207,6 +252,12 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             assert!(fs::read_to_string(profile.join(name))
                 .unwrap()
                 .contains("{ \"keep\" : true }"));
+        } else if agent == "copilot" {
+            assert!(!profile.join("hooks/lazysh.json").exists());
+            assert_eq!(
+                fs::read_to_string(&opaque).unwrap(),
+                "// preserve opaque Copilot config\n{}"
+            );
         } else {
             assert!(!profile.join("plugins/lazysh.js").exists());
         }

@@ -18,6 +18,11 @@ mod render;
 mod state;
 use json::{rewrite, Entry, Fault};
 use lazysh_agent::{claude_config, hooks, Error, Result};
+const WHOLE_FILE_AGENTS: [record::Agent; 3] = [
+    record::Agent::Opencode,
+    record::Agent::Cline,
+    record::Agent::Copilot,
+];
 use serde_json::{json, Value};
 #[path = "support/binary.rs"]
 mod binary;
@@ -155,11 +160,12 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
         Agent::Cursor,
         Agent::Opencode,
         Agent::Cline,
+        Agent::Copilot,
     ] {
         let entries = render::entries(agent, &binary.path).unwrap();
         let plugin = agent
-            .is_plugin()
-            .then(|| render::plugin(agent, &binary.path).unwrap());
+            .is_whole_file()
+            .then(|| render::owned_file(agent, &binary.path).unwrap());
         let owned = Owned {
             template_version: 1,
             package_version: env!("CARGO_PKG_VERSION").into(),
@@ -201,6 +207,7 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             assert!(plugin.contains(match agent {
                 Agent::Opencode => r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#,
                 Agent::Cline => r#"childProcess.execFile("/owned/it's a companion", ['ingest'"#,
+                Agent::Copilot => r#""exec": "/owned/it's a companion""#,
                 _ => unreachable!(),
             }));
             assert!(!plugin.contains("['lazysh-agent'"));
@@ -325,7 +332,7 @@ fn rendered_plugins_execute_their_absolute_companion_with_an_empty_path() {
         let companion = directory.path().join("Plugin's companion $ with spaces");
         fs::copy(binary::path(), &companion).unwrap();
         let plugin = directory.path().join("lazysh.js");
-        fs::write(&plugin, render::plugin(agent, &companion).unwrap()).unwrap();
+        fs::write(&plugin, render::owned_file(agent, &companion).unwrap()).unwrap();
         let state = directory.path().join("state");
         let output = Command::new(&runtime)
             .args(["-e", script])
@@ -355,9 +362,9 @@ fn initial_record(agent: record::Agent) -> record::Record {
     record.agent = agent;
     let owned = record.next.as_mut().unwrap();
     owned.entries = render::entries(agent, &owned.binary.path).unwrap();
-    record.provider_after_sha256 = Some(if agent.is_plugin() {
+    record.provider_after_sha256 = Some(if agent.is_whole_file() {
         let digest = record::hash(
-            render::plugin(agent, &owned.binary.path)
+            render::owned_file(agent, &owned.binary.path)
                 .unwrap()
                 .as_bytes(),
         );
@@ -492,11 +499,11 @@ fn update_and_removal_never_infer_success_from_partial_or_edited_owned_entries()
 }
 #[test]
 fn plugin_transitions_use_exact_owned_content_and_reject_contradictory_or_foreign_records() {
-    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+    for agent in WHOLE_FILE_AGENTS {
         use state::{classify, Observation};
         let mut record = initial_record(agent);
         let owned = record.next.as_ref().unwrap();
-        let plugin = render::plugin(agent, &owned.binary.path).unwrap();
+        let plugin = render::owned_file(agent, &owned.binary.path).unwrap();
         assert_eq!(
             classify(&record, &record::FileState::Missing, None).unwrap(),
             Observation::Prepared
@@ -577,12 +584,15 @@ impl ProfileFixture {
     fn apply(&self, action: files::Action, expected: &str) -> Result<commit::Outcome> {
         commit::apply(self.target.clone(), &self.companion, action, expected)
     }
+    fn apply_current(&self, action: files::Action) -> commit::Outcome {
+        self.apply(action, &self.plan(action)).unwrap()
+    }
     fn provider(&self) -> std::path::PathBuf {
-        self.target.profile.join(match self.target.agent {
-            record::Agent::Claude | record::Agent::Gemini => "settings.json",
-            record::Agent::Codex | record::Agent::Droid | record::Agent::Cursor => "hooks.json",
-            record::Agent::Opencode | record::Agent::Cline => "plugins/lazysh.js",
-        })
+        let parent = self.target.agent.asset_directory().map_or_else(
+            || self.target.profile.clone(),
+            |name| self.target.profile.join(name),
+        );
+        parent.join(self.target.agent.provider_name())
     }
     fn manifest(&self) -> std::path::PathBuf {
         self.target
@@ -665,16 +675,12 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
         assert!(installed.contains(r#"{ "env" : {"PRIVATE_TOKEN":"foreign-private-value"}"#));
         let provider_identity = fixture.inspect().provider.state;
         let receipt = fs::read(fixture.manifest()).unwrap();
-        let reuse = fixture
-            .apply(Action::Install, &fixture.plan(Action::Install))
-            .unwrap();
+        let reuse = fixture.apply_current(Action::Install);
         assert_eq!(reuse.status, "reused");
         assert!(!reuse.metadata_committed && !reuse.provider_committed);
         assert_eq!(fixture.inspect().provider.state, provider_identity);
         assert_eq!(fs::read(fixture.manifest()).unwrap(), receipt);
-        let removed = fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap();
+        let removed = fixture.apply_current(Action::Remove);
         assert_eq!(removed.status, "removed");
         let clean = fs::read_to_string(fixture.provider()).unwrap();
         assert!(clean.contains(r#"{"type":"command","command":"keep existing"}"#));
@@ -693,7 +699,7 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection() {
-    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+    for agent in WHOLE_FILE_AGENTS {
         use files::Action;
         use std::fs;
         let fixture = ProfileFixture::new(agent);
@@ -704,23 +710,21 @@ fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection()
         )
         .unwrap();
         let original = fixture.plan(Action::Install);
-        assert!(!fixture.target.profile.join("plugins").exists());
+        assert!(!fixture
+            .target
+            .profile
+            .join(agent.asset_directory().unwrap())
+            .exists());
         assert_eq!(
             fixture.apply(Action::Install, &original).unwrap().status,
             "configured"
         );
         fs::write(
-            fixture.target.profile.join("plugins/foreign.js"),
+            fixture.provider().parent().unwrap().join("foreign.js"),
             "preserve other plugin",
         )
         .unwrap();
-        assert_eq!(
-            fixture
-                .apply(Action::Remove, &fixture.plan(Action::Remove))
-                .unwrap()
-                .status,
-            "removed"
-        );
+        assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
         assert!(!fixture.provider().exists());
         assert_eq!(
             fs::read_to_string(&settings).unwrap(),
@@ -737,7 +741,7 @@ fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection()
             "foreign plugin"
         );
         assert_eq!(
-            fs::read_to_string(fixture.target.profile.join("plugins/foreign.js")).unwrap(),
+            fs::read_to_string(fixture.provider().parent().unwrap().join("foreign.js")).unwrap(),
             "preserve other plugin"
         );
         assert!(fixture.apply(Action::Install, &original).is_err());
@@ -792,9 +796,7 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
             }
             assert!(fixture.apply(Action::Install, &plan).is_err());
         }
-        let resumed = fixture
-            .apply(Action::Install, &fixture.plan(Action::Install))
-            .unwrap();
+        let resumed = fixture.apply_current(Action::Install);
         assert!(matches!(resumed.status, "configured" | "reused"));
         assert_eq!(
             fixture.inspect().observation,
@@ -810,14 +812,12 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone() {
-    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+    for agent in WHOLE_FILE_AGENTS {
         use files::Action;
         let fixture = ProfileFixture::new(agent);
         let original = fixture.plan(Action::Install);
         fixture.prepare_without_provider(&original);
-        let canceled = fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap();
+        let canceled = fixture.apply_current(Action::Remove);
         assert_eq!(canceled.status, "removed");
         assert!(!canceled.provider_committed);
         assert!(!fixture.provider().exists());
@@ -931,20 +931,28 @@ fn source_and_profile_replacements_before_provider_commit_cannot_change_the_repl
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_named_root_file() {
-    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+    for agent in WHOLE_FILE_AGENTS {
         use files::Action;
         use std::fs;
         let fixture = ProfileFixture::new(agent);
         fixture.prepare_without_provider(&fixture.plan(Action::Install));
-        fs::remove_dir(fixture.target.profile.join("plugins")).unwrap();
-        let unrelated = fixture.target.profile.join("lazysh.js");
+        fs::remove_dir(
+            fixture
+                .target
+                .profile
+                .join(agent.asset_directory().unwrap()),
+        )
+        .unwrap();
+        let unrelated = fixture.target.profile.join(agent.provider_name());
         fs::write(&unrelated, "foreign root file").unwrap();
-        let result = fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap();
+        let result = fixture.apply_current(Action::Remove);
         assert_eq!(result.status, "removed");
         assert!(!result.provider_committed);
-        assert!(!fixture.target.profile.join("plugins").exists());
+        assert!(!fixture
+            .target
+            .profile
+            .join(agent.asset_directory().unwrap())
+            .exists());
         assert_eq!(fs::read_to_string(unrelated).unwrap(), "foreign root file");
     }
 }
@@ -1192,6 +1200,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Cursor,
         record::Agent::Opencode,
         record::Agent::Cline,
+        record::Agent::Copilot,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -1557,12 +1566,23 @@ fn discover_metadata(
     path: &std::ffi::OsStr,
     overrides: &[(&str, &std::ffi::OsStr)],
 ) -> Value {
+    discover_metadata_version(home, path, overrides, None)
+}
+fn discover_metadata_version(
+    home: &std::path::Path,
+    path: &std::ffi::OsStr,
+    overrides: &[(&str, &std::ffi::OsStr)],
+    version: Option<u8>,
+) -> Value {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
     command
         .env_clear()
         .env("HOME", home)
         .env("PATH", path)
         .args(["hooks", "discover"]);
+    if let Some(version) = version {
+        command.args(["--schema-version", &version.to_string()]);
+    }
     for (name, value) in overrides {
         command.env(name, value);
     }
@@ -2136,4 +2156,150 @@ fn discovery_keeps_invalid_explicit_override_visible_without_an_executable_or_fa
     assert_eq!(result["truncated"], false);
     assert!(!marker.exists());
     assert!(default.is_dir());
+}
+
+#[test]
+fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("copilot");
+    let home = root.path();
+    let default = home.join(".copilot");
+    fs::create_dir(&default).unwrap();
+    fs::write(default.join("settings.json"), "PRIVATE_NOT_JSON").unwrap();
+    fs::create_dir(home.join("chosen")).unwrap();
+    let legacy = discover_metadata(home, bin.as_os_str(), &[]);
+    assert_eq!(discovered(&legacy, "copilot")["setup"], "manual");
+    assert_eq!(discovered(&legacy, "copilot")["profiles"], json!([]));
+    let current = |overrides: &[(&str, &OsStr)]| {
+        discover_metadata_version(home, bin.as_os_str(), overrides, Some(2))
+    };
+    let result = current(&[]);
+    assert_eq!(result["schemaVersion"], 2);
+    assert_eq!(discovered(&result, "copilot")["setup"], "managed");
+    let fallback = current(&[("COPILOT_HOME", OsStr::new(""))]);
+    assert_eq!(
+        discovered(&fallback, "copilot")["profiles"][0],
+        json!({"path":default,"source":"HOME","state":"directory"})
+    );
+    assert_eq!(
+        discover_metadata_version(home, bin.as_os_str(), &[], Some(1)),
+        legacy
+    );
+    for suffix in ["chosen ", "chosen\u{00a0}", "chosen\u{feff}"] {
+        let literal = home.join(suffix);
+        fs::create_dir(&literal).unwrap();
+        assert_eq!(
+            discover_metadata(
+                home,
+                bin.as_os_str(),
+                &[("COPILOT_HOME", literal.as_os_str())]
+            ),
+            legacy
+        );
+        let result = current(&[("COPILOT_HOME", literal.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "copilot")["profiles"][0],
+            json!({"path":literal,"source":"COPILOT_HOME","state":"directory"})
+        );
+    }
+    for invalid in [
+        OsStr::new(" "),
+        OsStr::new("relative"),
+        OsStr::new("~/chosen"),
+        OsStr::new("/owned/../profile"),
+        OsStr::new("/owned/\nprofile"),
+        OsStr::from_bytes(b"/owned/\xff"),
+    ] {
+        let result = current(&[("COPILOT_HOME", invalid)]);
+        assert_eq!(
+            discovered(&result, "copilot")["profiles"][0],
+            json!({"path":null,"source":"COPILOT_HOME","state":"invalid"})
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(default.join("settings.json")).unwrap(),
+        "PRIVATE_NOT_JSON"
+    );
+    assert!(!marker.exists());
+    assert!(!result.to_string().contains("PRIVATE"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_hooks() {
+    use files::Action;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::Copilot);
+    let hooks = fixture.target.profile.join("hooks");
+    fs::create_dir(&hooks).unwrap();
+    let preserved = [
+        (
+            fixture.target.profile.join("config.json"),
+            "// JSONC remains opaque\n{}",
+        ),
+        (
+            fixture.target.profile.join("settings.json"),
+            r#"{"disableAllHooks":true}"#,
+        ),
+        (
+            fixture.target.profile.join("providers.json"),
+            "PRIVATE_OWNED_PROVIDER",
+        ),
+        (
+            hooks.join("foreign.json"),
+            r#"{"version":1,"disableAllHooks":true,"hooks":{}}"#,
+        ),
+    ];
+    for (path, bytes) in &preserved {
+        fs::write(path, bytes).unwrap();
+    }
+    let manual = render::owned_file(record::Agent::Copilot, &fixture.companion).unwrap();
+    fs::write(fixture.provider(), &manual).unwrap();
+    assert!(matches!(
+        fixture.inspect().plan(Action::Install),
+        Err(Error::Installation("HooksForeignPlugin"))
+    ));
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), manual);
+    fs::remove_file(fixture.provider()).unwrap();
+    let plan = fixture.plan(Action::Install);
+    assert_eq!(
+        fixture.apply(Action::Install, &plan).unwrap().status,
+        "configured"
+    );
+    assert_eq!(fixture.provider(), hooks.join("lazysh.json"));
+    let asset: Value = serde_json::from_slice(&fs::read(fixture.provider()).unwrap()).unwrap();
+    assert_eq!(asset["version"], 1);
+    assert_eq!(asset["hooks"].as_object().unwrap().len(), 6);
+    assert!(asset["hooks"].get("PreToolUse").is_none());
+    let command = &asset["hooks"]["UserPromptSubmit"][0];
+    assert_eq!(command["exec"], fixture.companion.to_str().unwrap());
+    assert_eq!(command["args"], json!(["ingest", "--agent", "copilot"]));
+    assert_eq!(command["timeoutSec"], 5);
+    let state = fixture._root.path().join("state");
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-copilot-render","cwd":"/owned/copilot"});
+    let mut child = std::process::Command::new(command["exec"].as_str().unwrap());
+    child
+        .args(["ingest", "--agent", "copilot"])
+        .env_clear()
+        .env("PATH", "")
+        .env("LAZYSH_STATE_DIR", &state);
+    assert!(
+        process::run(&mut child, &serde_json::to_vec(&payload).unwrap())
+            .status
+            .success()
+    );
+    assert_eq!(
+        snapshot(&fixture.companion, &state)["sessions"][0]["state"],
+        "working"
+    );
+    assert_eq!(fixture.apply_current(Action::Install).status, "reused");
+    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
+    assert!(!fixture.provider().exists());
+    for (path, bytes) in &preserved {
+        assert_eq!(fs::read_to_string(path).unwrap(), *bytes);
+    }
+    fs::write(fixture.provider(), serde_json::to_vec(&asset).unwrap()).unwrap();
+    let inspect = fixture.inspect();
+    assert_eq!(inspect.observation, Some(state::Observation::Conflict));
+    assert!(inspect.plan(Action::Install).is_err());
 }

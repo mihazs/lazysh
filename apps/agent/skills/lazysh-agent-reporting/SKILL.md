@@ -17,7 +17,9 @@ for the selected CLI and installed companion version before configuring it.
 
 Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI,
 Cline CLI and Droid on qualified Linux filesystems. `lazysh-agent hooks discover`
-lists installation metadata without executing agents or changing profiles. Let
+lists version-1 installation metadata without executing agents or changing profiles.
+Copilot managed setup requires explicit `hooks discover --schema-version 2` and
+an updated companion; default discovery keeps Copilot manual for older clients. Let
 the user select the intended target; inspect its exact existing profile with
 `lazysh-agent hooks status`; install/update or remove only after reviewing its
 returned plan, using the corresponding expected plan hash. Droid requires an
@@ -37,6 +39,13 @@ Start a new Cline session with that profile to load it; preserve disabled-plugin
 settings and normal plugin restrictions. Child working-directory attribution and
 permission waits remain unsupported. Aider's `aider-config`/`aider-hook-status`
 provide callback health, never inferred agent session or completion state.
+
+Copilot setup owns only the selected profile's `hooks/lazysh.json` and its
+ownership receipt, with shell-free absolute companion execution. Existing manual
+files conflict rather than being adopted. `COPILOT_HOME` is a nonempty literal
+override; do not trim it or infer the active profile from SSH metadata. Start a
+new Copilot session with that profile and review `/hooks`; preserve trust,
+disabled-hook policy and foreign settings. Configuration is not live reporting.
 
 The companion must resolve in the hook's environment. Never bypass provider
 trust, enable plugins implicitly, answer permission requests or install separate

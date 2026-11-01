@@ -204,11 +204,7 @@ pub(super) struct Inspection {
 }
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
-        match self.target.agent {
-            Agent::Claude | Agent::Gemini => "settings.json",
-            Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-            Agent::Opencode | Agent::Cline => "lazysh.js",
-        }
+        self.target.agent.provider_name()
     }
     pub(super) fn manifest_name(&self) -> String {
         format!(".lazysh-hooks-{}.json", self.target.agent.name())
@@ -223,9 +219,9 @@ impl Inspection {
     }
     pub(super) fn desired(&self) -> Result<Owned> {
         let entries = render::entries(self.target.agent, &self.binary.path).map_err(rejected)?;
-        let plugin_sha256 = if self.target.agent.is_plugin() {
+        let plugin_sha256 = if self.target.agent.is_whole_file() {
             Some(record::hash(
-                render::plugin(self.target.agent, &self.binary.path)
+                render::owned_file(self.target.agent, &self.binary.path)
                     .map_err(rejected)?
                     .as_bytes(),
             ))
@@ -246,7 +242,7 @@ impl Inspection {
             Action::Install => Some(self.desired()?),
             Action::Remove => None,
         };
-        if self.target.agent.is_plugin()
+        if self.target.agent.is_whole_file()
             && previous.is_none()
             && next.is_some()
             && self.provider.contents.is_some()
@@ -294,9 +290,9 @@ impl Inspection {
         if previous.is_none() && next.is_none() {
             return Ok(self.provider.contents.clone());
         }
-        if self.target.agent.is_plugin() {
+        if self.target.agent.is_whole_file() {
             return next
-                .map(|_| render::plugin(self.target.agent, &self.binary.path).map_err(rejected))
+                .map(|_| render::owned_file(self.target.agent, &self.binary.path).map_err(rejected))
                 .transpose();
         }
         let previous = previous
@@ -322,8 +318,11 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     let profile = Directory::profile(&target.profile)?;
     storage_filesystem::require_local(&profile.path)?;
     directory_admission(&profile)?;
-    let plugins = if target.agent.is_plugin() {
-        match profile.child("plugins", false) {
+    let plugins = if target.agent.is_whole_file() {
+        match profile.child(
+            target.agent.asset_directory().expect("whole-file agent"),
+            false,
+        ) {
             Ok(directory) => Some(directory),
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
@@ -334,12 +333,8 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     if let Some(directory) = &plugins {
         directory_admission(directory)?;
     }
-    let provider_name = match target.agent {
-        Agent::Claude | Agent::Gemini => "settings.json",
-        Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-        Agent::Opencode | Agent::Cline => "lazysh.js",
-    };
-    let provider = if target.agent.is_plugin() && plugins.is_none() {
+    let provider_name = target.agent.provider_name();
+    let provider = if target.agent.is_whole_file() && plugins.is_none() {
         ReadFile {
             state: FileState::Missing,
             contents: None,

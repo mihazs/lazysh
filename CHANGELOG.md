@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit version-2 hook discovery and inspected managed Copilot setup for selected existing Linux profiles, with shell-free absolute companion handlers and protected file ownership. Default version-1 discovery keeps its seven managed providers and Copilot manual; settings, disabled hooks, trust and live reporting remain unchanged.
+
 - Keep touch scrolling continuous when terminal output redraws under a held finger on coarse-pointer screens. Preserve screen-reader mode and desktop hit testing; no input, connection or permission defaults change.
 
 - Make touch scrolling in mouse-tracking terminals depend on finger travel rather than touch-event frequency. Accumulate partial movement, keep the original pane and clear pending distance when the gesture ends.

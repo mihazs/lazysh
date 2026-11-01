@@ -8,7 +8,7 @@ vi.mock('./bridge',()=>({api:{companionHooks:hooks,companionHookDiscovery:discov
 import CompanionHooksPanel,{parseHookStatus,parseHookDiscovery} from './CompanionHooksPanel';
 const inspected={schemaVersion:1,supported:true,state:null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),reporting:'notChecked',trust:'notChecked'};
 let epoch=1000;
-beforeEach(async()=>{hooks.mockReset();discover.mockReset().mockResolvedValue({schemaVersion:1,supported:true,managedSetupSupported:true,agents:[],truncated:false});await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++epoch),nonce:'d'.repeat(64)});});
+beforeEach(async()=>{hooks.mockReset();discover.mockReset().mockResolvedValue({schemaVersion:2,supported:true,managedSetupSupported:true,agents:[],truncated:false});await uiI18n.changeLanguage('en');applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++epoch),nonce:'d'.repeat(64)});});
 afterEach(cleanup);
 function selectProfile(agent='codex'){fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:'/owned/profile'}});}
 it('refuses unsafe plans and treats conflicts and unsupported filesystems as non-writable',()=>{
@@ -100,6 +100,7 @@ it.each(['hidden','other-source','revoked'])('drops a %s reveal request without 
 });
 
 const detected={schemaVersion:1,supported:true,managedSetupSupported:true,agents:[{agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/custom profile',source:'CODEX_HOME',state:'directory'}]}],truncated:false};
+const detectedV2={...detected,schemaVersion:2};
 function openDiscovery(container:HTMLElement){const details=container.querySelector('details')!;details.open=true;fireEvent(details,new Event('toggle'));return details;}
 it('validates bounded discovery and refuses unknown providers, capabilities and private payload fields',()=>{
   expect(parseHookDiscovery(detected).agents[0].profiles[0].path).toBe('/owned/custom profile');
@@ -129,12 +130,12 @@ it('accepts current and legacy Kimi metadata in frozen v1 while retaining seven 
   expect(()=>parseHookDiscovery({...detected,schemaVersion:2,agents:[kimi]})).toThrow();
 });
 it('detects only opened visible setup and requires an explicit profile selection and inspected install',async()=>{
-  discover.mockResolvedValue(detected);hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
+  discover.mockResolvedValue(detectedV2);hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
   const view=render(<CompanionHooksPanel sessionId="discovered-host" visible/>);
   expect(discover).not.toHaveBeenCalled();expect(screen.getByLabelText('Hook provider')).toHaveProperty('value','');
   openDiscovery(view.container);
   const row=await screen.findByRole('button',{name:/Codex.*Installed executable/});
-  expect(discover).toHaveBeenCalledExactlyOnceWith('discovered-host');expect(row.getAttribute('aria-pressed')).toBe('false');expect(hooks).not.toHaveBeenCalled();
+  expect(discover).toHaveBeenCalledExactlyOnceWith('discovered-host',2);expect(row.getAttribute('aria-pressed')).toBe('false');expect(hooks).not.toHaveBeenCalled();
   expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',true);
   fireEvent.click(row);expect(screen.getByLabelText('Host profile directory')).toHaveProperty('value','/owned/custom profile');expect(hooks).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));fireEvent.click(await screen.findByRole('button',{name:'Install or update hooks'}));
@@ -142,7 +143,7 @@ it('detects only opened visible setup and requires an explicit profile selection
   expect(hooks.mock.calls[1]).toEqual(['discovered-host',{agent:'codex',action:'install',profileRoot:'/owned/custom profile',expectedPlan:inspected.installPlan}]);
 });
 it('keeps installed executable, missing profile, manual setup and health-only capabilities separate',async()=>{
-  discover.mockResolvedValue({...detected,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'KIMI_CODE_HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
+  discover.mockResolvedValue({...detectedV2,truncated:true,agents:[{...detected.agents[0],profiles:[{path:'/missing',source:'CODEX_HOME',state:'missing'}]},{agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'KIMI_CODE_HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]},{agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]}]});
   const view=render(<CompanionHooksPanel sessionId="capabilities" visible/>);openDiscovery(view.container);
   expect(await screen.findByRole('button',{name:/Codex.*Profile missing/})).toHaveProperty('disabled',true);
   for(const row of screen.getAllByRole('button',{name:/Kimi.*Manual setup/}))expect(row).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:/Aider.*Callback health only/})).toHaveProperty('disabled',true);
@@ -157,19 +158,19 @@ it.each(['hidden','source','closed','locked'])('drops late discovery on %s witho
   if(state==='source')view.rerender(<CompanionHooksPanel sessionId="new-discovery" visible/>);
   if(state==='closed'){details.open=false;fireEvent(details,new Event('toggle'));}
   if(state==='locked')applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(++epoch)});
-  await act(async()=>completeOld(detected));
+  await act(async()=>completeOld(detectedV2));
   expect(screen.queryByRole('button',{name:/Codex.*Installed executable/})).toBeNull();expect(screen.getByLabelText('Hook provider')).toHaveProperty('value','');expect(hooks).not.toHaveBeenCalled();
 });
 it('retains manual inspection when discovery is unavailable, but disables managed setup when explicitly unsupported',async()=>{
   discover.mockRejectedValueOnce(new Error('Old companion'));
   const view=render(<CompanionHooksPanel sessionId="legacy" visible/>);openDiscovery(view.container);
   await screen.findByText('Detection unavailable. Update the companion or choose a profile manually.');selectProfile();expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',false);
-  discover.mockResolvedValue({...detected,managedSetupSupported:false});view.rerender(<CompanionHooksPanel sessionId="unsupported" visible/>);
+  discover.mockResolvedValue({...detectedV2,managedSetupSupported:false});view.rerender(<CompanionHooksPanel sessionId="unsupported" visible/>);
   await screen.findByText('Managed hook setup is not supported on this host filesystem yet.');selectProfile();expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',true);expect(hooks).not.toHaveBeenCalled();
 });
 
 it('retires inspected plans when another detected profile is explicitly selected',async()=>{
-  discover.mockResolvedValue({...detected,agents:[{...detected.agents[0],profiles:[...detected.agents[0].profiles,{path:'/owned/second',source:'HOME',state:'directory'}]}]});
+  discover.mockResolvedValue({...detectedV2,agents:[{...detected.agents[0],profiles:[...detected.agents[0].profiles,{path:'/owned/second',source:'HOME',state:'directory'}]}]});
   hooks.mockResolvedValue(inspected);
   const view=render(<CompanionHooksPanel sessionId="profile-choice" visible/>);openDiscovery(view.container);
   fireEvent.click(await screen.findByRole('button',{name:/Codex.*custom profile/}));
@@ -187,7 +188,7 @@ it('late discovery never overwrites an explicitly entered target or inspects it'
 });
 
 it('unselects a pressed detected row and retires its inspected plan without hook actions',async()=>{
-  discover.mockResolvedValue(detected);hooks.mockResolvedValue(inspected);
+  discover.mockResolvedValue(detectedV2);hooks.mockResolvedValue(inspected);
   const view=render(<CompanionHooksPanel sessionId="unselect-profile" visible/>);openDiscovery(view.container);
   const row=await screen.findByRole('button',{name:/Codex.*Installed executable/});
   fireEvent.click(row);expect(document.activeElement).toBe(screen.getByRole('button',{name:'Inspect setup'}));
@@ -224,4 +225,48 @@ it('retains generic trust guidance for other configured providers',async()=>{
   await screen.findByText('Hooks configured. Live reporting has not been verified.');
   expect(screen.getByText('Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.')).toBeTruthy();
   expect(hooks).toHaveBeenCalledTimes(1);
+});
+
+it('keeps frozen v1 manual Copilot separate from explicit v2 managed capability',()=>{
+  const copilot={...detected.agents[0],agent:'copilot',setup:'manual'};
+  expect(parseHookDiscovery({...detected,agents:[copilot]}).agents[0].setup).toBe('manual');
+  const managedCopilot={...copilot,setup:'managed'};
+  expect(()=>parseHookDiscovery({...detected,agents:[managedCopilot]})).toThrow();
+  const v2={...detectedV2,agents:[managedCopilot]};
+  expect(parseHookDiscovery(v2,2).agents[0].setup).toBe('managed');
+  expect(()=>parseHookDiscovery(v2)).toThrow();
+  expect(()=>parseHookDiscovery({...detected,agents:[copilot]},2)).toThrow();
+  expect(()=>parseHookDiscovery({...v2,agents:[copilot]},2)).toThrow();
+});
+it('requires known v2 Copilot capability for inspection but retains legacy manual providers on failure',async()=>{
+  discover.mockResolvedValue(detected);
+  const view=render(<CompanionHooksPanel sessionId="old-copilot-companion" visible/>);openDiscovery(view.container);
+  await screen.findByText('Detection unavailable. Update the companion or choose a profile manually.');
+  selectProfile('copilot');fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(hooks).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',true);
+  selectProfile('claude');expect(screen.getByRole('button',{name:'Inspect setup'})).toHaveProperty('disabled',false);
+});
+it('uses v2 detection and separate inspected consent to install Copilot without asserting reporting',async()=>{
+  discover.mockResolvedValue({...detectedV2,agents:[{...detected.agents[0],agent:'copilot',profiles:[{path:'/owned/copilot ',source:'COPILOT_HOME',state:'directory'}]}]});
+  hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
+  const view=render(<CompanionHooksPanel sessionId="managed-copilot" visible/>);openDiscovery(view.container);
+  fireEvent.click(await screen.findByRole('button',{name:/GitHub Copilot.*COPILOT_HOME/}));
+  expect(hooks).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Install or update hooks'}));
+  expect(await screen.findByText(/Start a new Copilot session/)).toBeTruthy();
+  expect(hooks.mock.calls[1]).toEqual(['managed-copilot',{agent:'copilot',action:'install',profileRoot:'/owned/copilot ',expectedPlan:inspected.installPlan}]);
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
+});
+
+it('allows manual Copilot inspection and removal on a capable v2 host without detected executable rows',async()=>{
+  hooks.mockResolvedValueOnce({...inspected,state:'configured'}).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'removed'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'removed'});
+  const view=render(<CompanionHooksPanel sessionId="manual-copilot-off-path" visible/>);openDiscovery(view.container);
+  await act(async()=>{});
+  expect(screen.getByRole('option',{name:'GitHub Copilot CLI'})).toHaveProperty('disabled',false);
+  selectProfile('copilot');fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Remove lazysh hooks'}));
+  await act(async()=>{});
+  expect(hooks.mock.calls[0]).toEqual(['manual-copilot-off-path',{agent:'copilot',action:'status',profileRoot:'/owned/profile'}]);
+  expect(hooks.mock.calls[1]).toEqual(['manual-copilot-off-path',{agent:'copilot',action:'remove',profileRoot:'/owned/profile',expectedPlan:inspected.removePlan}]);
+  expect(hooks).toHaveBeenCalledTimes(3);
 });

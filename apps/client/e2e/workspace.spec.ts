@@ -100,7 +100,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];
@@ -131,8 +131,10 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         return report;
       }
       if(command==='companion_hook_discovery'){
-        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).join(',')!=='sessionId')throw new Error('Wrong discovery source');
-        return {schemaVersion:1,supported:true,managedSetupSupported:true,truncated:false,agents:[
+        const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||(schemaVersion!==1&&schemaVersion!==2))throw new Error('Wrong discovery source');
+        state.hookDiscoveryVersions.push(schemaVersion);
+        return {schemaVersion,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
           {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
           ...['droid','gemini','cursor','opencode','cline'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
@@ -631,6 +633,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([2]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
   await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();

@@ -1198,6 +1198,7 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         ("gemini", "posix-shell"),
         ("cursor", "posix-shell"),
         ("opencode", "bun-javascript"),
+        ("copilot", "shell-free-exec"),
     ] {
         let output = run(
             directory.path(),
@@ -1295,4 +1296,19 @@ fn cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows(
     assert_eq!(after["sessions"][0]["eventCount"], 2);
     assert_eq!(after["sessions"][1]["state"], "done");
     assert_eq!(after["sessions"][1]["eventCount"], 1);
+}
+
+#[test]
+fn hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles() {
+    let directory = tempfile::tempdir().unwrap();
+    for version in ["0", "3", "-1", "latest", "256"] {
+        let output = run(
+            directory.path(),
+            &["hooks", "discover", "--schema-version", version],
+            b"",
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }
