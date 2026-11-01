@@ -1,3 +1,4 @@
+import {ArrowLeft,RefreshCw} from 'lucide-react';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
@@ -70,8 +71,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,
     tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label))??[];
   return <section className="herdr-navigation" hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy}>
-    <header><div><strong>{t('herdrNavigationTitle')}</strong><small>{hostLabel}</small></div><button className="subtle-button" onClick={onClose}>{t('herdrNavigationBack')}</button></header>
-    <div className="tool-bar"><button className="subtle-button" disabled={busy||actionBusy} onClick={()=>void refresh()}>{t('herdrRefresh')}</button></div>
+    <header><div><h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small>{hostLabel}</small></div><button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button" title={t('herdrNavigationBack')} onClick={onClose}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t('herdrNavigationBack')}</span></button></header>
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
     {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
@@ -87,8 +87,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       </>}
       </details>
       {data.server && <>
-        <h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3>
-        <label>{t('herdrNavigationSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
+        <label><span className="sr-only">{t('herdrNavigationSearch')}</span><input type="search" placeholder={t('herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);

@@ -1,0 +1,83 @@
+[
+  {
+    "file": "agents-phone-before.png",
+    "sha256": "6774667776193390dcaa459d2f05bb486f98d89e4ad12ccd352de6b072959c1a",
+    "viewport": [
+      393,
+      852
+    ],
+    "source": "Synthetic real-application browser fixture",
+    "baseline": "91d6f8ba7f800170939a1946dae18322c5569ac9"
+  },
+  {
+    "file": "agents-desktop-before.png",
+    "sha256": "cfbc191e7bd0c1c5aa0efedbf953eebf875f039caf02d7539830865ca8526409",
+    "viewport": [
+      1280,
+      850
+    ],
+    "source": "Synthetic real-application browser fixture",
+    "baseline": "91d6f8ba7f800170939a1946dae18322c5569ac9"
+  },
+  {
+    "file": "agents-phone-after.png",
+    "sha256": "1f84a3c4021c74084f8b25445c5c9206cd100579c7734acd32fa3dc5af4828da",
+    "viewport": [
+      393,
+      852
+    ],
+    "source": "Synthetic real-application browser fixture",
+    "baseline": "Uncommitted focused redesign"
+  },
+  {
+    "file": "agents-desktop-after.png",
+    "sha256": "7910b6aa42bae9436511b2753ca5024eac2ea153114e16d3e124042d49481458",
+    "viewport": [
+      1280,
+      850
+    ],
+    "source": "Synthetic real-application browser fixture",
+    "baseline": "Uncommitted focused redesign"
+  },
+  {
+    "file": "agents-safe-area-393.png",
+    "sha256": "bed7a8867f3214fa6b4fb5e15e218bf8a24f5b6ea17c347fbd72f42b76389299",
+    "viewport": [
+      393,
+      852
+    ],
+    "safeArea": {
+      "top": 62,
+      "bottom": 34
+    },
+    "source": "Synthetic real-application browser fixture; not native acceptance"
+  },
+  {
+    "file": "agents-tablet-768.png",
+    "sha256": "2ef2e02ad97bc0f861528bd1bbbf2802b240c3dd02a492fb27de3cb693924634",
+    "viewport": [
+      768,
+      1024
+    ],
+    "safeArea": {},
+    "source": "Synthetic real-application browser fixture; not native acceptance"
+  },
+  {
+    "file": "report-clear-visible-phone.png",
+    "sha256": "9d5f51d6da85fc6343f86969d1d2fcec546c86717aa9aaeec8cc0a3f423c4044",
+    "viewport": [
+      393,
+      852
+    ],
+    "source": "Actual AgentPanel with 30 synthetic reports; focused row at least95% in viewport after clearing details"
+  },
+  {
+    "file": "report-clear-visible-desktop.png",
+    "sha256": "2bee678aa5ab7f2b3bb4286bb92b42a7601e6569f6f6430e69b4fafae55223eb",
+    "viewport": [
+      1280,
+      850
+    ],
+    "source": "Actual AgentPanel with 30 synthetic reports; focused row at least95% in viewport after clearing details"
+  }
+]

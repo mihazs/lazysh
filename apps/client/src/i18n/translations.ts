@@ -1448,7 +1448,7 @@ const translations = {
   voiceDeliveryUnicode: ["O ditado direto contém Unicode inválido. Edite o rascunho.", "El dictado directo contiene Unicode no válido. Edita el borrador."],
   voiceDeliveryLimit: ["O ditado direto excede 64 KiB incluindo Enter. Encurte ou prepare o rascunho.", "El dictado directo supera 64 KiB incluyendo Enter. Acorta o prepara el borrador."],
   agentsTitle: ["Atividade dos agentes", "Actividad de agentes"],
-  agentsNeedsYou: ["Precisa de você", "Te necesita"],
+  agentsNeedsYou: ["Atenção", "Atención"],
   agentsWorking: ["Trabalhando", "Trabajando"],
   agentsDone: ["Concluído", "Terminado"],
   agentsRefresh: ["Atualizar", "Actualizar"],

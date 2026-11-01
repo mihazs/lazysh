@@ -246,10 +246,53 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await serverSetup.locator('summary').click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
   await serverSetup.locator('summary').click();
-  if(phone)await page.setViewportSize({width:393,height:844});
+  if(phone){
+    await page.setViewportSize({width:393,height:852});
+    const navigation=await page.locator('.sidebar').boundingBox();
+    expect(navigation?.x).toBe(0);expect(navigation?.width).toBe(393);
+    const actions=live.locator('header button');
+    for(const action of await actions.all()){
+      const bounds=(await action.boundingBox())!;
+      expect(bounds.width).toBeGreaterThanOrEqual(44);expect(bounds.height).toBeGreaterThanOrEqual(44);
+    }
+  }
   await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
-  await expect(live.getByRole('button',{name:/^codex-builder/})).toBeInViewport({ratio:0.75});
+  const firstLiveAgent=live.getByRole('button',{name:/^codex-builder/});
+  await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+  if(phone)expect((await firstLiveAgent.boundingBox())!.y).toBeLessThan(400);
   await page.screenshot({path:testInfo.outputPath('healthy-agents-first-row.png')});
+  if(phone){
+    for(const width of [320,600]){
+      await page.setViewportSize({width,height:420});
+      await live.evaluate(node=>{node.style.fontSize='20px';});
+      await firstLiveAgent.scrollIntoViewIfNeeded();
+      expect(await page.locator('.sidebar').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+      await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+      await expect(page.getByRole('button',{name:'Close hosts',exact:true})).toBeInViewport();
+    }
+    await live.evaluate(node=>{node.style.fontSize='';});
+    await page.setViewportSize({width:393,height:852});
+    await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
+    await page.emulateMedia({forcedColors:'active',reducedMotion:'reduce'});
+    await expect(page.locator('.sidebar .brand')).toHaveCSS('backdrop-filter','none');
+    await expect(live.getByRole('button',{name:'Back to terminal',exact:true})).toBeVisible();
+    await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});
+    const protocol=await page.context().newCDPSession(page);
+    await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62,bottom:34}});
+    expect((await page.getByRole('button',{name:'Close hosts',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(62);
+    await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+    await page.screenshot({path:testInfo.outputPath('agents-safe-area-393.png')});
+    await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:0,bottom:0}});
+  }else{
+    await page.setViewportSize({width:768,height:1024});
+    const context=(await page.locator('.sidebar').boundingBox())!;
+    expect(context.width).toBeGreaterThanOrEqual(300);expect(context.width).toBeLessThanOrEqual(420);
+    expect((await page.locator('main.workspace').boundingBox())!.width).toBeGreaterThan(400);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('agents-tablet-768.png')});
+    await page.setViewportSize({width:1280,height:850});
+  }
+
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
   const details=live.locator('details').filter({has:page.getByText('Reported session',{exact:true})});
   await expect(details).not.toHaveAttribute('open');

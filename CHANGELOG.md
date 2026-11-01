@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Give mobile Agents and Workspaces full-width working views, compact Herdr navigation actions and selectable reported-activity rows with focused details. Reduce repeated navigation chrome while preserving terminal space, session state, setup disclosure and explicit live/reported distinctions. Label recorded attention neutrally instead of implying a valid pending request, and visibly return focus to the selected row when closing its details. No connection, permission or input defaults change.
+
 - Discover separate current Kimi Code and legacy Kimi CLI profile candidates without executing agents or reading configuration. Preserve literal overrides, manual-only setup and legacy hook output; clarify the printer targets Kimi CLI 1.52 and current lifecycle remains unqualified. No setup or trust defaults change.
 
 - Correct packaged agent-reporting guidance for read-only discovery and explicit managed Cline setup. Preserve plugin restrictions and separate installation from loaded reporting; no installation or trust defaults change.

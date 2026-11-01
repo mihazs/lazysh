@@ -10,3 +10,11 @@
 .herdr-navigation-row > span { min-width: 0; }
 
 .herdr-navigation details { min-width: 0; overflow-wrap: anywhere; }
+
+.herdr-navigation header { margin-bottom: 8px; }
+.herdr-navigation header h3 { margin: 0 0 4px; font-size: 14px; line-height: 1.4; }
+.herdr-navigation header .icon-button { flex: 0 0 44px; min-width: 44px; min-height: 44px; }
+.herdr-navigation-row { border: 1px solid transparent; border-radius: 8px; }
+.herdr-navigation-row:focus-visible { border-color: var(--accent); }
+.herdr-navigation-row > small { flex-shrink: 0; }
+.herdr-navigation h4 { margin: 14px 0 8px; color: var(--muted); font-size: 12px; }
