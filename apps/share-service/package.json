@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/share-service",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "private": true,
   "scripts": {
     "build": "cargo build --release --locked --package lazysh-share",
