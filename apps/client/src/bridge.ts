@@ -79,7 +79,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
 export const api = {
   accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
   companionHookDiscovery: (sessionId:string) => remoteInvoke<unknown>('companion_hook_discovery',{sessionId}),
-  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
+  companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
     if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
     const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);

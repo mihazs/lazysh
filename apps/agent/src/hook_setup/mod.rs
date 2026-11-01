@@ -26,6 +26,7 @@ pub enum AgentProfile {
     Gemini,
     Cursor,
     Opencode,
+    Cline,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
@@ -37,6 +38,7 @@ impl AgentProfile {
             Self::Gemini => record::Agent::Gemini,
             Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
+            Self::Cline => record::Agent::Cline,
         }
     }
 }
@@ -44,7 +46,7 @@ impl AgentProfile {
 pub struct Target {
     #[arg(long, value_enum)]
     pub agent: AgentProfile,
-    /// Existing, explicitly selected per-user provider configuration directory.
+    /// Existing, explicitly selected provider configuration directory.
     #[arg(long)]
     pub profile_root: PathBuf,
 }
@@ -88,10 +90,14 @@ pub fn run(command: Command) -> Result<Value> {
 fn preview(agent: AgentProfile) -> Result<Value> {
     let source = std::env::current_exe()?;
     let agent = agent.agent();
-    let (asset, dialect) = if agent == record::Agent::Opencode {
+    let (asset, dialect) = if agent.is_plugin() {
         (
-            Value::String(render::plugin(&source).map_err(Error::Installation)?),
-            "bun-javascript",
+            Value::String(render::plugin(agent, &source).map_err(Error::Installation)?),
+            if agent == record::Agent::Cline {
+                "cline-javascript"
+            } else {
+                "bun-javascript"
+            },
         )
     } else {
         let entries = render::entries(agent, &source).map_err(Error::Installation)?;
@@ -123,6 +129,10 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         AgentProfile::Droid => (crate::hooks::droid_config(), "posix-shell"),
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
+        AgentProfile::Cline => (
+            crate::hooks::cline_plugin()["content"].clone(),
+            "cline-javascript",
+        ),
         AgentProfile::Opencode => (
             crate::hooks::opencode_plugin()["content"].clone(),
             "bun-javascript",

@@ -154,9 +154,12 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
         Agent::Gemini,
         Agent::Cursor,
         Agent::Opencode,
+        Agent::Cline,
     ] {
         let entries = render::entries(agent, &binary.path).unwrap();
-        let plugin = (agent == Agent::Opencode).then(|| render::plugin(&binary.path).unwrap());
+        let plugin = agent
+            .is_plugin()
+            .then(|| render::plugin(agent, &binary.path).unwrap());
         let owned = Owned {
             template_version: 1,
             package_version: env!("CARGO_PKG_VERSION").into(),
@@ -195,7 +198,11 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             Err("HooksModifiedRecord")
         );
         if let Some(plugin) = plugin {
-            assert!(plugin.contains(r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#));
+            assert!(plugin.contains(match agent {
+                Agent::Opencode => r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#,
+                Agent::Cline => r#"childProcess.execFile("/owned/it's a companion", ['ingest'"#,
+                _ => unreachable!(),
+            }));
             assert!(!plugin.contains("['lazysh-agent'"));
         } else {
             for entry in record.next.unwrap().entries {
@@ -280,36 +287,66 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
 
 #[cfg(unix)]
 #[test]
-fn rendered_opencode_plugin_executes_its_absolute_companion_with_an_empty_path() {
+fn rendered_plugins_execute_their_absolute_companion_with_an_empty_path() {
     use std::{fs, process::Command};
     let runtime = Command::new("bun")
         .args(["-p", "process.execPath"])
         .output()
-        .expect("OpenCode plugin acceptance requires Bun");
+        .expect("plugin acceptance requires Bun");
     assert!(runtime.status.success());
     let runtime = std::path::PathBuf::from(String::from_utf8(runtime.stdout).unwrap().trim());
     assert!(runtime.is_absolute());
-    let directory = tempfile::tempdir().unwrap();
-    let companion = directory.path().join("OpenCode's companion $ with spaces");
-    fs::copy(binary::path(), &companion).unwrap();
-    let plugin = directory.path().join("lazysh.js");
-    fs::write(&plugin, render::plugin(&companion).unwrap()).unwrap();
-    let state = directory.path().join("state");
-    let output=Command::new(runtime).args(["-e",r#"
-        const { LazyshPlugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
-        const hooks = await LazyshPlugin({ directory: '/owned/opencode-project' });
-        await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'owned-plugin', status: { type: 'busy' } } } });
-    "#]).env_clear().env("PATH","").env("LAZYSH_OWNED_PLUGIN",plugin).env("LAZYSH_STATE_DIR",&state).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-    let report = snapshot(&companion, &state);
-    assert_eq!(report["sessions"][0]["sessionId"], "owned-plugin");
-    assert_eq!(report["sessions"][0]["agent"], "OpenCode");
-    assert_eq!(report["sessions"][0]["state"], "working");
+    for (agent, script, expected_agent, expected_session) in [
+        (
+            record::Agent::Opencode,
+            r#"
+            const { LazyshPlugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            const hooks = await LazyshPlugin({ directory: '/owned/opencode-project' });
+            await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'owned-plugin', status: { type: 'busy' } } } });
+        "#,
+            "OpenCode",
+            "owned-plugin".to_string(),
+        ),
+        (
+            record::Agent::Cline,
+            r#"
+            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            plugin.setup({}, { cwd: '/owned/cline-project' });
+            await plugin.hooks.beforeRun({ snapshot: { agentId: 'owned-root', conversationId: 'owned-conversation', runId: 'owned-run' } });
+        "#,
+            "Cline CLI",
+            format!(
+                "cline:{}",
+                record::hash(b"cline-v1\0owned-root\0owned-conversation")
+            ),
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let companion = directory.path().join("Plugin's companion $ with spaces");
+        fs::copy(binary::path(), &companion).unwrap();
+        let plugin = directory.path().join("lazysh.js");
+        fs::write(&plugin, render::plugin(agent, &companion).unwrap()).unwrap();
+        let state = directory.path().join("state");
+        let output = Command::new(&runtime)
+            .args(["-e", script])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_OWNED_PLUGIN", plugin)
+            .env("LAZYSH_STATE_DIR", &state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        let report = snapshot(&companion, &state);
+        assert_eq!(report["sessions"][0]["sessionId"], expected_session);
+        assert_eq!(report["sessions"][0]["agent"], expected_agent);
+        assert_eq!(report["sessions"][0]["state"], "working");
+    }
 }
 
 fn initial_record(agent: record::Agent) -> record::Record {
@@ -318,8 +355,12 @@ fn initial_record(agent: record::Agent) -> record::Record {
     record.agent = agent;
     let owned = record.next.as_mut().unwrap();
     owned.entries = render::entries(agent, &owned.binary.path).unwrap();
-    record.provider_after_sha256 = Some(if agent == record::Agent::Opencode {
-        let digest = record::hash(render::plugin(&owned.binary.path).unwrap().as_bytes());
+    record.provider_after_sha256 = Some(if agent.is_plugin() {
+        let digest = record::hash(
+            render::plugin(agent, &owned.binary.path)
+                .unwrap()
+                .as_bytes(),
+        );
         owned.plugin_sha256 = Some(digest.clone());
         digest
     } else {
@@ -451,44 +492,46 @@ fn update_and_removal_never_infer_success_from_partial_or_edited_owned_entries()
 }
 #[test]
 fn plugin_transitions_use_exact_owned_content_and_reject_contradictory_or_foreign_records() {
-    use state::{classify, Observation};
-    let mut record = initial_record(record::Agent::Opencode);
-    let owned = record.next.as_ref().unwrap();
-    let plugin = render::plugin(&owned.binary.path).unwrap();
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None).unwrap(),
-        Observation::Prepared
-    );
-    assert_eq!(
-        classify(&record, &present(&plugin, 7), Some(&plugin)).unwrap(),
-        Observation::Configured
-    );
-    let foreign = "export const OtherPlugin = () => ({});";
-    assert_eq!(
-        classify(&record, &present(foreign, 8), Some(foreign)).unwrap(),
-        Observation::Conflict
-    );
-    record.previous = record.next.take();
-    record.provider_before = present(&plugin, 7);
-    record.provider_after_sha256 = None;
-    assert_eq!(
-        classify(&record, &record.provider_before, Some(&plugin)).unwrap(),
-        Observation::Prepared
-    );
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None).unwrap(),
-        Observation::Removed
-    );
-    let edited = format!("{plugin}\n// user modification");
-    assert_eq!(
-        classify(&record, &present(&edited, 9), Some(&edited)).unwrap(),
-        Observation::Conflict
-    );
-    record.provider_before = record::FileState::Missing;
-    assert_eq!(
-        classify(&record, &record::FileState::Missing, None),
-        Err("HooksInvalidRecord")
-    );
+    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+        use state::{classify, Observation};
+        let mut record = initial_record(agent);
+        let owned = record.next.as_ref().unwrap();
+        let plugin = render::plugin(agent, &owned.binary.path).unwrap();
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None).unwrap(),
+            Observation::Prepared
+        );
+        assert_eq!(
+            classify(&record, &present(&plugin, 7), Some(&plugin)).unwrap(),
+            Observation::Configured
+        );
+        let foreign = "export const OtherPlugin = () => ({});";
+        assert_eq!(
+            classify(&record, &present(foreign, 8), Some(foreign)).unwrap(),
+            Observation::Conflict
+        );
+        record.previous = record.next.take();
+        record.provider_before = present(&plugin, 7);
+        record.provider_after_sha256 = None;
+        assert_eq!(
+            classify(&record, &record.provider_before, Some(&plugin)).unwrap(),
+            Observation::Prepared
+        );
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None).unwrap(),
+            Observation::Removed
+        );
+        let edited = format!("{plugin}\n// user modification");
+        assert_eq!(
+            classify(&record, &present(&edited, 9), Some(&edited)).unwrap(),
+            Observation::Conflict
+        );
+        record.provider_before = record::FileState::Missing;
+        assert_eq!(
+            classify(&record, &record::FileState::Missing, None),
+            Err("HooksInvalidRecord")
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -538,7 +581,7 @@ impl ProfileFixture {
         self.target.profile.join(match self.target.agent {
             record::Agent::Claude | record::Agent::Gemini => "settings.json",
             record::Agent::Codex | record::Agent::Droid | record::Agent::Cursor => "hooks.json",
-            record::Agent::Opencode => "plugins/lazysh.js",
+            record::Agent::Opencode | record::Agent::Cline => "plugins/lazysh.js",
         })
     }
     fn manifest(&self) -> std::path::PathBuf {
@@ -650,37 +693,59 @@ fn actual_filesystem_installs_reuses_and_removes_owned_entries_without_changing_
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn owned_plugin_absent_install_remove_aba_cannot_replay_the_initial_inspection() {
-    use files::Action;
-    use std::fs;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    let original = fixture.plan(Action::Install);
-    assert!(!fixture.target.profile.join("plugins").exists());
-    assert_eq!(
-        fixture.apply(Action::Install, &original).unwrap().status,
-        "configured"
-    );
-    fs::write(
-        fixture.target.profile.join("plugins/foreign.js"),
-        "preserve other plugin",
-    )
-    .unwrap();
-    assert_eq!(
-        fixture
-            .apply(Action::Remove, &fixture.plan(Action::Remove))
-            .unwrap()
-            .status,
-        "removed"
-    );
-    assert!(!fixture.provider().exists());
-    assert_eq!(
-        fs::read_to_string(fixture.target.profile.join("plugins/foreign.js")).unwrap(),
-        "preserve other plugin"
-    );
-    assert!(fixture.apply(Action::Install, &original).is_err());
-    assert!(
-        fixture.manifest().exists(),
-        "retain the ownership tombstone"
-    );
+    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+        use files::Action;
+        use std::fs;
+        let fixture = ProfileFixture::new(agent);
+        let settings = fixture.target.profile.join("settings.json");
+        fs::write(
+            &settings,
+            "{\"disabledPlugins\":[\"lazysh-root-lifecycle\"]}\n",
+        )
+        .unwrap();
+        let original = fixture.plan(Action::Install);
+        assert!(!fixture.target.profile.join("plugins").exists());
+        assert_eq!(
+            fixture.apply(Action::Install, &original).unwrap().status,
+            "configured"
+        );
+        fs::write(
+            fixture.target.profile.join("plugins/foreign.js"),
+            "preserve other plugin",
+        )
+        .unwrap();
+        assert_eq!(
+            fixture
+                .apply(Action::Remove, &fixture.plan(Action::Remove))
+                .unwrap()
+                .status,
+            "removed"
+        );
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            fs::read_to_string(&settings).unwrap(),
+            "{\"disabledPlugins\":[\"lazysh-root-lifecycle\"]}\n"
+        );
+        fs::write(fixture.provider(), "foreign plugin").unwrap();
+        assert_eq!(
+            fixture.inspect().observation,
+            Some(state::Observation::Conflict)
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+        assert_eq!(
+            fs::read_to_string(fixture.provider()).unwrap(),
+            "foreign plugin"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.target.profile.join("plugins/foreign.js")).unwrap(),
+            "preserve other plugin"
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+        assert!(
+            fixture.manifest().exists(),
+            "retain the ownership tombstone"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -745,21 +810,23 @@ fn fixed_commit_boundary_interruptions_leave_observable_state_and_require_a_fres
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceling_a_prepared_first_install_retains_a_nonreplayable_metadata_tombstone() {
-    use files::Action;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    let original = fixture.plan(Action::Install);
-    fixture.prepare_without_provider(&original);
-    let canceled = fixture
-        .apply(Action::Remove, &fixture.plan(Action::Remove))
-        .unwrap();
-    assert_eq!(canceled.status, "removed");
-    assert!(!canceled.provider_committed);
-    assert!(!fixture.provider().exists());
-    assert_eq!(
-        fixture.inspect().observation,
-        Some(state::Observation::Removed)
-    );
-    assert!(fixture.apply(Action::Install, &original).is_err());
+    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+        use files::Action;
+        let fixture = ProfileFixture::new(agent);
+        let original = fixture.plan(Action::Install);
+        fixture.prepare_without_provider(&original);
+        let canceled = fixture
+            .apply(Action::Remove, &fixture.plan(Action::Remove))
+            .unwrap();
+        assert_eq!(canceled.status, "removed");
+        assert!(!canceled.provider_committed);
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            fixture.inspect().observation,
+            Some(state::Observation::Removed)
+        );
+        assert!(fixture.apply(Action::Install, &original).is_err());
+    }
 }
 
 #[test]
@@ -864,20 +931,22 @@ fn source_and_profile_replacements_before_provider_commit_cannot_change_the_repl
     ignore = "managed writes require native ACL qualification; unsupported before mutation"
 )]
 fn canceled_plugin_setup_with_a_missing_plugins_directory_never_reads_a_same_named_root_file() {
-    use files::Action;
-    use std::fs;
-    let fixture = ProfileFixture::new(record::Agent::Opencode);
-    fixture.prepare_without_provider(&fixture.plan(Action::Install));
-    fs::remove_dir(fixture.target.profile.join("plugins")).unwrap();
-    let unrelated = fixture.target.profile.join("lazysh.js");
-    fs::write(&unrelated, "foreign root file").unwrap();
-    let result = fixture
-        .apply(Action::Remove, &fixture.plan(Action::Remove))
-        .unwrap();
-    assert_eq!(result.status, "removed");
-    assert!(!result.provider_committed);
-    assert!(!fixture.target.profile.join("plugins").exists());
-    assert_eq!(fs::read_to_string(unrelated).unwrap(), "foreign root file");
+    for agent in [record::Agent::Opencode, record::Agent::Cline] {
+        use files::Action;
+        use std::fs;
+        let fixture = ProfileFixture::new(agent);
+        fixture.prepare_without_provider(&fixture.plan(Action::Install));
+        fs::remove_dir(fixture.target.profile.join("plugins")).unwrap();
+        let unrelated = fixture.target.profile.join("lazysh.js");
+        fs::write(&unrelated, "foreign root file").unwrap();
+        let result = fixture
+            .apply(Action::Remove, &fixture.plan(Action::Remove))
+            .unwrap();
+        assert_eq!(result.status, "removed");
+        assert!(!result.provider_committed);
+        assert!(!fixture.target.profile.join("plugins").exists());
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "foreign root file");
+    }
 }
 
 #[test]
@@ -1122,6 +1191,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Gemini,
         record::Agent::Cursor,
         record::Agent::Opencode,
+        record::Agent::Cline,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -1545,6 +1615,7 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
         ".factory",
         ".cursor",
         ".config/opencode",
+        ".cline",
         "extra",
         "gemini-home/.gemini",
     ] {
@@ -1587,8 +1658,12 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
             .len(),
         2
     );
+    assert_eq!(discovered(&result, "cline")["setup"], "managed");
+    assert_eq!(
+        discovered(&result, "cline")["profiles"][0]["path"],
+        home.join(".cline").to_str().unwrap()
+    );
     for (agent, setup) in [
-        ("cline", "manual"),
         ("kimi", "manual"),
         ("copilot", "manual"),
         ("amp", "manual"),
@@ -1655,6 +1730,36 @@ fn discovery_invalid_nonempty_overrides_never_fall_back_and_empty_overrides_do()
     assert!(!absent.exists());
 }
 #[test]
+fn discovery_cline_override_matches_javascript_trim_and_never_selects_a_distinct_whitespace_directory(
+) {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let selected = home.join("selected");
+    fs::create_dir(&selected).unwrap();
+    fs::create_dir(home.join("selected ")).unwrap();
+    fs::create_dir(home.join(".cline")).unwrap();
+    let marker = home.join("must-not-execute");
+    let bin = home.join("bin");
+    metadata_executable(&bin.join("cline"), &marker);
+    let active = json!({"path":selected,"source":"CLINE_DIR","state":"directory"});
+    let fallback = json!({"path":home.join(".cline"),"source":"HOME","state":"directory"});
+    let invalid = json!({"path":null,"source":"CLINE_DIR","state":"invalid"});
+    for (value, expected) in [
+        (format!(" {} ", selected.display()), active.clone()),
+        (format!("{} ", selected.display()), active.clone()),
+        (format!("\u{feff}{}\u{feff}", selected.display()), active),
+        (" ".into(), fallback.clone()),
+        ("\u{feff}".into(), fallback),
+        ("\u{0085}".into(), invalid.clone()),
+        (format!("{}\u{0085}", selected.display()), invalid),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CLINE_DIR", OsStr::new(&value))]);
+        assert_eq!(discovered(&result, "cline")["profiles"][0], expected);
+    }
+    assert!(!marker.exists());
+}
+#[test]
 fn discovery_honors_config_directory_layers_aliases_and_profile_link_boundaries() {
     use std::{
         ffi::OsStr,
@@ -1665,7 +1770,7 @@ fn discovery_honors_config_directory_layers_aliases_and_profile_link_boundaries(
     let home = root.path();
     let bin = home.join("bin");
     let marker = home.join("marker");
-    for name in ["opencode", "cursor-agent", "claude", "codex"] {
+    for name in ["opencode", "cursor-agent", "claude", "codex", "cline"] {
         metadata_executable(&bin.join(name), &marker);
     }
     let config = home.join("config");
@@ -1679,11 +1784,16 @@ fn discovery_honors_config_directory_layers_aliases_and_profile_link_boundaries(
         &[
             ("XDG_CONFIG_HOME", config.as_os_str()),
             ("OPENCODE_CONFIG", ignored.as_os_str()),
+            ("CLINE_DIR", config.as_os_str()),
         ],
     );
     assert_eq!(
         discovered(&result, "opencode")["profiles"][0]["path"],
         config.join("opencode").to_str().unwrap()
+    );
+    assert_eq!(
+        discovered(&result, "cline")["profiles"][0],
+        json!({"path":config,"source":"CLINE_DIR","state":"directory"})
     );
     let cursor_profile = json!({"path": home.join(".cursor"), "source":"HOME", "state":"missing"});
     assert_eq!(
@@ -1871,6 +1981,7 @@ fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
         ".gemini",
         ".cursor",
         ".config/opencode",
+        ".cline",
         "extra",
     ] {
         fs::create_dir_all(home.join(suffix)).unwrap();
