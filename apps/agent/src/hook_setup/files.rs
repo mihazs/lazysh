@@ -206,7 +206,7 @@ impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
         match self.target.agent {
             Agent::Claude | Agent::Gemini => "settings.json",
-            Agent::Codex | Agent::Cursor => "hooks.json",
+            Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
             Agent::Opencode => "lazysh.js",
         }
     }
@@ -336,7 +336,7 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     }
     let provider_name = match target.agent {
         Agent::Claude | Agent::Gemini => "settings.json",
-        Agent::Codex | Agent::Cursor => "hooks.json",
+        Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
         Agent::Opencode => "lazysh.js",
     };
     let provider = if target.agent == Agent::Opencode && plugins.is_none() {
@@ -353,6 +353,10 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
             json::MAXIMUM,
         )?
     };
+    // Creating a standalone Droid file could shadow settings/legacy fallback hooks.
+    if target.agent == Agent::Droid && provider.state == FileState::Missing {
+        return Err(rejected("HooksDroidStandaloneRequired"));
+    }
     let manifest = read(
         &profile,
         &format!(".lazysh-hooks-{}.json", target.agent.name()),

@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 - Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.
+- Classify failed companion installer tag rechecks with closed diagnostics while preserving localized errors, provenance verification and installation defaults.
+
+- Add explicit managed Droid hook setup for an existing standalone `.factory/hooks.json`, including the connected Agents selector. Preserve foreign event groups and fallback/settings policy, bind the inspected absolute companion, and refuse missing files rather than shadowing legacy hooks. Fresh-profile migration and native Droid runtime qualification remain unsupported; no defaults or trust settings change.
+
+- Display native terminal failure messages instead of `[object Object]`, preserving localized errors.
+
+- Keep connected Herdr navigation and agent reports in one scrollable drawer so live rows remain reachable on short phone screens. Preserve the existing navigation, report readers and drafts when switching views.
+- Initialize companion database tables and indexes in one deferred transaction, avoiding separate schema commits and rolling back partial initialization on failure. Preserve full synchronization, existing writer coexistence and storage wait budgets.
 
 - Keep Android status and navigation icons light over the fixed navy native window background in both system appearances. Preserve keyboard and system insets and custom app/terminal themes.
 - Add a print-only Cline runtime plugin for root run activity, completion/stopped and generic failure attention, using native run identities and a two-second companion writer deadline. Child runs, permission waits and managed Cline installation remain unsupported; existing profiles, approval policy and adapters are unchanged.

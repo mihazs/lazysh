@@ -5,7 +5,7 @@ import {join,resolve} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import type {Writable} from 'node:stream';
 import {finished} from 'node:stream/promises';
-import {OwnedProcess} from './androidSsh';
+import {OwnedProcess,nativeReportCases} from './androidSsh';
 import {attestQrCamera} from './androidQrOwnership';
 
 const packages=['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client'] as const;
@@ -163,11 +163,10 @@ export async function realNtfyStartup(archive:string,root=resolve(import.meta.di
   }
 }
 export function validateNtfyReport(text:string) {
-  const xml=text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,'');
-  const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
+  const {cases,failed}=nativeReportCases(text);
   if(cases.length!==fixtureCases.length||new Set(cases.map(row=>row.name)).size!==fixtureCases.length||
       cases.some(row=>row.className!=='app.lazysh.client.NativeWorkspaceTest'||!fixtureCases.includes(row.name??''))||
-      /<(?:failure|error|skipped)\b/.test(xml))throw new Error('Actual native ntfy cases did not pass without skips');
+      failed)throw new Error('Actual native ntfy cases did not pass without skips');
   return {nativeCase:fixtureCase,nativeCases:fixtureCases,passed:fixtureCases.length,failed:0,skipped:0};
 }
 async function receipt(directory:string) {
@@ -180,6 +179,19 @@ export function firstLaunchObservation(text:string) {
   const match=/Distributor menu; foreground=(ntfy|permission|lazysh|other) allow=(true|false) deny=(true|false) toolbar=(true|false) ownedPrompt=(true|false) attempted=(true|false)/.exec(text);
   if(!match)return;
   return {foreground:match[1],allow:match[2]==='true',deny:match[3]==='true',toolbar:match[4]==='true',ownedPrompt:match[5]==='true',attempted:match[6]==='true'};
+}
+export function permissionActionObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy first-launch action[').length!==2)return;
+  const match=/Ntfy first-launch action\[stage=(none|foreground|allow|deny|toolbar|prompt|menu|click) before=(unavailable|positive|expired) after=(unavailable|positive|expired) action=(none|calling|returned|threw) snapshot=(unavailable|beforeAction|afterAction) permission=(granted|denied|unavailable)\]/.exec(text);
+  if(!match)return;
+  const [,stage,before,after,action,snapshot,permission]=match;
+  if((stage==='none')!==(before==='unavailable') ||
+    (stage==='none' && (after!=='unavailable' || action!=='none' || snapshot!=='unavailable')) ||
+    (stage==='click' && action==='none') ||
+    ((action==='calling' || action==='threw') && (stage!=='click' || after!=='unavailable')) ||
+    (stage==='click' && action==='returned' && after==='unavailable') ||
+    (snapshot==='afterAction' && action!=='returned'))return;
+  return {stage,before,after,action,snapshot,permission};
 }
 export function nativeFailureStage(failure:string) {
   const stages=[['Distributor menu','distributor_menu'],['Distributor settings','distributor_settings'],
@@ -203,7 +215,7 @@ export function settingsObservation(text:string) {
 }
 export function eventObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;
-  const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow))?\]/g)];
+  const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow)(?: hostProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) issuedInHandler=(within|outside|unavailable) postProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) callbackProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) postClock=(unavailable|beforeIssued|expired|withinWindow))?)?\]/g)];
   if(rows.length!==1)return;
   const match=rows[0];
   if(match[1]==='false' && match[2]==='true')return;
@@ -211,7 +223,7 @@ export function eventObservation(text:string) {
   return {entered:match[1]==='true',readReturned:match[2]==='true',initialReceipts:match[3],finalReceipts:match[4],
     appNotifications:flag(match[5]),postPermission:flag(match[6]),channelEnabled:flag(match[7]),ownedNotification:flag(match[8]),
     ...(match[9]===undefined?{}:{reads:match[9],returnedReads:match[10],writes:match[11],returnedWrites:match[12],
-      storedEnabled:flag(match[13]),clock:match[14]})};
+      storedEnabled:flag(match[13]),clock:match[14],...(match[15]===undefined?{}:{hostProgress:match[15],issuedInHandler:match[16],postProgress:match[17],callbackProgress:match[18],postClock:match[19]})})};
 }
 async function nativeFailure(directory:string) {
   try {
@@ -221,9 +233,10 @@ async function nativeFailure(directory:string) {
     const failure=/<failure\b[\s\S]*?<\/failure>/.exec(text)?.[0]??'';
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
+    const permissionAction=permissionActionObservation(failure);
     const settings=settingsObservation(failure);
     const event=eventObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{})};
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{})};
   }catch{return {};}
 }
 

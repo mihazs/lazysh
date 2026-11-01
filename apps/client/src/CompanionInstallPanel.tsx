@@ -13,13 +13,15 @@ const failures={companion_install_busy:'companionInstallAlreadyRunning',companio
 
 const failureKinds=['companion_install_busy','companion_install_unsupported','companion_release_unavailable','companion_newer_installed','companion_installer_invalid','companion_staging','companion_install_timeout','disconnected','app_locked','ssh_error','remote_command_failed','invalid_output','output_too_large','timeout'] as const;
 type FailureKind=typeof failureKinds[number]|'other'|'none';
-type Observation={phase:Stage|'preflight'|'unavailable';failure:FailureKind;outcome:'idle'|'pending'|'failed'|Result['status'];reason:NonNullable<Result['reason']>|'none'};
+type Observation={phase:Stage|'preflight'|'unavailable';failure:FailureKind;outcome:'idle'|'pending'|'failed'|Result['status'];reason:NonNullable<Result['reason']>|'none';recheck?:string};
 const initialObservation:Observation={phase:'unavailable',failure:'none',outcome:'idle',reason:'none'};
-export function companionInstallFailure(error:unknown):{phase?:Observation['phase'];failure:FailureKind} {
+export function companionInstallFailure(error:unknown):{phase?:Observation['phase'];failure:FailureKind;recheck?:string} {
   if(!error || typeof error!=='object')return {failure:'other'};
-  const value=error as {kind?:unknown;phase?:unknown};
+  const value=error as {kind?:unknown;phase?:unknown;message?:unknown};
   const phase=value.phase===null?'preflight':companionInstallStage({stage:value.phase});
-  return {phase:phase==='cleaningUp'?undefined:phase,failure:failureKinds.includes(value.kind as typeof failureKinds[number])?value.kind as FailureKind:'other'};
+  const recheck=value.kind==='companion_release_unavailable' && phase==='verifying' && typeof value.message==='string'
+    && value.message===value.message.trim() && /^lazysh-tag-recheck-v1:(?:transport:(?:timeout|connect|redirect|body|decode|request|other)|status:(?:[1-5][0-9]{2}|other)|body|json|ref|type|sha)$/.test(value.message)?value.message:undefined;
+  return {...(recheck?{recheck}:{}),phase:phase==='cleaningUp'?undefined:phase,failure:failureKinds.includes(value.kind as typeof failureKinds[number])?value.kind as FailureKind:'other'};
 }
 
 export function companionInstallStage(value:unknown):Stage|undefined {
@@ -72,13 +74,13 @@ export default function CompanionInstallPanel({sessionId,visible=true,ready=fals
       const kind=error && typeof error==='object' && 'kind' in error?error.kind:undefined;
       if(owns()){
         const failure=companionInstallFailure(error);
-        setObservation(previous=>({...previous,...(failure.phase?{phase:failure.phase}:{}),failure:failure.failure,outcome:'failed'}));
+        setObservation(previous=>({...previous,...(failure.phase?{phase:failure.phase}:{}),failure:failure.failure,recheck:failure.recheck,outcome:'failed'}));
         setError(typeof kind==='string' && Object.hasOwn(failures,kind)?new LocalUiError(failures[kind as keyof typeof failures]):captureUiError(error));
       }
     }
     finally {if(owns())setStage(undefined);if(pending.current===current)pending.current=null;}
   }
-  return <details data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-outcome={observation.outcome} data-install-reason={observation.reason} data-install-cleanup-stage={result?.cleanupFailure?.stage??'none'} data-install-cleanup-reason={result?.cleanupFailure?.reason??'none'} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
+  return <details data-install-recheck={observation.recheck} data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-outcome={observation.outcome} data-install-reason={observation.reason} data-install-cleanup-stage={result?.cleanupFailure?.stage??'none'} data-install-cleanup-reason={result?.cleanupFailure?.reason??'none'} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
     <summary>{t('companionInstallTitle')}</summary>
     <div className="tool-bar"><button className="subtle-button" disabled={!visible || !!stage || !access.current()} onClick={()=>void install()}>{stage?t('companionInstallBusy'):t(ready?'companionInstallUpdate':'companionInstallButton')}</button></div>
     {stage && <p className="agent-note" role="status">{t(stages[stage])}</p>}

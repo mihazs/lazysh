@@ -140,6 +140,16 @@ enum WorkerStage {
     Open,
     Ingest,
     Complete,
+    Unknown,
+}
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+enum WorkerOrigin {
+    Initialization,
+    TransientLock,
+    ConcurrentHooks,
 }
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum WorkerResult {
@@ -151,14 +161,17 @@ enum WorkerResult {
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InitializationWorker {
+    origin: WorkerOrigin,
     round: u8,
     worker: u8,
     started_after_us: u64,
-    open_elapsed_us: u64,
+    open_elapsed_us: Option<u64>,
     total_elapsed_us: u64,
+    actual_hold_us: Option<u64>,
     stage: WorkerStage,
     result: WorkerResult,
     sqlite_code: Option<i32>,
+    exit_code: Option<i32>,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum InitializationRecord {
@@ -181,7 +194,111 @@ impl InitializationRecord {
         }
     }
 }
+pub(super) fn assert_child_storage_error(output: &Output, code: i32) {
+    let record = InitializationWorker::child(
+        0,
+        output,
+        &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+    )
+    .unwrap();
+    assert!(record.valid());
+    assert_eq!(record.result, WorkerResult::StorageError);
+    assert_eq!(record.sqlite_code, Some(code));
+    assert_eq!(record.stage, WorkerStage::Unknown);
+    assert_eq!(record.open_elapsed_us, None);
+}
+
+// Only the CLI's complete sanitized terminal error is source-bound here.
+// It identifies a cause class, never the SQL boundary or time spent waiting.
+fn child_error(output: &Output) -> Option<(WorkerResult, Option<i32>)> {
+    if output.status.code() != Some(1) || !output.stdout.is_empty() || output.stderr.len() > 4096 {
+        return None;
+    }
+    let line = std::str::from_utf8(&output.stderr)
+        .ok()?
+        .strip_suffix('\n')?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    match line {
+        "lazysh-agent: IoError: operation failed" => Some((WorkerResult::IoError, None)),
+        "lazysh-agent: StorageError: operation failed" => Some((WorkerResult::StorageError, None)),
+        _ => {
+            let code = line
+                .strip_prefix("lazysh-agent: StorageError: operation failed (sqlite_code=")?
+                .strip_suffix(')')?;
+            let value = code.parse::<i32>().ok()?;
+            (value.to_string() == code).then_some((WorkerResult::StorageError, Some(value)))
+        }
+    }
+}
+
 impl InitializationWorker {
+    fn child(
+        worker: u8,
+        output: &Output,
+        (start, elapsed): &(std::time::Duration, std::time::Duration),
+    ) -> Option<Self> {
+        let (result, sqlite_code) = child_error(output).unwrap_or_else(|| {
+            (
+                if output.status.success() {
+                    WorkerResult::Success
+                } else {
+                    WorkerResult::OtherError
+                },
+                None,
+            )
+        });
+        Some(Self {
+            origin: WorkerOrigin::ConcurrentHooks,
+            round: 0,
+            worker,
+            started_after_us: u64::try_from(start.as_micros()).ok()?,
+            open_elapsed_us: None,
+            total_elapsed_us: u64::try_from(elapsed.as_micros()).ok()?,
+            actual_hold_us: None,
+            // The ordinary child strips diagnostics. Its SQL boundary is not observed.
+            stage: WorkerStage::Unknown,
+            result,
+            sqlite_code,
+            exit_code: output.status.code(),
+        })
+    }
+
+    fn valid(&self) -> bool {
+        if self.worker >= 16
+            || self.round
+                >= if self.origin == WorkerOrigin::Initialization {
+                    4
+                } else {
+                    1
+                }
+            || self
+                .open_elapsed_us
+                .is_some_and(|open| open > self.total_elapsed_us)
+        {
+            return false;
+        }
+        if self.origin == WorkerOrigin::ConcurrentHooks {
+            return self.open_elapsed_us.is_none()
+                && self.actual_hold_us.is_none()
+                && self.stage == WorkerStage::Unknown
+                && match (&self.result, self.exit_code) {
+                    (WorkerResult::Success, Some(0)) => self.sqlite_code.is_none(),
+                    (WorkerResult::StorageError, Some(1)) => true,
+                    (WorkerResult::IoError, Some(1)) => self.sqlite_code.is_none(),
+                    (WorkerResult::OtherError, code) => {
+                        code != Some(0) && self.sqlite_code.is_none()
+                    }
+                    _ => false,
+                };
+        }
+        self.open_elapsed_us.is_some()
+            && self.exit_code.is_none()
+            && self.actual_hold_us.is_some() == (self.origin == WorkerOrigin::TransientLock)
+            && self.stage != WorkerStage::Unknown
+            && (self.stage == WorkerStage::Complete) == (self.result == WorkerResult::Success)
+            && (self.sqlite_code.is_none() || self.result == WorkerResult::StorageError)
+    }
+
     fn observed(round: u8, worker: u8, observed: &super::ContendedWorker) -> Option<Self> {
         let stage = match observed.stage {
             "open" => WorkerStage::Open,
@@ -203,28 +320,62 @@ impl InitializationWorker {
         };
         let micros = |duration: std::time::Duration| u64::try_from(duration.as_micros()).ok();
         Some(Self {
+            origin: WorkerOrigin::Initialization,
             round,
             worker,
             started_after_us: micros(observed.started_after)?,
-            open_elapsed_us: micros(observed.open_elapsed)?,
+            open_elapsed_us: Some(micros(observed.open_elapsed)?),
             total_elapsed_us: micros(observed.total_elapsed)?,
+            actual_hold_us: None,
             stage,
             result,
             sqlite_code,
+            exit_code: None,
         })
+    }
+}
+fn emit_workers(records: impl IntoIterator<Item = Option<InitializationWorker>>) {
+    for record in records.into_iter().flatten() {
+        assert!(record.valid(), "invalid owned worker observation");
+        let _ = io::stderr()
+            .lock()
+            .write_all(InitializationRecord::Worker(record).line().as_bytes());
     }
 }
 pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorker]) {
     assert!(round < 4, "initialization round exceeds fixture bound");
     assert_eq!(workers.len(), 16, "initialization worker count changed");
     // Observe only after all workers join; do not add stderr contention inside Store::open.
-    for (worker, observed) in workers.iter().enumerate() {
-        if let Some(record) = InitializationWorker::observed(round, worker as u8, observed) {
-            let _ = io::stderr()
-                .lock()
-                .write_all(InitializationRecord::Worker(record).line().as_bytes());
-        }
-    }
+    emit_workers(
+        workers.iter().enumerate().map(|(worker, observed)| {
+            InitializationWorker::observed(round, worker as u8, observed)
+        }),
+    );
+}
+pub(super) fn transient_workers(hold: std::time::Duration, workers: &[super::ContendedWorker]) {
+    assert_eq!(workers.len(), 16, "transient worker count changed");
+    emit_workers(workers.iter().enumerate().map(|(worker, observed)| {
+        let mut record = InitializationWorker::observed(0, worker as u8, observed)?;
+        record.origin = WorkerOrigin::TransientLock;
+        record.actual_hold_us = Some(u64::try_from(hold.as_micros()).ok()?);
+        Some(record)
+    }));
+}
+pub(super) fn concurrent_workers(
+    outputs: &[Output],
+    timings: &[(std::time::Duration, std::time::Duration)],
+) {
+    assert_eq!(outputs.len(), 16, "concurrent worker count changed");
+    assert_eq!(outputs.len(), timings.len(), "missing owned child timing");
+    emit_workers(
+        outputs
+            .iter()
+            .zip(timings)
+            .enumerate()
+            .map(|(worker, (output, timing))| {
+                InitializationWorker::child(worker as u8, output, timing)
+            }),
+    );
 }
 
 // Only reviewed source names may leave the private owner spool.
@@ -285,6 +436,8 @@ const FAILED_TESTS: &[&str] = &[
     "storage_trace::initialization_projection_exports_only_bounded_closed_records",
     "storage_trace::initialization_worker_projection_keeps_timing_without_raw_causes",
     "storage_trace::initialization_worker_stage_drift_still_fails",
+    "storage_trace::worker_origins_keep_independent_epochs_and_strict_bounds",
+    "storage_trace::child_observations_keep_unknown_sql_phase_and_redact_output",
     "storage_trace::project_owned_initialization_diagnostics",
     "storage_trace::trace_export_rejects_symlinks_and_hard_links_without_reading_them",
     "sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code",
@@ -300,7 +453,7 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
     }
     let mut records = Vec::new();
     let mut phases = 0;
-    let mut workers = 0u64;
+    let mut workers = std::collections::BTreeSet::new();
     let mut failed_tests = std::collections::BTreeSet::new();
     for line in std::str::from_utf8(bytes).ok()?.lines() {
         if line.starts_with(failure_record::PREFIX) {
@@ -316,20 +469,12 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
                 return None;
             }
             let record: InitializationWorker = serde_json::from_str(json).ok()?;
-            if record.round >= 4
-                || record.worker >= 16
-                || record.open_elapsed_us > record.total_elapsed_us
-                || (record.stage == WorkerStage::Complete)
-                    != (record.result == WorkerResult::Success)
-                || (record.sqlite_code.is_some() && record.result != WorkerResult::StorageError)
-            {
+            if !record.valid() {
                 return None;
             }
-            let bit = 1u64 << (record.round * 16 + record.worker);
-            if workers & bit != 0 {
+            if !workers.insert((record.origin, record.round, record.worker)) {
                 return None;
             }
-            workers |= bit;
             records.push(InitializationRecord::Worker(record));
         } else if line.starts_with("test result: ") {
             continue;
@@ -492,9 +637,19 @@ fn failed_test_allowlist_covers_every_owned_source_test() {
     assert_eq!(declared.len(), FAILED_TESTS.len());
 }
 
-#[test]
-fn initialization_worker_projection_keeps_timing_without_raw_causes() {
-    let observed = super::ContendedWorker {
+fn rejects_worker_fields(value: &serde_json::Value, changes: &[(&str, serde_json::Value)]) {
+    for (field, invalid) in changes {
+        let mut invalid_record = value.clone();
+        invalid_record[*field] = invalid.clone();
+        assert!(
+            initialization_projection(format!("{WORKER_PREFIX}{invalid_record}\n").as_bytes())
+                .is_none()
+        );
+    }
+}
+
+fn contended_observation() -> super::ContendedWorker {
+    super::ContendedWorker {
         started_after: std::time::Duration::from_micros(17),
         open_elapsed: std::time::Duration::from_micros(3_001_000),
         total_elapsed: std::time::Duration::from_micros(3_001_009),
@@ -505,7 +660,12 @@ fn initialization_worker_projection_keeps_timing_without_raw_causes() {
                 Some("private path payload".into()),
             ),
         )),
-    };
+    }
+}
+
+#[test]
+fn initialization_worker_projection_keeps_timing_without_raw_causes() {
+    let observed = contended_observation();
     let record = InitializationWorker::observed(0, 0, &observed).unwrap();
     let line = InitializationRecord::Worker(record).line();
     assert!(!line.contains("private"));
@@ -535,26 +695,29 @@ fn initialization_worker_projection_keeps_timing_without_raw_causes() {
         initialization_projection(mixed.as_bytes()).unwrap().len(),
         3
     );
-    for (field, invalid) in [
-        ("round", serde_json::json!(4)),
-        ("worker", serde_json::json!(16)),
-        ("startedAfterUs", serde_json::json!(-1)),
-        ("openElapsedUs", serde_json::json!(3_001_010)),
-        ("totalElapsedUs", serde_json::json!(1.5)),
-        ("stage", serde_json::json!("private")),
-        ("stage", serde_json::json!("complete")),
-        ("result", serde_json::json!("Success")),
-        ("result", serde_json::json!("private")),
-        ("result", serde_json::json!("IoError")),
-        ("extra", serde_json::json!("private")),
-    ] {
-        let mut invalid_record = value.clone();
-        invalid_record[field] = invalid;
-        assert!(
-            initialization_projection(format!("{WORKER_PREFIX}{invalid_record}\n").as_bytes())
-                .is_none()
-        );
-    }
+    rejects_worker_fields(
+        &value,
+        &[
+            ("origin", serde_json::json!("private")),
+            ("origin", serde_json::json!("transient_lock")),
+            ("origin", serde_json::json!("concurrent_hooks")),
+            ("actualHoldUs", serde_json::json!(250000)),
+            ("openElapsedUs", serde_json::Value::Null),
+            ("exitCode", serde_json::json!(1)),
+            ("stage", serde_json::json!("unknown")),
+            ("round", serde_json::json!(4)),
+            ("worker", serde_json::json!(16)),
+            ("startedAfterUs", serde_json::json!(-1)),
+            ("openElapsedUs", serde_json::json!(3_001_010)),
+            ("totalElapsedUs", serde_json::json!(1.5)),
+            ("stage", serde_json::json!("private")),
+            ("stage", serde_json::json!("complete")),
+            ("result", serde_json::json!("Success")),
+            ("result", serde_json::json!("private")),
+            ("result", serde_json::json!("IoError")),
+            ("extra", serde_json::json!("private")),
+        ],
+    );
     assert!(initialization_projection(format!("{line}{line}").as_bytes()).is_none());
     let mut rows = String::new();
     for round in 0..4 {
@@ -580,6 +743,206 @@ fn initialization_worker_projection_keeps_timing_without_raw_causes() {
         InitializationRecord::Worker(InitializationWorker::observed(0, 0, &opaque).unwrap()).line();
     assert!(!line.contains("private"));
     assert!(line.contains("OtherError"));
+}
+
+#[test]
+fn worker_origins_keep_independent_epochs_and_strict_bounds() {
+    let observed = contended_observation();
+    let mut records = String::new();
+    for origin in [
+        WorkerOrigin::Initialization,
+        WorkerOrigin::TransientLock,
+        WorkerOrigin::ConcurrentHooks,
+    ] {
+        let rounds = if origin == WorkerOrigin::Initialization {
+            4
+        } else {
+            1
+        };
+        for round in 0..rounds {
+            for worker in 0..16 {
+                let mut record = InitializationWorker::observed(round, worker, &observed).unwrap();
+                record.origin = origin;
+                match origin {
+                    WorkerOrigin::Initialization => {}
+                    WorkerOrigin::TransientLock => record.actual_hold_us = Some(250123),
+                    WorkerOrigin::ConcurrentHooks => {
+                        record.open_elapsed_us = None;
+                        record.stage = WorkerStage::Unknown;
+                        record.result = WorkerResult::OtherError;
+                        record.sqlite_code = None;
+                        record.exit_code = Some(1);
+                    }
+                }
+                assert!(record.valid());
+                let line = InitializationRecord::Worker(record).line();
+                assert!(line.len() <= 512);
+                records.push_str(&line);
+            }
+        }
+    }
+    let decoded = initialization_projection(records.as_bytes()).unwrap();
+    assert_eq!(decoded.len(), 96);
+    let InitializationRecord::Worker(transient) = &decoded[64] else {
+        panic!("expected transient worker");
+    };
+    assert_eq!(transient.origin, WorkerOrigin::TransientLock);
+    assert_eq!(transient.round, 0);
+    assert_eq!(transient.actual_hold_us, Some(250123));
+    assert_eq!(transient.open_elapsed_us, Some(3_001_000));
+    assert_eq!(
+        transient.total_elapsed_us - transient.open_elapsed_us.unwrap(),
+        9
+    );
+    let duplicate = decoded[64].line();
+    assert!(initialization_projection(format!("{records}{duplicate}").as_bytes()).is_none());
+    let invalid_round = duplicate.replace("\"round\":0", "\"round\":1");
+    assert!(initialization_projection(invalid_round.as_bytes()).is_none());
+}
+
+#[test]
+fn child_observations_keep_unknown_sql_phase_and_redact_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut error = super::run(directory.path(), &["ingest", "--agent", "generic"], b"{}");
+    assert_eq!(error.status.code(), Some(1));
+    for (text, result, code) in [
+        ("IoError: operation failed", WorkerResult::IoError, None),
+        (
+            "StorageError: operation failed",
+            WorkerResult::StorageError,
+            None,
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=5)",
+            WorkerResult::StorageError,
+            Some(5),
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=-2147483648)",
+            WorkerResult::StorageError,
+            Some(i32::MIN),
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=2147483647)",
+            WorkerResult::StorageError,
+            Some(i32::MAX),
+        ),
+    ] {
+        for ending in ["\n", "\r\n"] {
+            error.stderr = format!("lazysh-agent: {text}{ending}").into_bytes();
+            let record = InitializationWorker::child(
+                7,
+                &error,
+                &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+            )
+            .unwrap();
+            assert_eq!(record.result, result);
+            assert_eq!(record.sqlite_code, code);
+            assert_eq!(record.stage, WorkerStage::Unknown);
+            assert_eq!(record.open_elapsed_us, None);
+            let value = serde_json::to_value(&record).unwrap();
+            rejects_worker_fields(
+                &value,
+                &[
+                    ("exitCode", serde_json::json!(0)),
+                    ("stage", serde_json::json!("ingest")),
+                    ("openElapsedUs", serde_json::json!(0)),
+                ],
+            );
+            assert!(initialization_projection(
+                InitializationRecord::Worker(record).line().as_bytes()
+            )
+            .is_some());
+        }
+    }
+    for code in [
+        "+5",
+        "05",
+        "-0",
+        " 5",
+        "5 ",
+        "2147483648",
+        "-2147483649",
+        "",
+        "private",
+    ] {
+        error.stderr =
+            format!("lazysh-agent: StorageError: operation failed (sqlite_code={code})\n")
+                .into_bytes();
+        assert!(child_error(&error).is_none());
+    }
+    let canonical = b"lazysh-agent: StorageError: operation failed (sqlite_code=5)\n";
+    for rejected in [
+        [canonical.as_slice(), canonical.as_slice()].concat(),
+        [canonical.as_slice(), b"private payload"].concat(),
+        [
+            journal_mode_busy_record().line().as_bytes(),
+            canonical.as_slice(),
+        ]
+        .concat(),
+        [
+            b"lazysh-storage-diagnostic {invalid}\n",
+            canonical.as_slice(),
+        ]
+        .concat(),
+        [b"private payload\n", canonical.as_slice()].concat(),
+        canonical[..canonical.len() - 1].to_vec(),
+        vec![b'x'; 4097],
+        vec![0xff],
+    ] {
+        error.stderr = rejected;
+        assert!(child_error(&error).is_none());
+    }
+    error.stderr = canonical.to_vec();
+    error.stdout = b"private output".to_vec();
+    assert!(child_error(&error).is_none());
+
+    for (worker, args) in [
+        (0, &["--help"][..]),
+        (1, &["private-unrecognized-command"][..]),
+    ] {
+        let started = std::time::Instant::now();
+        let output = super::run(directory.path(), args, b"");
+        assert_eq!(output.status.success(), worker == 0);
+        let mut contradiction = output.clone();
+        contradiction.stdout.clear();
+        contradiction.stderr = canonical.to_vec();
+        assert!(child_error(&contradiction).is_none());
+        let timing = (std::time::Duration::from_micros(19), started.elapsed());
+        let record = InitializationWorker::child(worker, &output, &timing).unwrap();
+        assert!(record.valid());
+        let line = InitializationRecord::Worker(record).line();
+        assert!(!line.contains("private"));
+        let decoded = initialization_projection(line.as_bytes()).unwrap();
+        assert_eq!(decoded.len(), 1);
+        let InitializationRecord::Worker(record) = &decoded[0] else {
+            panic!("expected child observation");
+        };
+        assert_eq!(record.origin, WorkerOrigin::ConcurrentHooks);
+        assert_eq!(record.stage, WorkerStage::Unknown);
+        assert_eq!(record.open_elapsed_us, None);
+        assert_eq!(record.sqlite_code, None);
+        assert_eq!(record.exit_code, output.status.code());
+        let value: serde_json::Value =
+            serde_json::from_str(line.strip_prefix(WORKER_PREFIX).unwrap()).unwrap();
+        rejects_worker_fields(
+            &value,
+            &[
+                ("round", serde_json::json!(1)),
+                ("stage", serde_json::json!("ingest")),
+                ("openElapsedUs", serde_json::json!(0)),
+                ("actualHoldUs", serde_json::json!(0)),
+                ("sqliteCode", serde_json::json!(5)),
+                ("extra", serde_json::json!("private")),
+            ],
+        );
+        let mut contradiction = value;
+        contradiction["exitCode"] = serde_json::json!(if worker == 0 { 1 } else { 0 });
+        assert!(
+            initialization_projection(format!("{WORKER_PREFIX}{contradiction}\n").as_bytes())
+                .is_none()
+        );
+    }
 }
 
 #[test]

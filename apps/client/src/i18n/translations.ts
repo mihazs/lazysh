@@ -63,6 +63,7 @@ const translations = {
   hooksRemove: ["Remover hooks do lazysh", "Eliminar hooks de lazysh"],
   hooksConfigured: ["Hooks configurados. Relatórios ao vivo não verificados.", "Hooks configurados. Informes en vivo sin verificar."],
   hooksNotConfigured: ["Hooks precisam de configuração ou reparo.", "Los hooks necesitan configuración o reparación."],
+  hooksDroidStandaloneRequired: ["Crie hooks.json independente na interface /hooks do Droid e inspecione novamente. As configurações e os hooks antigos não são migrados.", "Crea hooks.json independiente en la interfaz /hooks de Droid y vuelve a inspeccionar. La configuración y los hooks antiguos no se migran."],
   hooksUnsupported: ["A configuração de hooks ainda não é suportada neste sistema de arquivos.", "Este sistema de archivos aún no admite configurar hooks."],
   hooksConflict: ["O perfil mudou. Revise os hooks antes de continuar.", "El perfil cambió. Revisa sus hooks antes de continuar."],
   hooksUncertain: ["Não foi possível confirmar. Verifique novamente antes de tentar.", "No se pudo confirmar. Inspecciona antes de reintentar."],

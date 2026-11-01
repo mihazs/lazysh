@@ -14,6 +14,7 @@ export const english = {
   hooksRemove: "Remove lazysh hooks",
   hooksConfigured: "Hooks configured. Live reporting has not been verified.",
   hooksNotConfigured: "Hooks need setup or repair.",
+  hooksDroidStandaloneRequired: "Create standalone hooks.json in Droid’s /hooks UI, then inspect again. Existing settings and legacy hooks are not migrated.",
   hooksUnsupported: "Managed hook setup is not supported on this host filesystem yet.",
   hooksConflict: "The profile changed. Review its hooks before continuing.",
   hooksUncertain: "Setup could not be confirmed. Inspect again before retrying.",

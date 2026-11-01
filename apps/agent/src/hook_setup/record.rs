@@ -9,6 +9,7 @@ use std::path::PathBuf;
 pub(super) enum Agent {
     Claude,
     Codex,
+    Droid,
     Gemini,
     Cursor,
     Opencode,
@@ -18,6 +19,7 @@ impl Agent {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Droid => "droid",
             Self::Gemini => "gemini",
             Self::Cursor => "cursor",
             Self::Opencode => "opencode",
@@ -137,7 +139,7 @@ impl Record {
                             .plugin_sha256
                             .as_ref()
                             .is_some_and(|digest| lazysh_common::valid_sha256(digest)) => {}
-                Agent::Claude | Agent::Codex | Agent::Gemini | Agent::Cursor
+                Agent::Claude | Agent::Codex | Agent::Droid | Agent::Gemini | Agent::Cursor
                     if owned.plugin_sha256.is_none()
                         && !owned.entries.is_empty()
                         && owned.entries.len() <= 16 =>

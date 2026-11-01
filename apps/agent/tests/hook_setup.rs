@@ -150,6 +150,7 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
     for agent in [
         Agent::Claude,
         Agent::Codex,
+        Agent::Droid,
         Agent::Gemini,
         Agent::Cursor,
         Agent::Opencode,
@@ -225,6 +226,7 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
     for agent in [
         record::Agent::Claude,
         record::Agent::Codex,
+        record::Agent::Droid,
         record::Agent::Gemini,
         record::Agent::Cursor,
     ] {
@@ -503,6 +505,9 @@ impl ProfileFixture {
         let profile = root.path().join("selected profile");
         fs::create_dir(&profile).unwrap();
         fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
+        if agent == record::Agent::Droid {
+            fs::write(profile.join("hooks.json"), "{}\n").unwrap();
+        }
         let companion = root.path().join("private companion's $ path");
         fs::copy(binary::path(), &companion).unwrap();
         if fs::metadata(&companion).unwrap().len() > 64 * 1024 * 1024 {
@@ -532,7 +537,7 @@ impl ProfileFixture {
     fn provider(&self) -> std::path::PathBuf {
         self.target.profile.join(match self.target.agent {
             record::Agent::Claude | record::Agent::Gemini => "settings.json",
-            record::Agent::Codex | record::Agent::Cursor => "hooks.json",
+            record::Agent::Codex | record::Agent::Droid | record::Agent::Cursor => "hooks.json",
             record::Agent::Opencode => "plugins/lazysh.js",
         })
     }
@@ -1113,6 +1118,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
     for agent in [
         record::Agent::Claude,
         record::Agent::Codex,
+        record::Agent::Droid,
         record::Agent::Gemini,
         record::Agent::Cursor,
         record::Agent::Opencode,
@@ -1120,6 +1126,13 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
         assert_eq!(preview["reporting"], "notChecked");
+        if agent == record::Agent::Droid {
+            assert!(preview["asset"].get("hooks").is_none());
+            assert_eq!(
+                preview["asset"]["UserPromptSubmit"][0]["hooks"][0]["timeout"],
+                5
+            );
+        }
         assert!(!fixture.manifest().exists());
         let status = fixture.cli("status", None);
         let configured = fixture.cli("install", status["installPlan"].as_str());
@@ -1290,7 +1303,7 @@ fn gemini_and_cursor_configuration_preserves_disable_policy_and_exact_native_env
         }
         let removed = render::configuration(agent, &installed, &entries, &[]).unwrap();
         assert!(removed.contains(preserved));
-        assert!(json::counts(&removed, &entries)
+        assert!(json::counts(&removed, &entries, false)
             .unwrap()
             .iter()
             .all(|count| *count == 0));
@@ -1363,4 +1376,108 @@ fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_a
     assert!(unowned.inspect().plan(files::Action::Install).is_err());
     assert!(!unowned.manifest().exists());
     assert!(!unowned.target.profile.join(".lazysh-hooks.lock").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_replacement() {
+    use std::{fs, os::unix::fs::symlink};
+    let fixture = ProfileFixture::new(record::Agent::Droid);
+    let foreign = r#"{ "Stop" : [ {"matcher":"foreign", "hooks":[{"command":"keep", "timeout":1e+02}]} ], "UnknownFutureEvent":[] }"#;
+    fs::remove_file(fixture.provider()).unwrap();
+    let settings = fixture.target.profile.join("settings.json");
+    let legacy_dir = fixture.target.profile.join("hooks");
+    fs::create_dir(&legacy_dir).unwrap();
+    let legacy = legacy_dir.join("hooks.json");
+    let fallback = r#"{ "disableAllHooks":true, "allowManagedHooksOnly":true, "hooks":{"PreToolUse":[{"hooks":[{"command":"foreign permission policy"}]}]} }"#;
+    let legacy_hooks = r#"{ "PreToolUse":[{"matcher":"Execute","hooks":[{"command":"foreign permission policy"}]}] }"#;
+    for (path, contents) in [(&settings, fallback), (&legacy, legacy_hooks)] {
+        fs::write(path, contents).unwrap();
+    }
+    let absent = fixture.cli("status", None);
+    assert_eq!(absent["reason"], "HooksDroidStandaloneRequired");
+    assert_eq!(absent["supported"], false);
+    assert!(!fixture.provider().exists() && !fixture.manifest().exists());
+    fs::write(fixture.provider(), foreign).unwrap();
+    let plan = fixture.plan(files::Action::Install);
+    let configured = fixture.apply(files::Action::Install, &plan).unwrap();
+    assert_eq!(configured.status, "configured");
+    let installed = fs::read_to_string(fixture.provider()).unwrap();
+    assert!(installed
+        .contains(r#"{"matcher":"foreign", "hooks":[{"command":"keep", "timeout":1e+02}]}"#));
+    let native: Value = serde_json::from_str(&installed).unwrap();
+    assert!(native.get("hooks").is_none());
+    assert_eq!(native["UserPromptSubmit"][0]["hooks"][0]["timeout"], 5);
+    assert_eq!(
+        fixture.inspect().observation,
+        Some(state::Observation::Configured)
+    );
+    assert_eq!(
+        fixture
+            .apply(
+                files::Action::Install,
+                &fixture.plan(files::Action::Install)
+            )
+            .unwrap()
+            .status,
+        "reused"
+    );
+    assert_eq!(
+        fixture
+            .apply(files::Action::Remove, &fixture.plan(files::Action::Remove))
+            .unwrap()
+            .status,
+        "removed"
+    );
+    assert_eq!(
+        fixture.inspect().observation,
+        Some(state::Observation::Removed)
+    );
+    for (path, contents) in [(&settings, fallback), (&legacy, legacy_hooks)] {
+        assert_eq!(fs::read_to_string(path).unwrap(), contents);
+    }
+    assert!(fs::read_to_string(fixture.provider())
+        .unwrap()
+        .contains("1e+02"));
+    for malformed in [
+        "[]",
+        r#"{"hooks":{"Stop":[]}}"#,
+        r#"{"Stop":1}"#,
+        r#"{"Stop":[],"Stop":[]}"#,
+    ] {
+        fs::write(fixture.provider(), malformed).unwrap();
+        assert!(files::inspect(fixture.target.clone(), &fixture.companion)
+            .and_then(|value| value.plan(files::Action::Install))
+            .is_err());
+        assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), malformed);
+        assert!(render::configuration(
+            record::Agent::Droid,
+            malformed,
+            &[],
+            &render::entries(record::Agent::Droid, &fixture.companion).unwrap()
+        )
+        .is_err());
+    }
+    fs::remove_file(fixture.provider()).unwrap();
+    assert!(matches!(
+        files::inspect(fixture.target.clone(), &fixture.companion),
+        Err(Error::Installation("HooksDroidStandaloneRequired"))
+    ));
+    let status = fixture.cli("status", None);
+    assert_eq!(status["supported"], false);
+    assert_eq!(status["reason"], "HooksDroidStandaloneRequired");
+    assert!(!fixture.provider().exists());
+    symlink(&settings, fixture.provider()).unwrap();
+    assert!(files::inspect(fixture.target.clone(), &fixture.companion).is_err());
+    assert_eq!(fs::read_to_string(&settings).unwrap(), fallback);
+    let fixture = ProfileFixture::new(record::Agent::Droid);
+    let plan = fixture.plan(files::Action::Install);
+    fs::rename(
+        fixture.provider(),
+        fixture.target.profile.join("old hooks.json"),
+    )
+    .unwrap();
+    fs::write(fixture.provider(), "{}").unwrap();
+    assert!(fixture.apply(files::Action::Install, &plan).is_err());
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), "{}");
 }
