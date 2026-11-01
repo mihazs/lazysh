@@ -9,6 +9,7 @@ pub enum Agent {
     Gemini,
     Cursor,
     Opencode,
+    Cline,
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +46,7 @@ impl Request {
             Agent::Gemini => "gemini",
             Agent::Cursor => "cursor",
             Agent::Opencode => "opencode",
+            Agent::Cline => "cline",
         };
         let suffix = match (&self.action, &self.expected_plan) {
             (Action::Status, None) => String::new(),
@@ -156,6 +158,7 @@ mod tests {
         for (agent, name) in [
             (Agent::Gemini, "gemini"),
             (Agent::Cursor, "cursor"),
+            (Agent::Cline, "cline"),
             (Agent::Droid, "droid"),
         ] {
             request.agent = agent;

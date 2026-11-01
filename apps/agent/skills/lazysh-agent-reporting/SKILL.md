@@ -15,9 +15,10 @@ for the selected CLI and installed companion version before configuring it.
 
 ## Explicit setup
 
-Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI and
-Droid on
-qualified platforms. Inspect the exact selected existing profile with
+Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI,
+Cline CLI and Droid on qualified Linux filesystems. `lazysh-agent hooks discover`
+lists installation metadata without executing agents or changing profiles. Let
+the user select the intended target; inspect its exact existing profile with
 `lazysh-agent hooks status`; install/update or remove only after reviewing its
 returned plan, using the corresponding expected plan hash. Droid requires an
 already-existing standalone `.factory/hooks.json`; missing files require native
@@ -30,10 +31,12 @@ Native print-only paths also include `claude-config`, `codex-config`,
 `opencode-plugin`, `gemini-config`, `cursor-config`, `droid-config`, `kimi-config`,
 `copilot-config`, `amp-plugin` and `cline-plugin`. Review the printed fragment or
 asset and use the selected provider's ordinary setup without overwriting foreign
-entries. Cline uses an awaited runtime plugin for **root runs only**; child
-working-directory attribution, permission waits and managed Cline setup are
-unsupported. Aider's `aider-config`/`aider-hook-status` provide callback health,
-never inferred agent session or completion state.
+entries. Cline uses an awaited runtime plugin for **root runs only**. Managed
+setup binds the selected profile's `plugins/lazysh.js` to the inspected companion.
+Start a new Cline session with that profile to load it; preserve disabled-plugin
+settings and normal plugin restrictions. Child working-directory attribution and
+permission waits remain unsupported. Aider's `aider-config`/`aider-hook-status`
+provide callback health, never inferred agent session or completion state.
 
 The companion must resolve in the hook's environment. Never bypass provider
 trust, enable plugins implicitly, answer permission requests or install separate

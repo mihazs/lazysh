@@ -3,7 +3,7 @@ import {StrictMode} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
-import {applyAccessStatus} from './access';
+import {applyAccessStatus,captureAccess} from './access';
 import HerdrAgentsPanel,{parseHerdrAgents} from './HerdrAgentsPanel';
 import HerdrNavigation from './HerdrNavigation';
 import {herdrNavigationTree as tree} from './test/herdrNavigation';
@@ -167,13 +167,30 @@ it('searches agent, project and summary locally with matching status counts and 
   expect(search).toHaveProperty('value','');expect(document.querySelectorAll('.agent-card')).toHaveLength(3);
   expect(invoke.mock.calls.length).toBe(before);
 });
+it.each([
+  ['en','Attention','Needs you'],['pt-BR','Atenção','Precisa de você'],['es','Atención','Te necesita'],
+])('labels recorded attention neutrally in %s without changing inbox wording',async(locale,attention,inbox)=>{
+  await act(async()=>{await uiI18n.changeLanguage(locale);});
+  try {
+    await historyFixture(reported);render(<AgentPanel sessionId="neutral-attention"/>);
+    expect(await screen.findByRole('region',{name:attention})).toBeTruthy();
+    expect(t('inboxNeedsYou')).toBe(inbox);
+    expect(screen.queryByRole('button',{name:/approve|allow|permitir/i})).toBeNull();
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
 it('keeps selected reported context, search focus and draft through locale updates, then retires a filtered row',async()=>{
   await historyFixture(reported,discoveryRows());render(<AgentPanel sessionId="selection"/>);
-  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
-  const selected=screen.getByRole('region',{name:'Selected report'});
+  const trigger=await screen.findByRole('button',{name:'View Claude Code report for /work'});
+  fireEvent.click(trigger);
+  let selected=screen.getByRole('region',{name:'Selected report'});
+  expect(document.activeElement).toBe(selected);
   fireEvent.click(within(selected).getByText('Report details'));
   expect(within(selected).getByText('%1')).toBeTruthy();expect(within(selected).getByText('a')).toBeTruthy();
   expect(within(selected).queryByRole('button',{name:/jump|attach|approve/i})).toBeNull();
+  fireEvent.click(within(selected).getByRole('button',{name:'Clear selection'}));
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);selected=screen.getByRole('region',{name:'Selected report'});
+  expect(document.activeElement).toBe(selected);
   const search=screen.getByRole('searchbox');fireEvent.change(search,{target:{value:'Permission'}});search.focus();
   try {
     await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
@@ -231,9 +248,10 @@ it('keeps distinct literal report keys separate',async()=>{
   expect(within(screen.getByRole('region',{name:'Selected report'})).getByText('b:c')).toBeTruthy();
 });
 it('keeps the selected identity and focused search draft when explicit refresh updates its report',async()=>{
-  const rows=[session];await historyFixture(reported,rows);render(<AgentPanel sessionId="updated-report"/>);
+  const rows=[{...session,state:'working'}];await historyFixture(reported,rows);render(<AgentPanel sessionId="updated-report"/>);
   fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
   const details=screen.getByRole('region',{name:'Selected report'}),search=screen.getByRole('searchbox');
+  const originalRow=screen.getByRole('button',{name:'View Claude Code report for /work'});
   fireEvent.change(search,{target:{value:'/work'}});search.focus();
   rows[0]={...session,state:'done',eventCount:9,summary:'Completed permission review'};
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
@@ -241,6 +259,21 @@ it('keeps the selected identity and focused search draft when explicit refresh u
   expect(screen.getByRole('region',{name:'Selected report'})).toBe(details);
   expect(within(details).getByText('Done')).toBeTruthy();expect(within(details).getByText('9')).toBeTruthy();
   expect(search).toHaveProperty('value','/work');expect(document.activeElement).toBe(search);
+  const currentRow=screen.getByRole('button',{name:'View Claude Code report for /work'});
+  expect(originalRow.isConnected).toBe(false);expect(currentRow).not.toBe(originalRow);
+  fireEvent.click(within(details).getByRole('button',{name:'Clear selection'}));
+  expect(document.activeElement).toBe(currentRow);
+});
+it.each(['hidden','locked'] as const)('does not move focus for queued report selection in a %s panel',async condition=>{
+  await historyFixture(reported);const view=render(<AgentPanel sessionId="guarded-focus"/>);
+  const row=await screen.findByRole('button',{name:'View Claude Code report for /work'});
+  const draft=document.createElement('input');document.body.append(draft);
+  try {
+    if(condition==='hidden')view.rerender(<AgentPanel sessionId="guarded-focus" visible={false}/>);
+    else act(()=>access(true));
+    draft.focus();fireEvent.click(row);
+    expect(document.activeElement).toBe(draft);
+  } finally {draft.remove();}
 });
 it('suspends the same board while preserving its query and settings draft, then explicitly resumes its source',async()=>{
   const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
@@ -368,6 +401,47 @@ it('keeps the companion empty state stable during polling and retains an error u
 }));
 
 describe('live Herdr discovery',()=>{
+
+  it('reports only DOM-committed current Herdr reads and preserves receipt identity across visibility',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();let held=false;
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:held?pending.promise:tree);
+    const settled=vi.fn(receipt=>{
+      expect(screen.getByRole('region',{name:t('herdrNavigationTitle')})).toBeTruthy();
+      if(!receipt.failed)expect(screen.getByRole('button',{name:/^builder/})).toBeTruthy();
+    });
+    const props={sessionId:'receipt-owner',hostLabel:'Owned host',visible:true,mode:'agents' as const,onNavigate:vi.fn(),onAttach:vi.fn(),onClose:vi.fn(),onContentSettled:settled};
+    const view=render(<HerdrNavigation {...props}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const first=settled.mock.lastCall![0];expect(first).toMatchObject({host:'receipt-owner',server:'default',mode:'agents',failed:false});
+    held=true;view.rerender(<HerdrNavigation {...props} visible={false}/>);
+    expect(settled.mock.lastCall![0]).toBe(first);
+    view.rerender(<HerdrNavigation {...props}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    // A fast resume may expose the old committed receipt; it cannot represent the held fresh read.
+    expect(settled.mock.calls.every(([receipt])=>receipt.identity===first.identity)).toBe(true);
+    await act(async()=>pending.resolve({...tree}));
+    expect(settled.mock.lastCall![0].identity).not.toBe(first.identity);
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'receipt-owner',server:'default',failed:false});
+  }));
+  it.each(['agents','spaces'] as const)('qualifies an unsupported agent list as a failed receipt only in %s mode',mode=>pollingClock(async invoke=>{
+    const unsupported={...tree,agents:undefined};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:unsupported);
+    const settled=vi.fn();
+    render(<HerdrNavigation sessionId="unsupported-receipt" hostLabel="Owned host" visible mode={mode} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()} onContentSettled={settled}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'unsupported-receipt',server:'default',mode,identity:unsupported,failed:mode==='agents'});
+  }));
+  it('reports a current failed read without publishing hidden or retired-host results',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:pending.promise);
+    const settled=vi.fn(),props={sessionId:'failed-receipt',hostLabel:'Owned host',visible:true,mode:'agents' as const,onNavigate:vi.fn(),onAttach:vi.fn(),onClose:vi.fn(),onContentSettled:settled};
+    const view=render(<HerdrNavigation {...props}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    expect(settled).not.toHaveBeenCalled();await act(async()=>pending.reject(new Error('Owned read failed')));
+    expect(settled.mock.lastCall![0]).toMatchObject({host:'failed-receipt',server:'default',mode:'agents',failed:true});
+    const count=settled.mock.calls.length;view.rerender(<HerdrNavigation {...props} visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(settled).toHaveBeenCalledTimes(count);
+  }));
+
 
   it.each([1,2])('shares the selected reader and collapses healthy setup with %s servers',count=>pollingClock(async invoke=>{
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},...(count===2?[{name:'review'}]:[])]:tree);
@@ -654,6 +728,99 @@ describe('live Herdr discovery',()=>{
     await act(async()=>{access(true);complete([{name:'default'}]);});
     expect(screen.queryByText('builder')).toBeNull();
     expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions']);
+  });
+
+});
+
+
+describe('Herdr reported-session details',()=>{
+  const report={...session,state:'needs_attention' as const};
+  const reference={source:'herdr:codex',agent:'codex',kind:'id',value:'session_ABC-1'};
+  const referenced={...tree,agents:[{...tree.agents[0],agent_session:reference}]};
+  it('projects only closed provider IDs and omits private, path, malformed and conflicting references',()=>{
+    expect(parseHerdrAgents(referenced)[0].agent_session).toEqual(reference);
+    for(const change of [{kind:'path',value:'/private/profile'},{value:'/private/profile'},{value:'a'.repeat(257)},{value:'é'},{value:'ID\n'},{value:''},{source:'other'},{agent:'claude',source:'herdr:claude'}]){
+      const row=parseHerdrAgents({...referenced,agents:[{...referenced.agents[0],agent_session:{...reference,...change,private:'never retain'}}]})[0];
+      expect(row.agent_session).toBeUndefined();
+      expect(JSON.stringify(row)).not.toContain('never retain');
+    }
+  });
+  it.each(['codex','claude','opencode'])('matches exact %s IDs without granting actions',async agent=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const labels={codex:'Codex',claude:'Claude Code',opencode:'OpenCode'};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:[{...tree.agents[0],agent,agent_session:{...reference,agent,source:`herdr:${agent}`}}]});
+    render(<HerdrAgentsPanel sessionId="host" visible reports={{lease:captureAccess(),host:'host',available:true,rows:[{...report,sessionId:reference.value,agent:labels[agent as keyof typeof labels]}]}}/>);
+    expect(await screen.findByText('Unverified reference; may be stale.')).toBeTruthy();
+    expect(screen.getByText('Project:')).toBeTruthy();
+    expect(screen.queryByText(/Referenced by/)).toBeNull();
+    expect(screen.getByText('Attention')).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/send|approve|history/i})).toBeNull();
+  });
+  it('distinguishes missing reports from unavailable, expired and other-host reports',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:referenced);
+    const props={sessionId:'host',visible:true};
+    const {rerender}=render(<HerdrAgentsPanel {...props} reports={{lease:captureAccess(),host:'host',available:true,rows:[]}}/>);
+    expect(await screen.findByText('No matching report')).toBeTruthy();
+    for(const reports of [{host:'host',available:false,rows:[]},{host:'old-host',available:true,rows:[{...report,sessionId:reference.value,agent:'Codex'}]},{host:'host',available:true,rows:[]}]){
+      rerender(<HerdrAgentsPanel {...props} reports={{...reports,lease:captureAccess()}}/>);
+      if(reports.available && reports.host==='host')expect(screen.getByText('No matching report')).toBeTruthy();
+      else expect(screen.getByText('Reports unavailable')).toBeTruthy();
+    }
+    rerender(<HerdrAgentsPanel {...props} reports={{lease:captureAccess(),host:'host',available:true,rows:[]}}/>);
+    act(()=>access(true));
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
+  });
+  it('keeps expanded details stable during passive reads and removes a failed companion association',()=>pollingClock(async invoke=>{
+    const pending=deferredRead();let reads=0;
+    vi.mocked(invoke).mockImplementation(command=>{
+      if(command==='multiplexer_sessions')return Promise.resolve([{name:'default'}]);
+      if(command==='herdr_tree')return Promise.resolve(referenced);
+      if(command==='agent_snapshot')return ++reads===1?Promise.resolve({schemaVersion:1,sessions:[{...report,agent:'Codex',sessionId:reference.value}]}):pending.promise;
+      return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+    });
+    await act(async()=>{render(<AgentPanel sessionId="host"/>);});
+    const details=screen.getByText('Reported session').closest('details')!;
+    details.open=true;
+    expect(within(details).getByText('Project:')).toBeTruthy();
+    await act(async()=>vi.advanceTimersByTimeAsync(5000));
+    expect(screen.getByText('Reported session').closest('details')).toBe(details);
+    expect(details.open).toBe(true);
+    expect(within(details).queryByText('Reports unavailable')).toBeNull();
+    await act(async()=>pending.reject(new Error('read failed')));
+    expect(screen.getByText('Reported session').closest('details')).toBe(details);
+    expect(within(details).getByText('Reports unavailable')).toBeTruthy();
+    expect(within(details).queryByText('Project:')).toBeNull();
+  }));
+  it('does not associate an old host reply with a new host and clears details after report failure',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const old=deferredRead(),fresh=deferredRead();
+    vi.mocked(invoke).mockImplementation((command,args)=>{
+      if(command==='multiplexer_sessions')return Promise.resolve([{name:'default'}]);
+      if(command==='herdr_tree')return Promise.resolve(referenced);
+      if(command==='agent_snapshot')return (args && 'sessionId' in args && args.sessionId==='old'?old:fresh).promise;
+      return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+    });
+    const {rerender}=render(<AgentPanel sessionId="old"/>);
+    await screen.findByText('Reports unavailable');
+    rerender(<AgentPanel sessionId="new"/>);
+    await act(async()=>old.resolve({schemaVersion:1,sessions:[{...report,sessionId:reference.value,agent:'Codex',project:'/old-private'}]}));
+    expect(screen.queryByText('/old-private')).toBeNull();
+    await screen.findByText('Reports unavailable');
+    await act(async()=>fresh.reject(new Error('report unavailable')));
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
+    expect(screen.queryByText('No matching report')).toBeNull();
+  });
+  it('counts shared references before search filtering and refuses ambiguous reports',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const second={...referenced.agents[0],terminal_id:'term-other',pane_id:'w1:p4',name:'other'};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:{...referenced,agents:[referenced.agents[0],second],panes:[...tree.panes,{...tree.panes[0],pane_id:second.pane_id,terminal_id:second.terminal_id}]});
+    const matching={...report,agent:'Codex',sessionId:reference.value};
+    render(<HerdrAgentsPanel sessionId="host" visible reports={{lease:captureAccess(),host:'host',available:true,rows:[matching,matching]}}/>);
+    expect((await screen.findAllByText('Referenced by 2 panes here.')).length).toBe(2);
+    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'other'}});
+    expect(screen.getAllByText('Referenced by 2 panes here.').length).toBe(1);
+    expect(screen.getByText('Reports unavailable')).toBeTruthy();
   });
 
 });

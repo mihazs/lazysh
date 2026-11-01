@@ -98,19 +98,20 @@ async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'applicat
 
 async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
+  await page.clock.install();
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
-      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
+      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];
       if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
-      if(command==='connect')return {sessionId:'owned-navigation-ssh'};
+      if(command==='connect')return {sessionId:++state.connects===1?'owned-navigation-ssh':'other-navigation-ssh'};
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle'}]};if(state.agentCount>1){
+      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle',agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'r'.repeat(256)}}]};if(state.agentCount>1){
         const pane=tree.panes[0],agent=tree.agents[0];
         tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
@@ -124,15 +125,18 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='agent_snapshot'){
         if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
         if(!state.installed)throw {message:'Synthetic missing host companion'};
-        return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+        if(args.sessionId==='other-navigation-ssh')return {schemaVersion:1,sessions:[]};
+        const report={schemaVersion:1,sessions:[{sessionId:'r'.repeat(256),agent:'Codex',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+        if(state.holdReport)return new Promise(resolve=>{Object.assign(window,{finishOldReport:()=>{state.holdReport=false;resolve(report);}});});
+        return report;
       }
       if(command==='companion_hook_discovery'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).join(',')!=='sessionId')throw new Error('Wrong discovery source');
         return {schemaVersion:1,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
           {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
-          ...['droid','gemini','cursor','opencode'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
-          {agent:'cline',setup:'manual',executable:{path:'/owned/bin/cline',source:'path'},profiles:[]},
+          ...['droid','gemini','cursor','opencode','cline'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
+          {agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[]},
           {agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]},
         ]};
       }
@@ -216,6 +220,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.screenshot({path:testInfo.outputPath('session-toolbar.png')});
   await views.evaluate(node=>{for(const button of node.querySelectorAll('button'))button.style.fontSize='';});
   await views.getByRole('button').first().scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command)))).toEqual([]);
   await page.getByRole('button',{name:'Agents',exact:true}).click();
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
@@ -241,11 +246,64 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await serverSetup.locator('summary').click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
   await serverSetup.locator('summary').click();
-  if(phone)await page.setViewportSize({width:393,height:844});
+  if(phone){
+    await page.setViewportSize({width:393,height:852});
+    const navigation=await page.locator('.sidebar').boundingBox();
+    expect(navigation?.x).toBe(0);expect(navigation?.width).toBe(393);
+    const actions=live.locator('header button');
+    for(const action of await actions.all()){
+      const bounds=(await action.boundingBox())!;
+      expect(bounds.width).toBeGreaterThanOrEqual(44);expect(bounds.height).toBeGreaterThanOrEqual(44);
+    }
+  }
   await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
-  await expect(live.getByRole('button',{name:/^codex-builder/})).toBeInViewport({ratio:0.75});
+  const firstLiveAgent=live.getByRole('button',{name:/^codex-builder/});
+  await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+  if(phone)expect((await firstLiveAgent.boundingBox())!.y).toBeLessThan(400);
   await page.screenshot({path:testInfo.outputPath('healthy-agents-first-row.png')});
+  if(phone){
+    for(const width of [320,600]){
+      await page.setViewportSize({width,height:420});
+      await live.evaluate(node=>{node.style.fontSize='20px';});
+      await firstLiveAgent.scrollIntoViewIfNeeded();
+      expect(await page.locator('.sidebar').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+      await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+      await expect(page.getByRole('button',{name:'Close hosts',exact:true})).toBeInViewport();
+    }
+    await live.evaluate(node=>{node.style.fontSize='';});
+    await page.setViewportSize({width:393,height:852});
+    await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
+    await page.emulateMedia({forcedColors:'active',reducedMotion:'reduce'});
+    await expect(page.locator('.sidebar .brand')).toHaveCSS('backdrop-filter','none');
+    await expect(live.getByRole('button',{name:'Back to terminal',exact:true})).toBeVisible();
+    await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});
+    const protocol=await page.context().newCDPSession(page);
+    await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62,bottom:34}});
+    expect((await page.getByRole('button',{name:'Close hosts',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(62);
+    await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
+    await page.screenshot({path:testInfo.outputPath('agents-safe-area-393.png')});
+    await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:0,bottom:0}});
+  }else{
+    await page.setViewportSize({width:768,height:1024});
+    const context=(await page.locator('.sidebar').boundingBox())!;
+    expect(context.width).toBeGreaterThanOrEqual(300);expect(context.width).toBeLessThanOrEqual(420);
+    expect((await page.locator('main.workspace').boundingBox())!.width).toBeGreaterThan(400);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('agents-tablet-768.png')});
+    await page.setViewportSize({width:1280,height:850});
+  }
+
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
+  const details=live.locator('details').filter({has:page.getByText('Reported session',{exact:true})});
+  await expect(details).not.toHaveAttribute('open');
+  await details.locator('summary').click();
+  await expect(details.getByText('/nav/project',{exact:true})).toBeVisible();
+  await expect(details.getByText('Unverified reference; may be stale.',{exact:true})).toBeVisible();
+  expect(await details.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('herdr-reported-session.png')});
+  await details.locator('summary').click();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_action','herdr_chat','write_stdin','attach_multiplexer'].includes(command)))).toEqual([]);
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Development / Codex tasks / /nav/codex'))).toHaveCount(1);
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Idle'))).toHaveCount(0);
   const steadyRow=live.getByRole('button',{name:/^codex-builder/}),originalRow=await steadyRow.elementHandle();
@@ -307,8 +365,27 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await expect(board).toBeVisible();
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
+  await board.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishOldReport?:()=>void}).finishOldReport)).toBe('function');
+  await modes.getByRole('button',{name:'Connections',exact:true}).click();
+  await page.getByRole('button',{name:'Connect to Other navigation host',exact:true}).click();
+  await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
+  await page.getByRole('button',{name:'Connect',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await live.getByText('Reported session',{exact:true}).click();
+  await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
+  await page.evaluate(()=>(window as unknown as {finishOldReport:()=>void}).finishOldReport());
+  await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
+  await expect(live.locator('details').getByText('/nav/project',{exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;delete (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead;});
   if(phone){
+    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
     await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();
     await page.getByRole('dialog',{name:'Switch terminal session',exact:true}).locator('.session-choice').filter({has:page.getByText('Navigation host',{exact:true})}).click();
   }else await page.getByRole('tab',{name:'Navigation host',exact:true}).click();
@@ -555,7 +632,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
-  await expect(detected.getByRole('button',{name:/Cline.*Manual setup/})).toBeDisabled();
+  await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
   await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
   expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
@@ -618,6 +695,31 @@ test('usage returns to its exact terminal and Agents context without expanding m
   await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
 });
 
+for(const shorter of [false,true])test(`Activity scroll returns to the same mobile drawer owner (shorter=${shorter})`,async({page},testInfo)=>{
+  test.skip(shorter && testInfo.project.name!=='phone','Mobile restoration clamp');
+  await openClockedNavigation(page);const phone=testInfo.project.name==='phone';
+  if(phone)await page.setViewportSize({width:393,height:852});
+  await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number}}).workspaceNavigationState;state.installed=true;state.agentCount=80;});
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  const scroller=sidebar.locator('.workspace-navigation-scroll'),board=sidebar.getByRole('region',{name:'Agent activity',exact:true});
+  await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(80);
+  await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
+  const original=await board.elementHandle();await board.getByRole('heading',{name:'Agent activity',exact:true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:testInfo.outputPath('activity-before-usage.png'),animations:'disabled'});
+  const before=await scroller.evaluate(node=>node.scrollTop);expect(before).toBeGreaterThan(2000);
+  await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
+  if(shorter)await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{agentCount:number}}).workspaceNavigationState.agentCount=1;});
+  await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
+  await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(shorter?1:80);
+  const after=await scroller.evaluate(node=>node.scrollTop),retained=await original!.evaluate(node=>node.isConnected);
+  console.log(JSON.stringify({project:testInfo.project.name,before,after,retained}));
+  await page.screenshot({path:testInfo.outputPath('activity-after-return.png'),animations:'disabled'});
+  expect(retained).toBe(true);expect(after).toBe(shorter?await scroller.evaluate((node,top)=>Math.min(top,node.scrollHeight-node.clientHeight),before):before);
+});
+
 
 for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':'reported'} activity behind many live agents without changing owners`,async({page},testInfo)=>{
   await openClockedNavigation(page);
@@ -661,7 +763,7 @@ for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':
   await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
   await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
   await expect(sidebar.getByRole('button',{name:'Agents navigation',exact:true})).toHaveAttribute('aria-current','page');
-  // #665: released mobile Back resets drawer scroll; this jump adds no restoration state.
+  // The independent #665 restoration preserves the offset; jump controls remain directly reachable.
   await expect(jumpActivity).toBeInViewport({ratio:0.9});await expect(search).toHaveValue('/nav');
   await jumpActivity.click();
   await board.getByRole('button',{name:'Setup',exact:true}).click();await expect(settings).not.toBeChecked();

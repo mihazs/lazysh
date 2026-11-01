@@ -95,6 +95,34 @@ mod metadata {
                 None => self.home(fallback),
             }
         }
+        fn kimi_profile(&mut self, variable: &str, fallback: &str) -> Value {
+            // Both pinned Kimi dialects use nonempty overrides verbatim, without trimming.
+            match (self.environment)(variable) {
+                Some(value) if !value.is_empty() => self.profile(Some(value), variable, ""),
+                _ => self.home(fallback),
+            }
+        }
+        fn cline_profile(&mut self) -> Value {
+            let Some(value) = (self.environment)("CLINE_DIR") else {
+                return self.home(".cline");
+            };
+            // Cline uses ECMAScript String.trim: BOM is whitespace, NEL is not.
+            let value = match value.to_str() {
+                Some(text) => OsString::from(text.trim_matches(|c| {
+                    matches!(c,
+                        '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+                        '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+                        '\u{205f}' | '\u{3000}' | '\u{feff}'
+                    )
+                })),
+                None => value,
+            };
+            if value.is_empty() {
+                self.home(".cline")
+            } else {
+                self.profile(Some(value), "CLINE_DIR", "")
+            }
+        }
         fn config(&mut self, suffix: &str) -> Value {
             match self.variable("XDG_CONFIG_HOME") {
                 Some(value) => self.profile(Some(value), "XDG_CONFIG_HOME", suffix),
@@ -105,6 +133,16 @@ mod metadata {
             vec![match agent {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
+                "cline" => self.cline_profile(),
+                "kimi" => {
+                    let mut profiles = vec![
+                        self.kimi_profile("KIMI_CODE_HOME", ".kimi-code"),
+                        self.kimi_profile("KIMI_SHARE_DIR", ".kimi"),
+                    ];
+                    // Missing HOME yields one identical diagnostic for both dialects.
+                    profiles.dedup();
+                    return profiles;
+                }
                 "droid" => self.home(".factory"),
                 "gemini" => self.selected("GEMINI_CLI_HOME", ".gemini", ".gemini"),
                 // CLI-config overrides do not establish relocation of ~/.cursor/hooks.json.
@@ -231,7 +269,7 @@ mod metadata {
             ("gemini", "gemini", "managed"),
             ("cursor", "cursor-agent", "managed"),
             ("opencode", "opencode", "managed"),
-            ("cline", "cline", "manual"),
+            ("cline", "cline", "managed"),
             ("kimi", "kimi", "manual"),
             ("copilot", "copilot", "manual"),
             ("amp", "amp", "manual"),

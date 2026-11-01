@@ -306,7 +306,7 @@ fn opencode_native_events_keep_exact_sessions_and_bounded_metadata() {
 #[test]
 fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
     let dir = tempfile::tempdir().unwrap();
-    for command in ["codex-config", "opencode-plugin"] {
+    for command in ["codex-config", "opencode-plugin", "kimi-config"] {
         let output = run(dir.path(), &[command], b"");
         assert!(output.status.success());
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -321,9 +321,26 @@ fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
                 );
                 assert_eq!(value[0]["hooks"][0]["timeout"], 3);
             }
-        } else {
+        } else if command == "opencode-plugin" {
             assert_eq!(value["filename"], "lazysh.js");
             assert_eq!(value["content"], include_str!("../hooks/opencode.js"));
+        } else {
+            use sha2::{Digest, Sha256};
+            // Byte identity of the existing legacy printer, not a new Kimi Code dialect.
+            assert_eq!(
+                format!("{:x}", Sha256::digest(&output.stdout)),
+                "ab51fa6241aa7d6d6d7fc4408de5e9f47938f969aa75de5684a9c1e8ddb48f6d"
+            );
+            let help = run(dir.path(), &[command, "--help"], b"");
+            assert!(help.status.success());
+            let help = String::from_utf8(help.stdout).unwrap();
+            for text in [
+                "legacy Kimi CLI 1.52",
+                "never changes settings",
+                "Kimi Code 2.4 lifecycle is unqualified",
+            ] {
+                assert!(help.contains(text));
+            }
         }
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }

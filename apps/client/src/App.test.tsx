@@ -87,7 +87,8 @@ vi.mock("./TerminalPane", () => ({
 }));
 vi.mock('./AgentPanel',async original=>{
   const actual=await original<typeof import('./AgentPanel')>();
-  return {...actual,default:(props:React.ComponentProps<typeof actual.AgentPanel>)=>mocks.realAgents?<actual.AgentPanel {...props}/>:<div>Agent companion</div>};
+  const {captureAccess}=await import('./access');
+  return {...actual,default:(props:React.ComponentProps<typeof actual.AgentPanel>)=>mocks.realAgents?<actual.AgentPanel {...props}/>:<>{props.renderNavigation?.({host:undefined,available:false,rows:[],lease:captureAccess()})}<div ref={props.activityRef} id={props.activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} hidden={!props.visible}>Agent companion</div></>};
 });
 vi.mock('./PushSettingsPanel',()=>({default:()=> <div>Native push registration controls</div>}));
 vi.mock('./AppleStatusPanel',async()=>{
@@ -164,6 +165,50 @@ it('restores the actual Agents origin when returning from usage',async()=>{
   expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
   expect(screen.getByText('Agent companion').closest('[hidden]')).toBeNull();
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
+it.each(['success','failure','same-snapshot-failure','server','mode','viewport','lock','session','same-mode','inbox-entry','jump-live','double-back'] as const)('restores only a fresh same-owner mobile Agents read: %s',async outcome=>{
+  const media={matches:false,addEventListener:vi.fn<(event:string,callback:(event:{matches:boolean})=>void)=>void>(),removeEventListener:vi.fn()};
+  vi.stubGlobal('matchMedia',vi.fn(()=>media));
+  let finish!:(value:unknown)=>void,fail!:(reason:Error)=>void,reads=0;
+  const reported={...herdrNavigationTree,agents:herdrNavigationTree.agents as typeof herdrNavigationTree.agents|undefined};
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:outcome==='server' && reads>0?'replacement':'default'}]);
+    if(command==='herdr_tree')return ++reads===1?Promise.resolve(reported):new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+    return original(command,args);
+  });
+  const user=await connectForNavigation('scroll-origin');
+  const resize=(matches:boolean)=>act(()=>{media.matches=matches;for(const [event,callback] of media.addEventListener.mock.calls)if(event==='change')callback({matches});});
+  resize(true);await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('button',{name:'Agents'}));await screen.findByRole('button',{name:/^builder/});
+  const scroller=document.querySelector<HTMLDivElement>('.workspace-navigation-scroll')!;scroller.scrollTop=731;
+  await user.click(screen.getByRole('button',{name:'Open usage from navigation'}));scroller.scrollTop=0;
+  if(outcome==='viewport')resize(false);
+  if(outcome==='lock')await act(async()=>mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined}}));
+  if(outcome==='session'){
+    mocks.api.connect.mockResolvedValue({sessionId:'other-scroll-source'});
+    await user.click(screen.getByRole('button',{name:t('navigationConnections')}));
+    await user.click(screen.getByRole('button',{name:'Connect to Home'}));await user.type(screen.getByLabelText('Password'),'owned');await user.click(screen.getByRole('button',{name:'Connect'}));
+  }
+  if(outcome==='mode'){
+    await user.click(screen.getByRole('button',{name:t('navigationWorkspaces')}));
+  }else if(outcome!=='lock' && outcome!=='session')await user.click(screen.getByRole('button',{name:'Back'}));
+  if(outcome==='lock'||outcome==='session'){expect(scroller.scrollTop).toBe(0);return;}
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  if(outcome==='same-mode')await user.click(screen.getByRole('button',{name:t('navigationAgents')}));
+  if(outcome==='inbox-entry')act(()=>window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'scroll-origin'}})));
+  if(outcome==='jump-live')await user.click(within(screen.getByRole('navigation',{name:t('agentsSections')})).getByRole('button',{name:t('herdrAgentsTitle')}));
+  if(outcome==='double-back')act(()=>mocks.backButton?.({canGoBack:false}));
+  expect(scroller.scrollTop).toBe(0); // The retained old receipt cannot restore while a fresh read is held.
+  if(outcome==='failure')await act(async()=>fail(new Error('Owned fresh read failed')));
+  else if(outcome==='same-snapshot-failure')await act(async()=>{reported.agents=undefined;finish(reported);});
+  else await act(async()=>finish({...herdrNavigationTree}));
+  expect(scroller.scrollTop).toBe(outcome==='success'?731:0);
+  if(outcome==='failure'||outcome==='same-snapshot-failure'){
+    await user.click(screen.getByRole('button',{name:t('herdrRefresh')}));await act(async()=>finish({...herdrNavigationTree}));expect(scroller.scrollTop).toBe(0);
+  }
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
 it('dismisses the top dialog before navigating and releases native Back at the root',async()=>{
@@ -1840,7 +1885,8 @@ it('opens Agents on the attached default Herdr session among several running ser
   const companion=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'other'},{name:'named-work'}]);
-    if(command==='herdr_tree')return Promise.resolve({workspaces:[],tabs:[],panes:[],agents:[]});
+    if(command==='herdr_tree')return Promise.resolve({...herdrNavigationTree,agents:[{...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'owned-reference'}}]});
+    if(command==='agent_snapshot')return Promise.resolve({schemaVersion:1,sessions:[{...reportedAgent,agent:'Codex',sessionId:'owned-reference'}]});
     return companion(command,args);
   });
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
@@ -1848,6 +1894,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'agents-child'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
+  expect(mocks.invoke.mock.calls.filter(([command])=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command))).toEqual([]);
   await user.click(screen.getByRole('button',{name:'Agents'}));
   const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
   await waitFor(()=>expect(select).toHaveProperty('disabled',false));
@@ -1855,6 +1902,13 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='herdr_tree')).toEqual([
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
+  const live=screen.getByRole('region',{name:t('herdrNavigationTitle')});
+  const summary=within(live).getByText('Reported session');
+  await user.click(summary);
+  expect(within(live).getByText('/project')).toBeTruthy();
+  expect(within(live).getByText('Unverified reference; may be stale.')).toBeTruthy();
+  await user.click(summary);
+  expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
 it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{

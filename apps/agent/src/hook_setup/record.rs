@@ -13,8 +13,12 @@ pub(super) enum Agent {
     Gemini,
     Cursor,
     Opencode,
+    Cline,
 }
 impl Agent {
+    pub(super) fn is_plugin(self) -> bool {
+        matches!(self, Self::Opencode | Self::Cline)
+    }
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -23,6 +27,7 @@ impl Agent {
             Self::Gemini => "gemini",
             Self::Cursor => "cursor",
             Self::Opencode => "opencode",
+            Self::Cline => "cline",
         }
     }
 }
@@ -98,10 +103,10 @@ impl Record {
             || !valid_path(&self.profile)
             || (self.previous.is_some() && self.provider_before == FileState::Missing)
             || (self.next.is_some() && self.provider_after_sha256.is_none())
-            || (self.agent != Agent::Opencode
+            || (!self.agent.is_plugin()
                 && self.provider_after_sha256.is_none()
                 && (self.previous.is_some() || self.next.is_some()))
-            || (self.agent == Agent::Opencode
+            || (self.agent.is_plugin()
                 && self.previous.is_none()
                 && self.provider_before != FileState::Missing)
             || self
@@ -133,7 +138,7 @@ impl Record {
                 return Err("HooksInvalidRecord");
             }
             match self.agent {
-                Agent::Opencode
+                Agent::Opencode | Agent::Cline
                     if owned.entries.is_empty()
                         && owned
                             .plugin_sha256
@@ -161,7 +166,7 @@ impl Record {
                 _ => return Err("HooksInvalidRecord"),
             }
         }
-        if self.agent == Agent::Opencode
+        if self.agent.is_plugin()
             && self
                 .next
                 .as_ref()
@@ -170,7 +175,7 @@ impl Record {
         {
             return Err("HooksInvalidRecord");
         }
-        if self.agent == Agent::Opencode
+        if self.agent.is_plugin()
             && matches!((&self.previous,&self.provider_before),
             (Some(owned),FileState::Present{sha256,..}) if owned.plugin_sha256.as_ref()!=Some(sha256))
         {

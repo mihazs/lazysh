@@ -1,5 +1,46 @@
 # @lazysh/client
 
+## 1.5.2
+
+### Patch Changes
+
+- 11187d3: Refine mobile connected navigation with full-width agent/workspace views, compact accessible Herdr actions and progressive activity details while preserving terminal and session behavior.
+- @lazysh/account-usage@1.5.2
+  - @lazysh/common@1.5.2
+  - @lazysh/display-idle@1.5.2
+  - @lazysh/et-transport@1.5.2
+  - @lazysh/mosh-transport@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.1
+  - @lazysh/common@1.5.1
+  - @lazysh/display-idle@1.5.1
+  - @lazysh/et-transport@1.5.1
+  - @lazysh/mosh-transport@1.5.1
+
+## 1.5.0
+
+### Minor Changes
+
+- f0b0b94: Show optional read-only Herdr reported-session details with same-connection companion matches and explicit unverified/shared-reference labels. Path references remain private; input and Chat authority are unchanged.
+- 8db8a98: Detect installed host agents and known profile locations before explicit hook setup. Let users select a target while preserving inspected installation plans, manual profile selection and provider trust decisions. Discovery never installs hooks or creates missing profiles.
+- afc27ec: Add explicit managed Cline root lifecycle plugin setup and profile discovery. Preserve existing plugin restrictions and require inspected install/remove plans; configuration does not establish live reporting.
+
+### Patch Changes
+
+- 9f2c42f: Make reported agent activity reachable from the top of the Agents drawer without changing readers or navigation state.
+- 8811c8a: Retain the mobile Agents drawer reading position when returning from a tool without changing navigation or provider state.
+- a422338: Reveal the current Agents Setup through its visible public button before native keep-awake acceptance toggles the checkbox. Preserve the ownership checks, deadlines and strict gesture oracle; this test precondition repair does not establish Android gesture acceptance.
+- b190865: Correct download and public roadmap guidance, and document Obtainium as the preferred Android installation method with explicit APK flavor selection and verification limits.
+- @lazysh/account-usage@1.5.0
+  - @lazysh/common@1.5.0
+  - @lazysh/display-idle@1.5.0
+  - @lazysh/et-transport@1.5.0
+  - @lazysh/mosh-transport@1.5.0
+
 ## 1.4.2
 
 ### Patch Changes
