@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
@@ -253,6 +253,22 @@ test('settings observation admits only finite flags and the two-scroll limit',()
   expect(settingsObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:true,toolbar:true,list:true,target:false,scrollAttempts:2});
   expect(settingsObservation(diagnostic.replace('scrollAttempts=2','scrollAttempts=3'))).toBeUndefined();
   expect(settingsObservation(diagnostic.replace('settingsToolbar=true','settingsToolbar=private-data'))).toBeUndefined();
+});
+
+test('return failure retains one closed snapshot and discards private failure context',()=>{
+  const state='foreground=ntfy settings=true defaultDialog=unavailable add=false certificate=false allow=false deny=unavailable ime=true';
+  const trace=`Ntfy return state[${state}]`;
+  expect(returnStateObservation(`private-prefix\n${trace}\nprivate-suffix`)).toEqual({
+    foreground:'ntfy',settings:true,defaultDialog:null,add:false,certificate:false,allow:false,deny:null,ime:true});
+  expect(JSON.stringify(returnStateObservation(trace))).not.toMatch(/private|origin|fingerprint|package|timestamp/);
+  for(const foreground of ['ntfy','permission','lazysh','aospIme','other','unavailable'])
+    expect(returnStateObservation(trace.replace('foreground=ntfy',`foreground=${foreground}`))?.foreground).toBe(foreground);
+  for(const bad of [trace+trace,trace.replace('settings=true','settings=private'),trace.replace('foreground=ntfy','foreground=io.heckel.ntfy'),
+    trace.replace('ime=true','ime=1'),trace.replace('state[','state[private='),trace.replace('ime=true]','ime=true private]'),
+    trace.replace('settings=true','settings=true\u0000'),trace.replace('settings=true','settings=true\n'),
+    trace.replace('certificate=false','certificate=false origin=secret'),trace.replace(' defaultDialog=unavailable',''),
+    trace.replace('foreground=ntfy','first{foreground=ntfy'),trace+'x'.repeat(256*1024)])
+    expect(returnStateObservation(bad)).toBeUndefined();
 });
 
 const eventDiagnostic='Actual bound-event notification required; eventObservation[entered=true readReturned=false initialReceipts=zero finalReceipts=one appNotifications=true postPermission=false channelEnabled=unavailable ownedNotification=false]';
