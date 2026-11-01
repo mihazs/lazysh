@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/credential-vault",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",
