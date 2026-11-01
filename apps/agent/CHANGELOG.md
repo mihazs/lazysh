@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.5.0
+
+### Minor Changes
+
+- 8db8a98: Detect installed host agents and known profile locations before explicit hook setup. Let users select a target while preserving inspected installation plans, manual profile selection and provider trust decisions. Discovery never installs hooks or creates missing profiles.
+- afc27ec: Add explicit managed Cline root lifecycle plugin setup and profile discovery. Preserve existing plugin restrictions and require inspected install/remove plans; configuration does not establish live reporting.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.0
+  - @lazysh/common@1.5.0
+  - @lazysh/notification-client@1.5.0
+
 ## 1.4.2
 
 ### Patch Changes

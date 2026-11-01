@@ -1,5 +1,9 @@
 # @lazysh/mosh-transport
 
+## 1.5.0
+
+No changes in this release.
+
 ## 1.4.2
 
 No changes in this release.
