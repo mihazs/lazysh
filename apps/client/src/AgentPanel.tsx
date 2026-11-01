@@ -3,7 +3,7 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { Bot, RefreshCw } from 'lucide-react';
+import { Bot, RefreshCw, Settings2 } from 'lucide-react';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import KeepAwakeControl from './KeepAwakeControl';
@@ -76,11 +76,13 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
   const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [setupSource,setSetupSource]=useState<string>();
   const [loadedSessionId, setLoadedSessionId] = useState<string>();
   const [query,setQuery]=useState('');
   const [filter,setFilter]=useState<AgentState|'all'>('all');
   const [selection,setSelection]=useState<{source:string;key:string}|null>(null);
   const ready=loaded && loadedSessionId===sessionId;
+  const setupOpen=setupSource===sessionId || !!error;
   const reports=ready && !error ? sessions : [];
   const currentReports=useRef(reports);currentReports.current=reports;
   const term=query.trim().toLowerCase();
@@ -151,14 +153,18 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
   },[sessionId,panelVisible]);
 
   return <section className="tool-panel agent-panel" hidden={!panelVisible} aria-label={t('agentsTitle')}>
-    <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
-    <ApprovalPanel sessionId={sessionId} visible={panelVisible} />
-    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button className="subtle-button" disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={15} />{t('agentsRefresh')}</button></div>
-    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
-    <p className="agent-note">{t('agentsReportedHint')}</p>
+    <ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button type="button" className="subtle-button" aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={15}/>{t('agentsSetupAction')}</button><button className="subtle-button" disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={15} />{t('agentsRefresh')}</button></div>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
-    <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>
-    <CompanionHooksPanel sessionId={sessionId} visible={panelVisible}/>
+    <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
+      <h3>{t('agentsSetupAction')}</h3>
+      <p className="agent-note">{t('agentsReportedHint')}</p>
+      <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
+      <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>
+      <CompanionHooksPanel sessionId={sessionId} visible={panelVisible}/>
+      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
+    </section>
+    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <div className="agent-discovery">
       <label className="agent-search">{t('agentsSearch')}<input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label>
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
@@ -181,7 +187,6 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
     {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p></div>}
     {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><strong><Bot size={16} /> {s.agent}</strong><button className="subtle-button" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={()=>setSelection({source:sessionId,key:reportKey(s)})}>{t('agentsDetails')}</button><p>{s.summary}</p><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small>{s.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
-    {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
   </section>;
 }
 
