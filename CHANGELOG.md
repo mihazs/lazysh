@@ -8,6 +8,7 @@
 - Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
 
 - Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+- Restore the mobile Agents drawer scroll offset once when returning from a tool to the same session and mode. Discard stale offsets after source, mode, server, access or layout changes; focus, navigation history, provider readers and connection defaults are unchanged.
 
 - Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 
