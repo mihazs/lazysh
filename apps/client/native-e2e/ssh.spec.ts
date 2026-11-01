@@ -8,7 +8,7 @@ import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -30,6 +30,69 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   fixture.captureSafe=true;
   await challengeOwnedSsh(gui,ssh,terminal,owner);
   await disconnectOwnedSsh(gui,terminal);
+});
+
+it('saves credentials in a disposable Secret Service and reconnects only after explicit saved-host consent',async()=>{
+  fixture.captureSafe=false;
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const gui=fixture.gui=await NativeGui.startWithDisposableVault();
+  await gui.assertDisposableCredential('empty');
+  const {browser,terminal,owner}=await openOwnedRememberedSsh(gui,ssh);
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await gui.assertDisposableCredential('saved');
+  let savedHostId:string|undefined;
+  const catalogState=async(stored:boolean)=>{
+    const path=join(gui.directory,'config','app.lazysh.client','hosts.json');
+    if((await stat(path)).size>64*1024)throw new Error('Owned host catalog exceeds its bound');
+    const text=await readFile(path,'utf8');let records:unknown;
+    try{records=JSON.parse(text);}catch{throw new Error('Owned host catalog is invalid');}
+    if(!Array.isArray(records))throw new Error('Owned host catalog is not a list');
+    if(text.includes('PRIVATE KEY')||text.includes(JSON.stringify(ssh.privateKey).slice(1,-1))||/"(?:password|privateKey|private_key|passphrase)"\s*:/.test(text))throw new Error('Owned host catalog contains credential material');
+    const hosts=records.filter((value:unknown)=>!!value&&typeof value==='object'&&'name' in value&&value.name==='Owned SSH GUI host');
+    if(hosts.length!==1)return false;
+    const host=hosts[0] as Record<string,unknown>;
+    if(typeof host.id!=='string'||(savedHostId!==undefined&&host.id!==savedHostId))return false;
+    savedHostId=host.id;
+    return (stored?host.credentialsStored===true:host.credentialsStored===undefined||host.credentialsStored===false)&&host.hostname==='127.0.0.1'&&host.port===ssh.port&&host.username===ssh.username&&host.fingerprint===ssh.fingerprint;
+  };
+  expect(await catalogState(true)).toBe(true);
+  await disconnectOwnedSsh(gui,terminal);
+  gui.stage='owned saved-credential dialog';
+  const reopen=async()=>{
+    await (await browser.$('button[aria-label="Connect to Owned SSH GUI host"]')).click();
+    const dialog=await browser.$('[role="dialog"][aria-label="Connect to Owned SSH GUI host"]');await dialog.waitForDisplayed();return dialog;
+  };
+  const dialog=await reopen();
+  const saved=await (await dialog.$('label*=Use saved credentials')).$('input[type="checkbox"]');await saved.waitForExist();
+  expect(await saved.isSelected()).toBe(true);
+  expect(await dialog.$$('textarea,input[type="password"]')).toHaveLength(0);
+  await (await dialog.$('button=Private key')).click();
+  expect(await (await dialog.$('textarea')).getValue()==='').toBe(true);
+  expect(await (await dialog.$('input[type="password"]')).getValue()==='').toBe(true);
+  expect(await (await (await dialog.$('label*=Save credentials on this device')).$('input')).isSelected()).toBe(false);
+  const savedAgain=await (await dialog.$('label*=Use saved credentials')).$('input[type="checkbox"]');
+  await savedAgain.click();expect(await savedAgain.isSelected()).toBe(true);
+  expect(await dialog.$$('textarea,input[type="password"]')).toHaveLength(0);
+  let activeTerminal=false;
+  for(const canvas of await browser.$$('.terminal-canvas .xterm-screen'))activeTerminal ||= await canvas.isDisplayed();
+  expect(activeTerminal).toBe(false);
+  await (await dialog.$('button=Connect')).click();
+  const second=await browser.$('.terminal-canvas .xterm-screen');await second.waitForDisplayed({timeout:20_000});
+  await challengeOwnedSsh(gui,ssh,second,owner,'AFTER_SAVED_RECONNECT');
+  await gui.assertDisposableCredential('unchanged');
+  await disconnectOwnedSsh(gui,second);
+  gui.stage='owned saved-credential explicit forget';
+  const forgotten=await reopen();
+  await (await forgotten.$('button=Forget saved credentials')).waitForDisplayed();
+  await (await forgotten.$('button=Forget saved credentials')).click();
+  await (await forgotten.$('label*=Use saved credentials')).waitForExist({reverse:true});
+  await gui.assertDisposableCredential('empty');
+  expect(await catalogState(false)).toBe(true);
+  await (await forgotten.$('button=Private key')).click();
+  expect(await (await forgotten.$('textarea')).getValue()==='').toBe(true);
+  expect(await (await forgotten.$('input[type="password"]')).getValue()==='').toBe(true);
+  await (await forgotten.$('button=Cancel')).click();await forgotten.waitForDisplayed({reverse:true});
+  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
 });
 
 it('enters the saved Herdr default through Mosh in the actual GUI and queues only confirmed input to its original receiver',async()=>{

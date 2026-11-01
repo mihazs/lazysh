@@ -23,10 +23,33 @@ async function until<T>(stage:string,probe:()=>Promise<T|undefined>,milliseconds
   do {const value=await probe();if(value!==undefined)return value;await delay(25);}while(performance.now()<deadline);
   throw new Error(`Owned native GUI deadline: ${stage}`);
 }
+export function disposableVaultArguments(directory:string):string[] {
+  if(!directory.startsWith('/tmp/lazysh-native-gui-')||resolve(directory)!==directory||/[\x00-\x1f\x7f]/.test(directory))throw new Error('Invalid disposable vault directory');
+  return ['--foreground','--unlock','--components=secrets',`--control-directory=${join(directory,'runtime')}`];
+}
+export function secretServicePid(reply:string):number {
+  const lines=reply.trim().split('\n'),match=lines[1]?.trim().match(/^uint32 ([1-9][0-9]*)$/);
+  const pid=Number(match?.[1]);
+  if(reply.length>2048||lines.length!==2||!lines[0].startsWith('method return ')||!Number.isSafeInteger(pid)||pid>2147483647)throw new Error('Invalid disposable Secret Service owner');
+  return pid;
+}
+export function credentialItemPaths(reply:string):string[] {
+  if(reply.length>4096)throw new Error('Disposable credential metadata exceeds its bound');
+  const paths=[...reply.matchAll(/object path "([^"\n]+)"/g)].map(match=>match[1]);
+  if(paths.length>8||paths.some(path=>!/^\/org\/freedesktop\/secrets\/collection\/[A-Za-z0-9_]+(?:\/[A-Za-z0-9_]+)*$/.test(path))||new Set(paths).size!==paths.length)throw new Error('Invalid disposable credential metadata');
+  // Only the two object-path arrays from SearchItems, never secret retrieval.
+  const body=reply.trim().split('\n').slice(1).join('\n');
+  if(!reply.startsWith('method return ')||!/^\s*array \[\s*(?:object path "[^"\n]+"\s*)*\]\s*array \[\s*(?:object path "[^"\n]+"\s*)*\]\s*$/.test(body))throw new Error('Invalid disposable credential metadata');
+  return paths;
+}
 export class NativeGui {
   browser?:Browser;
   private bus?:OwnedProcess;
   private display?:OwnedProcess;
+  private secretService?:OwnedProcess;
+  private secretImage='';
+  private secretMembers:OwnedPid[]=[];
+  private credentialItem?:string;
   private driver?:OwnedProcess;
   private clientObserver?:ClientTargetObserver;
   private env:NodeJS.ProcessEnv;
@@ -52,15 +75,17 @@ export class NativeGui {
   });
   stage='fixture startup';
   connections=0;
-  private constructor(readonly directory:string,readonly binary:string,private readonly testWorker:OwnedPid) {this.busAddress=`unix:path=${directory}/runtime/bus`;this.env=guiEnvironment(directory,this.busAddress);}
+  private constructor(readonly directory:string,readonly binary:string,private readonly testWorker:OwnedPid,private readonly disposableVault=false) {this.busAddress=`unix:path=${directory}/runtime/bus`;this.env=guiEnvironment(directory,this.busAddress);}
 
-  static async start() {
+  static async start() {return this.startOwned(false);}
+  static async startWithDisposableVault() {return this.startOwned(true);}
+  private static async startOwned(disposableVault:boolean) {
     if(process.platform!=='linux'||!process.getuid||process.getuid()===0)throw new Error('Native GUI acceptance requires an unprivileged Linux account');
     assertDirectDriverEnvironment(process.env);
     const binary=await executable(join(ROOT,'target/release/lazysh'),'fresh bundled application','lazysh');
     const testWorker=await identity(process.pid);if(!testWorker)throw new Error('Native GUI test worker identity unavailable');
     const directory=await mkdtemp('/tmp/lazysh-native-gui-');
-    const fixture=new NativeGui(directory,binary,testWorker);
+    const fixture=new NativeGui(directory,binary,testWorker,disposableVault);
     try {await fixture.setup();return fixture;}
     catch(error) {try{await fixture.stop();}catch(cleanup){throw new AggregateError([error,cleanup],'Native GUI startup and cleanup failed');}throw error;}
   }
@@ -129,6 +154,7 @@ export class NativeGui {
     }
     const [driverPort,nativePort]=await driverPorts();
     this.ports.driver=driverPort;this.ports.native=nativePort;assertDistinctPorts(this.ports);
+    if(this.disposableVault)await this.startDisposableVault();
     this.driver=this.namespaced(this.driverFile,['--port',String(driverPort),'--native-port',String(nativePort),'--native-host','127.0.0.1','--native-driver',this.nativeDriverFile]);
     await until('owned driver listeners',async()=>await this.ownsListener(driverPort,this.driverFile)&&await this.ownsListener(nativePort,this.nativeDriverFile)?true:undefined);
     await this.assertDisplay();
@@ -144,8 +170,8 @@ export class NativeGui {
     const digest=createHash('sha256');for await(const chunk of createReadStream(this.binary))digest.update(chunk);
     console.info(`Owned native GUI binary sha256=${digest.digest('hex')}`);
   }
-  private namespaced(program:string,args:string[]) {
-    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[])]),this.directory,this.env);
+  private namespaced(program:string,args:string[],captureOutput=true) {
+    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[])]),this.directory,this.env,captureOutput);
   }
   private async connectionOrigin(socket:Socket) {
     const stage=this.stage;
@@ -182,13 +208,68 @@ export class NativeGui {
     }
     return false;
   }
+  private busCall(method:'GetNameOwner'|'GetConnectionUnixProcessID'|'NameHasOwner',value:string) {
+    return this.command('owned private bus observation','/usr/bin/dbus-send',[
+      `--bus=${this.busAddress}`,'--print-reply','--reply-timeout=1000','--dest=org.freedesktop.DBus','/org/freedesktop/DBus',`org.freedesktop.DBus.${method}`,`string:${value}`]);
+  }
+  private async busName(service:string) {
+    const name=(await this.busCall('GetNameOwner',service)).match(/\bstring "(:[0-9]+\.[0-9]+)"/)?.[1];
+    if(!name)throw new Error('Owned private bus name unavailable');return name;
+  }
+  private async startDisposableVault() {
+    this.secretImage=await executable('/usr/bin/gnome-keyring-daemon','disposable Secret Service','gnome-keyring-daemon');
+    if((await readdir(this.env.XDG_DATA_HOME!)).length)throw new Error('Disposable vault data directory was not empty');
+    this.secretService=this.namespaced(this.secretImage,disposableVaultArguments(this.directory),false);
+    this.secretService.child.stdin!.end('lazysh-owned-disposable-keyring-only');
+    await until('disposable Secret Service',async()=>{
+      if(!await this.secretService!.liveIdentity())throw new Error('Disposable Secret Service stopped during startup');
+      return /\bboolean true\s*$/.test(await this.busCall('NameHasOwner','org.freedesktop.secrets'))?true:undefined;
+    },5000);
+    await this.assertSecretServiceOwner();
+  }
+  private async assertSecretServiceOwner() {
+    const root=await this.secretService?.liveIdentity();if(!root)throw new Error('Disposable Secret Service scope unavailable');
+    const before=await descendants(root),name=await this.busName('org.freedesktop.secrets');
+    // The broker uses its own/test worker's PID namespace, not an assumed global host PID.
+    const pid=secretServicePid(await this.busCall('GetConnectionUnixProcessID',name));
+    const selected=before.find(item=>item.pid===pid);
+    const same=(a:OwnedPid|undefined,b:OwnedPid|undefined)=>!!a&&!!b&&a.pid===b.pid&&a.start===b.start&&a.parent===b.parent&&!['Z','X'].includes(b.state);
+    if(!selected||(await stat(`/proc/${pid}`)).uid!==process.getuid!()||await readlink(`/proc/${pid}/exe`)!==this.secretImage||!same(selected,await identity(pid))
+      ||await readlink(`/proc/${pid}/ns/pid`)===await readlink('/proc/self/ns/pid'))throw new Error('Disposable Secret Service owner is not the owned daemon');
+    if(await this.busName('org.freedesktop.secrets')!==name||!same(root,await this.secretService?.liveIdentity()))throw new Error('Disposable Secret Service ownership changed');
+    const after=await descendants(root);
+    if(!same(selected,after.find(item=>item.pid===pid))||!same(selected,await identity(pid))||await readlink(`/proc/${pid}/exe`)!==this.secretImage)throw new Error('Disposable Secret Service ancestry changed');
+    const retained=new Map(this.secretMembers.map(item=>[`${item.pid}:${item.start}`,item]));
+    for(const item of after)retained.set(`${item.pid}:${item.start}`,item);
+    this.secretMembers=[...retained.values()];
+  }
+  async assertDisposableCredential(expected:'empty'|'saved'|'unchanged') {
+    await this.assertSecretServiceOwner();
+    const reply=await this.command('owned credential item metadata','/usr/bin/dbus-send',[
+      `--bus=${this.busAddress}`,'--print-reply','--reply-timeout=1000','--dest=org.freedesktop.secrets','/org/freedesktop/secrets',
+      'org.freedesktop.Secret.Service.SearchItems','dict:string:string:service,app.lazysh.client.credentials']);
+    const items=credentialItemPaths(reply);
+    if(expected==='empty') {if(items.length)throw new Error('Disposable credential was not absent');}
+    else {
+      if(items.length!==1)throw new Error('Disposable credential item was not unique');
+      if(expected==='saved') {if(this.credentialItem!==undefined)throw new Error('Disposable credential baseline was already captured');this.credentialItem=items[0];}
+      else if(items[0]!==this.credentialItem)throw new Error('Disposable credential item identity changed');
+    }
+    await this.assertSecretServiceOwner();
+  }
+  private async stopDisposableVault() {
+    if(!this.secretService)return;
+    await this.secretService.stop();
+    await until('disposable Secret Service retirement',async()=>{
+      const live=await Promise.all(this.secretMembers.map(async item=>(await identity(item.pid))?.start===item.start));
+      return live.some(Boolean)?undefined:true;
+    },2000);
+    if(!/\bboolean false\s*$/.test(await this.busCall('NameHasOwner','org.freedesktop.secrets')))throw new Error('Disposable Secret Service name survived cleanup');
+  }
   async appOwner():Promise<AppOwner> {
     await this.assertDisplay();
-    const call=(method:string,value:string)=>this.command('owned singleton bus observation','/usr/bin/dbus-send',[
-      `--bus=${this.busAddress}`,'--print-reply','--reply-timeout=1000','--dest=org.freedesktop.DBus','/org/freedesktop/DBus',`org.freedesktop.DBus.${method}`,`string:${value}`]);
-    const name=(await call('GetNameOwner',BUS_NAME)).match(/\bstring "(:[0-9]+\.[0-9]+)"/)?.[1];
-    if(!name)throw new Error('Owned singleton name was not registered');
-    const pid=Number((await call('GetConnectionUnixProcessID',name)).match(/\buint32 ([0-9]+)/)?.[1]);
+    const name=await this.busName(BUS_NAME);
+    const pid=Number((await this.busCall('GetConnectionUnixProcessID',name)).match(/\buint32 ([0-9]+)/)?.[1]);
     const owned=(await this.processes()).find(item=>item.pid===pid);
     if(!owned||await readlink(`/proc/${pid}/exe`)!==this.binary||(await identity(pid))?.start!==owned.start)throw new Error('Singleton owner is not the owned GUI binary');
     return {name,pid,start:owned.start};
@@ -217,6 +298,7 @@ export class NativeGui {
         const live=await Promise.all(this.members.map(async item=>(await identity(item.pid))?.start===item.start));
         return live.some(Boolean)?undefined:true;
       },2000);},
+      async()=>{await this.stopDisposableVault();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},
       async()=>{if(this.clientObserver){this.clientObserver.stop();console.info(`Owned test-worker observer: ${this.clientObserver.status()}; target connections=${this.clientObserver.targetConnections}`);}},

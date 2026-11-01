@@ -1,4 +1,5 @@
 import {expect,it} from 'vitest';
+import {disposableVaultArguments,secretServicePid,credentialItemPaths} from '../../native-e2e/fixture';
 import {assertDirectDriverEnvironment,guiEnvironment,listenerInode,namespaceArguments} from '../../native-e2e/policy';
 
 it('refuses a WebDriver client proxy instead of sending owned loopback traffic through it',()=>{
@@ -28,4 +29,26 @@ it('requires a PID-namespace supervisor and hides host home/runtime/display sock
   expect(args.join(' ')).toContain('--ro-bind /tmp/.X11-unix/X1200 /tmp/.X11-unix/X1200');
   expect(args).not.toContain('--unshare-user-try');expect(args).not.toContain('--not-a-security-boundary');
   expect(()=>namespaceArguments('driver',[],'/tmp/owned','/home/owned','/tmp/.X11-unix/X1200',[])).toThrow();
+});
+
+it('keeps the disposable vault foreground, secrets-only and within the existing private GUI namespace',()=>{
+  const directory='/tmp/lazysh-native-gui-vault';
+  expect(disposableVaultArguments(directory)).toEqual(['--foreground','--unlock','--components=secrets',`--control-directory=${directory}/runtime`]);
+  for(const bad of ['relative','/tmp/lazysh-native-gui-a/../other','/home/owned','/tmp/lazysh-native-gui-vault\n'])expect(()=>disposableVaultArguments(bad)).toThrow();
+  const env=guiEnvironment(directory,`unix:path=${directory}/runtime/bus`);
+  for(const key of ['GNOME_KEYRING_CONTROL','GPG_AGENT_INFO','SSH_AUTH_SOCK','DBUS_STARTER_ADDRESS'])expect(env).not.toHaveProperty(key);
+  const args=namespaceArguments('/usr/bin/gnome-keyring-daemon',disposableVaultArguments(directory),directory,'/home/owned','/tmp/.X11-unix/X1200',[]);
+  expect(args.join(' ')).toContain('--tmpfs /home/owned --tmpfs /run --tmpfs /tmp');
+  expect(args).not.toContain('--start');expect(args).not.toContain('--daemonize');
+});
+it('admits only one bounded local PID from the private-bus owner reply',()=>{
+  expect(secretServicePid('method return sender=org.freedesktop.DBus\n   uint32 741\n')).toBe(741);
+  for(const bad of ['uint32 741','method return x\n uint32 0','method return x\n uint32 0741','method return x\n uint32 2147483648','method return x\n uint32 741\n uint32 742','error x\n uint32 741'])expect(()=>secretServicePid(bad)).toThrow();
+});
+it('observes credential identity/count through object-path metadata without accepting a secret payload',()=>{
+  const header='method return sender=org.freedesktop.secrets\n';
+  expect(credentialItemPaths(header+' array [ ]\n array [ ]')).toEqual([]);
+  const item='/org/freedesktop/secrets/collection/login/1';
+  expect(credentialItemPaths(header+` array [ object path "${item}" ]\n array [ ]`)).toEqual([item]);
+  for(const body of [`array [ object path "${item}" object path "${item}" ] array []`,'array [ object path "/foreign" ] array []',`array [ object path "${item}/" ] array []`,`array [ object path "${item.replace('/login/','/login//')}" ] array []`,'array [] array [] string "private value"','array []','array [ array [','array [ ] ] array [ ]','] array [ ] array [','x'.repeat(4097)])expect(()=>credentialItemPaths(header+body)).toThrow();
 });
