@@ -1,7 +1,7 @@
-import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript} from '../.changeset/windows-standard-user';
+import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection} from '../.changeset/windows-standard-user';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
-import { appendFile, mkdtemp, mkdir, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, link, mkdtemp, mkdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -10,7 +10,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { windowsGuiDaclFailures, windowsGuiSessionNonzero, parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiFrontendReasons, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumCommonSource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { windowsGuiDaclFailures, windowsGuiSessionNonzero, parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiFrontendReasons, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumCommonSource, windowsGuiMediumSource, windowsStandardDiagnosticScript, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const launchFailureDetails=['CREATE_PROCESS_WITH_TOKEN','RESUME_THREAD'].flatMap(call=>windowsGuiLaunchErrors.map(error=>call+':'+error)).concat('RESUME_THREAD:RESUME_COUNT_UNEXPECTED');
@@ -1493,6 +1493,50 @@ test('NSIS image prediction preserves the runtime bundle-comparison constants by
   expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
     sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
 }));
+
+test('Windows standard progress is private, fixture-bound and never a result authority',async()=>fixture(async parent=>{
+  const root=join(parent,'lazysh-standard-123-1'),path=join(root,'work/standard-progress.json');
+  await mkdir(join(root,'work'),{recursive:true});
+  const source='a'.repeat(40),binary='b'.repeat(64),record={fixture:'lazysh-standard-123-1',source,binary,stage:'VALIDATION_ENTERED'};
+  const read=()=>readStandardDiagnostic(root,source,binary);
+  expect(await read()).toBe('UNKNOWN');
+  await publishStandardProgress(root,source,binary,'WORKER_STARTED');
+  expect(await Bun.file(path).exists()).toBe(false);
+  await writeFile(path,JSON.stringify(record));expect(await read()).toBe('VALIDATION_ENTERED');
+  await publishStandardProgress(root,source,binary,'RESULT_WRITTEN');expect(await read()).toBe('RESULT_WRITTEN');
+  const valid=await readFile(path);
+  await publishStandardProgress(root,source,binary,'private arbitrary stage');expect(await readFile(path)).toEqual(valid);
+  for(const value of [null,[],{...record,fixture:'lazysh-standard-122-1'},{...record,source:'c'.repeat(40)},{...record,binary:'c'.repeat(64)},{...record,stage:'COMPLETE'},{...record,stage:'private arbitrary stage'},{...record,private:'never echo'}]){
+    const text=JSON.stringify(value);await writeFile(path,text);expect(await read()).toBe('UNKNOWN');
+    await publishStandardProgress(root,source,binary,'WORKER_STARTED');expect(await readFile(path,'utf8')).toBe(text);
+  }
+  for(const bytes of [Buffer.from('{'),Buffer.from([0xff]),Buffer.alloc(513,32)]){await writeFile(path,bytes);expect(await read()).toBe('UNKNOWN');}
+  await unlink(path);await mkdir(path);expect(await read()).toBe('UNKNOWN');await rmdir(path);
+  const foreign=join(parent,'foreign');await writeFile(foreign,JSON.stringify(record));await symlink(foreign,path);expect(await read()).toBe('UNKNOWN');await unlink(path);
+  await link(foreign,path);expect(await read()).toBe('UNKNOWN');await unlink(path);
+  await writeFile(path,JSON.stringify(record));expect(await readStandardDiagnostic(root,'private',binary)).toBe('UNKNOWN');
+  const wire='LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_OWNER_TIMEOUT';
+  expect(standardOwnerRejection(wire,undefined,'RESULT_WRITTEN')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT progress=RESULT_WRITTEN cleanup=UNKNOWN');
+  expect(standardOwnerRejection(wire,'private error','private progress')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT progress=UNKNOWN cleanup=UNKNOWN');
+  expect(standardOwnerRejection('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:private',undefined,undefined)).toBe('Standard native owner rejected: UNVERIFIED progress=UNKNOWN cleanup=UNKNOWN');
+}));
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard progress PowerShell writer is bounded and cannot change validation failure',async()=>fixture(async parent=>{
+  const root=join(parent,'lazysh-standard-124-1'),work=join(root,'work'),path=join(work,'standard-progress.json');await mkdir(work,{recursive:true});
+  const source='a'.repeat(40),binary='b'.repeat(64),record={fixture:'lazysh-standard-124-1',source,binary,stage:'VALIDATION_ENTERED'};
+  const script=windowsStandardDiagnosticScript+"$script:failure='retained';StandardDiagnostic 'GUI_ENTERED';if($script:failure -cne 'retained'){throw 'diagnostic changed failure'};[Console]::Out.Write('PROGRESS_DIAGNOSTIC_RETURNED')";
+  const deadline=performance.now()+30000;
+  const run=()=>{
+    const remaining=Math.floor(deadline-performance.now()-1000);
+    if(remaining<=0)throw new Error('Standard progress fixture exhausted its shared budget');
+    return native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,RUNNER_TEMP:work,GITHUB_SHA:source,LAZYSH_BINARY_SHA256:binary,LAZYSH_GUI_REQUIRE_STANDARD:'1'},Math.min(30000,remaining));
+  };
+  await writeFile(path,JSON.stringify(record));expect(await run()).toBe('PROGRESS_DIAGNOSTIC_RETURNED');expect(await readStandardDiagnostic(root,source,binary)).toBe('GUI_ENTERED');
+  for(const text of ['{',JSON.stringify({...record,binary:'c'.repeat(64)}),JSON.stringify({...record,private:'not a record'}),' '.repeat(513)]){await writeFile(path,text);expect(await run()).toBe('PROGRESS_DIAGNOSTIC_RETURNED');expect(await readFile(path,'utf8')).toBe(text);}
+  await unlink(path);expect(await run()).toBe('PROGRESS_DIAGNOSTIC_RETURNED');expect(await Bun.file(path).exists()).toBe(false);
+  const target=join(parent,'target');await writeFile(target,JSON.stringify(record));await symlink(target,path);expect(await run()).toBe('PROGRESS_DIAGNOSTIC_RETURNED');expect(await readFile(target,'utf8')).toBe(JSON.stringify(record));
+  await unlink(path);await link(target,path);expect(await run()).toBe('PROGRESS_DIAGNOSTIC_RETURNED');expect(await readFile(target,'utf8')).toBe(JSON.stringify(record));
+}),35000);
 
 test('Windows standard owner keeps output closed and staging inside its public dependency closure',async()=>{
   const originalNameCheck='Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");';

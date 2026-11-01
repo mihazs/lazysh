@@ -899,9 +899,38 @@ function GuiMediumStart($job,$info,$probeDeadline=0) {
 }
 `;
 
+export const windowsStandardProgressStages=['UNKNOWN','WORKER_STARTED','VALIDATION_ENTERED','GUI_ENTERED','GUI_CLIENT_WAIT','GUI_CLEANUP','GUI_RETURNED','VALIDATION_RETURNED','RESULT_WRITTEN'] as const;
+export const windowsStandardDiagnosticScript=String.raw`
+function StandardDiagnostic($phase) {
+  $stream=$null
+  try {
+    if ($env:LAZYSH_GUI_REQUIRE_STANDARD -cne '1') { return }
+    $stages=@(${windowsStandardProgressStages.map(stage=>"'"+stage+"'").join(',')})
+    $root=Split-Path -Parent $env:RUNNER_TEMP;$path=Join-Path $env:RUNNER_TEMP 'standard-progress.json';$binary=$env:LAZYSH_BINARY_SHA256
+    for ($current=$path; $current; $current=Split-Path -Parent $current) {
+      $ancestor=Get-Item -LiteralPath $current -Force -ErrorAction Stop
+      if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
+    }
+    if ($phase -cnotin $stages) { return }
+    $item=Get-Item -LiteralPath $path -Force
+    if ($item.PSIsContainer -or $item.LinkType -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+    $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
+    $bytes=[byte[]]::new(513);$length=$stream.Read($bytes,0,$bytes.Length)
+    if ($length -gt 512 -or $stream.Length -ne $length) { return }
+    $record=[Text.UTF8Encoding]::new($false,$true).GetString($bytes,0,$length) | ConvertFrom-Json -ErrorAction Stop
+    $fixture=Split-Path -Leaf $root
+    if ((($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'binary,fixture,source,stage' -or $record.fixture -cne $fixture -or $record.source -cne $env:GITHUB_SHA -or $record.binary -cne $binary -or $record.stage -cnotin $stages) { return }
+    $text=@{fixture=$record.fixture;source=$record.source;binary=$record.binary;stage=$phase} | ConvertTo-Json -Compress
+    $encoded=[Text.UTF8Encoding]::new($false).GetBytes($text)
+    $stream.SetLength(0);$stream.Write($encoded,0,$encoded.Length);$stream.Flush()
+  } catch { } finally { try { if ($stream) { $stream.Dispose() } } catch { } }
+}
+`;
+
 export const windowsInstalledGuiScript = String.raw`
 ${windowsGuiEndpointsScript}
 ${windowsGuiMediumScript}
+${windowsStandardDiagnosticScript}
 function GuiProcess($file, $arguments, $counterfactual = $false, $medium = $false) {
   Plain $file
   $info = [Diagnostics.ProcessStartInfo]::new($file)
@@ -972,6 +1001,7 @@ function GuiMediumCounterfactual {
 }
 function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
   $requireStandard=$medium -or $env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1'
+  StandardDiagnostic 'GUI_ENTERED'
   $script:stage = 'gui'
   Require ([Environment]::UserInteractive -and (Get-Process -Id $PID).SessionId -ne 0) 'GUI_INTERACTIVE'
   foreach ($file in @($env:LAZYSH_GUI_DRIVER, $env:LAZYSH_GUI_EDGE, $env:LAZYSH_GUI_NODE, $env:LAZYSH_GUI_VITEST)) { Plain $file; Require (Test-Path -LiteralPath $file -PathType Leaf) 'GUI_TOOLS' }
@@ -1028,6 +1058,7 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
     if ($medium) { $script:failure='GUI_MEDIUM_UNAVAILABLE' }
     $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts') $counterfactual $medium
     if ($medium) { $script:mediumAdmitted=$true }
+    StandardDiagnostic 'GUI_CLIENT_WAIT'
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
       Plain $env:LAZYSH_GUI_RECEIPT
@@ -1069,6 +1100,7 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
     if ($medium -and $_.Exception.GetBaseException().Message -ceq 'CLEANUP_UNVERIFIED') { $script:failure='GUI_CLEANUP' }
     $primaryFailure = $script:failure
   } finally {
+    StandardDiagnostic 'GUI_CLEANUP'
     $script:failure = 'GUI_CLEANUP'
     $cleanupFailed = $false
     $mediumDeadline=[DateTime]::UtcNow.AddSeconds(10)
@@ -1104,6 +1136,7 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
       Require $false 'GUI_CLEANUP'
     }
     $guiCleanupVerified = $true
+    StandardDiagnostic 'GUI_RETURNED'
     if ($counterfactual -and !$medium) { $script:capCleanupVerified=$true }
   }
   if ($primaryFailure) {
