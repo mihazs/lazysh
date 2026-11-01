@@ -1,7 +1,7 @@
 import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import { Bot, RefreshCw, Settings2 } from 'lucide-react';
 import ApprovalPanel from './ApprovalPanel';
@@ -68,7 +68,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,renderNavigation }: { sessionId: string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,renderNavigation,activityRef,activityId }: { sessionId: string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const [access]=useState(captureAccess);
@@ -191,7 +191,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
     {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><strong><Bot size={16} /> {s.agent}</strong><button className="subtle-button" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={()=>setSelection({source:sessionId,key:reportKey(s)})}>{t('agentsDetails')}</button><p>{s.summary}</p><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small>{s.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
   </section>;
-  return renderNavigation?<>{renderNavigation(reportSource)}<div className="workspace-navigation-agents" hidden={!panelVisible}>{panel}</div></>:panel;
+  return renderNavigation?<>{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible}>{panel}</div></>:panel;
 }
 
 export default AgentPanel;

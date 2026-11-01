@@ -4,6 +4,14 @@
 
 - Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.
 
+- Add direct Live agents and Activity jump controls at the top of the Agents drawer. Move focus and only the drawer scroll position while preserving mounted readers, drafts, approvals and Back behavior; no agent data or connection settings change.
+- Detect installed host agents and known profile locations when opening Agent hook setup, with no provider preselected. Select a detected target or enter a manual profile before inspecting and installing hooks; discovery does not install hooks, create profiles or change trust settings. Executable discovery and live activity remain separate.
+
+- Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
+
+- Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+- Restore the mobile Agents drawer scroll offset once when returning from a tool to the same session and mode. Discard stale offsets after source, mode, server, access or layout changes; focus, navigation history, provider readers and connection defaults are unchanged.
+
 - Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 
 - Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.

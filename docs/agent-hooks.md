@@ -2,8 +2,14 @@
 
 ## Managed lifecycle hook setup
 
-In **Agents → Agent hook setup**, select the provider and its existing absolute
-profile directory on the connected SSH host, then choose **Inspect setup**.
+Opening **Agents → Agent hook setup** detects installed agents and known profile
+locations on the connected SSH host. Select an agent and profile, then choose
+**Inspect setup**. Detection does not execute agents or install hooks. A found
+profile is shown separately from an installed executable; manual-only adapters
+cannot use managed installation.
+Use manual setup for an alternate absolute profile directory. The SSH environment
+can differ from a running agent's environment, so an inferred path does not prove
+which profile that agent loaded. Missing profiles are not created automatically.
 Installing/updating or removing requires a separate explicit action against
 that inspected plan. Install or update the host companion first when the host
 has an older version. Setup uses the resolved companion executable's absolute
@@ -17,7 +23,7 @@ Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI and Ope
 on the qualified Linux filesystems described below. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
-layer; setup does not discover or enable the provider's active layer.
+layer; detection does not establish or enable the provider's active layer.
 
 Gemini's six native groups retain their 5000 **millisecond** deadline and preserve
 `hooksConfig.enabled` and `hooksConfig.disabled` exactly. Cursor retains its
@@ -31,11 +37,24 @@ global hooks are enabled, trusted, or reporting in the running provider.
 The equivalent local commands are:
 
 ```sh
+lazysh-agent hooks discover
 lazysh-agent hooks preview --agent codex
 lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
 lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
 lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
 ```
+
+Discovery uses executable metadata on bounded absolute `PATH` entries and known
+Codex standalone locations. It respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`GEMINI_CLI_HOME` (with `.gemini` appended), and OpenCode's
+`OPENCODE_CONFIG_DIR`/XDG configuration directory. `OPENCODE_CONFIG` names a file,
+so it is not used as a hook profile directory. Invalid overrides are reported
+instead of silently selecting another profile. A truncated scan is labelled;
+manual selection remains available. No credential or profile contents are read
+by discovery. Discovery and managed installation have separate platform limits.
+Cursor hook discovery uses its [documented hook location](https://prod.cursor.com/docs/hooks), `~/.cursor/hooks.json`;
+CLI configuration overrides are not assumed to relocate hooks. Use manual
+selection for another verified hook layer.
 
 `install` also updates existing owned entries. Every changed profile needs a
 fresh inspection. Claude and Gemini use `settings.json`, Codex and Cursor use `hooks.json`,

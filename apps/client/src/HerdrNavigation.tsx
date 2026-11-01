@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
@@ -7,11 +7,14 @@ import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErr
 import {herdrStatusKeys,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
 import './HerdrNavigation.css';
 
+export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
+
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onNavigate,onAttach,onClose,onRestoreHostTools}:{
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
+  onContentSettled?:(receipt:HerdrContentReceipt)=>void;
   onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
 }) {
   useUi();
@@ -25,6 +28,14 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const action=useRef(false);
   const current=useRef({sessionId,visible,mode,server:data?.server});current.current={sessionId,visible,mode,server:data?.server};
   useEffect(()=>()=>{current.current={...current.current,visible:false};},[]);
+  const settledCallback=useRef(onContentSettled);settledCallback.current=onContentSettled;
+  const settledFailure=mode==='agents' && agentFailure?.host===sessionId?agentFailure:failure?.host===sessionId?failure:undefined;
+  const settledIdentity=data?.snapshot??settledFailure??(data?.loaded?data:undefined);
+  const settledFailed=!!settledFailure;
+  useLayoutEffect(()=>{
+    if(visible && !busy && lease.current() && !document.hidden && settledIdentity)
+      settledCallback.current?.({host:sessionId,server:data?.server??'',mode,identity:settledIdentity,failed:settledFailed});
+  },[sessionId,visible,busy,lease,mode,data?.server,settledIdentity,settledFailed]);
   const tree=data?.snapshot;
   const referenceCounts=reportedSessionCounts(data?.rows??[]);
   const term=query.trim().toLocaleLowerCase();
