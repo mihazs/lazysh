@@ -80,6 +80,34 @@ public final class OwnedImeService extends InputMethodService {
             result.putBoolean("accepted", Objects.requireNonNull(active, "Owned IME editor unavailable")
                     .connection.setComposingText("owned-preedit-" + nonce, 1));
         }
+        // Fixed ASCII transactions only; the host raw receiver is the delivery oracle.
+        if ("composeCorrection".equals(method) || "extendTail".equals(method)
+                || "eraseTail".equals(method) || "repeatWord".equals(method)) {
+            Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
+            if (saved == null || saved.connection != target.connection)
+                throw new IllegalStateException("Owned IME captured terminal required");
+            InputConnection connection = target.connection;
+            boolean accepted = connection.beginBatchEdit();
+            try {
+                if ("composeCorrection".equals(method)) {
+                    accepted &= connection.setComposingText("teh", 1);
+                    accepted &= connection.setComposingText("the", 1);
+                    accepted &= connection.finishComposingText();
+                } else if ("extendTail".equals(method)) {
+                    accepted &= connection.setComposingRegion(0, 3);
+                    accepted &= connection.setComposingText("there", 1);
+                    accepted &= connection.finishComposingText();
+                } else if ("eraseTail".equals(method)) {
+                    accepted &= connection.deleteSurroundingText(2, 0);
+                } else {
+                    accepted &= connection.commitText("the", 1);
+                }
+            } finally { accepted &= connection.endBatchEdit(); }
+            result.putBoolean("accepted", accepted);
+            CharSequence read = connection.getTextBeforeCursor(256, 0);
+            String expected = "extendTail".equals(method) ? "there" : "repeatWord".equals(method) ? "thethe" : "the";
+            result.putBoolean("readMatched", read != null && expected.contentEquals(read));
+        }
         if ("old".equals(method) || "current".equals(method)) {
             Snapshot selected = Objects.requireNonNull("old".equals(method) ? saved : active, "Owned IME connection unavailable");
             String text = "owned-" + method + "-" + nonce;
@@ -99,6 +127,8 @@ public final class OwnedImeService extends InputMethodService {
             OwnedClipboardProvider.requireTargetCaller(Objects.requireNonNull(getContext()));
             if (arg == null || !arg.matches("[0-9a-f]{32}") || extras != null
                     || !("arm".equals(method) || "state".equals(method) || "capture".equals(method)
+                    || "composeCorrection".equals(method) || "extendTail".equals(method)
+                    || "eraseTail".equals(method) || "repeatWord".equals(method)
                     || "preedit".equals(method) || "old".equals(method) || "current".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
