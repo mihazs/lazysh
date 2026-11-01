@@ -1481,3 +1481,458 @@ fn droid_standalone_hooks_preserve_fallback_profiles_and_refuse_shadowing_or_rep
     assert!(fixture.apply(files::Action::Install, &plan).is_err());
     assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), "{}");
 }
+
+fn discover_metadata(
+    home: &std::path::Path,
+    path: &std::ffi::OsStr,
+    overrides: &[(&str, &std::ffi::OsStr)],
+) -> Value {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    command
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", path)
+        .args(["hooks", "discover"]);
+    for (name, value) in overrides {
+        command.env(name, value);
+    }
+    json_output::decode(command.output().unwrap())
+}
+fn metadata_executable(path: &std::path::Path, marker: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nprintf private-executed > '{}'\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+fn discovered<'a>(result: &'a Value, agent: &str) -> &'a Value {
+    result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == agent)
+        .unwrap()
+}
+#[test]
+fn discovery_reports_independent_executable_profile_and_setup_evidence_without_execution() {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin with ' quote");
+    let marker = home.join("must-not-execute");
+    for name in [
+        "codex",
+        "droid",
+        "gemini",
+        "cursor-agent",
+        "opencode",
+        "cline",
+        "kimi",
+        "copilot",
+        "amp",
+        "aider",
+    ] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    for name in [
+        ".claude",
+        ".factory",
+        ".cursor",
+        ".config/opencode",
+        "extra",
+        "gemini-home/.gemini",
+    ] {
+        fs::create_dir_all(home.join(name)).unwrap();
+    }
+    fs::write(home.join(".claude/settings.json"), "private-profile-secret").unwrap();
+    let gemini = home.join("gemini-home");
+    let extra = home.join("extra");
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("GEMINI_CLI_HOME", gemini.as_os_str()),
+            ("OPENCODE_CONFIG_DIR", extra.as_os_str()),
+        ],
+    );
+    assert_eq!(result["schemaVersion"], 1);
+    assert_eq!(result["supported"], true);
+    assert_eq!(result["managedSetupSupported"], cfg!(target_os = "linux"));
+    assert_eq!(result["agents"].as_array().unwrap().len(), 11);
+    assert_eq!(result["truncated"], false);
+    assert!(discovered(&result, "claude")["executable"].is_null());
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "directory"
+    );
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "missing"
+    );
+    assert!(!home.join(".codex").exists());
+    assert_eq!(
+        discovered(&result, "gemini")["profiles"][0]["path"],
+        gemini.join(".gemini").to_str().unwrap()
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    for (agent, setup) in [
+        ("cline", "manual"),
+        ("kimi", "manual"),
+        ("copilot", "manual"),
+        ("amp", "manual"),
+        ("aider", "healthOnly"),
+    ] {
+        assert_eq!(discovered(&result, agent)["setup"], setup);
+        assert_eq!(discovered(&result, agent)["profiles"], json!([]));
+    }
+    assert!(!marker.exists());
+    assert!(!result.to_string().contains("private"));
+    let empty = discover_metadata(
+        home,
+        OsStr::new(""),
+        &[("CLAUDE_CONFIG_DIR", OsStr::new("relative"))],
+    );
+    let diagnostic = discovered(&empty, "claude");
+    assert!(diagnostic["executable"].is_null());
+    assert_eq!(
+        diagnostic["profiles"][0],
+        json!({"path":null,"source":"CLAUDE_CONFIG_DIR","state":"invalid"})
+    );
+}
+#[test]
+fn discovery_invalid_nonempty_overrides_never_fall_back_and_empty_overrides_do() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    metadata_executable(&bin.join("codex"), &home.join("marker"));
+    fs::create_dir(home.join(".codex")).unwrap();
+    for invalid in [
+        OsStr::new("relative"),
+        OsStr::new("~/other"),
+        OsStr::new("/safe/../other"),
+        OsStr::new("/safe/./other"),
+        OsStr::new("/private\nsecret"),
+        OsStr::from_bytes(b"/invalid\xff"),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", invalid)]);
+        let profile = &discovered(&result, "codex")["profiles"][0];
+        assert_eq!(
+            profile,
+            &json!({"path":null,"source":"CODEX_HOME","state":"invalid"})
+        );
+        assert!(!result.to_string().contains("secret"));
+    }
+    for empty in ["", " \t "] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", OsStr::new(empty))]);
+        assert_eq!(
+            discovered(&result, "codex")["profiles"][0]["state"],
+            "directory"
+        );
+        assert_eq!(
+            discovered(&result, "codex")["profiles"][0]["source"],
+            "HOME"
+        );
+    }
+    let absent = home.join("chosen-missing");
+    let result = discover_metadata(home, bin.as_os_str(), &[("CODEX_HOME", absent.as_os_str())]);
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "missing"
+    );
+    assert!(!absent.exists());
+}
+#[test]
+fn discovery_honors_config_directory_layers_aliases_and_profile_link_boundaries() {
+    use std::{
+        ffi::OsStr,
+        fs,
+        os::unix::fs::{symlink, PermissionsExt},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    let marker = home.join("marker");
+    for name in ["opencode", "cursor-agent", "claude", "codex"] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    let config = home.join("config");
+    fs::create_dir_all(config.join("opencode")).unwrap();
+    fs::create_dir(config.join("cursor")).unwrap();
+    let ignored = home.join("config-file.json");
+    fs::write(&ignored, "private-file-content").unwrap();
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("XDG_CONFIG_HOME", config.as_os_str()),
+            ("OPENCODE_CONFIG", ignored.as_os_str()),
+        ],
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"][0]["path"],
+        config.join("opencode").to_str().unwrap()
+    );
+    let cursor_profile = json!({"path": home.join(".cursor"), "source":"HOME", "state":"missing"});
+    assert_eq!(
+        &discovered(&result, "cursor")["profiles"][0],
+        &cursor_profile
+    );
+    symlink(&config, home.join(".claude")).unwrap();
+    let broken = home.join("broken");
+    symlink(home.join("absent"), &broken).unwrap();
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[
+            ("CURSOR_CONFIG_DIR", broken.as_os_str()),
+            ("CODEX_HOME", broken.as_os_str()),
+            ("OPENCODE_CONFIG_DIR", OsStr::new("relative")),
+        ],
+    );
+    assert_eq!(
+        &discovered(&result, "cursor")["profiles"][0],
+        &cursor_profile
+    );
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert_eq!(
+        discovered(&result, "codex")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        discovered(&result, "opencode")["profiles"][0]["state"],
+        "invalid"
+    );
+    fs::rename(bin.join("claude"), bin.join("target")).unwrap();
+    symlink(bin.join("target"), bin.join("claude")).unwrap();
+    fs::set_permissions(bin.join("opencode"), fs::Permissions::from_mode(0o600)).unwrap();
+    let result = discover_metadata(home, bin.as_os_str(), &[]);
+    assert_eq!(
+        discovered(&result, "claude")["executable"]["source"],
+        "path"
+    );
+    assert!(!result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["agent"] == "opencode"));
+    assert!(!marker.exists());
+}
+#[test]
+fn discovery_bounds_path_scans_and_codex_standalone_entries_without_recursive_search() {
+    use std::{ffi::OsStr, fs};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    let marker = home.join("marker");
+    metadata_executable(&bin.join("claude"), &marker);
+    let path = format!(
+        "{}:{}:{}",
+        bin.display(),
+        bin.display(),
+        vec!["relative"; 70].join(":")
+    );
+    let byte_limited = format!(
+        "{}:{}",
+        bin.display(),
+        vec!["/x".repeat(1500); 12].join(":")
+    );
+    for path in [path, byte_limited] {
+        let result = discover_metadata(home, OsStr::new(&path), &[]);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+    }
+    let release = home.join(".codex/packages/standalone/releases/one/bin/codex");
+    metadata_executable(&release, &marker);
+    let result = discover_metadata(home, OsStr::new(""), &[]);
+    assert_eq!(
+        discovered(&result, "codex")["executable"],
+        json!({"path":release,"source":"codexStandalone"})
+    );
+    let releases = home.join(".codex/packages/standalone/releases");
+    for index in 0..20 {
+        fs::create_dir(releases.join(format!("version-{index}"))).unwrap();
+    }
+    let result = discover_metadata(home, OsStr::new(""), &[]);
+    assert_eq!(result["truncated"], true);
+    let long = format!("/{}", "x".repeat(4097));
+    let result = discover_metadata(
+        home,
+        bin.as_os_str(),
+        &[("CLAUDE_CONFIG_DIR", OsStr::new(&long))],
+    );
+    assert_eq!(result["truncated"], true);
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "invalid"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_distinguishes_unavailable_profile_metadata_and_never_searches_cwd() {
+    use std::{ffi::OsStr, fs, os::unix::fs::PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let bin = home.join("bin");
+    metadata_executable(&bin.join("claude"), &home.join("marker"));
+    let locked = home.join("locked");
+    let profile = locked.join("profile");
+    fs::create_dir_all(&profile).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o0)).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", "")
+        .env("CLAUDE_CONFIG_DIR", &profile)
+        .args(["hooks", "discover"])
+        .output();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    let result = json_output::decode(output.unwrap());
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0]["state"],
+        "unavailable"
+    );
+    let result = discover_metadata(home, bin.as_os_str(), &[("HOME", OsStr::new(""))]);
+    assert_eq!(
+        discovered(&result, "claude")["profiles"][0],
+        json!({"path":null,"source":"HOME","state":"unavailable"})
+    );
+    let relative = discover_metadata(home, OsStr::new(":.:bin"), &[]);
+    assert_eq!(relative["agents"], json!([]));
+    fs::create_dir(bin.join("gemini")).unwrap();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    let result = json_output::decode(
+        command
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", &bin)
+            .args(["hooks", "discover"])
+            .current_dir(&bin)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn discovery_caps_serialized_result_bytes_and_marks_partial_metadata() {
+    use std::fs;
+    let outer = tempfile::tempdir().unwrap();
+    let mut home = outer.path().to_path_buf();
+    while home.as_os_str().len() < 3700 {
+        home.push("x".repeat(200));
+    }
+    fs::create_dir_all(&home).unwrap();
+    let bin = home.join("bin");
+    let marker = outer.path().join("never-executed");
+    for name in [
+        "claude",
+        "codex",
+        "droid",
+        "gemini",
+        "cursor-agent",
+        "opencode",
+        "cline",
+        "kimi",
+        "copilot",
+        "amp",
+        "aider",
+    ] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    for suffix in [
+        ".claude",
+        ".codex",
+        ".factory",
+        ".gemini",
+        ".cursor",
+        ".config/opencode",
+        "extra",
+    ] {
+        fs::create_dir_all(home.join(suffix)).unwrap();
+    }
+    let extra = home.join("extra");
+    let result = discover_metadata(
+        &home,
+        bin.as_os_str(),
+        &[("OPENCODE_CONFIG_DIR", extra.as_os_str())],
+    );
+    assert_eq!(result["truncated"], true);
+    assert!(result["agents"].as_array().unwrap().len() < 11);
+    assert!(serde_json::to_vec(&result).unwrap().len() <= 65536);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_cursor_aliases_preserve_path_order_and_return_one_unexecuted_row() {
+    let home = tempfile::tempdir().unwrap();
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    let marker = home.path().join("must-not-run-cursor");
+    let path = std::env::join_paths([&first, &second]).unwrap();
+    for executable in [
+        second.join("agent"),
+        first.join("cursor-agent"),
+        first.join("agent"),
+    ] {
+        metadata_executable(&executable, &marker);
+        let result = discover_metadata(home.path(), &path, &[]);
+        assert_eq!(result["agents"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            discovered(&result, "cursor")["executable"],
+            json!({"path":executable,"source":"path"})
+        );
+        assert_eq!(
+            discovered(&result, "cursor")["profiles"][0]["path"],
+            home.path().join(".cursor").to_str().unwrap()
+        );
+    }
+    assert!(!marker.exists());
+}
+
+#[test]
+fn discovery_keeps_invalid_explicit_override_visible_without_an_executable_or_fallback() {
+    use std::{ffi::OsStr, fs};
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("never-execute");
+    let default = home.path().join(".codex");
+    fs::create_dir(&default).unwrap();
+    metadata_executable(&home.path().join("bin/codex"), &marker);
+    let result = discover_metadata(
+        home.path(),
+        OsStr::new(""),
+        &[("CODEX_HOME", OsStr::new("relative"))],
+    );
+    assert_eq!(
+        result["agents"],
+        json!([{"agent":"codex","setup":"managed","executable":null,
+        "profiles":[{"path":null,"source":"CODEX_HOME","state":"invalid"}]}])
+    );
+    assert_eq!(result["truncated"], false);
+    assert!(!marker.exists());
+    assert!(default.is_dir());
+}
