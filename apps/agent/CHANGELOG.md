@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.5.1
+
+### Patch Changes
+
+- c630f74: Correct the packaged reporting skill to describe installed-agent discovery and managed Cline setup while preserving explicit selection, inspected plans and plugin policy.
+- @lazysh/account-usage@1.5.1
+  - @lazysh/common@1.5.1
+  - @lazysh/notification-client@1.5.1
+
 ## 1.5.0
 
 ### Minor Changes
