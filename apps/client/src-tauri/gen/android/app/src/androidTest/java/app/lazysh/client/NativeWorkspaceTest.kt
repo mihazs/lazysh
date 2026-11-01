@@ -2189,6 +2189,7 @@ class NativeWorkspaceTest {
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
+    @Test fun ownedSshImeTransactionsThroughRealUi() = ownedSshUi(false, requireIme = true)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
     @Test fun ownedSharedHerdrNavigationThroughRealUi() = ownedSshUi(true, requireSharedHerdr = true)
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
@@ -2580,7 +2581,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false) {
+        require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
         require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
         require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
@@ -2608,6 +2610,7 @@ class NativeWorkspaceTest {
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
+        require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
@@ -2904,6 +2907,8 @@ class NativeWorkspaceTest {
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (requireIme) {
+                verifySshImeTransactions(scenario, fixture, label)
             } else if (requireAttachments) {
                 verifyManualAttachmentUpload(scenario, fixture, label)
             } else if (!requireMoshBackground) {
@@ -3807,15 +3812,112 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
-    @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
-        val instrumentation=InstrumentationRegistry.getInstrumentation()
-        val arguments=InstrumentationRegistry.getArguments()
-        org.junit.Assume.assumeTrue("Owned IME acceptance only",arguments.getString("lazyshImeAcceptance")=="true")
-        assertTrue("Dedicated cached emulator required",Build.VERSION.SDK_INT==36 && Build.MODEL=="sdk_gphone64_x86_64")
-        val nonce=checkNotNull(arguments.getString("lazyshImeNonce"))
-        assertTrue("Exact owned IME nonce required",Regex("[0-9a-f]{32}").matches(nonce))
-        val port=checkNotNull(arguments.getString("lazyshImePort")).toInt()
-        assertTrue("Owned loopback fixture port required",port in 1024..65535)
+    private fun verifySshImeTransactions(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
+        val nonce = fixture.getString("nonce")
+        val directory = fixture.getJSONObject("ime").getString("directory")
+        require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/ime").matches(directory))
+        assertEquals("Owned emulator API required", 36, Build.VERSION.SDK_INT)
+        val originalWeb = AtomicReference<WebView>()
+        val packagedUrl = AtomicReference<String>()
+        scenario.onActivity {
+            val web = requireNotNull(webView(it.window.decorView))
+            originalWeb.set(web); packagedUrl.set(web.url)
+        }
+        val originalUrl = packagedUrl.get()
+        require(originalUrl == "http://tauri.localhost/" || originalUrl == "https://tauri.localhost/")
+        fun clickIcon(name: String) = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
+            "button[aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
+        fun send(command: String) {
+            if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true") clickIcon("Compose")
+            pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
+            closeSoftKeyboard(); clickIcon("Paste draft"); closeSoftKeyboard(); clickIcon("Close composer")
+            awaitDocument(scenario, "owned IME command terminal focused", "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+        }
+        send(fixture.getString("challenge"))
+        awaitDocument(scenario, "owned IME SSH challenge and returned prompt", """
+            (()=>{const text=document.querySelector('.terminal-canvas .xterm-screen')?.textContent||'';
+              return text.includes(${JSONObject.quote(fixture.getString("expected"))}) &&
+                text.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>text.indexOf(${JSONObject.quote(fixture.getString("expected"))});})()
+        """)
+        assertEquals("Receiver banner must be fresh", "false", evaluate(scenario,
+            "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_READY')"))
+        send("exec './ime-receiver' '$directory' --ime-transactions '$nonce'")
+        awaitDocument(scenario, "owned raw receiver actually ready", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_READY')")
+        val ime = OwnedImeControl(nonce)
+        fun terminalEditor() {
+            awaitDocument(scenario, "packaged terminal current normal editable helper", """
+                (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea'),area=areas[0];
+                  return areas.length===1 && document.hasFocus() && !document.hidden && document.activeElement===area &&
+                    !area.readOnly && !area.disabled && area.type!=='password' && area.autocomplete==='off' &&
+                    area.getAttribute('autocorrect')==='off' && area.spellcheck===false &&
+                    Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
+            """)
+            scenario.onActivity {
+                val web = requireNotNull(webView(it.window.decorView))
+                assertSame("Packaged WebView must remain original", originalWeb.get(), web)
+                assertEquals("Packaged document must not navigate", originalUrl, web.url)
+                assertTrue("Native terminal window must stay focused", web.hasWindowFocus() && web.hasFocus())
+            }
+        }
+        fun tapTerminal() {
+            val bounds = JSONArray(evaluate(scenario, """
+                (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
+                  return [rect.left+rect.width/2,rect.top+Math.min(rect.height/2,40),innerWidth];})()
+            """))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val location = IntArray(2); view.getLocationOnScreen(location)
+                val scale = view.width / bounds.getDouble(2)
+                val x = bounds.getDouble(0) * scale; val y = bounds.getDouble(1) * scale
+                require(x>0 && x<view.width && y>0 && y<view.height) { "Owned terminal tap outside WebView" }
+                floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
+            }, Press.FINGER))
+            terminalEditor()
+        }
+        var primary: Throwable? = null
+        try {
+            ime.arm(); ime.select(); tapTerminal()
+            val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
+            ime.editor(first); ime.call("capture")
+            for (operation in listOf("composeCorrection", "extendTail", "eraseTail", "repeatWord")) {
+                terminalEditor()
+                val result = ime.call(operation)
+                assertTrue("Fixed native IME transaction accepted: $operation", result.getBoolean("accepted"))
+                assertTrue("Fixed native IME transaction readback: $operation", result.getBoolean("readMatched"))
+            }
+            clickIcon("Compose")
+            awaitDocument(scenario, "composer revokes packaged terminal editor", "document.querySelector('.terminal-compose textarea')?.value==='' && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===true")
+            val old = ime.call("old")
+            assertFalse("Retired actual connection cannot read current editor", old.getBoolean("readReturned"))
+            assertEquals("Late terminal commit must not type into composer", "true", evaluate(scenario,
+                "document.querySelector('.terminal-compose textarea')?.value===''") )
+            clickIcon("Close composer"); tapTerminal()
+            val second = ime.awaitIme("Remote epoch inconclusive: distinct packaged terminal proxy required") {
+                it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("distinct") && it.getLong("generation")>first.getLong("generation")
+            }
+            ime.editor(second); terminalEditor()
+            val current = ime.call("current")
+            assertTrue("Current actual connection accepts fixed marker", current.getBoolean("accepted"))
+            assertTrue("Current actual connection readback confirms fixed marker", current.getBoolean("readMatched"))
+            terminalEditor()
+            awaitDocument(scenario, "actual receiver wrote the exact transaction stream before disconnect", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_DELIVERED')")
+            android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
+        } catch (failure: Throwable) { primary=failure; throw failure }
+        finally {
+            try { ime.restore() } catch (cleanup: Throwable) {
+                if (primary != null) primary!!.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
+    private class OwnedImeControl(private val nonce: String) {
+        private val instrumentation = InstrumentationRegistry.getInstrumentation()
+        private var armed = false
+        init {
+            require(Regex("[0-9a-f]{32}").matches(nonce)) { "Owned IME nonce required" }
+            assertEquals("Owned IME APK signer must match target", android.content.pm.PackageManager.SIGNATURE_MATCH,
+                instrumentation.context.packageManager.checkSignatures(instrumentation.context.packageName, instrumentation.targetContext.packageName))
+        }
         fun shell(command:String):String {
             val descriptor=instrumentation.uiAutomation.executeShellCommand(command)
             return android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
@@ -3824,11 +3926,11 @@ class NativeWorkspaceTest {
                 String(bytes,Charsets.UTF_8).trim()
             }
         }
-        val component="${instrumentation.context.packageName}/app.lazysh.client.OwnedImeService"
-        val original=shell("settings get secure default_input_method")
-        assertTrue("Original IME must be restorable",Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+").matches(original) && original!=component)
-        val enabled=shell("settings get secure enabled_input_methods")
-        assertTrue("Fixture IME must start disabled",enabled.split(':').none {it.substringBefore(';')==component})
+        private val component="${instrumentation.context.packageName}/app.lazysh.client.OwnedImeService"
+        private val original=shell("settings get secure default_input_method")
+        init { assertTrue("Original IME must be restorable",Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+").matches(original) && original!=component) }
+        private val enabled=shell("settings get secure enabled_input_methods")
+        init { assertTrue("Fixture IME must start disabled",enabled.split(':').none {it.substringBefore(';')==component}) }
         val resolver=instrumentation.targetContext.contentResolver
         val control=Uri.parse("content://app.lazysh.client.test.imefixture")
         fun call(method:String)=checkNotNull(resolver.call(control,method,nonce,null))
@@ -3848,6 +3950,37 @@ class NativeWorkspaceTest {
             assertFalse("Native AUTO_CORRECT must stay off",state.getBoolean("autoCorrect"))
             assertFalse("Private learning flag must remain absent",state.getBoolean("privateLearning"))
         }
+        fun arm() { call("arm"); armed = true }
+        fun select() {
+            shell("ime enable $component"); shell("ime set $component")
+            assertEquals("Fixture IME selected", component, shell("settings get secure default_input_method"))
+        }
+        fun restore() {
+            var failure: Throwable? = null
+            for (action in listOf<()->Unit>(
+                { if (armed) call("release") },
+                { shell("ime set $original"); assertEquals("Original IME restored", original, shell("settings get secure default_input_method")) },
+                { shell("ime disable $component"); assertEquals("Original enabled IMEs preserved", enabled, shell("settings get secure enabled_input_methods")) }
+            )) try { action() } catch (error: Throwable) {
+                if (failure == null) failure = error else failure!!.addSuppressed(error)
+            }
+            if (failure != null) throw failure!!
+        }
+    }
+
+    @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val arguments=InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue("Owned IME acceptance only",arguments.getString("lazyshImeAcceptance")=="true")
+        assertTrue("Dedicated cached emulator required",Build.VERSION.SDK_INT==36 && Build.MODEL=="sdk_gphone64_x86_64")
+        val nonce=checkNotNull(arguments.getString("lazyshImeNonce"))
+        assertTrue("Exact owned IME nonce required",Regex("[0-9a-f]{32}").matches(nonce))
+        val port=checkNotNull(arguments.getString("lazyshImePort")).toInt()
+        assertTrue("Owned loopback fixture port required",port in 1024..65535)
+        val ime=OwnedImeControl(nonce)
+        val call=ime::call
+        val awaitIme=ime::awaitIme
+        val editor=ime::editor
         val scenario=NativeActivityFixture.scenario
         val clientBefore=AtomicReference<android.webkit.WebViewClient>()
         val documentBefore=AtomicReference<String>()
@@ -3894,9 +4027,8 @@ class NativeWorkspaceTest {
             assertTrue("Owned $phase native page completion required",finished.await(30,TimeUnit.SECONDS))
         }
         var primary:Throwable?=null
-        var armed=false
         try {
-            call("arm");armed=true
+            ime.arm()
             navigate("blank","about:blank")
             assertEquals("Owned trivial JavaScript callback required","4",evaluate(scenario,"2+2"))
             android.util.Log.i("lazysh-ime-owned","phase=blank callback=true")
@@ -3906,9 +4038,7 @@ class NativeWorkspaceTest {
             </script>"""
             navigate("harness","http://127.0.0.1:$port/owned-ime-harness/",html)
             awaitDocument(scenario,"current-source owned IME fixture","window.__lazyshImeOwner==='$nonce' && !!window.ownedIme?.textarea")
-            shell("ime enable $component")
-            shell("ime set $component")
-            assertEquals("Only owned IME selected",component,shell("settings get secure default_input_method"))
+            ime.select()
             // Native focus must precede DOM focus, as in typeInto: refocusing afterward can blur the editor.
             scenario.onActivity {activity->
                 val web=checkNotNull(webView(activity.window.decorView))
@@ -3950,9 +4080,7 @@ class NativeWorkspaceTest {
         finally {
             var cleanup:Throwable?=null
             for(action in listOf<()->Unit>(
-                {if(armed)call("release")},
-                {shell("ime set $original");assertEquals("Original IME restored",original,shell("settings get secure default_input_method"))},
-                {shell("ime disable $component");assertEquals("Original enabled IMEs preserved",enabled,shell("settings get secure enabled_input_methods"))},
+                {ime.restore()},
                 {
                     try {if(navigated)navigate("restore",originalDocument)}
                     finally {
