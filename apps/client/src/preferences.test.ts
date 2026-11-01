@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('keeps past-bottom keyboard dismissal opt-in for old, invalid and stored settings',()=>{
+    for(const value of [undefined,null,false,1,'true',{}])expect(parsePreferences({...defaults,dismissKeyboardOnOverscroll:value}).dismissKeyboardOnOverscroll).toBe(false);
+    expect(defaults.dismissKeyboardOnOverscroll).toBe(false);
+    expect(parsePreferences(JSON.parse(JSON.stringify({...defaults,dismissKeyboardOnOverscroll:true}))).dismissKeyboardOnOverscroll).toBe(true);
+  });
   it('preserves keystroke boundaries and treats literal Unicode/spaces as one step',()=>{
     expect(parseChordSteps('C-b, S-t')).toEqual(['\x02','T']);
     expect(parseChordSteps('F12, M-h Enter')).toEqual(['\x1b[24~','\x1bh','\r']);

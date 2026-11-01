@@ -186,7 +186,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   element.addEventListener('paste', paste, true);
   element.addEventListener('pointerdown', activate, true);
   element.addEventListener('click', activate, true);
-  return {get blocked() {return !!unapplied;}, reset() {unapplied = null; onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
+  return {get idle() {return !composing && !ending && !sending && !replaying && !fallbackPending && !deferred && !key229 && !unapplied && !helper._isComposing && !helper._isSendingComposition;}, get blocked() {return !!unapplied;}, reset() {unapplied = null; onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
     unapplied = null; onUnappliedEdit(null); revoke(); output.dispose();
     element.removeEventListener('keydown', keydown, true);
     element.removeEventListener('keyup', keyup, true);

@@ -448,8 +448,54 @@ test('terminal canvas stays anchored when keyboard-sized resizes reveal its inpu
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });
 
-test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page})=>{
+test.describe('touch-layout past-bottom keyboard dismissal',()=>{
+  test.use({hasTouch:true});
+test('optional past-bottom gesture dismisses only idle local history input and preserves normal scrolling',async({page},testInfo)=>{
+  if(testInfo.project.name==='phone')await page.setViewportSize({width:393,height:852});
+  await expect.poll(()=>page.evaluate(()=>matchMedia('(pointer: coarse)').matches)).toBe(true);
   await fixture(page);
+  await page.getByText('Terminal touch gestures',{exact:true}).click();
+  const setting=page.getByRole('checkbox',{name:'Hide keyboard when scrolling past local history bottom',exact:true});await expect(setting).not.toBeChecked();
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  const canvas=page.locator('.terminal-canvas:visible'),area=canvas.locator('.xterm-helper-textarea'),screen=canvas.locator('.xterm-screen'),viewport=canvas.locator('.xterm-viewport');
+  await expect(screen).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,index)=>`local history ${index}\r\n`).join('')));
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(500);
+  const box=(await screen.boundingBox())!,origin={x:box.x+60,y:box.y+100};
+  const input=await page.context().newCDPSession(page);
+  await canvas.evaluate(element=>{Reflect.set(window,'overscrollMoves',0);element.addEventListener('touchmove',()=>Reflect.set(window,'overscrollMoves',Reflect.get(window,'overscrollMoves')+1),{capture:true,passive:true});});
+  await page.evaluate(()=>{const trace:unknown[]=[];Reflect.set(window,'overscrollTrace',trace);for(const type of ['touchstart','touchmove','touchcancel','touchend'])document.addEventListener(type,event=>{const touch=event as TouchEvent;if(type==='touchstart')Reflect.set(window,'overscrollTarget',event.target);trace.push({type,cancelable:touch.cancelable,target:(event.target as Element).className,tag:(event.target as Element).tagName,points:Array.from(touch.touches,point=>({x:point.clientX,y:point.clientY})),scrollY});},{capture:true,passive:true});});
+  const swipe=async(direction:number,partial=false)=>{
+    const before=await page.evaluate(()=>Reflect.get(window,'overscrollMoves')) as number;
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+direction*20}]});
+    await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'overscrollMoves'))).toBe(before+1);await expect(area).toBeFocused();
+    if(!partial){await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+direction*60}]});await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'overscrollMoves'))).toBe(before+2).catch(async error=>{await testInfo.attach('overscroll-delivery.json',{body:JSON.stringify({origin,bounds:await screen.boundingBox(),trace:await page.evaluate(()=>Reflect.get(window,'overscrollTrace')),target:await page.evaluate(()=>{const node=Reflect.get(window,'overscrollTarget') as Element;return {connected:node.isConnected,tag:node.tagName,html:node.outerHTML.slice(0,250)};})}),contentType:'application/json'});throw error;});}
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  };
+  await canvas.click({position:{x:30,y:30}});await swipe(-1);await expect(area).toBeFocused();
+  await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Input');await page.getByText('Terminal touch gestures',{exact:true}).click();
+  await setting.check();await page.screenshot({path:testInfo.outputPath('overscroll-setting.png')});
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();await canvas.click({position:{x:30,y:30}});
+  const bottom=await viewport.evaluate(node=>node.scrollTop);await swipe(1);await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(bottom);await expect(area).toBeFocused();
+  await page.mouse.move(origin.x,origin.y);await page.mouse.wheel(0,10000);await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBe(bottom);
+  await page.screenshot({path:testInfo.outputPath('overscroll-before.png')});
+  await swipe(-1);await expect(area).not.toBeFocused();expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('overscroll-after.png')});
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h\x1b[?1000h\x1b[?1006h'));
+  await canvas.click({position:{x:30,y:30}});await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await swipe(-1);await expect(area).toBeFocused();
+  expect((await page.evaluate(()=>window.simpleShortcutWrites)).every(bytes=>/^\x1b\[<6[45];\d+;\d+M$/.test(bytes))).toBe(true);
+  expect((await page.evaluate(()=>window.simpleShortcutWrites)).length).toBeGreaterThan(0);
+});
+
+});
+
+for(const dismissKeyboardOnOverscroll of [false,true])test(`direct finger scrolling uses real xterm history and the same mouse reports as a wheel (dismiss=${dismissKeyboardOnOverscroll})`,async({page})=>{
+  await fixture(page);
+  if(dismissKeyboardOnOverscroll){await page.getByText('Terminal touch gestures',{exact:true}).click();await page.getByRole('checkbox',{name:'Hide keyboard when scrolling past local history bottom',exact:true}).check();}
   await page.keyboard.press('Escape');
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();

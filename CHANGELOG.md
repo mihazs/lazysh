@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an optional gesture to hide the keyboard when scrolling past the bottom of local terminal history. It is off by default; remote mouse scrolling, alternate screens and active text composition keep their existing behavior.
+
 - Add held-pointer panning to the expanded terminal D-pad, with paced arrow repeats, a pause zone and cancellation when input ownership or session availability changes. Existing arrow taps, keyboard activation, corner shortcuts and toolbar defaults remain unchanged.
 
 - Organize documentation by learning, tasks, reference and explanation; add a guided first SSH session and separate companion setup, settings and event-storage contracts. Preserve established links, security limits and platform acceptance boundaries. No application defaults change.

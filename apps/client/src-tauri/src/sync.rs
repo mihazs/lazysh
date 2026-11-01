@@ -474,6 +474,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "gestureChords",
             "dpadCorners",
             "autoHideToolbar",
+            "dismissKeyboardOnOverscroll",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
         validate_theme_preferences(object)?;
@@ -483,6 +484,9 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             || object.get("uiLanguage").is_some_and(|value| {
                 !matches!(value.as_str(), Some("system" | "en" | "pt-BR" | "es"))
             })
+            || object
+                .get("dismissKeyboardOnOverscroll")
+                .is_some_and(|value| !value.is_boolean())
             || object.get("version").and_then(|v| v.as_u64()) != Some(1)
             || object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || serde_json::to_vec(preferences)
@@ -1429,19 +1433,27 @@ mod tests {
         let mut bundle = settings();
         validate_bundle(&bundle, Scope::Settings).unwrap();
         for (field, valid, unsupported) in [
-            ("sessionLayout", &["list", "cards"][..], "grid"),
-            ("uiLanguage", &["system", "en", "pt-BR", "es"][..], "pt-PT"),
+            (
+                "sessionLayout",
+                serde_json::json!(["list", "cards"]),
+                serde_json::json!(["grid", null, ["list"], true]),
+            ),
+            (
+                "uiLanguage",
+                serde_json::json!(["system", "en", "pt-BR", "es"]),
+                serde_json::json!(["pt-PT", null, ["system"], true]),
+            ),
+            (
+                "dismissKeyboardOnOverscroll",
+                serde_json::json!([false, true]),
+                serde_json::json!([null, "true", 1, [], {}]),
+            ),
         ] {
-            for value in valid {
+            for value in valid.as_array().unwrap() {
                 bundle.preferences = Some(serde_json::json!({"version":1,(field):value}));
                 validate_bundle(&bundle, Scope::Settings).unwrap();
             }
-            for invalid in [
-                serde_json::json!(unsupported),
-                serde_json::json!(null),
-                serde_json::json!([valid[0]]),
-                serde_json::json!(true),
-            ] {
+            for invalid in unsupported.as_array().unwrap() {
                 bundle.preferences = Some(serde_json::json!({"version":1,(field):invalid}));
                 assert!(validate_bundle(&bundle, Scope::Settings).is_err());
             }
@@ -1478,12 +1490,16 @@ mod tests {
     #[test]
     fn encrypted_files_require_shared_secret_and_reject_tampering_and_expensive_headers() {
         let key = generate_recovery();
-        let encrypted = encrypt(&key, &settings()).unwrap();
+        let mut original = settings();
+        original.preferences.as_mut().unwrap()["dismissKeyboardOnOverscroll"] =
+            serde_json::json!(true);
+        let encrypted = encrypt(&key, &original).unwrap();
         assert!(!encrypted
             .windows(b"remote.example".len())
             .any(|w| w == b"remote.example"));
         let decoded = decrypt(&key, &encrypted, Scope::Settings).unwrap();
         assert_eq!(decoded.hosts[0].hostname, "remote.example");
+        assert_eq!(decoded.preferences, original.preferences);
         assert!(decrypt(&generate_recovery(), &encrypted, Scope::Settings).is_err());
         assert!(decrypt(&key, &encrypted, Scope::Credentials).is_err());
         let mut corrupted = encrypted.clone();
