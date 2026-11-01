@@ -1581,6 +1581,13 @@ fn metadata_executable(path: &std::path::Path, marker: &std::path::Path) {
     .unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
+fn metadata_fixture(agent: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    let marker = root.path().join("must-not-execute");
+    metadata_executable(&bin.join(agent), &marker);
+    (root, bin, marker)
+}
 fn discovered<'a>(result: &'a Value, agent: &str) -> &'a Value {
     result["agents"]
         .as_array()
@@ -1670,7 +1677,9 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
         ("aider", "healthOnly"),
     ] {
         assert_eq!(discovered(&result, agent)["setup"], setup);
-        assert_eq!(discovered(&result, agent)["profiles"], json!([]));
+        if agent != "kimi" {
+            assert_eq!(discovered(&result, agent)["profiles"], json!([]));
+        }
     }
     assert!(!marker.exists());
     assert!(!result.to_string().contains("private"));
@@ -1689,10 +1698,8 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
 #[test]
 fn discovery_invalid_nonempty_overrides_never_fall_back_and_empty_overrides_do() {
     use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
-    let root = tempfile::tempdir().unwrap();
+    let (root, bin, _) = metadata_fixture("codex");
     let home = root.path();
-    let bin = home.join("bin");
-    metadata_executable(&bin.join("codex"), &home.join("marker"));
     fs::create_dir(home.join(".codex")).unwrap();
     for invalid in [
         OsStr::new("relative"),
@@ -1729,6 +1736,89 @@ fn discovery_invalid_nonempty_overrides_never_fall_back_and_empty_overrides_do()
     );
     assert!(!absent.exists());
 }
+#[test]
+fn discovery_kimi_current_and_legacy_profiles_preserve_literal_overrides_without_execution() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("kimi");
+    let home = root.path();
+    let selected = home.join("chosen ");
+    fs::create_dir(&selected).unwrap();
+    for (index, variable, suffix) in [
+        (0, "KIMI_CODE_HOME", ".kimi-code"),
+        (1, "KIMI_SHARE_DIR", ".kimi"),
+    ] {
+        let default = home.join(suffix);
+        let result = discover_metadata(home, bin.as_os_str(), &[]);
+        assert_eq!(result["schemaVersion"], 1);
+        assert_eq!(discovered(&result, "kimi")["setup"], "manual");
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let fallback = json!({"path":default,"source":"HOME","state":"missing"});
+        assert_eq!(discovered(&result, "kimi")["profiles"][index], fallback);
+        assert!(!default.exists());
+        fs::create_dir(&default).unwrap();
+        fs::write(default.join("config.toml"), "not TOML: PRIVATE-KIMI-CONFIG").unwrap();
+        let fallback = json!({"path":default,"source":"HOME","state":"directory"});
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, OsStr::new(""))]);
+        assert_eq!(discovered(&result, "kimi")["profiles"][index], fallback);
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, selected.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"][index],
+            json!({"path":selected,"source":variable,"state":"directory"})
+        );
+        let absent = home.join(format!("missing-{index}"));
+        let result = discover_metadata(home, bin.as_os_str(), &[(variable, absent.as_os_str())]);
+        assert_eq!(
+            discovered(&result, "kimi")["profiles"][index],
+            json!({"path":absent,"source":variable,"state":"missing"})
+        );
+        assert!(!absent.exists());
+        for invalid in [
+            OsStr::new(" "),
+            OsStr::new("relative"),
+            OsStr::new("~/chosen"),
+            OsStr::new("/owned/../other"),
+            OsStr::new("/owned/\nother"),
+            OsStr::from_bytes(b"/owned/\xff"),
+        ] {
+            let result = discover_metadata(home, bin.as_os_str(), &[(variable, invalid)]);
+            assert_eq!(
+                discovered(&result, "kimi")["profiles"][index],
+                json!({"path":null,"source":variable,"state":"invalid"})
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(default.join("config.toml")).unwrap(),
+            "not TOML: PRIVATE-KIMI-CONFIG"
+        );
+    }
+    for invalid_home in [
+        OsStr::new(""),
+        OsStr::new("relative"),
+        OsStr::from_bytes(b"/invalid\xff"),
+    ] {
+        let result = discover_metadata(home, bin.as_os_str(), &[("HOME", invalid_home)]);
+        let profiles = discovered(&result, "kimi")["profiles"].as_array().unwrap();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "identical unavailable dialect roots must not break v1 discovery"
+        );
+        assert_eq!(profiles[0]["path"], Value::Null);
+        assert_eq!(profiles[0]["source"], "HOME");
+    }
+    let result = discover_metadata(home, bin.as_os_str(), &[]);
+    assert!(!result.to_string().contains("PRIVATE-KIMI-CONFIG"));
+    assert!(!marker.exists());
+    assert_eq!(fs::read_dir(home.join(".kimi-code")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(home.join(".kimi")).unwrap().count(), 1);
+}
+
 #[test]
 fn discovery_cline_override_matches_javascript_trim_and_never_selects_a_distinct_whitespace_directory(
 ) {

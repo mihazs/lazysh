@@ -95,6 +95,13 @@ mod metadata {
                 None => self.home(fallback),
             }
         }
+        fn kimi_profile(&mut self, variable: &str, fallback: &str) -> Value {
+            // Both pinned Kimi dialects use nonempty overrides verbatim, without trimming.
+            match (self.environment)(variable) {
+                Some(value) if !value.is_empty() => self.profile(Some(value), variable, ""),
+                _ => self.home(fallback),
+            }
+        }
         fn cline_profile(&mut self) -> Value {
             let Some(value) = (self.environment)("CLINE_DIR") else {
                 return self.home(".cline");
@@ -127,6 +134,15 @@ mod metadata {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
                 "cline" => self.cline_profile(),
+                "kimi" => {
+                    let mut profiles = vec![
+                        self.kimi_profile("KIMI_CODE_HOME", ".kimi-code"),
+                        self.kimi_profile("KIMI_SHARE_DIR", ".kimi"),
+                    ];
+                    // Missing HOME yields one identical diagnostic for both dialects.
+                    profiles.dedup();
+                    return profiles;
+                }
                 "droid" => self.home(".factory"),
                 "gemini" => self.selected("GEMINI_CLI_HOME", ".gemini", ".gemini"),
                 // CLI-config overrides do not establish relocation of ~/.cursor/hooks.json.

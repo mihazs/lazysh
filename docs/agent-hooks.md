@@ -232,11 +232,35 @@ activity indicates work; permission, idle and elicitation notifications indicate
 attention. Droid also emits an idle notification after cancellation, so a
 canceled turn is not reported as a successful final response.
 
-`lazysh-agent kimi-config` prints JSON containing a TOML fragment in `content`
-for Kimi's `[[hooks]]` entries. Kimi prompt/tool activity indicates work, including
+`lazysh-agent kimi-config` retains the legacy Kimi CLI **1.52.0** contract and
+prints the same JSON containing a TOML fragment in `content` for its `[[hooks]]`
+entries. It does not configure or qualify Kimi Code 2.4.1. Legacy prompt/tool
+activity indicates work, including
 failed tools while the agent continues. Only the documented permission_prompt
 notification is treated as a permission wait. SessionStart and child lifecycle
 notifications do not finish a parent or create a fictitious working turn.
+
+Hook discovery reports separate metadata candidates for current Kimi Code 2.4.1
+(`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and legacy Kimi CLI 1.52.0
+(`KIMI_SHARE_DIR`, otherwise `~/.kimi`), in that order. Nonempty overrides are
+used literally: discovery does not trim whitespace, expand `~`, or resolve
+relative paths. Paths outside its absolute-path admission are labelled invalid;
+an invalid override does not fall back to the default for that dialect. Empty
+overrides use the default. The other dialect remains a separate candidate, not a
+fallback or automatic selection. Identical unresolved HOME diagnostics appear
+once. Discovery reads directory metadata only: it
+does not execute Kimi, open/create configuration, migrate profiles, or identify
+the installed version. Kimi remains manual-only in discovery schema 1; the seven
+managed providers and existing printer/ingestion behavior are unchanged.
+
+Kimi Code 2.4.1 native lifecycle remains unqualified. Its external hooks omit
+agent identity from several turn/tool events; blockable `Stop` is not successful
+turn completion, and `PermissionRequest` is an observation that approval was
+requested, not proof it is still waiting. Metadata presence does not establish
+hook loading, current root state or per-turn completion. See [#696](https://github.com/mihazs/lazysh/issues/696).
+The path contracts are pinned to [Kimi Code 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/apps/kimi-code/src/utils/paths.ts#L35)
+and [Kimi CLI 1.52.0](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/share.py#L7);
+the current event limits follow the [2.4.1 emitters](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts#L178).
 
 Kimi 1.52.0 shares the parent's session and hook engine with child souls. Both
 root and child turns emit identical unscoped Stop/StopFailure payloads, so those
