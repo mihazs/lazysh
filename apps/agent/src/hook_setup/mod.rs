@@ -27,6 +27,7 @@ pub enum AgentProfile {
     Cursor,
     Opencode,
     Cline,
+    Copilot,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
@@ -39,6 +40,7 @@ impl AgentProfile {
             Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
             Self::Cline => record::Agent::Cline,
+            Self::Copilot => record::Agent::Copilot,
         }
     }
 }
@@ -53,7 +55,11 @@ pub struct Target {
 #[derive(Subcommand)]
 pub enum Command {
     /// Discover known installed executables and profile directories without reading configuration.
-    Discover,
+    Discover {
+        /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+        schema_version: u8,
+    },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
     Preview {
         #[arg(long, value_enum)]
@@ -81,7 +87,7 @@ pub enum Command {
 }
 pub fn run(command: Command) -> Result<Value> {
     match command {
-        Command::Discover => Ok(discovery::run()),
+        Command::Discover { schema_version } => Ok(discovery::run(schema_version)),
         Command::Preview { agent } => preview(agent),
         other => manage(other),
     }
@@ -90,9 +96,15 @@ pub fn run(command: Command) -> Result<Value> {
 fn preview(agent: AgentProfile) -> Result<Value> {
     let source = std::env::current_exe()?;
     let agent = agent.agent();
-    let (asset, dialect) = if agent.is_plugin() {
+    let (asset, dialect) = if agent == record::Agent::Copilot {
+        let text = render::owned_file(agent, &source).map_err(Error::Installation)?;
         (
-            Value::String(render::plugin(agent, &source).map_err(Error::Installation)?),
+            serde_json::from_str(&text).map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
+            "shell-free-exec",
+        )
+    } else if agent.is_whole_file() {
+        (
+            Value::String(render::owned_file(agent, &source).map_err(Error::Installation)?),
             if agent == record::Agent::Cline {
                 "cline-javascript"
             } else {
@@ -129,6 +141,7 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         AgentProfile::Droid => (crate::hooks::droid_config(), "posix-shell"),
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
+        AgentProfile::Copilot => (crate::hooks::copilot_config(), "shell-free-exec"),
         AgentProfile::Cline => (
             crate::hooks::cline_plugin()["content"].clone(),
             "cline-javascript",
@@ -149,7 +162,7 @@ fn manage(command: Command) -> Result<Value> {
         Command::Status { target } => (target, None),
         Command::Install { target, .. } => (target, Some(files::Action::Install)),
         Command::Remove { target, .. } => (target, Some(files::Action::Remove)),
-        Command::Preview { .. } | Command::Discover => unreachable!(),
+        Command::Preview { .. } | Command::Discover { .. } => unreachable!(),
     };
     let selected = files::Target {
         agent: target.agent.agent(),

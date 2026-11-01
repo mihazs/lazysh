@@ -35,7 +35,7 @@ pub(super) fn classify(
             Observation::Conflict
         });
     }
-    if record.agent.is_plugin() {
+    if record.agent.is_whole_file() {
         let old = record
             .previous
             .as_ref()

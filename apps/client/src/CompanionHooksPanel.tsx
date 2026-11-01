@@ -3,23 +3,23 @@ import {api as nativeApi} from './bridge';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
-type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline';
+type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot';
 const providers={claude:'Claude Code',codex:'Codex',droid:'Droid',gemini:'Gemini CLI',cursor:'Cursor CLI',opencode:'OpenCode',cline:'Cline',kimi:'Kimi',copilot:'GitHub Copilot',amp:'Amp',aider:'Aider'} as const;
 type DetectedAgent=keyof typeof providers;
 type Profile={path:string|null;source:string;state:'directory'|'missing'|'unavailable'|'invalid'};
-type Discovery={schemaVersion:1;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
+type Discovery={schemaVersion:1|2;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
 const managed=new Set<string>(['claude','codex','droid','gemini','cursor','opencode','cline']);
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new LocalUiError('hooksInvalid');return value as Record<string,unknown>;}
 function closed(value:Record<string,unknown>,keys:string[]){if(Object.keys(value).some(key=>!keys.includes(key)))throw new LocalUiError('hooksInvalid');}
 function boundedText(value:unknown,maximum=4096):value is string{return typeof value==='string'&&value.length>0&&value.length<=maximum&&!/[\x00-\x1f\x7f]/.test(value);}
 function absoluteProfile(value:string){return boundedText(value)&&value.startsWith('/')&&!value.split('/').some(part=>part==='.'||part==='..');}
-export function parseHookDiscovery(value:unknown):Discovery {
+export function parseHookDiscovery(value:unknown,expectedVersion:1|2=1):Discovery {
   const v=object(value);closed(v,['schemaVersion','supported','managedSetupSupported','agents','truncated']);
-  if(v.schemaVersion!==1||typeof v.supported!=='boolean'||typeof v.managedSetupSupported!=='boolean'||typeof v.truncated!=='boolean'||!Array.isArray(v.agents)||v.agents.length>11||(!v.supported&&(v.managedSetupSupported||v.agents.length)))throw new LocalUiError('hooksInvalid');
+  if(v.schemaVersion!==expectedVersion||typeof v.supported!=='boolean'||typeof v.managedSetupSupported!=='boolean'||typeof v.truncated!=='boolean'||!Array.isArray(v.agents)||v.agents.length>11||(!v.supported&&(v.managedSetupSupported||v.agents.length)))throw new LocalUiError('hooksInvalid');
   const seen=new Set<string>();
   const agents=v.agents.map(raw=>{
     const a=object(raw),id=a.agent;closed(a,['agent','setup','executable','profiles']);
-    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||a.setup!==(managed.has(id)?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
+    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||a.setup!==((managed.has(id)||(expectedVersion===2&&id==='copilot'))?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
     seen.add(id);
     let executable:Discovery['agents'][number]['executable']=null;
     if(a.executable!==null){const e=object(a.executable);closed(e,['path','source']);if(!boundedText(e.path)||!absoluteProfile(e.path)||!['path','codexStandalone'].includes(e.source as string)||(e.source==='codexStandalone'&&id!=='codex'))throw new LocalUiError('hooksInvalid');executable={path:e.path,source:e.source as 'path'|'codexStandalone'};}
@@ -27,7 +27,7 @@ export function parseHookDiscovery(value:unknown):Discovery {
     const profiles=a.profiles.map(rawProfile=>{const p=object(rawProfile);closed(p,['path','source','state']);if(!['directory','missing','unavailable','invalid'].includes(p.state as string)||!boundedText(p.source,64)||(p.path!==null&&!boundedText(p.path))||((p.state==='directory'||p.state==='missing')&&(typeof p.path!=='string'||!absoluteProfile(p.path))))throw new LocalUiError('hooksInvalid');const key=JSON.stringify([p.path,p.source]);if(paths.has(key))throw new LocalUiError('hooksInvalid');paths.add(key);return {path:p.path,source:p.source,state:p.state} as Profile;});
     return {agent:id as DetectedAgent,setup:a.setup as Discovery['agents'][number]['setup'],executable,profiles};
   });
-  const result:Discovery={schemaVersion:1,supported:v.supported,managedSetupSupported:v.managedSetupSupported,agents,truncated:v.truncated};
+  const result:Discovery={schemaVersion:expectedVersion,supported:v.supported,managedSetupSupported:v.managedSetupSupported,agents,truncated:v.truncated};
   if(new TextEncoder().encode(JSON.stringify(result)).length>65536)throw new LocalUiError('hooksInvalid');
   return result;
 }
@@ -62,7 +62,7 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     if(!visible||!opened||!access.current())return;
     const owns=()=>mounted.current&&access.current()&&id===discoveryRevision.current&&selection.current.visible&&selection.current.sessionId===sessionId&&disclosure.current?.open;
     setDetecting(true);
-    void api.companionHookDiscovery(sessionId).then(value=>{if(owns())setDiscovery(parseHookDiscovery(value));}).catch(()=>{if(owns())setDiscoveryError(true);}).finally(()=>{if(owns())setDetecting(false);});
+    void api.companionHookDiscovery(sessionId,2).then(value=>{if(owns())setDiscovery(parseHookDiscovery(value,2));}).catch(()=>{if(owns())setDiscoveryError(true);}).finally(()=>{if(owns())setDetecting(false);});
     return ()=>{discoveryRevision.current++;};
   },[sessionId,visible,opened]);
   useEffect(()=>{setAgent('');setProfile('');},[sessionId]);
@@ -73,8 +73,10 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     if(agent===candidate.agent&&profile===target.path){focusInspection.current=false;setAgent('');setProfile('');return;}
     focusInspection.current=true;setAgent(candidate.agent as Agent);setProfile(target.path);
   }
+  const copilotSupported=discovery?.schemaVersion===2&&discovery.supported&&discovery.managedSetupSupported;
+  const providerAllowed=agent!=='copilot'||copilotSupported;
   async function run(action:'status'|'install'|'remove') {
-    if(flight.current!==null || !visible || !access.current() || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false)return;
+    if(!providerAllowed || flight.current!==null || !visible || !access.current() || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false)return;
     const expectedPlan=action==='install'?status?.installPlan:status?.removePlan;
     if(action!=='status' && !expectedPlan)return;
     const id=++revision.current;flight.current=id;setBusy(true);setError('');setUncertain(false);
@@ -117,14 +119,15 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     </section>
     <p className="agent-note">{t('hooksManualPath')}</p>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option></select></label>
-      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
-      <button ref={inspect} className="subtle-button" disabled={busy || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
+      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option><option value="copilot" disabled={!copilotSupported}>GitHub Copilot CLI</option></select></label>
+      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':agent==='copilot'?'/home/user/.copilot':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
+      <button ref={inspect} className="subtle-button" disabled={busy || !providerAllowed || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
+    {agent==='copilot'&&!copilotSupported&&<p className="agent-note" role="status">{t('hooksCopilotCapability')}</p>}
     {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
-    {status?.supported && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
+    {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
-    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':'hooksTrust' : 'hooksTrust')}</p>
+    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':agent==='copilot'?'hooksCopilotGuide':'hooksTrust' : 'hooksTrust')}</p>
   </details>;
 }

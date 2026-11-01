@@ -135,7 +135,14 @@ fn read_provider(
     if !missing_parent {
         return files::read(provider, current.provider_name(), false, json::MAXIMUM);
     }
-    match current.profile.child("plugins", false) {
+    match current.profile.child(
+        current
+            .target
+            .agent
+            .asset_directory()
+            .expect("whole-file agent"),
+        false,
+    ) {
         Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(files::ReadFile {
                 state: FileState::Missing,
@@ -224,11 +231,26 @@ pub(super) fn apply(
         return Err(rejected("HooksReadOnlyConfiguration"));
     }
     let new_plugins =
-        if current.target.agent.is_plugin() && current.plugins.is_none() && after.is_some() {
+        if current.target.agent.is_whole_file() && current.plugins.is_none() && after.is_some() {
             files::directory_admission(&current.profile)?;
-            current.profile.mkdir("plugins")?;
+            current.profile.mkdir(
+                current
+                    .target
+                    .agent
+                    .asset_directory()
+                    .expect("whole-file agent"),
+            )?;
             current.profile.file.sync_all()?;
-            Some(current.profile.child("plugins", false)?)
+            Some(
+                current.profile.child(
+                    current
+                        .target
+                        .agent
+                        .asset_directory()
+                        .expect("whole-file agent"),
+                    false,
+                )?,
+            )
         } else {
             None
         };
@@ -238,7 +260,7 @@ pub(super) fn apply(
         .or(new_plugins.as_ref())
         .unwrap_or(&current.profile);
     let missing_parent =
-        current.target.agent.is_plugin() && current.plugins.is_none() && new_plugins.is_none();
+        current.target.agent.is_whole_file() && current.plugins.is_none() && new_plugins.is_none();
     let receipt = String::from_utf8(record.encode().map_err(rejected)?)
         .map_err(|_| rejected("HooksInvalidRecord"))?;
     let mut staged_record = Stage::new(&current.profile, &receipt)?;

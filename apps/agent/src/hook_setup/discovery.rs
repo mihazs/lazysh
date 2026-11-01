@@ -1,20 +1,23 @@
 //! Read-only installation metadata; never a profile admission or live-reporting proof.
 use serde_json::{json, Value};
 
-pub fn run() -> Value {
+pub fn run(schema_version: u8) -> Value {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        inspect(|name| std::env::var_os(name))
+        inspect(schema_version, |name| std::env::var_os(name))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        json!({"schemaVersion":1,"supported":false,"managedSetupSupported":false,"agents":[],"truncated":false})
+        json!({"schemaVersion":schema_version,"supported":false,"managedSetupSupported":false,"agents":[],"truncated":false})
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn inspect(environment: impl FnMut(&str) -> Option<std::ffi::OsString>) -> Value {
-    metadata::discover(environment)
+pub(crate) fn inspect(
+    schema_version: u8,
+    environment: impl FnMut(&str) -> Option<std::ffi::OsString>,
+) -> Value {
+    metadata::discover(schema_version, environment)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -36,6 +39,7 @@ mod metadata {
     struct Scan<F> {
         environment: F,
         truncated: bool,
+        schema_version: u8,
     }
     impl<F: FnMut(&str) -> Option<OsString>> Scan<F> {
         fn variable(&mut self, name: &str) -> Option<OsString> {
@@ -95,8 +99,8 @@ mod metadata {
                 None => self.home(fallback),
             }
         }
-        fn kimi_profile(&mut self, variable: &str, fallback: &str) -> Value {
-            // Both pinned Kimi dialects use nonempty overrides verbatim, without trimming.
+        fn literal_profile(&mut self, variable: &str, fallback: &str) -> Value {
+            // Pinned Kimi and Copilot resolvers preserve nonempty overrides verbatim.
             match (self.environment)(variable) {
                 Some(value) if !value.is_empty() => self.profile(Some(value), variable, ""),
                 _ => self.home(fallback),
@@ -134,10 +138,13 @@ mod metadata {
                 "claude" => self.selected("CLAUDE_CONFIG_DIR", ".claude", ""),
                 "codex" => self.selected("CODEX_HOME", ".codex", ""),
                 "cline" => self.cline_profile(),
+                "copilot" if self.schema_version == 2 => {
+                    self.literal_profile("COPILOT_HOME", ".copilot")
+                }
                 "kimi" => {
                     let mut profiles = vec![
-                        self.kimi_profile("KIMI_CODE_HOME", ".kimi-code"),
-                        self.kimi_profile("KIMI_SHARE_DIR", ".kimi"),
+                        self.literal_profile("KIMI_CODE_HOME", ".kimi-code"),
+                        self.literal_profile("KIMI_SHARE_DIR", ".kimi"),
                     ];
                     // Missing HOME yields one identical diagnostic for both dialects.
                     profiles.dedup();
@@ -255,10 +262,14 @@ mod metadata {
             paths.into_iter().find(|path| self.executable(path))
         }
     }
-    pub(super) fn discover(environment: impl FnMut(&str) -> Option<OsString>) -> Value {
+    pub(super) fn discover(
+        schema_version: u8,
+        environment: impl FnMut(&str) -> Option<OsString>,
+    ) -> Value {
         let mut scan = Scan {
             environment,
             truncated: false,
+            schema_version,
         };
         let paths = scan.paths();
         let mut agents = vec![];
@@ -276,6 +287,11 @@ mod metadata {
             ("aider", "aider", "healthOnly"),
         ] {
             let profiles = scan.profiles(agent);
+            let setup = if agent == "copilot" && schema_version == 2 {
+                "managed"
+            } else {
+                setup
+            };
             // Search directories first: a legacy alias earlier on PATH wins
             // over a current alias later on PATH. Within a directory prefer agent.
             let aliases: &[&str] = if agent == "cursor" {
@@ -317,6 +333,6 @@ mod metadata {
                 scan.truncated = true;
             }
         }
-        json!({"schemaVersion":1,"supported":true,"managedSetupSupported":cfg!(target_os="linux"),"agents":agents,"truncated":scan.truncated})
+        json!({"schemaVersion":schema_version,"supported":true,"managedSetupSupported":cfg!(target_os="linux"),"agents":agents,"truncated":scan.truncated})
     }
 }

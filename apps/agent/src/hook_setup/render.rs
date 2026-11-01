@@ -54,7 +54,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             ),
             5,
         ),
-        Agent::Opencode | Agent::Cline => (false, 0),
+        Agent::Opencode | Agent::Cline | Agent::Copilot => (false, 0),
     };
     if !valid {
         return Err("HooksInvalidTemplate");
@@ -83,7 +83,7 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
-        Agent::Opencode | Agent::Cline => return Ok(Vec::new()),
+        Agent::Opencode | Agent::Cline | Agent::Copilot => return Ok(Vec::new()),
     };
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
@@ -120,8 +120,44 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         })
         .collect()
 }
-pub(super) fn plugin(agent: Agent, binary: &Path) -> Result<String, &'static str> {
+pub(super) fn owned_file(agent: Agent, binary: &Path) -> Result<String, &'static str> {
     let path = binary.to_str().ok_or("HooksInvalidBinary")?;
+    if agent == Agent::Copilot {
+        let mut config = crate::hooks::copilot_config();
+        let expected = [
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+            "SessionEnd",
+            "notification",
+        ];
+        if config["version"] != 1 || config.as_object().is_none_or(|v| v.len() != 2) {
+            return Err("HooksInvalidTemplate");
+        }
+        let events = config["hooks"]
+            .as_object_mut()
+            .ok_or("HooksInvalidTemplate")?;
+        if events.len() != expected.len() {
+            return Err("HooksInvalidTemplate");
+        }
+        for event in expected {
+            let commands = events
+                .get_mut(event)
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or("HooksInvalidTemplate")?;
+            if commands.len() != 1
+                || commands[0]
+                    != serde_json::json!({"type":"command","exec":"lazysh-agent","args":["ingest","--agent","copilot"],"timeoutSec":5})
+            {
+                return Err("HooksInvalidTemplate");
+            }
+            commands[0]["exec"] = path.into();
+        }
+        return serde_json::to_string_pretty(&config)
+            .map(|text| text + "\n")
+            .map_err(|_| "HooksInvalidTemplate");
+    }
     let path = serde_json::to_string(path).map_err(|_| "HooksInvalidBinary")?;
     let (asset, command, replacement) = match agent {
         Agent::Opencode => (
