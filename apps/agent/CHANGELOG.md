@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.6.0
+
+### Minor Changes
+
+- aad0990: Add opt-in version-2 hook discovery and inspected, profile-scoped Copilot hook setup while preserving version-1 compatibility, foreign settings and provider trust.
+
+### Patch Changes
+
+- 99d1b8e: Avoid reporting a completed Amp turn from an initially idle thread. The updated manual plugin reports idle only after observing that thread running, and does not treat an error followed by idle as recovery. Replace previously copied Amp plugin files to receive this fix; existing historical reports are unchanged.
+- @lazysh/account-usage@1.6.0
+  - @lazysh/common@1.6.0
+  - @lazysh/notification-client@1.6.0
+
 ## 1.5.5
 
 ### Patch Changes
