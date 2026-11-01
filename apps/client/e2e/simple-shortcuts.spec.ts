@@ -1,7 +1,7 @@
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutOutput:(text:string)=>void}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -18,7 +18,13 @@ async function fixture(page:Page) {
         window.simpleShortcutOutput=text=>(args.events as {onmessage:(event:unknown)=>void}).onmessage({type:'data',data:Array.from(new TextEncoder().encode(text))});
         return {sessionId:'local:shortcut-fixture'};
       }
-      if (command==='local_write') {const steps=args.steps as string[]|undefined; if(steps)window.simpleShortcutSteps.push(steps);window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);return;}
+      if (command==='local_write') {
+        const steps=args.steps as string[]|undefined;
+        if(steps)window.simpleShortcutSteps.push(steps);
+        window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);
+        if(window.simpleShortcutWriteFailure)throw {kind:window.simpleShortcutWriteFailure,message:'Owned queue failure'};
+        return;
+      }
       if (['local_resize','local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected shortcut fixture command: ${command}`);
@@ -397,6 +403,22 @@ async function openShortcutTerminal(page:Page) {
 
 for(const android of [false,true])test.describe(android ? 'Android IME' : 'ordinary keyboard',()=>{
   if(android)test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
+test('real xterm DSR failures retain nonuser classification and visible errors',async({page})=>{
+  const receipts:string[]=[];
+  page.on('console',message=>{if(message.type()==='warning'&&message.text().startsWith('lazysh-terminal-input '))receipts.push(message.text().slice('lazysh-terminal-input '.length));});
+  await openShortcutTerminal(page);
+  await expect(page.locator('.xterm-helper-textarea')).toBeAttached();
+  for(const [kind,cause] of [['backpressure','queue-full'],['input_closed','channel-closed']] as const) {
+    await page.evaluate(kind=>{window.simpleShortcutWriteFailure=kind;window.simpleShortcutOutput('\x1b[6n');},kind);
+    await expect.poll(()=>receipts.length).toBe(kind==='backpressure'?1:2);
+    const writes=await page.evaluate(()=>window.simpleShortcutWrites);
+    const response=writes.at(-1)!;
+    expect(response).toMatch(/^\x1b\[\d+;\d+R$/);
+    expect(JSON.parse(receipts.at(-1)!)).toEqual({caller:'terminal-nonuser',cause,utf16Units:response.length,
+      dispatch:{active:true,connected:true,disposed:false,currentOwner:true},receipt:{active:true,connected:true,disposed:false,currentOwner:true}});
+    await expect(page.getByText('Owned queue failure',{exact:true})).toBeVisible();
+  }
+});
 test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and protocol input', async ({page,context}) => {
   await openShortcutTerminal(page);
   const keys=page.getByLabel('Terminal keys',{exact:true});
