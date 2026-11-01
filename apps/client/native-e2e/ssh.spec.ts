@@ -68,7 +68,7 @@ it('saves credentials in a disposable Secret Service and reconnects only after e
   expect(await dialog.$$('textarea,input[type="password"]')).toHaveLength(0);
   await (await dialog.$('button=Private key')).click();
   expect(await (await dialog.$('textarea')).getValue()==='').toBe(true);
-  expect(await (await dialog.$('input[type="password"]')).getValue()==='').toBe(true);
+  expect(await (await (await dialog.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()==='').toBe(true);
   expect(await (await (await dialog.$('label*=Save credentials on this device')).$('input')).isSelected()).toBe(false);
   const savedAgain=await (await dialog.$('label*=Use saved credentials')).$('input[type="checkbox"]');
   await savedAgain.click();expect(await savedAgain.isSelected()).toBe(true);
@@ -90,7 +90,7 @@ it('saves credentials in a disposable Secret Service and reconnects only after e
   expect(await catalogState(false)).toBe(true);
   await (await forgotten.$('button=Private key')).click();
   expect(await (await forgotten.$('textarea')).getValue()==='').toBe(true);
-  expect(await (await forgotten.$('input[type="password"]')).getValue()==='').toBe(true);
+  expect(await (await (await forgotten.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()==='').toBe(true);
   await (await forgotten.$('button=Cancel')).click();await forgotten.waitForDisplayed({reverse:true});
   expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
 });
