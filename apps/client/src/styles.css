@@ -1697,15 +1697,23 @@ button svg {
 
 .font-license { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
 
-/* Glass belongs to navigation and sheets; terminal output stays opaque. */
+/* Glass belongs to chrome and short sheets, not long reading surfaces. */
 @supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
-  .sidebar, .workspace-header, .dialog {
+  .workspace-header, [data-mobile-presentation="sheet"] > .dialog {
+    background: color-mix(in srgb, var(--theme-panel) 84%, transparent);
+    backdrop-filter: blur(16px) saturate(120%);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  }
+  .sidebar {
     background: color-mix(in srgb, var(--theme-panel) 94%, transparent);
     backdrop-filter: blur(16px) saturate(120%);
   }
+  .workspace-navigation-modes button[aria-current="page"] {
+    background: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-control));
+  }
 }
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
-  .sidebar, .workspace-header, .dialog { background: var(--theme-panel); backdrop-filter: none; }
+  .sidebar, .workspace-header, [data-mobile-presentation="sheet"] > .dialog { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   button, .sidebar { transition: none; }
