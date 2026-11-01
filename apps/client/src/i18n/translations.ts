@@ -171,7 +171,7 @@ const translations = {
   navigationLiveSessions: ["Sessões ativas do app", "Sesiones activas de la app"],
   navigationNoSessions: ["Conecte a um servidor ou abra um terminal local para ver suas sessões do app.", "Conecta a un servidor o abre un terminal local para ver tus sesiones de la app."],
   navigationManageSessions: ["Abrir gerenciador de sessões", "Abrir gestor de sesiones"],
-  navigationManagerHint: ["Use o gerenciador existente para descobrir e gerenciar tmux, Herdr ou Zellij. A navegação entre painéis aqui requer uma sessão tmux conectada.", "Usa el gestor existente para descubrir y gestionar tmux, Herdr o Zellij. La navegación entre paneles aquí requiere una sesión tmux conectada."],
+  navigationManagerHint: ["Use o gerenciador de sessões para descobrir e gerenciar sessões tmux, Herdr ou Zellij.", "Usa el gestor de sesiones para descubrir y gestionar sesiones tmux, Herdr o Zellij."],
   navigationManagerOpen: ["O gerenciador de sessões está aberto na área de trabalho.", "El gestor de sesiones está abierto en el área de trabajo."],
   agentsReportTechnicalDetails: ["Detalhes do relato", "Detalles del informe"],
 

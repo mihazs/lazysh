@@ -452,6 +452,13 @@ describe('live Herdr discovery',()=>{
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
     expect(browser.getByRole('heading',{name:t('herdrNavigationSpaces')})).toBeTruthy();
     expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
+    const spacesSetup=browser.getByText(`${t('herdrAgentsServer')} · default`).closest('details')!;
+    expect(spacesSetup.open).toBe(false);
+    expect(browser.getByText(t('herdrNavigationShared')).closest('details')).toBeNull();
+    fireEvent.click(spacesSetup.querySelector('summary')!);
+    expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
+    expect(browser.getAllByText(t('herdrNavigationShared'))).toHaveLength(1);
+    fireEvent.click(spacesSetup.querySelector('summary')!);
     const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
     expect(browser.getByText('builder')).toBeTruthy();
     view.rerender(<HerdrNavigation {...props} mode="agents"/>);

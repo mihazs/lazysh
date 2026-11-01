@@ -285,7 +285,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - name: Verify native GUI namespace prerequisites
         env:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: private
@@ -382,13 +382,14 @@ jobs:
       - name: Prepare owned native GUI system tools
         run: |
           tools_dir=$(mktemp -d "$RUNNER_TEMP/lazysh-native-tools.XXXXXX")
-          for tool in WebKitWebDriver Xvfb; do
+          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon; do
             source=$(readlink -f "/usr/bin/$tool")
             install -m 0755 "$source" "$tools_dir/$tool"
             cmp "$source" "$tools_dir/$tool"
           done
           echo "LAZYSH_NATIVE_GUI_WEBKIT_DRIVER=$tools_dir/WebKitWebDriver" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
+          echo "LAZYSH_NATIVE_GUI_SECRET_SERVICE=$tools_dir/gnome-keyring-daemon" >> "$GITHUB_ENV"
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
