@@ -227,7 +227,20 @@ export function standardWorkerEnvironment(current:NodeJS.ProcessEnv,configured:R
   const selected=Object.fromEntries(Object.entries(current).filter(([key,value])=>inheritedStandardKeys.has(key.toUpperCase())&&value!==undefined));
   return {...selected,...configured};
 }
-export function standardWorker(fixture:string,source:string,binary:string){return String.raw`
+function standardOwnerMode(value:unknown):'gui'|'bootstrap-exit'{
+  if(value!=='gui'&&value!=='bootstrap-exit')throw new Error('Unknown standard owner mode');return value;
+}
+export function standardOwnerCompletion(mode:unknown,receiptPresent:boolean,receipt:ReturnType<typeof parseStandardReceipt>|undefined){
+  if(standardOwnerMode(mode)==='gui'){
+    if(!receiptPresent||receipt?.result!=='PASSED')throw new Error('Standard owner receipt rejected');
+    return 'Windows ordinary-user NSIS, installed GUI and owned account cleanup passed';
+  }
+  if(receiptPresent||receipt!==undefined)throw new Error('Bootstrap control unexpectedly wrote a receipt');
+  return {kind:'NON_ACCEPTANCE_BOOTSTRAP',observation:'CHILD_EXITED_ZERO'} as const;
+}
+export function standardWorker(fixture:string,source:string,binary:string,mode:unknown='gui'){
+  if(standardOwnerMode(mode)==='bootstrap-exit')return 'process.exit(0);';
+  return String.raw`
 import {readFile,writeFile} from 'node:fs/promises';
 import {publishStandardProgress} from './.changeset/windows-standard-progress';
 import {fileURLToPath} from 'node:url';
@@ -260,6 +273,15 @@ if(result!=='PASSED')process.exitCode=1;
 `;}
 export const standardBrokerScript=String.raw`$ErrorActionPreference='Stop';try{Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$result=[OwnedMediumGui]::RunStandard($env:LAZYSH_WINDOWS_STANDARD_ROOT,(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'bin/bun.exe'),(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'worker.ts'),$env:LAZYSH_STANDARD_IMAGE_HASH,([Environment]::TickCount64+[long]$env:LAZYSH_STANDARD_REMAINING));[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$result)}catch{$code=$_.Exception.GetBaseException().Message;if($code -ceq 'TOKEN_UNAVAILABLE'){$code=[OwnedMediumGui]::StandardTokenFailure()};if($code -cnotin @(${standardCodes.map(code=>"'"+code+"'").join(',')}) -and !($code -cmatch '\ACLEANUP_UNVERIFIED:([A-Z_]+)\z' -and $matches[1] -cin @('UNVERIFIED',${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>"'"+code+"'").join(',')}))){$code='UNVERIFIED'};[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$code)}`;
 export async function windowsStandardInstallation(installer:string,binary:string,version:string){
+  const result=await runStandardOwner(installer,binary,version,'gui');
+  if(typeof result!=='string')throw new Error('Standard GUI owner mode changed');return result;
+}
+export async function windowsStandardBootstrapExit(installer:string,binary:string,version:string){
+  const result=await runStandardOwner(installer,binary,version,'bootstrap-exit');
+  if(typeof result==='string')throw new Error('Bootstrap control mode changed');return result;
+}
+async function runStandardOwner(installer:string,binary:string,version:string,mode:unknown){
+  const selected=standardOwnerMode(mode);
   const root=hostedStandardScope(process.env),started=Date.now(),deadline=started+650000;
   await mkdir(root);await writeFile(join(root,'fixture.owner'),process.env.GITHUB_SHA!,{flag:'wx'});
   await appendFile(process.env.GITHUB_ENV!,`LAZYSH_WINDOWS_STANDARD_ROOT=${root}\n`);
@@ -278,7 +300,7 @@ export async function windowsStandardInstallation(installer:string,binary:string
     await copyStandardClosure(driverRoot,join(root,'tools'),driverRoot);
     const binaryHash=(await digestFile(join(root,'binary.exe'))).sha256;
     const environment={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'mihazs/lazysh',GITHUB_SHA:process.env.GITHUB_SHA!,RUNNER_TEMP:join(root,'work'),TEMP:join(root,'work','temp'),TMP:join(root,'work','temp'),PATH:[join(root,'bin'),dirname(pwsh),join(process.env.SystemRoot!,'System32')].join(';'),LAZYSH_TEST_WINDOWS_GUI:'1',LAZYSH_GUI_DRIVER:join(root,'tools','bin','tauri-driver.exe'),LAZYSH_GUI_EDGE:join(root,'tools','edge','msedgedriver.exe')};
-    await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker(basename(root),process.env.GITHUB_SHA!,binaryHash),{flag:'wx'});
+    await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker(basename(root),process.env.GITHUB_SHA!,binaryHash,selected),{flag:'wx'});
     await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'UNKNOWN'}),{flag:'wx'}).catch(()=>{});
     await publishStandardProgress(root,process.env.GITHUB_SHA!,binaryHash,'PREPARED');
     const prepared=await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash);
@@ -288,10 +310,11 @@ export async function windowsStandardInstallation(installer:string,binary:string
     const wire=await native(pwsh,['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_WINDOWS_STANDARD_ROOT:root,LAZYSH_STANDARD_REMAINING:String(remaining),LAZYSH_STANDARD_IMAGE_HASH:imageHash},remaining,windowsStandardUserSource);
     let receipt:ReturnType<typeof parseStandardReceipt>|undefined;
     const resultFile=join(root,'work','result.json');
-    if(await Bun.file(resultFile).exists()){const entry=await lstat(resultFile);if(!entry.isFile()||entry.isSymbolicLink()||!insideStandardRoot(await realpath(resultFile),root))throw new Error('Standard owner receipt escapes its scope');if(entry.size>2048)throw new Error('Standard owner receipt exceeds its bound');receipt=parseStandardReceipt(JSON.parse(await readFile(resultFile,'utf8')),process.env.GITHUB_SHA!,binaryHash);}
+    const receiptPresent=selected==='gui'?await Bun.file(resultFile).exists():await lstat(resultFile).then(()=>true,error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw new Error('Bootstrap control receipt presence unverified');});
+    if(selected==='gui'&&receiptPresent){const entry=await lstat(resultFile);if(!entry.isFile()||entry.isSymbolicLink()||!insideStandardRoot(await realpath(resultFile),root))throw new Error('Standard owner receipt escapes its scope');if(entry.size>2048)throw new Error('Standard owner receipt exceeds its bound');receipt=parseStandardReceipt(JSON.parse(await readFile(resultFile,'utf8')),process.env.GITHUB_SHA!,binaryHash);}
     if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')throw new Error(standardOwnerRejection(wire,receipt?.failure,await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash),prepared));
-    if(receipt?.result!=='PASSED')throw new Error('Standard owner receipt rejected');
-    completed=true;return 'Windows ordinary-user NSIS, installed GUI and owned account cleanup passed';
+    const result=standardOwnerCompletion(selected,receiptPresent,receipt);
+    completed=true;return result;
   }finally{
     if(!(await readdir(root)).some(name=>name==='account.owner'||name==='desktop.owner')){await removeStandardFixture(root);}
     else if(completed)throw new Error('Standard account cleanup is unverified');

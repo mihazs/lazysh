@@ -517,7 +517,21 @@ jobs:
           LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows (installed GUI|GUI (endpoint|window))'
       - name: Retire only the owned Windows standard-user scope
+        id: windows_gui_retirement
         if: ${{ always() && runner.os == 'Windows' }}
+        timeout-minutes: 1
+        run: bun .changeset/windows-standard-user.ts --recover
+      - name: Observe the Windows bootstrap exit non-acceptance control
+        id: windows_bootstrap_control
+        if: ${{ always() && runner.os == 'Windows' && steps.windows_package.outcome == 'success' && steps.windows_installer.outcome == 'success' && contains(fromJSON('["success","failure"]'), steps.windows_gui.outcome) && steps.windows_gui_retirement.outcome == 'success' }}
+        timeout-minutes: 12
+        env:
+          LAZYSH_TEST_WINDOWS_BOOTSTRAP_EXIT: '1'
+          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
+          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern '^actual Windows bootstrap exit is a non-acceptance control$'
+      - name: Retire only the owned Windows bootstrap control scope
+        if: ${{ always() && runner.os == 'Windows' && contains(fromJSON('["success","failure","cancelled"]'), steps.windows_bootstrap_control.outcome) }}
         timeout-minutes: 1
         run: bun .changeset/windows-standard-user.ts --recover
       - name: Reject unverified Windows private-file permissions

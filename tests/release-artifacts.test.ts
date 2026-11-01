@@ -1,7 +1,7 @@
-import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection,standardWorker,standardSourceFiles} from '../.changeset/windows-standard-user';
+import {windowsStandardInstallation,windowsStandardBootstrapExit,standardOwnerCompletion,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection,standardWorker,standardSourceFiles} from '../.changeset/windows-standard-user';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
-import { appendFile, link, mkdtemp, mkdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, link, mkdtemp, mkdir, readFile, readdir, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -688,7 +688,14 @@ test('Windows required gate uses complete standard context and retains unconditi
   expect(contracts.if).toBe("runner.os == 'Windows'");expect(contracts.env.LAZYSH_TEST_WINDOWS_GUI).toBe('1');expect(contracts['continue-on-error']).toBeUndefined();
   for(const owner of ['Windows launch portable contracts without process creation','owned UIA candidate contract','Windows standard broker portable'])expect(contracts.run).toContain(owner);
   const gui=steps.find((step:any)=>step.id==='windows_gui');expect(gui.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBeUndefined();expect(gui['timeout-minutes']).toBe(12);
-  const recovery=steps.find((step:any)=>step.run==='bun .changeset/windows-standard-user.ts --recover');expect(recovery.if).toBe("${{ always() && runner.os == 'Windows' }}");expect(recovery['continue-on-error']).toBeUndefined();
+  const recovery=steps.find((step:any)=>step.id==='windows_gui_retirement');expect(recovery.if).toBe("${{ always() && runner.os == 'Windows' }}");expect(recovery['continue-on-error']).toBeUndefined();expect(recovery.run).toBe('bun .changeset/windows-standard-user.ts --recover');
+  const control=steps.find((step:any)=>step.id==='windows_bootstrap_control');expect(control.if).toBe("${{ always() && runner.os == 'Windows' && steps.windows_package.outcome == 'success' && steps.windows_installer.outcome == 'success' && contains(fromJSON('[\"success\",\"failure\"]'), steps.windows_gui.outcome) && steps.windows_gui_retirement.outcome == 'success' }}");
+  expect(control['continue-on-error']).toBeUndefined();expect(control['timeout-minutes']).toBe(12);expect(control.env.LAZYSH_TEST_WINDOWS_BOOTSTRAP_EXIT).toBe('1');expect(control.env.LAZYSH_TEST_WINDOWS_GUI).toBeUndefined();
+  expect(control.run).toBe("bun test tests/release-artifacts.test.ts --test-name-pattern '^actual Windows bootstrap exit is a non-acceptance control$'");
+  expect(gui.run).toBe("bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows (installed GUI|GUI (endpoint|window))'");
+  expect(steps.indexOf(gui)).toBeLessThan(steps.indexOf(recovery));expect(steps.indexOf(recovery)).toBeLessThan(steps.indexOf(control));
+  const retirements=steps.filter((step:any)=>step.run==='bun .changeset/windows-standard-user.ts --recover');expect(retirements).toHaveLength(2);
+  expect(steps.indexOf(retirements[1])).toBeGreaterThan(steps.indexOf(control));expect(retirements[1].if).toBe("${{ always() && runner.os == 'Windows' && contains(fromJSON('[\"success\",\"failure\",\"cancelled\"]'), steps.windows_bootstrap_control.outcome) }}");expect(retirements[1]['continue-on-error']).toBeUndefined();expect(retirements[1]['timeout-minutes']).toBe(1);
 });
 
 test('HIGH evidence continuation requires the complete safe-denial wire record',()=>{
@@ -964,6 +971,13 @@ if($job -and $job.AsUserOutcome -and $job.AsUserOutcome -cne 'NOT_ELIGIBLE'){[Co
     expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(observed.result);
   }
 },110000);
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_BOOTSTRAP_EXIT!=='1')('actual Windows bootstrap exit is a non-acceptance control',async()=>{
+  const installer=await exactlyOne('nsis/*.exe',join(import.meta.dir,'../target/release/bundle')),binary=join(import.meta.dir,'../target/release/lazysh.exe');
+  const {version}=await Bun.file(join(import.meta.dir,'../apps/client/package.json')).json();
+  const observed=await windowsStandardBootstrapExit(installer,binary,version);
+  expect(observed).toEqual({kind:'NON_ACCEPTANCE_BOOTSTRAP',observation:'CHILD_EXITED_ZERO'});console.info('NON_ACCEPTANCE '+JSON.stringify(observed));
+},650000);
+
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');
@@ -1493,6 +1507,17 @@ test('NSIS image prediction preserves the runtime bundle-comparison constants by
   expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
     sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
 }));
+
+test('Windows standard bootstrap control is closed, has no file work and cannot satisfy the GUI receipt oracle',async()=>fixture(async root=>{
+  const body=standardWorker('private namespace','private source','private image','bootstrap-exit');expect(body).toBe('process.exit(0);');
+  for(const mode of [null,{},[],42,'','gui-extra','bootstrap-exit private'])expect(()=>standardWorker('private','private','private',mode)).toThrow('Unknown standard owner mode');
+  const worker=join(root,'worker.ts');await writeFile(worker,body);expect(await native(process.execPath,['run',worker],{PATH:process.env.PATH},5000)).toBe('');expect(await readdir(root)).toEqual(['worker.ts']);
+  const observation=standardOwnerCompletion('bootstrap-exit',false,undefined);expect(observation).toEqual({kind:'NON_ACCEPTANCE_BOOTSTRAP',observation:'CHILD_EXITED_ZERO'});
+  expect(()=>standardOwnerCompletion('gui',false,undefined)).toThrow('Standard owner receipt rejected');expect(()=>standardOwnerCompletion('gui',true,observation as any)).toThrow('Standard owner receipt rejected');
+  const receipt={result:'PASSED' as const};expect(()=>standardOwnerCompletion('gui',false,receipt)).toThrow('Standard owner receipt rejected');expect(standardOwnerCompletion('gui',true,receipt)).toBe('Windows ordinary-user NSIS, installed GUI and owned account cleanup passed');
+  for(const mode of ['gui-private',null,{}])expect(()=>standardOwnerCompletion(mode,true,receipt)).toThrow('Unknown standard owner mode');
+  expect(()=>standardOwnerCompletion('bootstrap-exit',true,undefined)).toThrow('Bootstrap control unexpectedly wrote a receipt');expect(()=>standardOwnerCompletion('bootstrap-exit',false,receipt)).toThrow('Bootstrap control unexpectedly wrote a receipt');
+}),10000);
 
 test('Windows standard progress is private, fixture-bound and never a result authority',async()=>fixture(async parent=>{
   const root=join(parent,'lazysh-standard-123-1'),path=join(root,'work/standard-progress.json');
