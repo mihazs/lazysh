@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop the updated Amp plugin from reporting completion for an initially idle thread or treating error-to-idle as recovery. It reports idle only after observing that thread running. Replace previously copied manual Amp plugin files to receive the fix; existing historical reports, legacy ingestion and trust defaults remain unchanged.
+
 - Complete independently identified Copilot child reports while preserving the parent's state and ignoring ambiguous child completion callbacks. No installation, permission or input defaults change.
 
 - Document Linux Copilot CLI 1.0.105 manual-hook completion and unanswered elicitation attention qualification, with explicit runtime limits (#704).
