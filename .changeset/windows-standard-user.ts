@@ -1,8 +1,10 @@
-import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailures,windowsStandardProgressStages} from './windows-installed-gui';
+import {insideStandardRoot,readStandardDiagnostic,standardDiagnosticStage} from './windows-standard-progress';
+export {insideStandardRoot,readStandardDiagnostic,publishStandardProgress} from './windows-standard-progress';
+import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
 import {native,windowsInstallerFailure} from './release-platform';
-import {copyFile,lstat,open,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
-import {basename,dirname,join,relative,resolve,sep} from 'node:path';
+import {copyFile,lstat,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
+import {basename,dirname,join,resolve} from 'node:path';
 
 
 export const standardWritableDirectories=['work','node_modules/.vite','node_modules/.vite-temp','node_modules/.vitest-cache','apps/client/node_modules/.vite','apps/client/node_modules/.vite-temp'] as const;
@@ -192,46 +194,17 @@ export function parseStandardReceipt(value:unknown,source:string,binary:string):
   if(row.failure!==undefined&&(row.result!=='FAILED'||typeof row.failure!=='string'||windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+row.failure)!==row.failure))throw new Error('Standard owner failure rejected');
   return {result:row.result as 'PASSED'|'FAILED',...(typeof row.failure==='string'?{failure:row.failure}:{})};
 }
-function standardDiagnosticStage(value:unknown):string {
-  return typeof value==='string'&&(windowsStandardProgressStages as readonly string[]).includes(value)?value:'UNKNOWN';
-}
-async function standardDiagnostic(root:string,source:string,binary:string,next?:string):Promise<string>{
-  let file:Awaited<ReturnType<typeof open>>|undefined;
-  try{
-    const fixture=basename(root);
-    if(!/^lazysh-standard-[0-9]{1,20}-[0-9]{1,20}$/.test(fixture)||!(/^[a-f0-9]{40}$/.test(source))||!(/^[a-f0-9]{64}$/.test(binary)))return 'UNKNOWN';
-    const path=join(root,diagnosticName),before=await lstat(path);
-    if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size>512||!insideStandardRoot(await realpath(path),root))return 'UNKNOWN';
-    file=await open(path,next===undefined?'r':'r+');
-    const retained=await file.stat();
-    if(!retained.isFile()||retained.nlink!==1||retained.dev!==before.dev||retained.ino!==before.ino||retained.size!==before.size)return 'UNKNOWN';
-    const bytes=Buffer.alloc(513);let size=0;
-    while(size<bytes.length){const read=await file.read(bytes,size,bytes.length-size,size);if(!read.bytesRead)break;size+=read.bytesRead;}
-    const after=await file.stat(),leaf=await lstat(path);
-    if(size>512||after.size!==size||after.dev!==before.dev||after.ino!==before.ino||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs||!leaf.isFile()||after.nlink!==1||leaf.nlink!==1||leaf.size!==after.size||leaf.isSymbolicLink()||leaf.dev!==after.dev||leaf.ino!==after.ino)return 'UNKNOWN';
-    const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,size)));
-    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join(',')!=='binary,fixture,source,stage'||value.fixture!==fixture||value.source!==source||value.binary!==binary||standardDiagnosticStage(value.stage)!==value.stage)return 'UNKNOWN';
-    if(next!==undefined){
-      if(standardDiagnosticStage(next)!==next)return 'UNKNOWN';
-      await file.truncate(0);await file.writeFile(JSON.stringify({...value,stage:next}));
-    }
-    return next??value.stage;
-  }catch{return 'UNKNOWN';}finally{await file?.close().catch(()=>{});}
-}
-export async function readStandardDiagnostic(root:string,source:string,binary:string){return standardDiagnostic(root,source,binary);}
-export async function publishStandardProgress(root:string,source:string,binary:string,stage:string){await standardDiagnostic(root,source,binary,stage);}
-export function standardOwnerRejection(wire:unknown,failure:unknown,progress:unknown){
+export function standardOwnerRejection(wire:unknown,failure:unknown,progress:unknown,prepared:unknown=undefined){
   const code=standardOwnerCode(wire);
   const primary=typeof wire==='string'&&code==='CLEANUP_UNVERIFIED'&&wire.split(':').length===3?' primary='+wire.split(':')[2]:'';
   const detail=typeof failure==='string'&&windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+failure)===failure?' ('+failure+')':'';
-  return 'Standard native owner rejected: '+code+primary+detail+' progress='+standardDiagnosticStage(progress)+' cleanup=UNKNOWN';
+  return 'Standard native owner rejected: '+code+primary+detail+' prepared='+(prepared==='PREPARED'?'PREPARED':'UNKNOWN')+' progress='+standardDiagnosticStage(progress)+' cleanup=UNKNOWN';
 }
-export const standardSourceFiles=['package.json','apps/client/package.json','apps/client/vitest.native-gui.config.ts','apps/client/native-e2e/policy.ts','apps/client/native-e2e/windows/installed.spec.ts','.changeset/bun-lock.ts','.changeset/release-artifacts.ts','.changeset/release-platform.ts','.changeset/windows-installed-gui.ts','.changeset/windows-standard-user.ts'] as const;
+export const standardSourceFiles=['package.json','apps/client/package.json','apps/client/vitest.native-gui.config.ts','apps/client/native-e2e/policy.ts','apps/client/native-e2e/windows/installed.spec.ts','.changeset/bun-lock.ts','.changeset/release-artifacts.ts','.changeset/release-platform.ts','.changeset/windows-installed-gui.ts','.changeset/windows-standard-user.ts','.changeset/windows-standard-progress.ts'] as const;
 function hostedStandardScope(env:NodeJS.ProcessEnv){
   if(process.platform!=='win32'||env.GITHUB_ACTIONS!=='true'||env.RUNNER_ENVIRONMENT!=='github-hosted'||env.GITHUB_REPOSITORY!=='mihazs/lazysh'||!/^\d{1,20}$/.test(env.GITHUB_RUN_ID??'')||!/^\d{1,20}$/.test(env.GITHUB_RUN_ATTEMPT??'')||!env.RUNNER_TEMP||!env.GITHUB_ENV||!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA??''))throw new Error('Standard owner requires verified disposable hosted Windows CI');
   return join(resolve(env.RUNNER_TEMP),`lazysh-standard-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`);
 }
-export function insideStandardRoot(path:string,root:string){const name=relative(resolve(root),resolve(path));return name===''||(!name.startsWith('..'+sep)&&name!=='..'&&!name.startsWith(sep)&&!name.includes(':'));}
 export async function copyStandardClosure(source:string,target:string,allowed:string,visited=new Set<string>(),budget={files:0,bytes:0}){
   const actual=await realpath(source);if(!insideStandardRoot(actual,allowed)||visited.has(actual))throw new Error('Standard fixture dependency escapes its allowed closure');
   const entry=await lstat(actual);if(entry.isDirectory()){
@@ -254,14 +227,16 @@ export function standardWorkerEnvironment(current:NodeJS.ProcessEnv,configured:R
   const selected=Object.fromEntries(Object.entries(current).filter(([key,value])=>inheritedStandardKeys.has(key.toUpperCase())&&value!==undefined));
   return {...selected,...configured};
 }
-const standardWorker=String.raw`
+export const standardWorker=String.raw`
 import {readFile,writeFile} from 'node:fs/promises';
-import {windowsInstallation,windowsInstallerFailure} from './.changeset/release-platform';
-import {standardWorkerEnvironment,publishStandardProgress} from './.changeset/windows-standard-user';
+import {publishStandardProgress} from './.changeset/windows-standard-progress';
 import {fileURLToPath} from 'node:url';
 const config=JSON.parse(await readFile(new URL('./owner.json',import.meta.url),'utf8'));
 const root=fileURLToPath(new URL('.',import.meta.url));
 await publishStandardProgress(root,config.environment.GITHUB_SHA,config.binaryHash,'WORKER_STARTED');
+const {windowsInstallation,windowsInstallerFailure}=await import('./.changeset/release-platform');
+const {standardWorkerEnvironment}=await import('./.changeset/windows-standard-user');
+await publishStandardProgress(root,config.environment.GITHUB_SHA,config.binaryHash,'IMPORTS_READY');
 const selected=standardWorkerEnvironment(process.env,config.environment);
 for(const key of Object.keys(process.env))delete process.env[key];
 Object.assign(process.env,selected);
@@ -301,7 +276,8 @@ export async function windowsStandardInstallation(installer:string,binary:string
     const binaryHash=(await digestFile(join(root,'binary.exe'))).sha256;
     const environment={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'mihazs/lazysh',GITHUB_SHA:process.env.GITHUB_SHA!,RUNNER_TEMP:join(root,'work'),TEMP:join(root,'work','temp'),TMP:join(root,'work','temp'),PATH:[join(root,'bin'),dirname(pwsh),join(process.env.SystemRoot!,'System32')].join(';'),LAZYSH_TEST_WINDOWS_GUI:'1',LAZYSH_GUI_DRIVER:join(root,'tools','bin','tauri-driver.exe'),LAZYSH_GUI_EDGE:join(root,'tools','edge','msedgedriver.exe')};
     await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker,{flag:'wx'});
-    await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'UNKNOWN'}),{flag:'wx'}).catch(()=>{});
+    await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'PREPARED'}),{flag:'wx'}).catch(()=>{});
+    const prepared=await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash);
     const remaining=deadline-Date.now()-1000;if(remaining<=15000)throw new Error('Standard owner setup exhausted its budget');
     const script=standardBrokerScript;
     const imageHash=(await digestFile(join(root,'bin','bun.exe'))).sha256;
@@ -309,7 +285,7 @@ export async function windowsStandardInstallation(installer:string,binary:string
     let receipt:ReturnType<typeof parseStandardReceipt>|undefined;
     const resultFile=join(root,'work','result.json');
     if(await Bun.file(resultFile).exists()){const entry=await lstat(resultFile);if(!entry.isFile()||entry.isSymbolicLink()||!insideStandardRoot(await realpath(resultFile),root))throw new Error('Standard owner receipt escapes its scope');if(entry.size>2048)throw new Error('Standard owner receipt exceeds its bound');receipt=parseStandardReceipt(JSON.parse(await readFile(resultFile,'utf8')),process.env.GITHUB_SHA!,binaryHash);}
-    if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')throw new Error(standardOwnerRejection(wire,receipt?.failure,await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash)));
+    if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')throw new Error(standardOwnerRejection(wire,receipt?.failure,await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash),prepared));
     if(receipt?.result!=='PASSED')throw new Error('Standard owner receipt rejected');
     completed=true;return 'Windows ordinary-user NSIS, installed GUI and owned account cleanup passed';
   }finally{

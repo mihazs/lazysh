@@ -1,3 +1,5 @@
+import {windowsStandardProgressStages} from './windows-standard-progress.ts';
+export {windowsStandardProgressStages} from './windows-standard-progress.ts';
 import {request} from 'node:http';
 import {win32} from 'node:path';
 
@@ -899,7 +901,6 @@ function GuiMediumStart($job,$info,$probeDeadline=0) {
 }
 `;
 
-export const windowsStandardProgressStages=['UNKNOWN','WORKER_STARTED','VALIDATION_ENTERED','GUI_ENTERED','GUI_CLIENT_WAIT','GUI_CLEANUP','GUI_RETURNED','VALIDATION_RETURNED','RESULT_WRITTEN'] as const;
 export const windowsStandardDiagnosticScript=String.raw`
 function StandardDiagnostic($phase) {
   $stream=$null

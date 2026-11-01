@@ -1,4 +1,4 @@
-import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection} from '../.changeset/windows-standard-user';
+import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection,standardWorker,standardSourceFiles} from '../.changeset/windows-standard-user';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
 import { appendFile, link, mkdtemp, mkdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
@@ -1502,6 +1502,8 @@ test('Windows standard progress is private, fixture-bound and never a result aut
   expect(await read()).toBe('UNKNOWN');
   await publishStandardProgress(root,source,binary,'WORKER_STARTED');
   expect(await Bun.file(path).exists()).toBe(false);
+  await writeFile(path,JSON.stringify({...record,stage:'PREPARED'}));expect(await read()).toBe('PREPARED');
+  await publishStandardProgress(root,source,binary,'IMPORTS_READY');expect(await read()).toBe('IMPORTS_READY');
   await writeFile(path,JSON.stringify(record));expect(await read()).toBe('VALIDATION_ENTERED');
   await publishStandardProgress(root,source,binary,'RESULT_WRITTEN');expect(await read()).toBe('RESULT_WRITTEN');
   const valid=await readFile(path);
@@ -1516,10 +1518,34 @@ test('Windows standard progress is private, fixture-bound and never a result aut
   await link(foreign,path);expect(await read()).toBe('UNKNOWN');await unlink(path);
   await writeFile(path,JSON.stringify(record));expect(await readStandardDiagnostic(root,'private',binary)).toBe('UNKNOWN');
   const wire='LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_OWNER_TIMEOUT';
-  expect(standardOwnerRejection(wire,undefined,'RESULT_WRITTEN')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT progress=RESULT_WRITTEN cleanup=UNKNOWN');
-  expect(standardOwnerRejection(wire,'private error','private progress')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT progress=UNKNOWN cleanup=UNKNOWN');
-  expect(standardOwnerRejection('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:private',undefined,undefined)).toBe('Standard native owner rejected: UNVERIFIED progress=UNKNOWN cleanup=UNKNOWN');
+  expect(standardOwnerRejection(wire,undefined,'WORKER_STARTED','PREPARED')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT prepared=PREPARED progress=WORKER_STARTED cleanup=UNKNOWN');
+  expect(standardOwnerRejection(wire,undefined,'RESULT_WRITTEN')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT prepared=UNKNOWN progress=RESULT_WRITTEN cleanup=UNKNOWN');
+  expect(standardOwnerRejection(wire,'private error','private progress')).toBe('Standard native owner rejected: CLEANUP_UNVERIFIED primary=STANDARD_OWNER_TIMEOUT prepared=UNKNOWN progress=UNKNOWN cleanup=UNKNOWN');
+  expect(standardOwnerRejection('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:private',undefined,undefined)).toBe('Standard native owner rejected: UNVERIFIED prepared=UNKNOWN progress=UNKNOWN cleanup=UNKNOWN');
 }));
+
+test('Windows standard worker records entry before a held business import and never reports failed imports ready',async()=>fixture(async parent=>{
+  const deadline=performance.now()+10000,root=join(parent,'lazysh-standard-125-1'),work=join(root,'work'),modules=join(root,'.changeset');
+  await mkdir(work,{recursive:true});await mkdir(modules);
+  const source='a'.repeat(40),binary='b'.repeat(64),worker=join(root,'worker.ts');
+  await writeFile(join(root,'owner.json'),JSON.stringify({environment:{GITHUB_SHA:source},binaryHash:binary}));
+  await writeFile(join(work,'standard-progress.json'),JSON.stringify({fixture:'lazysh-standard-125-1',source,binary,stage:'PREPARED'}));
+  await writeFile(join(modules,'windows-standard-progress.ts'),await readFile(new URL('../.changeset/windows-standard-progress.ts',import.meta.url)));
+  await writeFile(join(modules,'release-platform.ts'),"console.info('OWNED_IMPORT_HELD');await Bun.stdin.text();throw new Error('OWNED_IMPORT_FAILED');export const windowsInstallation=undefined,windowsInstallerFailure=undefined;");
+  await writeFile(join(modules,'windows-standard-user.ts'),"export const standardWorkerEnvironment=()=>{throw new Error('ENVIRONMENT_MUST_NOT_RUN');};export {publishStandardProgress} from './windows-standard-progress';");
+  await writeFile(worker,standardWorker);expect(standardSourceFiles).toContain('.changeset/windows-standard-progress.ts');
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');
+  const remaining=Math.floor(deadline-performance.now()-2000);if(remaining<=0)throw new Error('Worker fixture setup exhausted its budget');
+  const pending=promisify(execFile)(process.execPath,['run',worker],{cwd:root,env:{PATH:process.env.PATH},timeout:Math.min(8000,remaining),killSignal:'SIGKILL',maxBuffer:1024});
+  let observed='';const ready=new Promise<void>((resolve,reject)=>{pending.child.stdout?.on('data',chunk=>{observed+=chunk.toString();if(observed==='OWNED_IMPORT_HELD\n')resolve();else if(observed.length>64)reject(new Error('Unexpected owned import marker'));});});
+  try{
+    await Promise.race([ready,pending.then(()=>{throw new Error('Worker exited before held import');},()=>{throw new Error('Worker failed before held import');})]);
+    expect(await readStandardDiagnostic(root,source,binary)).toBe('WORKER_STARTED');
+    pending.child.stdin?.end();
+    const failed=await pending.then(()=>false,error=>Number.isInteger(error.code)&&error.code!==0&&error.killed!==true&&String(error.stderr).includes('OWNED_IMPORT_FAILED'));
+    expect(failed).toBe(true);expect(await readStandardDiagnostic(root,source,binary)).toBe('WORKER_STARTED');expect(await Bun.file(join(work,'result.json')).exists()).toBe(false);
+  }finally{if(pending.child.exitCode===null&&pending.child.signalCode===null)pending.child.kill('SIGKILL');await pending.catch(()=>{});}
+}),15000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard progress PowerShell writer is bounded and cannot change validation failure',async()=>fixture(async parent=>{
   const root=join(parent,'lazysh-standard-124-1'),work=join(root,'work'),path=join(work,'standard-progress.json');await mkdir(work,{recursive:true});
