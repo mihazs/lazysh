@@ -64,7 +64,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
-      <details className="herdr-server-setup" open={mode!=='agents' || data.servers.length!==1 || !data.loaded || !data.server || failure?.host===sessionId || agentFailure?.host===sessionId ? true : undefined}>
+      <details className="herdr-server-setup" open={mode!=='agents' || !data.loaded || !data.server || failure?.host===sessionId || agentFailure?.host===sessionId ? true : undefined}>
       <summary hidden={mode!=='agents'}>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>
