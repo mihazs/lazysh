@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep the native branded startup cover until the current renderer acknowledges its first workspace commit when app lock is disabled, including after renderer recreation. Confirmed locks retain their native unlock controls.
+
 - Refine theme-aware frosted navigation and short action sheets, keeping long forms and terminal output opaque and preserving reduced-transparency and forced-color fallbacks. No theme defaults change.
 
 - Prioritize live agents and reported activity over optional configuration. Healthy Agents setup and single-server Herdr selection now start collapsed; explicit setup preserves mounted drafts and operations, while companion repair and pending approvals remain visible. Connection, permission and collection defaults are unchanged.
