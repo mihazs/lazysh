@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.5
+
+### Patch Changes
+
+- efb451e: Organize documentation around guided learning, task guides, reference and explanation, with a first SSH session and preserved security and platform limits.
+- @lazysh/account-usage@1.7.5
+  - @lazysh/common@1.7.5
+  - @lazysh/display-idle@1.7.5
+  - @lazysh/et-transport@1.7.5
+  - @lazysh/mosh-transport@1.7.5
+
 ## 1.7.4
 
 ### Patch Changes
