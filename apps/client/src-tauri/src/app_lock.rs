@@ -76,8 +76,23 @@ pub struct Runtime {
     operation: Arc<Mutex<()>>,
     pending: AtomicU64,
     cleaned: tokio::sync::Notify,
+    renderer_generation: AtomicU64,
     render_revision: AtomicU64,
     render: Arc<Mutex<()>>,
+}
+impl Runtime {
+    fn renderer_ready(&self, authority: &AccessState, generation: u64) -> bool {
+        authority.status().is_ok_and(|status| {
+            status.initialized
+                && (status.enabled || self.renderer_generation.load(Ordering::SeqCst) == generation)
+        })
+    }
+    fn acknowledge_renderer(&self, authority: &AccessState, generation: u64) -> Result<(), String> {
+        authority.ready(generation).map_err(String::from)?;
+        self.renderer_generation
+            .fetch_max(generation, Ordering::SeqCst);
+        Ok(())
+    }
 }
 async fn owned_configuration<T: Send + 'static>(
     guard: tokio::sync::OwnedMutexGuard<()>,
@@ -111,6 +126,11 @@ fn view(app: AppHandle, covered: bool) {
         return;
     };
     let runtime = app.state::<Runtime>();
+    // Disabled policy is not a first-render acknowledgement. Keep the native
+    // branded cover until this renderer has actually committed its workspace.
+    if !runtime.renderer_ready(app.vault().access(), generation) {
+        return;
+    }
     let native = runtime.native.load(Ordering::SeqCst);
     let revision = runtime.render_revision.fetch_add(1, Ordering::SeqCst) + 1;
     let render = runtime.render.clone();
@@ -123,6 +143,9 @@ fn view(app: AppHandle, covered: bool) {
             != revision
             || app.vault().access().generation().ok() != Some(generation)
             || app.vault().access().is_locked() != covered
+            || !app
+                .state::<Runtime>()
+                .renderer_ready(app.vault().access(), generation)
         {
             return;
         }
@@ -613,10 +636,8 @@ pub fn app_lock_ready(app: AppHandle, generation: String) -> Result<(), String> 
     let generation = generation
         .parse::<u64>()
         .map_err(|_| "Invalid resume generation")?;
-    app.vault()
-        .access()
-        .ready(generation)
-        .map_err(String::from)?;
+    app.state::<Runtime>()
+        .acknowledge_renderer(app.vault().access(), generation)?;
     view(app, false);
     Ok(())
 }
@@ -782,6 +803,43 @@ mod tests {
         assert!(std::fs::read_to_string(path)
             .unwrap()
             .contains("\"enabled\":true"));
+    }
+    #[test]
+    fn disabled_startup_and_replacement_wait_for_current_renderer_commit() {
+        let runtime = Runtime::default();
+        let authority = AccessState::disabled();
+        let first = authority.generation().unwrap();
+        assert!(!runtime.renderer_ready(&authority, first));
+        assert!(runtime.acknowledge_renderer(&authority, first - 1).is_err());
+        assert!(!runtime.renderer_ready(&authority, first));
+        runtime.acknowledge_renderer(&authority, first).unwrap();
+        assert!(runtime.renderer_ready(&authority, first));
+        authority.background().unwrap();
+        authority.foreground().unwrap();
+        assert!(runtime.renderer_ready(&authority, first));
+        authority.replace_renderer().unwrap();
+        assert!(!runtime.renderer_ready(&authority, first));
+        authority.finish_renderer_replacement().unwrap();
+        authority.foreground().unwrap();
+        let replacement = authority.generation().unwrap();
+        assert!(runtime.acknowledge_renderer(&authority, first).is_err());
+        assert!(!runtime.renderer_ready(&authority, replacement));
+        runtime
+            .acknowledge_renderer(&authority, replacement)
+            .unwrap();
+        assert!(runtime.renderer_ready(&authority, replacement));
+    }
+    #[test]
+    fn confirmed_lock_remains_available_before_renderer_acknowledgement() {
+        let runtime = Runtime::default();
+        let authority = AccessState::default();
+        authority.initialize(true, true, "owned".into()).unwrap();
+        let generation = authority.generation().unwrap();
+        assert!(runtime.renderer_ready(&authority, generation));
+        assert!(runtime
+            .acknowledge_renderer(&authority, generation)
+            .is_err());
+        assert!(authority.is_locked());
     }
     #[test]
     fn repeated_native_ready_never_reinitializes_or_unlocks_a_recreated_view() {
