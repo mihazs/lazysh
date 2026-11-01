@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.5.2
+
+### Patch Changes
+
+- dbd55aa: Discover current and legacy Kimi profile metadata while retaining manual-only setup and the legacy 1.52 hook printer contract.
+- @lazysh/account-usage@1.5.2
+  - @lazysh/common@1.5.2
+  - @lazysh/notification-client@1.5.2
+
 ## 1.5.1
 
 ### Patch Changes
