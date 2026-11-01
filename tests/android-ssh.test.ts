@@ -1264,3 +1264,76 @@ test('Herdr visual observations bound rectangles and counts and discard private 
   f.card.getBoundingClientRect=()=>{throw new Error('private host/path');};
   expect(f.observe()).toEqual({state:'unavailable'});
 });
+
+
+async function companionReadinessFixture(expected='Update companion',expectedOutcome='installed') {
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const source=kotlin.match(/val companionReadinessObservation = """([\s\S]*?)"""/);
+  expect(source).not.toBeNull();
+  const scope='details.companion-install',direct=scope+' > .tool-bar > button';
+  const element=kotlin.match(/private fun workspaceElementVisible\([^\n]* = """([\s\S]*?)"""/)![1];
+  const visible=(selector:string,touchable=false)=>element.replaceAll('${JSONObject.quote(selector)}',JSON.stringify(selector)).replaceAll('$touchable',String(touchable));
+  const button=kotlin.match(/private fun workspaceButtonVisible\([^\n]* = """([\s\S]*?)"""/)![1]
+    .replaceAll('${JSONObject.quote("$scope button")}',JSON.stringify(scope+' button')).replaceAll('${JSONObject.quote(text)}',JSON.stringify(expected));
+  const install=kotlin.slice(kotlin.indexOf('fun verifyCompanionInstallation()'));
+  const allowed=(name:string)=>JSON.parse('['+install.match(new RegExp('val '+name+' = setOf\\(([^)]*)\\)'))![1]+']');
+  const expression=source![1].replaceAll('${JSONObject.quote(panel)}',JSON.stringify(scope))
+    .replaceAll('${JSONObject.quote("$panel > .tool-bar > button")}',JSON.stringify(direct))
+    .replaceAll('${workspaceButtonVisible(panel, action)}',button)
+    .replaceAll('${workspaceElementVisible(panel)}',visible(scope))
+    .replaceAll('${workspaceElementVisible("$panel > .tool-bar > button", true)}',visible(direct,true))
+    .replaceAll('${JSONObject.quote(action)}',JSON.stringify(expected))
+    .replaceAll('${JSONObject.quote(if(reused) "installed" else "idle")}',JSON.stringify(expectedOutcome))
+    .replaceAll('${JSONArray(phases)}',JSON.stringify(allowed('phases')))
+    .replaceAll('${JSONArray(failures)}',JSON.stringify(allowed('failures')));
+  const state={present:true,open:true,hidden:false,disabled:false,parentError:false,count:1,label:'Update companion',outcome:'installed',phase:'cleaningUp',failure:'none',hit:true};
+  const bounds=()=>({left:10,top:10,right:110,bottom:40,width:100,height:30});
+  const action={get textContent(){return state.label;},get disabled(){return state.disabled;},
+    getClientRects:()=>state.open&&!state.hidden?[bounds()]:[],
+    getBoundingClientRect:()=>state.open&&!state.hidden?bounds():{left:0,top:0,right:0,bottom:0,width:0,height:0},
+    closest:()=>action,contains:(value:unknown)=>value===action};
+  const panel={get open(){return state.open;},getClientRects:()=>state.hidden?[]:[bounds()],getBoundingClientRect:bounds,
+    getAttribute:(name:string)=>({'data-install-outcome':state.outcome,'data-install-phase':state.phase,'data-install-failure':state.failure}[name]),
+    closest:()=>({querySelector:()=>state.parentError?Object.defineProperty({},'textContent',{get(){throw new Error('Private parent text read');}}):null})};
+  const document={querySelector:(selector:string)=>!state.present?null:selector===scope?panel:selector===direct&&state.count?action:null,
+    querySelectorAll:(selector:string)=>state.present&&(selector===direct||selector===scope+' button')?Array(state.count).fill(action):[],
+    elementFromPoint:()=>state.hit?action:{closest:()=>null}};
+  const observe=()=>new Function('document','getComputedStyle','innerWidth','innerHeight',`return (${expression});`)(document,()=>({visibility:state.hidden?'hidden':'visible'}),400,800);
+  return {state,observe};
+}
+
+test('companion readiness observation identifies the exact unchanged action predicates',async()=>{
+  const {state,observe}=await companionReadinessFixture();
+  expect(observe()).toEqual({expectedActionVisible:true,matchingExpectedActionEnabled:true,outcomeExpected:true,panelPresent:true,panelVisible:true,detailsOpen:true,directActionPresent:true,directActionVisible:true,directActionEnabled:true,labelKind:'update',outcome:'installed',phase:'cleaningUp',failure:'none',parentAgentErrorPresent:false});
+  state.label='Install companion';state.parentError=true;
+  expect(observe()).toMatchObject({expectedActionVisible:false,matchingExpectedActionEnabled:false,outcomeExpected:true,labelKind:'install',parentAgentErrorPresent:true});
+  state.label=' Update companion ';
+  expect(observe()).toMatchObject({expectedActionVisible:true,matchingExpectedActionEnabled:false,labelKind:'other'});
+  state.label='Update companion';state.outcome='idle';
+  expect(observe()).toMatchObject({expectedActionVisible:true,matchingExpectedActionEnabled:true,outcomeExpected:false,outcome:'idle'});
+});
+
+test('companion readiness observation separates collapsed, occluded, missing and duplicate actions',async()=>{
+  const {state,observe}=await companionReadinessFixture();
+  state.open=false;expect(observe()).toMatchObject({panelVisible:true,detailsOpen:false,expectedActionVisible:false,directActionVisible:false});
+  state.open=true;state.hit=false;expect(observe()).toMatchObject({detailsOpen:true,expectedActionVisible:false,directActionVisible:false});
+  state.hit=true;state.hidden=true;expect(observe()).toMatchObject({panelVisible:false,directActionVisible:false});
+  state.hidden=false;state.count=0;expect(observe()).toMatchObject({directActionPresent:false,directActionEnabled:false,labelKind:'other'});
+  state.count=2;expect(observe()).toMatchObject({expectedActionVisible:false,matchingExpectedActionEnabled:true,directActionPresent:true,directActionVisible:false,labelKind:'other'});
+  state.present=false;expect(observe()).toMatchObject({panelPresent:false,panelVisible:false,outcome:'unavailable',phase:'unavailable',failure:'unavailable'});
+});
+
+test('companion readiness observation retains only closed enums and booleans',async()=>{
+  const {state,observe}=await companionReadinessFixture('Install companion','idle');
+  state.label='Install companion';state.outcome='idle';
+  expect(observe()).toMatchObject({expectedActionVisible:true,matchingExpectedActionEnabled:true,outcomeExpected:true,labelKind:'install'});
+  state.label='Installing…';state.disabled=true;
+  expect(observe()).toMatchObject({labelKind:'busy',directActionEnabled:false,matchingExpectedActionEnabled:false});
+  const secret='private-key-path-token-and-error';
+  for(const key of ['label','outcome','phase','failure'] as const)state[key]=secret;
+  state.parentError=true;
+  const sample=observe();
+  expect(sample).toMatchObject({labelKind:'other',outcome:'unavailable',phase:'unavailable',failure:'unavailable',parentAgentErrorPresent:true});
+  expect(JSON.stringify(sample)).not.toContain(secret);
+  expect(Object.values(sample).every(value=>typeof value==='boolean'||['other','unavailable'].includes(value as string))).toBe(true);
+});
