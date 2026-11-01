@@ -1791,8 +1791,16 @@ class NativeWorkspaceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val nonce = fixture.getString("nonce")
+        val expectedName = JSONObject.quote(fixture.getString("name"))
+        awaitDocument(scenario, "one selected owned Mosh attachment terminal", """
+            (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+              return selected.length===1 && selected[0].textContent.trim()===$expectedName &&
+                ${workspaceElementVisible("button.session-switcher-trigger", true)} &&
+                document.querySelector('.session-switcher-trigger')?.textContent===$expectedName &&
+                document.querySelector('.workspace-footer')?.textContent.includes('Mosh') &&
+                Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0).length===1;})()
+        """)
         selectOwnedConnection(scenario, fixture.getString("name"), true)
-        awaitDocument(scenario, "one selected owned Mosh attachment terminal", "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0).length===1")
         val owned = fixture.getJSONObject("attachments")
         require(owned.getString("newName") == "owned-upload-$nonce.png" && owned.getString("collisionName") == "owned-collision-$nonce.png")
         val uri = Uri.parse("content://app.lazysh.client.test.clipboardfixture/large-png")
