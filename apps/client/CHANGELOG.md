@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.1
+  - @lazysh/common@1.5.1
+  - @lazysh/display-idle@1.5.1
+  - @lazysh/et-transport@1.5.1
+  - @lazysh/mosh-transport@1.5.1
+
 ## 1.5.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @lazysh/transcription-service
 
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/common@1.5.1
+
 ## 1.5.0
 
 ### Patch Changes
