@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.7.0
+
+### Minor Changes
+
+- bcc7feb: Add opt-in V3 managed Amp system-plugin setup with protected ownership, shadow-aware removal and bounded V2 metadata compatibility.
+
+### Patch Changes
+
+- b988e84: Qualify manual Android Mosh attachment uploads with a valid image spanning multiple chunks and an unchanged pre-existing destination. This checkpoint does not establish closed-control recovery, file-picker/camera or Samsung device compatibility.
+- @lazysh/account-usage@1.7.0
+  - @lazysh/common@1.7.0
+  - @lazysh/display-idle@1.7.0
+  - @lazysh/et-transport@1.7.0
+  - @lazysh/mosh-transport@1.7.0
+
 ## 1.6.0
 
 ### Minor Changes
