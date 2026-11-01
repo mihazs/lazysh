@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.7.1
+
+### Patch Changes
+
+- 45c8b2f: Follow the visible Appearance disclosure before native iOS app-icon acceptance. Preserve actual icon confirmation, readback, restoration and existing wait limits.
+- 222c1e2: Retain bounded host/device clock comparison diagnostics in owned Android ntfy acceptance receipts without changing notification admission or clock settings.
+- @lazysh/account-usage@1.7.1
+  - @lazysh/common@1.7.1
+  - @lazysh/display-idle@1.7.1
+  - @lazysh/et-transport@1.7.1
+  - @lazysh/mosh-transport@1.7.1
+
 ## 1.7.0
 
 ### Minor Changes
