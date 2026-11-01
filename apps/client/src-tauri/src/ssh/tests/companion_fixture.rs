@@ -14,7 +14,7 @@ pub(super) fn environment(directory: &Path) -> String {
     fs::set_permissions(bin.join("lazysh-agent"), fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(directory.join(".zshrc"), b"").unwrap();
     assert!(!directory.to_str().unwrap().chars().any(char::is_whitespace));
-    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} CODEX_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",bin.display(),directory.display(),directory.join(".codex").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
+    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} CODEX_HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",bin.display(),directory.display(),directory.join(".codex").display(),directory.join(".config").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
 }
 pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
     let binary = PathBuf::from(
@@ -140,8 +140,11 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     fs::copy(&executable, directory.join("bin/copilot")).unwrap();
+    fs::copy(&executable, directory.join("bin/amp")).unwrap();
     let copilot_profile = directory.join(".copilot");
     fs::create_dir(&copilot_profile).unwrap();
+    let amp_profile = directory.join(".config/amp");
+    fs::create_dir_all(&amp_profile).unwrap();
     let detected_profile = directory.join(".codex");
     fs::create_dir(&detected_profile).unwrap();
     let discovery = crate::companion::hooks::discover(session, lease)
@@ -187,8 +190,30 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         copilot_profile.to_str().unwrap()
     );
     assert!(!marker.exists());
+    let newest = crate::companion::hooks::discover_version(session, lease, 3)
+        .await
+        .unwrap();
+    let amp = newest["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent"] == "amp")
+        .unwrap();
+    assert_eq!(amp["setup"], "managed");
+    assert_eq!(amp["profiles"][0]["path"], amp_profile.to_str().unwrap());
+    for old in [&discovery, &v2] {
+        let row = old["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["agent"] == "amp")
+            .unwrap();
+        assert_eq!(row["setup"], "manual");
+        assert_eq!(row["profiles"], serde_json::json!([]));
+    }
+    assert!(!marker.exists());
     for agent in [
-        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline", "copilot",
+        "claude", "codex", "droid", "gemini", "cursor", "opencode", "cline", "copilot", "amp",
     ] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
@@ -218,7 +243,7 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             .await
             .unwrap();
         assert_eq!(configured["outcome"]["status"], "configured");
-        let current = invoke("status", None).await.unwrap();
+        let mut current = invoke("status", None).await.unwrap();
         assert_eq!(current["state"], "configured");
         assert_eq!(current["reporting"], "notChecked");
         if agent == "cursor" {
@@ -244,6 +269,16 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             );
             assert_eq!(config["hooks"]["Stop"][0]["timeoutSec"], 5);
         }
+        if agent == "amp" {
+            let text = fs::read_to_string(profile.join("plugins/lazysh.js")).unwrap();
+            let binding = serde_json::to_string(&current["binary"]["path"]).unwrap();
+            assert!(text.contains(&format!("childProcess.spawn({binding},")));
+            fs::write(profile.join("plugins/lazysh.ts"), "foreign Amp plugin").unwrap();
+            current = invoke("status", None).await.unwrap();
+            assert_eq!(current["state"], "configured");
+            assert_eq!(current["reason"], "HooksAmpShadow");
+            assert!(current["installPlan"].is_null());
+        }
         let removed = invoke("remove", current["removePlan"].as_str())
             .await
             .unwrap();
@@ -260,6 +295,12 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
             );
         } else {
             assert!(!profile.join("plugins/lazysh.js").exists());
+            if agent == "amp" {
+                assert_eq!(
+                    fs::read_to_string(profile.join("plugins/lazysh.ts")).unwrap(),
+                    "foreign Amp plugin"
+                );
+            }
         }
     }
 }

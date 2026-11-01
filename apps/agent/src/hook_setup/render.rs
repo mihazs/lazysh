@@ -54,7 +54,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             ),
             5,
         ),
-        Agent::Opencode | Agent::Cline | Agent::Copilot => (false, 0),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => (false, 0),
     };
     if !valid {
         return Err("HooksInvalidTemplate");
@@ -83,7 +83,7 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
-        Agent::Opencode | Agent::Cline | Agent::Copilot => return Ok(Vec::new()),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => return Ok(Vec::new()),
     };
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
@@ -164,6 +164,11 @@ pub(super) fn owned_file(agent: Agent, binary: &Path) -> Result<String, &'static
             crate::hooks::opencode_plugin(),
             "['lazysh-agent', 'ingest', '--agent', 'opencode']",
             format!("[{path}, 'ingest', '--agent', 'opencode']"),
+        ),
+        Agent::Amp => (
+            crate::hooks::amp_plugin(),
+            "childProcess.spawn('lazysh-agent',",
+            format!("childProcess.spawn({path},"),
         ),
         Agent::Cline => (
             crate::hooks::cline_plugin(),

@@ -169,6 +169,8 @@ fn verify(
         || actual_provider.state != plan.provider
         || actual_provider.group != plan.provider_group
         || files::binary(&plan.binary.path)? != plan.binary
+        || files::amp_shadows(current.target.agent, (!missing_parent).then_some(provider))?
+            != plan.amp_shadows
     {
         return Err(rejected("HooksStalePlan"));
     }

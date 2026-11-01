@@ -21,7 +21,8 @@ are refused.
 
 Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
 on the qualified Linux filesystems described below. Explicit version-2 discovery
-also enables managed GitHub Copilot CLI setup. Gemini uses the selected
+also enables managed GitHub Copilot CLI setup; explicit version-3 discovery adds
+managed Amp setup while preserving both older mappings. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
 layer; detection does not establish or enable the provider's active layer.
@@ -401,10 +402,34 @@ These contracts follow the [Cursor hook reference](https://cursor.com/docs/hooks
 and [scope-specific working directories](https://cursor.com/docs/reference/third-party-hooks).
 Authenticated Cursor execution and neutral-output acceptance remain unverified.
 
+Managed Amp setup requires explicit `hooks discover --schema-version 3`. The
+app requests V3 when setup is opened; only a native remote-command rejection
+allows one V2 metadata request for older Copilot-capable companions. Malformed
+responses, unsupported capability, access changes and source loss do not trigger
+fallback. Default V1 and explicit V2 continue to label Amp manual.
+
+Select the existing system profile `<configuration-base>/amp`; a nonempty
+`XDG_CONFIG_HOME` is used literally without trimming and must be a safe absolute
+path. Empty/unset values use `~/.config`; unsafe explicit values never fall back.
+The inspected installer owns only `plugins/lazysh.js` and
+`.lazysh-hooks-amp.json`, binding the observer's one spawn executable to the
+absolute companion. It preserves settings, other plugins, trust and policy.
+Foreign `lazysh.ts` or `lazysh` entries (including links) block installation and
+updates. Exact-owned JS removal remains available through a freshly inspected
+remove plan; it preserves those foreign entries. Shadow metadata changes retire
+old plans and are checked again at the existing write boundaries. The cooperative
+lock does not make absence atomic against other same-user writers after the last
+check, and a workspace plugin can still mask the system plugin. Configured status
+therefore retains `reporting:notChecked` and `trust:notChecked`. Start a new Amp
+session with that configuration and review its normal plugin policy; loading,
+native ordering and root/child attribution require separate qualification. Use
+the newer companion to remove owned Amp hooks before downgrading to a companion
+that cannot read its Amp ownership record.
+
 `lazysh-agent amp-plugin` prints the original plugin in `content`, with its
 suggested filename. Place reviewed content in your selected Amp plugin directory.
 It subscribes to native `ctx.thread.state` for encountered threads: `running`
-reports work, `awaiting-approval` reports attention, `idle` reports completion,
+reports work, `awaiting-approval` reports attention, `idle` after observed running reports completion,
 and `error` reports a failed turn. It does not intercept tools or answer approvals.
 Per-thread writes are ordered; while a write is pending, only the latest next
 state is retained. A late initial lookup cannot overwrite a newer native state.
@@ -454,7 +479,7 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter, standalone printer and explicit existing-file Linux setup; contract fixtures, native runtime unverified |
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
-| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
+| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Explicit V3 managed system plugin and bounded observer; actual asset fixtures, native loading/order and authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
 | [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 

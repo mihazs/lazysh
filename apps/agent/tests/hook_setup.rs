@@ -18,10 +18,11 @@ mod render;
 mod state;
 use json::{rewrite, Entry, Fault};
 use lazysh_agent::{claude_config, hooks, Error, Result};
-const WHOLE_FILE_AGENTS: [record::Agent; 3] = [
+const WHOLE_FILE_AGENTS: [record::Agent; 4] = [
     record::Agent::Opencode,
     record::Agent::Cline,
     record::Agent::Copilot,
+    record::Agent::Amp,
 ];
 use serde_json::{json, Value};
 #[path = "support/binary.rs"]
@@ -326,6 +327,17 @@ fn rendered_plugins_execute_their_absolute_companion_with_an_empty_path() {
                 "cline:{}",
                 record::hash(b"cline-v1\0owned-root\0owned-conversation")
             ),
+        ),
+        (
+            record::Agent::Amp,
+            r#"
+            const { default: plugin } = await import(process.env.LAZYSH_OWNED_PLUGIN);
+            const callbacks = new Map();
+            plugin({ system: { workspaceRoot: 'file:///owned/amp-project' }, helpers: { filePathFromURI: () => '/owned/amp-project' }, on: (event, callback) => { callbacks.set(event, callback); return { unsubscribe() {} }; }, onDispose() {} });
+            callbacks.get('session.start')({}, { thread: { id: 'owned-amp-thread', state: { subscribe(callback) { callback('running'); return { unsubscribe() {} }; }, get: async () => 'running' } } });
+        "#,
+            "Amp",
+            "owned-amp-thread".to_string(),
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -1201,6 +1213,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Opencode,
         record::Agent::Cline,
         record::Agent::Copilot,
+        record::Agent::Amp,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -2302,4 +2315,222 @@ fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_ho
     let inspect = fixture.inspect();
     assert_eq!(inspect.observation, Some(state::Observation::Conflict));
     assert!(inspect.plan(Action::Install).is_err());
+}
+
+#[test]
+fn discovery_v3_amp_preserves_raw_xdg_and_never_promotes_old_schemas() {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    let (root, bin, marker) = metadata_fixture("amp");
+    let home = root.path();
+    let default = home.join(".config/amp");
+    fs::create_dir_all(&default).unwrap();
+    fs::write(default.join("settings.json"), "PRIVATE_DO_NOT_READ").unwrap();
+    for version in [1, 2] {
+        let legacy = discover_metadata_version(home, bin.as_os_str(), &[], Some(version));
+        assert_eq!(discovered(&legacy, "amp")["setup"], "manual");
+        assert_eq!(discovered(&legacy, "amp")["profiles"], json!([]));
+    }
+    let inspect = |raw: Option<&OsStr>| {
+        let overrides = raw
+            .map(|value| vec![("XDG_CONFIG_HOME", value)])
+            .unwrap_or_default();
+        discover_metadata_version(home, bin.as_os_str(), &overrides, Some(3))
+    };
+    let result = inspect(None);
+    assert_eq!(result["schemaVersion"], 3);
+    let amp = discovered(&result, "amp");
+    assert_eq!(amp["setup"], "managed");
+    assert_eq!(
+        amp["profiles"][0],
+        json!({"path":default,"source":"HOME","state":"directory"})
+    );
+    assert_eq!(inspect(Some(OsStr::new(""))), result);
+    for suffix in ["literal", "literal "] {
+        let base = home.join(suffix);
+        fs::create_dir_all(base.join("amp")).unwrap();
+        let selected = inspect(Some(base.as_os_str()));
+        assert_eq!(
+            discovered(&selected, "amp")["profiles"][0],
+            json!({"path":base.join("amp"),"source":"XDG_CONFIG_HOME","state":"directory"})
+        );
+    }
+    for raw in [
+        OsStr::new(" "),
+        OsStr::new("relative"),
+        OsStr::new("~/config"),
+        OsStr::new("/owned/../config"),
+        OsStr::new("/owned/\nconfig"),
+        OsStr::from_bytes(b"/owned/\xff"),
+    ] {
+        let invalid = inspect(Some(raw));
+        assert_eq!(
+            discovered(&invalid, "amp")["profiles"][0],
+            json!({"path":null,"source":"XDG_CONFIG_HOME","state":"invalid"})
+        );
+    }
+    assert!(!result.to_string().contains("PRIVATE"));
+    assert_eq!(
+        fs::read_to_string(default.join("settings.json")).unwrap(),
+        "PRIVATE_DO_NOT_READ"
+    );
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_foreign_shadow_blocks_install_but_never_blocks_exact_owned_removal() {
+    use files::Action;
+    use std::{fs, os::unix::fs::symlink};
+    for kind in ["typescript", "directory", "symlink"] {
+        let fixture = ProfileFixture::new(record::Agent::Amp);
+        assert_eq!(fixture.apply_current(Action::Install).status, "configured");
+        let remove_before = fixture
+            .inspect()
+            .plan(Action::Remove)
+            .unwrap()
+            .digest()
+            .unwrap();
+        let plugins = fixture.provider().parent().unwrap().to_owned();
+        let shadow = plugins.join(if kind == "typescript" {
+            "lazysh.ts"
+        } else {
+            "lazysh"
+        });
+        match kind {
+            "typescript" => fs::write(&shadow, "foreign source unchanged").unwrap(),
+            "directory" => fs::create_dir(&shadow).unwrap(),
+            _ => symlink("missing-foreign-target", &shadow).unwrap(),
+        }
+        let identity = files::identity(&fs::symlink_metadata(&shadow).unwrap());
+        assert!(matches!(
+            fixture.inspect().plan(Action::Install),
+            Err(Error::Installation("HooksAmpShadow"))
+        ));
+        assert!(matches!(
+            fixture.apply(Action::Remove, &remove_before),
+            Err(Error::Installation("HooksStalePlan"))
+        ));
+        let status = fixture.cli("status", None);
+        assert_eq!(status["state"], "configured");
+        assert_eq!(status["reason"], "HooksAmpShadow");
+        assert!(status["installPlan"].is_null());
+        let plan = status["removePlan"].as_str().unwrap();
+        assert_eq!(
+            fixture.apply(Action::Remove, plan).unwrap().status,
+            "removed"
+        );
+        assert!(!fixture.provider().exists());
+        assert_eq!(
+            files::identity(&fs::symlink_metadata(&shadow).unwrap()),
+            identity
+        );
+        if kind == "typescript" {
+            assert_eq!(
+                fs::read_to_string(shadow).unwrap(),
+                "foreign source unchanged"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_shadow_changes_at_each_write_boundary_stale_the_plan_and_keep_recovery_removable() {
+    use files::Action;
+    use std::fs;
+    for point in [
+        commit::Boundary::BeforeRecord,
+        commit::Boundary::BeforeProvider,
+    ] {
+        for change in [
+            "install-add",
+            "remove-add",
+            "remove-delete",
+            "remove-replace",
+            "remove-aba",
+        ] {
+            let fixture = ProfileFixture::new(record::Agent::Amp);
+            let action = if change == "install-add" {
+                fs::create_dir(fixture.provider().parent().unwrap()).unwrap();
+                Action::Install
+            } else {
+                fixture.apply_current(Action::Install);
+                Action::Remove
+            };
+            let shadow = fixture.provider().parent().unwrap().join("lazysh.ts");
+            let initial_shadow = !change.ends_with("add");
+            if initial_shadow {
+                fs::write(&shadow, "foreign unchanged").unwrap();
+            }
+            let retained = initial_shadow.then(|| fs::File::open(&shadow).unwrap());
+            let original = fs::read(fixture.provider()).ok();
+            let expected = fixture.plan(action);
+            let changed_path = shadow.clone();
+            interrupt(move |boundary| {
+                if boundary == point {
+                    let _keep_inode_alive = &retained;
+                    if initial_shadow {
+                        fs::remove_file(&changed_path)?;
+                    }
+                    if change != "remove-delete" {
+                        fs::write(
+                            &changed_path,
+                            if change == "remove-replace" {
+                                "foreign replacement"
+                            } else {
+                                "foreign unchanged"
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            });
+            let outcome = fixture.apply(action, &expected);
+            clear_interrupt();
+            if point == commit::Boundary::BeforeRecord {
+                assert!(matches!(
+                    outcome,
+                    Err(Error::Installation("HooksStalePlan"))
+                ));
+            } else {
+                let result = outcome.unwrap();
+                assert_eq!(result.status, "uncertain");
+                assert_eq!(result.reason, Some("HooksStalePlan"));
+                assert!(!result.provider_committed);
+            }
+            assert_eq!(fs::read(fixture.provider()).ok(), original);
+            assert_eq!(shadow.exists(), change != "remove-delete");
+            let removal = fixture.apply_current(Action::Remove);
+            assert!(matches!(removal.status, "removed" | "absent"));
+            assert_eq!(shadow.exists(), change != "remove-delete");
+            if shadow.exists() {
+                assert_eq!(
+                    fs::read_to_string(shadow).unwrap(),
+                    if change == "remove-replace" {
+                        "foreign replacement"
+                    } else {
+                        "foreign unchanged"
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn amp_shadow_snapshot_is_ephemeral_and_does_not_rewrite_old_agent_plan_or_record_shapes() {
+    for agent in WHOLE_FILE_AGENTS {
+        let fixture = ProfileFixture::new(agent);
+        let plan = fixture.inspect().plan(files::Action::Install).unwrap();
+        let value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            value.get("ampShadows").is_some(),
+            agent == record::Agent::Amp
+        );
+        let encoded = plan.transition.unwrap().encode().unwrap();
+        let record = record::Record::decode(&encoded).unwrap();
+        assert_eq!(record.encode().unwrap(), encoded);
+        assert!(!String::from_utf8(encoded).unwrap().contains("ampShadows"));
+    }
 }

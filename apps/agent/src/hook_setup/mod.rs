@@ -28,6 +28,7 @@ pub enum AgentProfile {
     Opencode,
     Cline,
     Copilot,
+    Amp,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AgentProfile {
@@ -41,6 +42,7 @@ impl AgentProfile {
             Self::Opencode => record::Agent::Opencode,
             Self::Cline => record::Agent::Cline,
             Self::Copilot => record::Agent::Copilot,
+            Self::Amp => record::Agent::Amp,
         }
     }
 }
@@ -57,7 +59,7 @@ pub enum Command {
     /// Discover known installed executables and profile directories without reading configuration.
     Discover {
         /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3))]
         schema_version: u8,
     },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
@@ -105,7 +107,9 @@ fn preview(agent: AgentProfile) -> Result<Value> {
     } else if agent.is_whole_file() {
         (
             Value::String(render::owned_file(agent, &source).map_err(Error::Installation)?),
-            if agent == record::Agent::Cline {
+            if agent == record::Agent::Amp {
+                "amp-javascript"
+            } else if agent == record::Agent::Cline {
                 "cline-javascript"
             } else {
                 "bun-javascript"
@@ -145,6 +149,10 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         AgentProfile::Cline => (
             crate::hooks::cline_plugin()["content"].clone(),
             "cline-javascript",
+        ),
+        AgentProfile::Amp => (
+            crate::hooks::amp_plugin()["content"].clone(),
+            "amp-javascript",
         ),
         AgentProfile::Opencode => (
             crate::hooks::opencode_plugin()["content"].clone(),
@@ -195,8 +203,15 @@ fn manage(command: Command) -> Result<Value> {
             json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":"conflict","installPlan":null,"removePlan":null,"reporting":"notChecked","trust":"notChecked"}),
         );
     }
-    let install = inspected.plan(files::Action::Install)?;
     let remove = inspected.plan(files::Action::Remove)?;
+    let install = match inspected.plan(files::Action::Install) {
+        Err(Error::Installation("HooksAmpShadow")) => {
+            return Ok(
+                json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":null,"removePlan":remove.digest()?,"binary":remove.binary,"reason":"HooksAmpShadow","reporting":"notChecked","trust":"notChecked"}),
+            );
+        }
+        other => other?,
+    };
     Ok(
         json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked"}),
     )
