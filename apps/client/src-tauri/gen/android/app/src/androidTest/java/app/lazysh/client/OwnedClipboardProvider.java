@@ -36,7 +36,7 @@ public final class OwnedClipboardProvider extends ContentProvider {
         String path = uri.getPath();
         if (!"content".equals(uri.getScheme()) || !"app.lazysh.client.test.clipboardfixture".equals(uri.getAuthority())
                 || uri.getQuery() != null || uri.getFragment() != null
-                || !("/png".equals(path) || "/jpg".equals(path) || "/oversize".equals(path)))
+                || !("/png".equals(path) || "/jpg".equals(path) || "/oversize".equals(path) || "/large-png".equals(path)))
             throw new IllegalStateException("Clipboard fixture URI rejected");
         return path;
     }
@@ -49,7 +49,16 @@ public final class OwnedClipboardProvider extends ContentProvider {
         try {
             File file = File.createTempFile("owned-clipboard-", ".bin", Objects.requireNonNull(getContext()).getCacheDir());
             try {
-                Bitmap bitmap = Bitmap.createBitmap(4, 3, Bitmap.Config.ARGB_8888);
+                Bitmap bitmap = Bitmap.createBitmap("/large-png".equals(kind) ? 448 : 4, "/large-png".equals(kind) ? 320 : 3, Bitmap.Config.ARGB_8888);
+                if ("/large-png".equals(kind)) {
+                    int[] pixels = new int[448 * 320];
+                    int noise = 0x19730516;
+                    for (int i = 0; i < pixels.length; i++) {
+                        noise ^= noise << 13; noise ^= noise >>> 17; noise ^= noise << 5;
+                        pixels[i] = 0xff000000 | (noise & 0x00ffffff);
+                    }
+                    bitmap.setPixels(pixels, 0, 448, 0, 0, 448, 320);
+                }
                 try (FileOutputStream output = new FileOutputStream(file)) {
                     if (!bitmap.compress("/jpg".equals(kind) ? Bitmap.CompressFormat.JPEG : Bitmap.CompressFormat.PNG, 90, output))
                         throw new IllegalStateException("Clipboard fixture compression failed");
