@@ -1254,6 +1254,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
   const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
+  const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
+  const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
+  const secondaryTools=sessionViews.filter(tool=>!primaryToolIds.includes(tool.id));
+  function mobileToolButton({id,label,Icon}:ReturnType<typeof views>[number]){
+    return <button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
+  }
+
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
@@ -2355,46 +2362,62 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
-          <div className="form-stack">
+          <div className="workspace-tools-content">
             {active && <>
-              <nav className="mobile-session-views" aria-label={t('appSessionViews')}>
-                {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>)}
+              <nav className="mobile-session-views workspace-primary-tools" aria-label={t('appSessionViews')}>
+                {primaryTools.map(mobileToolButton)}
               </nav>
-              <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
-              {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-              {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
-              <button type="button" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+              {secondaryTools.length>0 && <details className="workspace-more-tools">
+                <summary>{t('workspaceMoreTools')}</summary>
+                <nav className="mobile-session-views" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>
+              </details>}
+              <details className="workspace-connection-actions">
+                <summary>{t('navigationConnections')}</summary>
+                <div className="workspace-tools-group">
+                  <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+                  {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
+                  {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+                  {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+                </div>
+              </details>
             </>}
-            {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
-            <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
-            <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setInbox(true);
-              }}
-            >{t("appOpenNotificationInbox")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setSync(true);
-              }}
-            >{t("appOpenEncryptedSync")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setSharing(true);
-              }}
-            >{t("appOpenShareableUploads")}</button>
-            <button
-              onClick={() => {
-                setMobileTools(false);
-                setPalette(true);
-              }}
-            >{t("appSearchSavedHosts")}</button>
+            <details className="workspace-application-options">
+              <summary>{t('workspaceApplicationOptions')}</summary>
+              <div className="workspace-tools-group">
+                <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
+                <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setInbox(true);
+                  }}
+                >{t("appOpenNotificationInbox")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setSync(true);
+                  }}
+                >{t("appOpenEncryptedSync")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setSharing(true);
+                  }}
+                >{t("appOpenShareableUploads")}</button>
+                <button
+                  onClick={() => {
+                    setMobileTools(false);
+                    setPalette(true);
+                  }}
+                >{t("appSearchSavedHosts")}</button>
+              </div>
+            </details>
+            {active && <div className="workspace-tools-danger">
+              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+            </div>}
           </div>
         </Dialog>
       )}
