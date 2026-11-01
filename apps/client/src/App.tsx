@@ -296,11 +296,13 @@ function Dialog({
   children,
   close,
   mobilePresentation = "sheet",
+  initialFocus,
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
   mobilePresentation?: "page" | "sheet";
+  initialFocus?: () => HTMLElement | null;
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -311,7 +313,7 @@ function Dialog({
     const focusable = () => focusableWithin(ref.current);
     const controls = focusable();
     (
-      controls.find((control) => control.matches("input, textarea")) ??
+      initialFocus?.() ?? controls.find((control) => control.matches("input, textarea")) ??
       controls[0]
     )?.focus();
     const keydown = (event: KeyboardEvent) => {
@@ -645,6 +647,8 @@ export function ConnectDialog({
   const [passphrase, setPassphrase] = useState("");
   const [rememberCredentials, setRememberCredentials] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(false);
+  const [credentialsReady, setCredentialsReady] = useState(false);
+  const destination = useRef<HTMLParagraphElement>(null);
   const [storedCredentials, setStoredCredentials] = useState(
     host.credentialsStored === true,
   );
@@ -669,6 +673,7 @@ export function ConnectDialog({
   const [moshServer, setMoshServer] = useState(host.mosh?.serverPath ?? defaultMosh.serverPath);
   const [moshPortMin, setMoshPortMin] = useState(host.mosh?.portMin ?? defaultMosh.portMin);
   const [moshPortMax, setMoshPortMax] = useState(host.mosh?.portMax ?? defaultMosh.portMax);
+  const transportLabel = transport === 'auto' ? t(defaultMultiplexer ? 'defaultMuxAuto' : 'appAutoMoshThenETThenSSH') : transport === 'et' ? 'Eternal Terminal' : transport === 'mosh' ? 'Mosh' : 'SSH';
   const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
@@ -711,7 +716,8 @@ export function ConnectDialog({
       .then((saved) => {
         if (alive.current) setSavedCredentials(saved === true);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive.current) setCredentialsReady(true); });
     return () => {
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
@@ -720,6 +726,13 @@ export function ConnectDialog({
       connectingSessions.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!credentialsReady || document.activeElement !== destination.current) return;
+    const form = destination.current?.closest('form');
+    (focusableWithin(form ?? null).find(control => control.matches('input[required], textarea[required]'))
+      ?? form?.querySelector<HTMLButtonElement>('button[type="submit"]'))?.focus();
+  }, [credentialsReady, capabilitiesReady]);
 
   async function connect(accept = false) {
     if (connecting.current || (transport === 'auto' && !capabilitiesReady)) return;
@@ -823,6 +836,7 @@ export function ConnectDialog({
   return (
     <Dialog
       mobilePresentation={trust ? "sheet" : "page"}
+      initialFocus={() => destination.current}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -864,11 +878,13 @@ export function ConnectDialog({
             void connect();
           }}
         >
-          <p className="destination">
+          <p ref={destination} tabIndex={-1} className="destination">
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
-          {!recovery && <label>{t("appTransport")}<select
+          {!recovery && <details className="connection-options" onInvalidCapture={event => { event.currentTarget.open = true; }}>
+            <summary>{t('appConnectionOptions')} · {transportLabel}</summary>
+            <label>{t("appTransport")}<select
               value={transport}
               disabled={busy || !!launch?.mux}
               onChange={(event) =>
@@ -885,12 +901,13 @@ export function ConnectDialog({
                 {!etAvailable || defaultMultiplexer ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
-          </label>}
+          </label>
+            <TransportOptions mode={transport} busy={busy}
+              options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
+              change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
+          </details>}
           {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
           {defaultMultiplexer && <p className="security-note">{t('defaultMuxConnecting',{kind:defaultMultiplexer.kind,name:defaultMultiplexer.name})} {t('defaultMuxSsh')}</p>}
-          {!recovery && <TransportOptions mode={transport} busy={busy}
-            options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
-            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />}
           {!recovery && host.jumpHostId && (
             <fieldset>
               <legend>{t("appBastion")}{" "}
@@ -1071,7 +1088,7 @@ export function ConnectDialog({
           )}
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
-            <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
+            <button type="submit" className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
               {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
