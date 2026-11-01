@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.7
+
+### Patch Changes
+
+- 019bc6a: Add an owned Android packaged-terminal SSH checkpoint for fixed native IME correction/repeat transactions and stale InputConnection rejection; physical keyboard qualification remains separate.
+- @lazysh/account-usage@1.7.7
+  - @lazysh/common@1.7.7
+  - @lazysh/display-idle@1.7.7
+  - @lazysh/et-transport@1.7.7
+  - @lazysh/mosh-transport@1.7.7
+
 ## 1.7.6
 
 ### Patch Changes
