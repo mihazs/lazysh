@@ -913,3 +913,23 @@ it("portals only the active terminal controls into the existing header and retai
     view.unmount(); expect(target.childElementCount).toBe(0);
   } finally {target.remove();}
 });
+
+it('publishes only the active local overlay Back handler and keeps its draft without sending',()=>{
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const onBackChange=vi.fn(),reportError=vi.fn();
+  const view=render(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'retained draft'}});
+  const close=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  act(()=>expect(close()).toBe(true));expect(screen.queryByLabelText('Compose text')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  const stale=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  view.rerender(<TerminalPane session={session} active={false} reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);act(()=>expect(stale()).toBe(false));
+  view.rerender(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  view.unmount();expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  expect(mocks.write).not.toHaveBeenCalled();expect(terminal.paste).not.toHaveBeenCalled();
+});
