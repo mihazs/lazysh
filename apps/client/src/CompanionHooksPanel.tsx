@@ -15,11 +15,18 @@ export function parseHookStatus(value:unknown):Status {
   if(![v.installPlan,v.removePlan].every(plan=>typeof plan==='string' && /^[a-f0-9]{64}$/.test(plan)))throw new LocalUiError('hooksInvalid');
   return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string};
 }
-export default function CompanionHooksPanel({sessionId,visible}:{sessionId:string;visible:boolean}) {
+export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionId:string;visible:boolean;reveal?:Readonly<{sessionId:string}>}) {
   useUi();const api=useProtectedApi(nativeApi),{access,mounted}=useMountedAccess();
   const [agent,setAgent]=useState<Agent>('codex'),[profile,setProfile]=useState(''),[status,setStatus]=useState<Status>(),[busy,setBusy]=useState(false),[error,setError]=useState<UiErrorCause>(''),[uncertain,setUncertain]=useState(false);
   const revision=useRef(0),flight=useRef<number|null>(null);
+  const disclosure=useRef<HTMLDetailsElement>(null),provider=useRef<HTMLSelectElement>(null);
   const selection=useRef({sessionId,visible,agent,profile});selection.current={sessionId,visible,agent,profile};
+  useEffect(()=>{
+    const current=selection.current;
+    if(!reveal || reveal.sessionId!==current.sessionId || !current.visible || !mounted.current || !access.current())return;
+    if(disclosure.current)disclosure.current.open=true;
+    provider.current?.focus();
+  },[reveal]);
   useEffect(()=>{revision.current++;flight.current=null;setBusy(false);setStatus(undefined);setError('');setUncertain(false);},[sessionId,visible,agent,profile]);
   async function run(action:'status'|'install'|'remove') {
     if(flight.current!==null || !visible || !access.current())return;
@@ -41,10 +48,10 @@ export default function CompanionHooksPanel({sessionId,visible}:{sessionId:strin
     } catch(error){if(owns()){setStatus(undefined);setError(captureUiError(error));}}
     finally {if(owns())setBusy(false);if(flight.current===id)flight.current=null;}
   }
-  return <details className="companion-install" hidden={!visible} aria-label={t('hooksTitle')}>
+  return <details ref={disclosure} className="companion-install" hidden={!visible} aria-label={t('hooksTitle')}>
     <summary>{t('hooksTitle')}</summary>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent)}><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option></select></label>
+      <label>{t('hooksProvider')}<select ref={provider} value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent)}><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option></select></label>
       <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
       <button className="subtle-button" disabled={busy || !profile.startsWith('/')} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
