@@ -1987,7 +1987,10 @@ class NativeWorkspaceTest {
                 record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
-            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response))
+            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response), observe = { remaining ->
+                runCatching { MoshBackgroundObservation.parse(evaluate(scenario,
+                    MoshBackgroundObservation.expression(key, token, name), remaining)).toString() }.getOrDefault("unavailable")
+            })
             execution(true)
             send("sleep 3; exit")
             home()
@@ -2012,6 +2015,23 @@ class NativeWorkspaceTest {
                 val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName}")
                 if (primary != null) primary!!.addSuppressed(closed) else throw closed
             }
+        }
+    }
+
+    @Test fun moshBackgroundObservationNeverRetainsTerminalContentOrInterpretsTransportState() {
+        val sample = JSONObject().put("retained", true).put("helperCount", "one").put("documentFocused", true)
+            .put("activeKind", "terminal").put("readOnly", false).put("disabled", false).put("composerPresent", true)
+            .put("composerEmpty", true).put("rendererConnected", false).put("globalError", true).put("unappliedEdit", false)
+        assertEquals(sample.toString(), MoshBackgroundObservation.parse(sample.toString()).toString())
+        val absent = JSONObject(sample.toString()).put("helperCount", "zero").put("readOnly", JSONObject.NULL)
+            .put("disabled", JSONObject.NULL).put("composerPresent", false).put("composerEmpty", JSONObject.NULL)
+            .put("rendererConnected", JSONObject.NULL).put("activeKind", "other")
+        assertEquals(absent.toString(), MoshBackgroundObservation.parse(absent.toString()).toString())
+        for (invalid in listOf("{", " ".repeat(769), JSONObject(sample.toString()).put("activeKind", "private text").toString(),
+            JSONObject(sample.toString()).put("readOnly", "false").toString(), JSONObject(sample.toString()).put("rawDOM", "private text").toString(),
+            JSONObject(sample.toString()).put("helperCount", "many").toString(), JSONObject(sample.toString()).put("composerEmpty", JSONObject.NULL).toString(),
+            JSONObject(sample.toString()).apply { remove("retained") }.toString())) {
+            assertTrue("Unexpected Mosh observation must be unavailable", runCatching { MoshBackgroundObservation.parse(invalid) }.isFailure)
         }
     }
 
