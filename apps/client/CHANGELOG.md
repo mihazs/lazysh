@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.4
+
+### Patch Changes
+
+- c398f06: Verify session-first Workspaces, explicit Herdr setup disclosure and retained terminal navigation through the real Linux native app and owned SSH servers.
+- @lazysh/account-usage@1.7.4
+  - @lazysh/common@1.7.4
+  - @lazysh/display-idle@1.7.4
+  - @lazysh/et-transport@1.7.4
+  - @lazysh/mosh-transport@1.7.4
+
 ## 1.7.3
 
 ### Patch Changes
