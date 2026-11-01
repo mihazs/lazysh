@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.2
+
+### Patch Changes
+
+- f9b908e: Add an owned Linux native GUI saved-credential reconnect checkpoint using a disposable Secret Service, with explicit trust/save/reconnect/forget and private-process cleanup.
+- @lazysh/account-usage@1.7.2
+  - @lazysh/common@1.7.2
+  - @lazysh/display-idle@1.7.2
+  - @lazysh/et-transport@1.7.2
+  - @lazysh/mosh-transport@1.7.2
+
 ## 1.7.1
 
 ### Patch Changes
