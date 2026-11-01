@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add held-pointer panning to the expanded terminal D-pad, with paced arrow repeats, a pause zone and cancellation when input ownership or session availability changes. Existing arrow taps, keyboard activation, corner shortcuts and toolbar defaults remain unchanged.
+
 - Organize documentation by learning, tasks, reference and explanation; add a guided first SSH session and separate companion setup, settings and event-storage contracts. Preserve established links, security limits and platform acceptance boundaries. No application defaults change.
 
 - Prioritize connected app sessions above discovered Herdr spaces and refine compact themed navigation. Healthy Herdr server setup in Workspaces is now collapsed by default. Missing selections and unhealthy readers still reveal setup automatically. Keep shared-focus warnings visible and preserve session identity, reader drafts, contextual return, authentication and transport defaults.

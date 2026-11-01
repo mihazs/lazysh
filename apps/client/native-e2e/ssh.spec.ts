@@ -8,7 +8,7 @@ import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -29,6 +29,122 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   const {terminal,owner}=await openOwnedSsh(gui,ssh);
   fixture.captureSafe=true;
   await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await disconnectOwnedSsh(gui,terminal);
+});
+
+it('pans the expanded D-pad through one native held pointer and stops bytes in its original SSH receiver',async()=>{
+  fixture.captureSafe=false;
+  const tools=herdrTools(),ssh=fixture.ssh=await SshFixture.start(tools);
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSsh(gui,ssh);
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  gui.stage='owned D-pad preference';
+  await (await browser.$('button[aria-label="Preferences"]')).click();
+  const settings=await browser.$('[role="dialog"][aria-label="Preferences"]');await settings.waitForDisplayed();
+  await (await settings.$('summary=Keyboard and gestures')).click();
+  await (await settings.$('summary=Toolbar keys and order')).click();
+  await (await settings.$('button=Add dpad')).click();
+  await (await settings.$('button[aria-label="Close Preferences"]')).click();await settings.waitForDisplayed({reverse:true});
+  await (await browser.$('button=dpad')).click();
+  const up=await browser.$('.terminal-dpad button[aria-label="D-pad up"]');await up.waitForDisplayed();
+  expect(await up.getAttribute('aria-pressed')).toBeNull();
+  gui.stage='owned D-pad raw receiver';
+  const image=join(ssh.directory,'bin','owned-terminal-receiver'),imageStat=await stat(image);
+  const imageHash=createHash('sha256').update(await readFile(image)).digest('hex');
+  expect(imageHash).toBe(createHash('sha256').update(await readFile(tools.receiverBinary)).digest('hex'));
+  await terminal.click();await typeText(browser,'exec ./bin/owned-terminal-receiver .\n');
+  let receiver:OwnedPid|undefined;
+  await browser.waitUntil(async()=>{
+    const text=await readFile(join(ssh.directory,'receiver-pid'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+    if(!/^[1-9][0-9]{0,9}\n$/.test(text))return false;
+    receiver=await identity(Number(text.trim()));return !!receiver&&!['Z','X'].includes(receiver.state);
+  },{timeout:3000,timeoutMsg:'Owned D-pad receiver was not ready'});
+  const original=receiver!;
+  let ancestor:OwnedPid|undefined=original,owned=false;
+  for(let depth=0;ancestor&&depth<16;depth++){
+    if(ancestor.pid===ssh.daemon.child.pid){owned=true;break;}
+    ancestor=await identity(ancestor.parent);
+  }
+  expect(owned).toBe(true);
+  const bytes=async()=>{
+    const current=await identity(original.pid),executable=await stat(`/proc/${original.pid}/exe`);
+    if(!current||current.start!==original.start||['Z','X'].includes(current.state)||executable.dev!==imageStat.dev||executable.ino!==imageStat.ino)
+      throw new Error('Owned D-pad receiver identity changed');
+    const path=join(ssh.directory,'received-bytes'),info=await stat(path);
+    if(!info.isFile()||info.uid!==process.getuid!()||info.size>4096)throw new Error('Owned D-pad receiver output invalid');
+    const value=await readFile(path);if(value.length>4096)throw new Error('Owned D-pad receiver output exceeds bound');return value;
+  };
+  expect(await bytes()).toEqual(Buffer.alloc(0));
+  fixture.captureSafe=true;
+  await up.click();
+  await browser.waitUntil(async()=>(await bytes()).equals(Buffer.from('\x1b[A')),{timeout:3000,timeoutMsg:'Owned D-pad tap did not arrive once'});
+  const phases=[
+    {x:0,y:0,pattern:/^(?:\x1b\[A){3,32}$/},
+    {x:-24,y:0,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}$/},
+    {x:0,y:24,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}(?:\x1b\[B){2,32}$/},
+    {x:24,y:0,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}(?:\x1b\[B){2,32}(?:\x1b\[C){2,32}$/},
+  ];
+  const valid='\x1b[A'.repeat(3)+'\x1b[D'.repeat(2)+'\x1b[B'.repeat(2)+'\x1b[C'.repeat(2);
+  expect(phases[3].pattern.test(valid)).toBe(true);
+  for(const invalid of [valid+'\x1b[A',valid.replace('\x1b[D','\x1b[C'),valid+'\x80'])expect(phases[3].pattern.test(invalid)).toBe(false);
+  const position=await browser.execute(()=>{
+    const button=document.querySelector('.terminal-dpad button[aria-label="D-pad up"]');
+    if(!button)return null;
+    const r=button.getBoundingClientRect(),x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);
+    return {x,y,visible:r.width>0&&r.height>0&&x>24&&y>24&&x+24<innerWidth&&y+24<innerHeight&&button.contains(document.elementFromPoint(x,y))};
+  });
+  expect(position?.visible).toBe(true);const {x,y}=position!;
+  const traceKey=`__ownedDpad_${ssh.nonce}`,pointerId=`owned-dpad-${ssh.nonce}`;
+  expect(await browser.execute(key=>{
+    if(Object.hasOwn(window,key))return false;
+    const pad=document.querySelector('.terminal-dpad');if(!pad)return false;
+    const state={down:0,up:0,moves:0,cancel:0,trusted:true,samePointer:true,mouse:true,pointer:undefined as number|undefined,dispose:()=>{}};
+    const observe=(event:Event)=>{
+      if(!(event instanceof PointerEvent))return;
+      state.trusted&&=event.isTrusted;state.mouse&&=event.pointerType==='mouse';
+      if(event.type==='pointerdown'){state.down++;state.pointer??=event.pointerId;}
+      else if(event.type==='pointerup')state.up++;
+      else if(event.type==='pointercancel')state.cancel++;
+      else state.moves++;
+      if(state.pointer!==undefined)state.samePointer&&=event.pointerId===state.pointer;
+    };
+    const names=['pointerdown','pointerup','pointermove','pointercancel'];
+    for(const name of names)pad.addEventListener(name,observe,{capture:true,passive:true});
+    state.dispose=()=>{for(const name of names)pad.removeEventListener(name,observe,true);};
+    Object.defineProperty(window,key,{value:state,configurable:true});return true;
+  },traceKey)).toBe(true);
+  const pointer=()=>browser.action('pointer',{id:pointerId,parameters:{pointerType:'mouse'}});
+  let primary:unknown;
+  try{
+    gui.stage='owned D-pad held native directions';
+    for(const [index,phase]of phases.entries()){
+      const action=pointer().move({x:x+phase.x,y:y+phase.y,origin:'viewport',duration:0});
+      if(index===0)action.down({button:0});
+      await action.pause(600).perform(true);
+      expect(phase.pattern.test((await bytes()).toString('latin1'))).toBe(true);
+    }
+    gui.stage='owned D-pad dead-zone and release';
+    await pointer().move({x,y,origin:'viewport',duration:0}).pause(240).perform(true);
+    const paused=await bytes();expect(phases[3].pattern.test(paused.toString('latin1'))).toBe(true);
+    await pointer().pause(240).perform(true);expect(await bytes()).toEqual(paused);
+    expect(await browser.execute(key=>{
+      const value=(window as unknown as Record<string,{down:number;up:number;trusted:boolean;samePointer:boolean;mouse:boolean}>)[key];
+      return !!value&&value.down===1&&value.up===0&&value.trusted&&value.samePointer&&value.mouse;
+    },traceKey)).toBe(true);
+    await pointer().up({button:0}).pause(240).perform(true);expect(await bytes()).toEqual(paused);
+    expect(await browser.execute(key=>{
+      const value=(window as unknown as Record<string,{down:number;up:number;moves:number;cancel:number;trusted:boolean;samePointer:boolean;mouse:boolean}>)[key];
+      return !!value&&value.down===1&&value.up===1&&value.moves>=4&&value.cancel===0&&value.trusted&&value.samePointer&&value.mouse;
+    },traceKey)).toBe(true);
+    expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+    expect(createHash('sha256').update(await readFile(image)).digest('hex')).toBe(imageHash);
+  }catch(error){primary=error;throw error;}
+  finally{
+    const cleanup:unknown[]=[];
+    try{await browser.releaseActions();}catch(error){cleanup.push(error);}
+    try{await browser.execute(key=>{const owner=window as unknown as Record<string,{dispose():void}>;owner[key]?.dispose();delete owner[key];},traceKey);}catch(error){cleanup.push(error);}
+    if(cleanup.length)throw new AggregateError(primary?[primary,...cleanup]:cleanup,'Owned D-pad pointer observation cleanup failed');
+  }
   await disconnectOwnedSsh(gui,terminal);
 });
 

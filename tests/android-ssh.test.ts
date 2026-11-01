@@ -7,7 +7,7 @@ import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1139,7 +1139,7 @@ test('owned attachment readback detects changed content, inode, size and timesta
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
   const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
   const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
   expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
@@ -1151,7 +1151,7 @@ test('manual attachment native checkpoint is selected by the existing uncached S
   expect(support).toContain("attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi'");
   expect(support).toContain("attachments?'-PlazyshAttachmentAcceptance=true'");
   expect(support).toContain('retainedPackages=!!herdr || attachments');
-  expect(support).toContain("(herdr || attachments)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
+  expect(support).toContain("(herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
   expect(support).toContain('(herdrMosh || attachments) && await readFile');
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/attachment-ui');
@@ -1361,16 +1361,65 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
-  expect(support).toContain("ime?{privateTtyGroup:true}");
+  expect(support).toContain("rawInput?{privateTtyGroup:true}");
   expect(support).toContain("ime?'-PlazyshSshImeAcceptance=true'");
   expect(support).toContain("ime?'ownedSshImeTransactionsThroughRealUi'");
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/ssh-ime-ui');
-  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshAttachmentAcceptance"');
+  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance"');
   const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
   for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
   expect(/\.value\s*=(?!=)/.test(body)).toBe(false);
   expect(body).toContain('ime.restore()');expect(body).toContain('ime.call("old")');expect(body).toContain('ime.call("current")');
-  expect(body).toContain('assertSame("Packaged WebView must remain original"');
+  const setup=kotlin.split('private inner class OwnedRawSshInput(')[1].split('private fun verifySshImeTransactions(')[0];
+  expect(setup).toContain('assertSame("Packaged WebView must remain original"');
+  for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(setup).not.toContain(forbidden);
+});
+
+
+test('D-pad receipt and wire oracle reject malformed counts, stale/reordered arrows and repeats after the stopped snapshot',()=>{
+  const nonce='0123456789abcdef'.repeat(2),row={schemaVersion:1,nonce,up:4,left:2,down:3,right:2};
+  const counts=dpadReceipt(JSON.stringify(row),nonce),wire=Buffer.from('\x1b[A'.repeat(4)+'\x1b[D'.repeat(2)+'\x1b[B'.repeat(3)+'\x1b[C'.repeat(2)+`owned-dpad-${nonce}`);
+  expect(counts).toEqual([4,2,3,2]);expect(()=>verifyDpadReceiverBytes(wire,nonce,counts)).not.toThrow();
+  for(const invalid of [{...row,up:2},{...row,left:33},{...row,right:'2'},{...row,down:2.5},{...row,extra:'private text'},{...row,nonce:'0'.repeat(32)}])
+    expect(()=>dpadReceipt(JSON.stringify(invalid),nonce)).toThrow('Owned D-pad receipt invalid');
+  for(const invalid of [Buffer.concat([wire,Buffer.from('\x1b[C')]),Buffer.from(wire.toString().replace('owned-dpad','\x1b[Cowned-dpad')),
+    Buffer.from(wire.toString().replace('\x1b[D','\x1b[B')),Buffer.from(wire.toString().replace('owned-dpad','\x1b[Aowned-dpad')),Buffer.from('owned-dpad-'+nonce)])
+    expect(()=>verifyDpadReceiverBytes(invalid,nonce,counts)).toThrow('Owned D-pad receiver bytes differ');
+});
+
+test('native D-pad routing preserves default isolation and the packaged/raw-SSH ownership path',async()=>{
+  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_DPAD=1');
+  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
+  const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')");
+  expect(native).toContain('androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true)');
+  const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
+  expect(support).toContain("dpad?'-PlazyshSshDpadAcceptance=true'");expect(support).toContain('retainedPackages=!!herdr || attachments || dpad');
+  expect(support).toContain('verifyDpadReceiverBytes(bytes.subarray(0,read.bytesRead),fixture.nonce,counts)');
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');expect(gradle).toContain('outputs/androidTest-results/ssh-dpad-ui');
+  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
+  expect(body).toContain('MotionEvent.ACTION_MOVE');expect(body).toContain('MotionEvent.ACTION_CANCEL');expect(body).toContain('observer?.restore(activity.window)');
+  expect(body).toContain('Dead-zone output must stop');expect(body).toContain('Final UP must not repeat or click the original arrow');
+});
+
+test('native D-pad count and neutral observations execute the embedded source with closed current-pad ownership',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0],nonce='0123456789abcdef'.repeat(2);
+  const source=body.match(/val countExpression = """([\s\S]*?)"""\.trimIndent\(\)/)![1].replaceAll('${nonce}',nonce);
+  const neutral=body.match(/while\(evaluate\(scenario,"([^"\n]+)",remaining\(\)\)!="true"\)/)![1];
+  let padCount=1,buttonCount=4,outline='',text=`PRIVATE_CONTEXT D_${nonce}_3_2_2_2`;
+  const buttons=()=>Array.from({length:buttonCount},()=>({style:{outline}}));
+  const document={querySelectorAll:(selector:string)=>selector==='.terminal-dpad'?Array.from({length:padCount},()=>({querySelectorAll:buttons})):buttons(),querySelector:()=>({textContent:text})};
+  const counts=new Function('document',`return (${source});`),quiet=new Function('document',`return (${neutral});`);
+  expect(counts(document)).toEqual([3,2,2,2]);expect(quiet(document)).toBe(true);
+  text+=` D_${nonce}_3_2_2_3`;expect(counts(document)).toEqual([3,2,2,3]);
+  outline='1px solid';expect(quiet(document)).toBe(false);outline='';
+  for(const invalidPads of [0,2]){padCount=invalidPads;expect(counts(document)).toBeNull();}
+  padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
+  buttonCount=3;expect(counts(document)).toBeNull();buttonCount=4;text=`PRIVATE_CONTEXT D_${nonce}_99_2_2_2`;expect(counts(document)).toBeNull();
+  text='PRIVATE_CONTEXT_WITHOUT_A_RECEIVER_STATE';expect(counts(document)).toBeNull();
 });
