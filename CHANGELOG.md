@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Keep touch scrolling continuous when terminal output redraws under a held finger on coarse-pointer screens. Preserve screen-reader mode and desktop hit testing; no input, connection or permission defaults change.
+
+- Make touch scrolling in mouse-tracking terminals depend on finger travel rather than touch-event frequency. Accumulate partial movement, keep the original pane and clear pending distance when the gesture ends.
+- Keep the terminal canvas anchored when the keyboard resizes the available space and the browser reveals its input. Terminal history continues to scroll inside xterm's viewport.
+
 - Stop the updated Amp plugin from reporting completion for an initially idle thread or treating error-to-idle as recovery. It reports idle only after observing that thread running. Replace previously copied manual Amp plugin files to receive the fix; existing historical reports, legacy ingestion and trust defaults remain unchanged.
 
 - Complete independently identified Copilot child reports while preserving the parent's state and ignoring ambiguous child completion callbacks. No installation, permission or input defaults change.
