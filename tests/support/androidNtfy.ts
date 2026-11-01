@@ -5,7 +5,7 @@ import {join,resolve} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import type {Writable} from 'node:stream';
 import {finished} from 'node:stream/promises';
-import {OwnedProcess,nativeReportCases} from './androidSsh';
+import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,compareHostAdbServer,emulatorContinuity,compareEmulatorContinuity} from './androidSsh';
 import {attestQrCamera} from './androidQrOwnership';
 
 const packages=['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client'] as const;
@@ -43,16 +43,23 @@ type NtfyClockComparison={
 };
 const unavailableClock=(status:NtfyClockComparison['status']):NtfyClockComparison=>
   ({status,offset:'unavailable',magnitude:'unavailable',uncertainty:'unavailable',hostProgress:'unavailable'});
+function validNtfyClockPoint(point:NtfyClockPoint) {
+  return Number.isSafeInteger(point.wall) && point.wall>=0 && point.wall<8_640_000_000_000_000 &&
+    typeof point.before==='bigint' && typeof point.after==='bigint' && point.before>=0n && point.after>=point.before && point.after<=9_223_372_036_854_775_807n;
+}
+function ntfyHostClockSpan(before:NtfyClockPoint,after:NtfyClockPoint) {
+  if(!validNtfyClockPoint(before)||!validNtfyClockPoint(after)||after.before<before.after)return;
+  const wall=BigInt(after.wall-before.wall)*1_000_000n;
+  return {progress:after.wall<before.wall||wall<after.before-before.after-1_000_000n?'wallBehind':
+    wall>after.after-before.before+1_000_000n?'wallAhead':'consistentWithinMillisecond',elapsed:after.after-before.before} as const;
+}
 export function ntfyClockComparison(raw:string,before:NtfyClockPoint,after:NtfyClockPoint):NtfyClockComparison {
   const match=/^(0|[1-9][0-9]{0,12})\n?$/.exec(raw);
   if(raw.length>14 || !match || match[0]!==raw)return unavailableClock('malformed');
-  const valid=(point:NtfyClockPoint)=>Number.isSafeInteger(point.wall) && point.wall>=0 && point.wall<8_640_000_000_000_000 &&
-    typeof point.before==='bigint' && typeof point.after==='bigint' && point.before>=0n && point.after>=point.before && point.after<=9_223_372_036_854_775_807n;
   const guest=BigInt(match[1])*1000n;
-  if(!valid(before)||!valid(after)||after.before<before.after||guest>=8_640_000_000_000_000n)return unavailableClock('outOfBounds');
-  const wall=BigInt(after.wall-before.wall)*1_000_000n;
-  const hostProgress=after.wall<before.wall||wall<after.before-before.after-1_000_000n?'wallBehind':
-    wall>after.after-before.before+1_000_000n?'wallAhead':'consistentWithinMillisecond';
+  const host=ntfyHostClockSpan(before,after);
+  if(!host||guest>=8_640_000_000_000_000n)return unavailableClock('outOfBounds');
+  const hostProgress=host.progress;
   if(hostProgress!=='consistentWithinMillisecond')return {...unavailableClock('hostDiscontinuity'),hostProgress};
   // date +%s represents [second, second+1); Date.now() has millisecond quantization.
   // The guest sample occurred somewhere inside this entire command bracket.
@@ -75,6 +82,92 @@ export async function observeNtfyClock(read:()=>Promise<string>,check:()=>Promis
   const after=sample();
   await check(); // Lost emulator identity must still fail closed, even after a failed read.
   return raw===undefined?unavailableClock('commandFailed'):ntfyClockComparison(raw,before,after);
+}
+type ControlledClockReadback='notRead'|'malformed'|'hostDiscontinuity'|'wideBracket'|'outsideDeclaredOffset'|'verified';
+export function controlledNtfyClockReadback(raw:string,before:NtfyClockPoint,after:NtfyClockPoint,setAt=before):ControlledClockReadback {
+  const match=/^(0|[1-9][0-9]{0,15})\n?$/.exec(raw);
+  if(raw.length>17||!match||match[0]!==raw)return 'malformed';
+  const guest=BigInt(match[1]);
+  if(guest>=8_640_000_000_000_000n)return 'malformed';
+  const host=ntfyHostClockSpan(before,after),whole=ntfyHostClockSpan(setAt,after);
+  if(!host||!whole||host.progress!=='consistentWithinMillisecond'||whole.progress!=='consistentWithinMillisecond')return 'hostDiscontinuity';
+  // Both samples represent millisecond intervals. Never admit overlapping-zero bounds.
+  const lower=guest-BigInt(after.wall)-1n,upper=guest+1n-BigInt(before.wall);
+  if(host.elapsed>250_000_000n||upper-lower>250n)return 'wideBracket';
+  return lower>0n&&upper<=2000n?'verified':'outsideDeclaredOffset';
+}
+export async function absentNtfyPackages(command:(args:string[])=>Promise<string>) {
+  for(const name of packages) {
+    const raw=await command(['shell','pm','list','packages',name]);
+    const rows=raw===''?[]:raw.replace(/\n$/,'').split('\n');
+    if(Buffer.byteLength(raw)>4096||!rows.every(row=>/^package:[A-Za-z0-9_.]+$/.test(row))||rows.includes(`package:${name}`))
+      throw new Error('Owned ntfy fixture packages/state must be absent');
+  }
+}
+export class OwnedNtfyClock {
+  private original:boolean|undefined;
+  private restoreNeeded=false;
+  private attempted=false;
+  private restoreAttempted=false;
+  private state:'notStarted'|'preparing'|'verified'='notStarted';
+  private readback:ControlledClockReadback='notRead';
+  private restoration:'notRequired'|'pending'|'restored'|'blocked'|'failed'='notRequired';
+  constructor(private readonly command:(args:string[])=>Promise<string>,private readonly check:()=>Promise<void>,private readonly sample=sampleNtfyHostClock) {}
+  private async call(args:string[]) {
+    try{return await this.command(args);}catch{throw new Error('Owned ntfy controlled clock command failed');}
+  }
+  private async request(args:string[]) {
+    await this.check();
+    try{return await this.call(args);}
+    finally{await this.check();}
+  }
+  private async autoTime() {
+    const value=await this.request(['shell','cmd','time_detector','is_auto_detection_enabled']);
+    if(!/^(true|false)\n?$/.test(value)||value.replace(/\n$/,'').includes('\n'))throw new Error('Owned ntfy automatic time response invalid');
+    return value.startsWith('true');
+  }
+  private async setAutoTime(value:boolean) {
+    if(await this.request(['shell','cmd','time_detector','set_auto_detection_enabled',String(value)])!=='')throw new Error('Owned ntfy automatic time update unrecognized');
+    if(await this.autoTime()!==value)throw new Error('Owned ntfy automatic time update not verified');
+  }
+  async prepare() {
+    if(this.attempted)throw new Error('Owned ntfy controlled clock cannot be repeated');
+    this.attempted=true;this.state='preparing';
+    await this.check();await absentNtfyPackages(args=>this.request(args));
+    this.original=await this.autoTime();
+    this.restoreNeeded=true;this.restoration='pending'; // A lost update acknowledgement still needs restoration.
+    await this.setAutoTime(false);
+    await this.check();
+    const at=this.sample();
+    if(!validNtfyClockPoint(at)||at.wall>8_639_999_999_998_999)throw new Error('Owned ntfy host clock invalid');
+    // This is a declared disposable-VM state, not exact synchronization or a payload timestamp.
+    try{if(await this.call(['shell','cmd','alarm','set-time',String(at.wall+1000)])!=='')throw new Error('Owned ntfy clock update unrecognized');}
+    finally{await this.check();}
+    await this.check();
+    const before=this.sample();
+    let raw:string,after:NtfyClockPoint;
+    try{raw=await this.call(['shell','date','+%s%3N']);}
+    finally{after=this.sample();await this.check();}
+    this.readback=controlledNtfyClockReadback(raw,before,after,at);
+    if(this.readback!=='verified')throw new Error('Owned ntfy controlled clock readback not admitted');
+    await absentNtfyPackages(args=>this.request(args));this.state='verified';
+  }
+  async restore(teardown:()=>Promise<void>) {
+    if(!this.restoreNeeded)return;
+    if(this.restoreAttempted)throw new Error('Owned ntfy clock restoration cannot be repeated');
+    this.restoreAttempted=true;this.restoration='blocked';
+    await teardown(); // Never change time underneath retained app/high-water state.
+    await this.check();await absentNtfyPackages(args=>this.request(args));
+    this.restoration='failed';
+    await this.setAutoTime(this.original!);this.restoration='restored';
+  }
+  observation() {return {state:this.state,readback:this.readback,restoration:this.restoration,declaredState:'strictlyPositiveAtMostTwoSeconds',maxReadbackUncertaintyMs:250} as const;}
+}
+type NtfyClockOwner={server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof emulatorContinuity>>};
+export function sameNtfyClockOwner(before:NtfyClockOwner,after:NtfyClockOwner) {
+  const guest=compareEmulatorContinuity(before.guest,after.guest);
+  return before.guest.connection==='device'&&after.guest.connection==='device'&&compareHostAdbServer(before.server,after.server)==='same'&&
+    guest.transport==='same'&&guest.boot==='same'&&guest.adbd==='same';
 }
 export function privateInputCommand(nonce:string) {
   if(!/^[a-f\d]{32}$/.test(nonce))throw invalid();
@@ -304,6 +397,10 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   let primary=false;
   let phase='owned admission';
   let clockComparison=unavailableClock('commandFailed');
+  let clock:OwnedNtfyClock|undefined;
+  let receiptValue:Record<string,unknown>|undefined;
+  let failureValue:Record<string,unknown>|undefined;
+  let originalFailure:Error|undefined;
   const run=async(stage:string,program:string,args:string[],milliseconds=10_000)=>{
     phase=stage;
     await owned.check();
@@ -338,9 +435,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await child.finish('normal APK trust and FOSS absence',120_000);
   };
   try {
-    clockComparison=await observeNtfyClock(()=>new OwnedProcess(adb,['-s',serial,'shell','date','+%s'],root)
-      .finish('owned host-device clock observation',2000),()=>owned.check());
-    for(const name of packages)if((await shell('fixture package absence',['shell','pm','list','packages',name])).trim())throw new Error('Native ntfy acceptance requires absent fixture packages');
+    await absentNtfyPackages(args=>shell('fixture package absence',args));
     const pins=JSON.parse(await readFile(join(root,'apps/client/src-tauri/fixtures/ntfy-provenance.json'),'utf8'));
     for(const [name,pin] of [['server',pins.server],['distributor',pins.android]] as const){
       const path=join(directory,name==='server'?'server.tar.gz':'distributor.apk');
@@ -388,6 +483,23 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await run('native acceptance APK resources',join(android,'gradlew'),[':app:assembleUniversalDebug',...gradleArgs],120_000);
     if(await nativeDigest(apk)!==baselineNative)throw new Error('Acceptance cannot replace the current native library');
     await inspectAcceptanceTrust(apk,join(directory,'ca.pem'),sdk,run);
+    phase='owned controlled clock provisioning';
+    await owned.check();
+    const captureClockOwner=async():Promise<NtfyClockOwner>=>({server:await hostAdbServerIdentity(adb),guest:await emulatorContinuity(adb,serial,undefined,0)});
+    const clockOwner=await captureClockOwner();
+    const checkClockOwner=async()=>{
+      await owned.check();
+      if(!sameNtfyClockOwner(clockOwner,await captureClockOwner()))throw new Error('Owned ntfy clock identity unavailable or changed');
+      await owned.check();
+    };
+    await checkClockOwner();
+    if(await shell('owned clock API36 admission',['shell','getprop','ro.build.version.sdk'])!=='36\n')throw invalid();
+    phase='owned controlled clock provisioning';
+    clockComparison=await observeNtfyClock(()=>new OwnedProcess(adb,['-s',serial,'shell','date','+%s'],root)
+      .finish('owned host-device clock observation',2000),checkClockOwner);
+    clock=new OwnedNtfyClock(args=>new OwnedProcess(adb,['-s',serial,...args],root)
+      .finish('owned controlled clock operation',2000),checkClockOwner);
+    await clock.prepare();
     await installed.install('io.heckel.ntfy',join(directory,'distributor.apk'));
     await installed.install('app.lazysh.client',apk);
     await owned.check();
@@ -421,29 +533,37 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       'apps/client/src-tauri/gen/android/app/build.gradle.kts','tests/support/androidNtfy.ts']){
       source[path]=createHash('sha256').update(await boundedFile(join(root,path),1024*1024)).digest('hex');
     }
-    await mkdir(finite,{recursive:true});
-    await writeFile(join(finite,'receipt.json'),JSON.stringify({schemaVersion:1,head,source,...native,clockComparison,serverVersion:pins.server.version,
+    receiptValue={schemaVersion:1,head,source,...native,clockComparison,serverVersion:pins.server.version,
       distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
       distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
       activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
-      releaseRustCompilation:false,notificationDelivery:true,replayCallbackObserved:true,privateGenericNotification:true})+'\n');
+      releaseRustCompilation:false,notificationDelivery:true,replayCallbackObserved:true,privateGenericNotification:true};
   }catch(error){
     primary=true;
     const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;
-    try {
-      await mkdir(finite,{recursive:true});
-      await writeFile(join(finite,'failure.json'),JSON.stringify({schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,
-        ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false})+'\n');
-    }catch{console.error('Finite ntfy failure receipt could not be retained');}
+    failureValue={schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,
+      ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false};
     // Framework/private protocol errors may contain values. Keep only the fixed
     // source stage and finite exit; raw logs remain private until owned cleanup.
-    throw new Error(`Native ntfy acceptance failed at ${phase}${code?`; exit=${code[1]}`:''}`);
+    originalFailure=new Error(`Native ntfy acceptance failed at ${phase}${code?`; exit=${code[1]}`:''}`);
   }finally{
-    const errors:unknown[]=[];
-    for(const child of children.reverse())try{await child.stop();}catch(error){errors.push(error);}
-    for(const port of reverses)try{await shell('owned reverse cleanup',['reverse','--remove',`tcp:${port}`]);}catch(error){errors.push(error);}
-    errors.push(...await installed.cleanup());
-    try{await rm(directory,{recursive:true,force:true});}catch(error){errors.push(error);}
-    if(errors.length){if(primary)console.error('Owned ntfy cleanup failed after original failure');else throw new Error('Owned ntfy cleanup failed');}
+    const cleanupFailures:string[]=[];
+    for(const child of children.reverse())try{await child.stop();}catch{cleanupFailures.push('child');}
+    for(const port of reverses)try{await shell('owned reverse cleanup',['reverse','--remove',`tcp:${port}`]);}catch{cleanupFailures.push('reverse');}
+    if((await installed.cleanup()).length)cleanupFailures.push('packages');
+    try{await clock?.restore(async()=>{
+      if(cleanupFailures.length)throw new Error('Owned ntfy teardown not established');
+      await absentNtfyPackages(args=>shell('owned package teardown verification',args));
+    });}catch{cleanupFailures.push('clockRestoration');}
+    try{await rm(directory,{recursive:true,force:true});}catch{cleanupFailures.push('directory');}
+    const failed=originalFailure||cleanupFailures.length>0;
+    try{
+      await mkdir(finite,{recursive:true});
+      await writeFile(join(finite,failed?'failure.json':'receipt.json'),JSON.stringify({
+        ...(failed?failureValue??{schemaVersion:1,phase:'owned cleanup',exit:null,runtimePassed:false,notificationDelivery:false}:receiptValue),
+        ...(clock?{controlledClock:clock.observation()}:{}),cleanupFailures})+'\n');
+    }catch{if(!failed)throw new Error('Finite ntfy receipt could not be retained');console.error('Finite ntfy failure receipt could not be retained');}
+    if(cleanupFailures.length){if(primary)console.error('Owned ntfy cleanup failed after original failure');else throw new Error('Owned ntfy cleanup failed');}
   }
+  if(originalFailure)throw originalFailure;
 }

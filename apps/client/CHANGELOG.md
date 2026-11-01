@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.8
+
+### Patch Changes
+
+- d015653: Prepare and independently verify a bounded positive-offset clock state only in the attested disposable Android ntfy fixture, restoring automatic time after verified app-state teardown.
+- @lazysh/account-usage@1.7.8
+  - @lazysh/common@1.7.8
+  - @lazysh/display-idle@1.7.8
+  - @lazysh/et-transport@1.7.8
+  - @lazysh/mosh-transport@1.7.8
+
 ## 1.7.7
 
 ### Patch Changes
