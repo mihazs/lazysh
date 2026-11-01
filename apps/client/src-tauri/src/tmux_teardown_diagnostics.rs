@@ -248,7 +248,7 @@ mod linux {
         }
     }
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    enum Wait {
+    enum WaitKind {
         PipeRead,
         PipeWrite,
         EventWait,
@@ -256,53 +256,55 @@ mod linux {
         #[default]
         Unavailable,
     }
-    fn parse_wait(bytes: &[u8]) -> Wait {
+    fn parse_wait(bytes: &[u8]) -> WaitKind {
         if bytes.is_empty() || bytes.len() > 128 {
-            return Wait::Unavailable;
+            return WaitKind::Unavailable;
         }
         match bytes.strip_suffix(b"\n").unwrap_or(bytes) {
-            b"0" => Wait::Unavailable,
-            b"pipe_read" => Wait::PipeRead,
-            b"pipe_write" => Wait::PipeWrite,
-            b"do_epoll_wait" | b"ep_poll" | b"poll_schedule_timeout.constprop.0" => Wait::EventWait,
-            _ => Wait::Other,
+            b"0" => WaitKind::Unavailable,
+            b"pipe_read" => WaitKind::PipeRead,
+            b"pipe_write" => WaitKind::PipeWrite,
+            b"do_epoll_wait" | b"ep_poll" | b"poll_schedule_timeout.constprop.0" => {
+                WaitKind::EventWait
+            }
+            _ => WaitKind::Other,
         }
     }
-    fn read_wait(pid: i32) -> Wait {
-        let read = || -> io::Result<Wait> {
+    fn read_wait(pid: i32) -> WaitKind {
+        let read = || -> io::Result<WaitKind> {
             let Some(file) = owned_file(pid, Field::Wchan)? else {
-                return Ok(Wait::Unavailable);
+                return Ok(WaitKind::Unavailable);
             };
             let mut bytes = Vec::new();
             file.take(129).read_to_end(&mut bytes)?;
             Ok(parse_wait(&bytes))
         };
-        read().unwrap_or(Wait::Unavailable)
+        read().unwrap_or(WaitKind::Unavailable)
     }
     // Observe only an already-attributed identity. Never publish the kernel symbol,
     // and reject a changed parent, UID, lifetime or dead process around the read.
     fn wait_probe(
         identity: ClientIdentity,
         mut sample: impl FnMut(i32) -> Sample,
-        read: impl FnOnce(i32) -> Wait,
-    ) -> Wait {
+        read: impl FnOnce(i32) -> WaitKind,
+    ) -> WaitKind {
         if identity.pid <= 1 {
-            return Wait::Unavailable;
+            return WaitKind::Unavailable;
         }
         let before = relation(sample(identity.pid));
         if !before.is_some_and(|(start, _)| start == identity.start) {
-            return Wait::Unavailable;
+            return WaitKind::Unavailable;
         }
         let wait = read(identity.pid);
         if relation(sample(identity.pid)) != before {
-            return Wait::Unavailable;
+            return WaitKind::Unavailable;
         }
         wait
     }
     #[derive(Clone, Copy, Debug, Default)]
     struct Waits {
-        server: Wait,
-        fresh_control: Wait,
+        server: WaitKind,
+        fresh_control: WaitKind,
     }
     fn fd_kind(bytes: &[u8]) -> FdKind {
         let number = |value: &[u8]| !value.is_empty() && value.iter().all(u8::is_ascii_digit);
@@ -1078,15 +1080,15 @@ mod linux {
     #[test]
     fn wait_categories_never_publish_symbols_or_oversized_input() {
         for (input, expected) in [
-            (b"pipe_read".as_slice(), Wait::PipeRead),
-            (b"pipe_write\n", Wait::PipeWrite),
-            (b"do_epoll_wait", Wait::EventWait),
-            (b"ep_poll", Wait::EventWait),
-            (b"poll_schedule_timeout.constprop.0", Wait::EventWait),
-            (b"0", Wait::Unavailable),
-            (b"", Wait::Unavailable),
-            (b"private-symbol/path/12345", Wait::Other),
-            (&[b'x'; 129], Wait::Unavailable),
+            (b"pipe_read".as_slice(), WaitKind::PipeRead),
+            (b"pipe_write\n", WaitKind::PipeWrite),
+            (b"do_epoll_wait", WaitKind::EventWait),
+            (b"ep_poll", WaitKind::EventWait),
+            (b"poll_schedule_timeout.constprop.0", WaitKind::EventWait),
+            (b"0", WaitKind::Unavailable),
+            (b"", WaitKind::Unavailable),
+            (b"private-symbol/path/12345", WaitKind::Other),
+            (&[b'x'; 129], WaitKind::Unavailable),
         ] {
             let result = parse_wait(input);
             assert_eq!(result, expected);
@@ -1116,8 +1118,12 @@ mod linux {
         ] {
             let mut snapshots = [valid, changed].into_iter();
             assert_eq!(
-                wait_probe(identity, |_| snapshots.next().unwrap(), |_| Wait::PipeRead),
-                Wait::Unavailable
+                wait_probe(
+                    identity,
+                    |_| snapshots.next().unwrap(),
+                    |_| WaitKind::PipeRead
+                ),
+                WaitKind::Unavailable
             );
         }
         for rejected in [
@@ -1128,16 +1134,16 @@ mod linux {
         ] {
             assert_eq!(
                 wait_probe(identity, |_| rejected, |_| panic!("unadmitted wait read")),
-                Wait::Unavailable
+                WaitKind::Unavailable
             );
         }
         assert_eq!(
-            wait_probe(identity, |_| valid, |_| Wait::PipeRead),
-            Wait::PipeRead
+            wait_probe(identity, |_| valid, |_| WaitKind::PipeRead),
+            WaitKind::PipeRead
         );
         assert_eq!(
-            wait_probe(identity, |_| valid, |_| Wait::Unavailable),
-            Wait::Unavailable
+            wait_probe(identity, |_| valid, |_| WaitKind::Unavailable),
+            WaitKind::Unavailable
         );
         assert_eq!(
             wait_probe(
@@ -1145,7 +1151,7 @@ mod linux {
                 |_| panic!("PID one must not be read"),
                 |_| panic!("PID one must not be opened")
             ),
-            Wait::Unavailable
+            WaitKind::Unavailable
         );
     }
     #[test]

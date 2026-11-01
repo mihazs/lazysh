@@ -3,7 +3,7 @@ import {attachmentReceipt} from './attachmentData';
 export const fileReviewSession = 'ssh:literal-file-review';
 export const fileReviewRoot = '/literal/repositório';
 export const fileReviewName = 'unchanged.ts';
-export const fileReviewSource = 'const literal = "<img src=secret onerror=alert(1)>";\n// unchanged user content';
+export const fileReviewSource = 'const literal = "<img src=secret onerror=alert(1)>";\n// unchanged user content: this deliberately long literal fixture line keeps horizontal keyboard scrolling observable across narrow phone and tablet reading surfaces.';
 export const fileReviewOid = 'b'.repeat(40);
 export const fileReviewPatch = '@@ -1 +1 @@\n-before literal\n+after literal';
 export function fileReviewReply(command: string): unknown {
