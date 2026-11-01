@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep the native branded startup cover until the current renderer acknowledges its first workspace commit when app lock is disabled, including after renderer recreation. Confirmed locks retain their native unlock controls.
+
 - Classify failed companion installer tag rechecks with closed diagnostics while preserving localized errors, provenance verification and installation defaults.
 
 - Add explicit managed Droid hook setup for an existing standalone `.factory/hooks.json`, including the connected Agents selector. Preserve foreign event groups and fallback/settings policy, bind the inspected absolute companion, and refuse missing files rather than shadowing legacy hooks. Fresh-profile migration and native Droid runtime qualification remain unsupported; no defaults or trust settings change.
