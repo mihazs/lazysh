@@ -4,10 +4,12 @@ import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
+import * as fileSystem from 'node:fs/promises';
+import * as ownedProcesses from './support/ownedProcess';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1338,6 +1340,58 @@ test('companion readiness observation retains only closed enums and booleans',as
   expect(Object.values(sample).every(value=>typeof value==='boolean'||['other','unavailable'].includes(value as string))).toBe(true);
 });
 
+
+test.skipIf(process.platform!=='linux')('raw receiver identity checker rejects live foreign, substituted and falsely terminal observations',async()=>{
+  const current=(await identity(process.pid))!;
+  const hash=createHash('sha256').update(await readFile(`/proc/${process.pid}/exe`)).digest('hex');
+  expect(await checkRawReceiverIdentity(current,undefined,process.pid,hash)).toEqual(current);
+  await expect(checkRawReceiverIdentity(current,current,process.pid,'0'.repeat(64))).rejects.toThrow('image differs');
+  await expect(checkRawReceiverIdentity(current,{...current,start:'0'},process.pid,hash)).rejects.toThrow('replaced');
+  await expect(checkRawReceiverIdentity(current,{...current,pid:current.pid+1},process.pid,hash)).rejects.toThrow('replaced');
+  await expect(checkRawReceiverIdentity(current,current,2147483647,hash)).rejects.toThrow('identity unavailable');
+  await expect(checkRawReceiverIdentity(undefined,undefined,process.pid,hash)).rejects.toThrow('not observed');
+  // A missing/terminal first sample cannot excuse an independently still-live
+  // original. Every purported terminal state requires the real fresh readback.
+  for(const state of ['Z','X']) {
+    await expect(checkRawReceiverIdentity({...current,state},current,process.pid,hash)).rejects.toThrow('identity unavailable');
+    await expect(checkRawReceiverIdentity({...current,state},undefined,process.pid,hash)).rejects.toThrow('not observed');
+  }
+  await expect(checkRawReceiverIdentity(undefined,current,process.pid,hash)).rejects.toThrow('identity unavailable');
+});
+
+test.skipIf(process.platform!=='linux')('raw receiver checker preserves exact filesystem errors and rejects missing executable for a still-live receiver',async()=>{
+  const current=(await identity(process.pid))!,path=`/proc/${process.pid}/exe`;
+  const original=fileSystem.readFile;
+  const hash=createHash('sha256').update(await original(path)).digest('hex');
+  for(const code of ['EACCES','EIO',undefined,'ENOENT','ESRCH']) {
+    const failure=Object.assign(new Error('private-receiver-read-error'),{code});
+    const read=spyOn(fileSystem,'readFile').mockImplementation((...args:Parameters<typeof original>)=>{
+      if(args[0]===path)return Promise.reject(failure);
+      return original(...args);
+    });
+    try {
+      const result=await checkRawReceiverIdentity(current,current,process.pid,hash).catch(error=>error);
+      if(code==='ENOENT' || code==='ESRCH')expect(result.message).toBe('Owned IME receiver identity unavailable');
+      else expect(result).toBe(failure);
+      expect((await identity(process.pid))?.start).toBe(current.start);
+    } finally {read.mockRestore();}
+  }
+  expect(await checkRawReceiverIdentity(current,current,process.pid,hash)).toEqual(current);
+});
+
+test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observed terminal replacement before any later disappearance',async()=>{
+  const current=(await identity(process.pid))!;
+  const hash=createHash('sha256').update(await readFile(`/proc/${process.pid}/exe`)).digest('hex');
+  for(const state of ['Z','X']) {
+    let reads=0;
+    const sample=spyOn(ownedProcesses,'identity').mockImplementation(async()=>++reads===1?{...current,start:'0',state}:undefined);
+    try {
+      await expect(checkRawReceiverIdentity(current,current,process.pid,hash)).rejects.toThrow('replaced');
+      expect(reads).toBe(1);
+    } finally {sample.mockRestore();}
+  }
+  expect((await identity(process.pid))?.start).toBe(current.start);
+});
 
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;

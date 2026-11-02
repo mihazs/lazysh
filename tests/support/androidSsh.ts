@@ -362,6 +362,41 @@ export async function attachmentIdentity(path:string) {
   } finally {await file.close();}
 }
 
+// A previously admitted receiver may exit between /proc reads during ordinary
+// native disconnect. Only a fresh terminal observation permits that transition;
+// a known bad hash, replacement or live foreign process still fails immediately.
+export async function checkRawReceiverIdentity(current:Awaited<ReturnType<typeof identity>>,observed:Awaited<ReturnType<typeof identity>>,daemonPid:number,imageHash:string|undefined) {
+  if(current && observed && (current.pid!==observed.pid || current.start!==observed.start))throw new Error('Owned IME receiver replaced');
+  const exited=async()=>{
+    if(!observed)throw new Error('Original owned IME receiver was not observed');
+    const final=await identity(observed.pid);
+    if(final && final.start!==observed.start)throw new Error('Owned IME receiver replaced');
+    if(final && !['Z','X'].includes(final.state))throw new Error('Owned IME receiver identity unavailable');
+    return observed;
+  };
+  if(!current || ['Z','X'].includes(current.state))return exited();
+  let ancestor=current,owned=false;
+  for(let depth=0;depth<16;depth++) {
+    if(ancestor.pid===daemonPid){owned=true;break;}
+    if(ancestor.parent===0)throw new Error('Owned IME receiver identity unavailable');
+    const parent=await identity(ancestor.parent);
+    if(!parent)return exited();
+    ancestor=parent;
+  }
+  if(!owned)throw new Error('Owned IME receiver identity unavailable');
+  let bytes:Buffer;
+  try {bytes=await readFile(`/proc/${current.pid}/exe`);}
+  catch(error) {
+    if(!['ENOENT','ESRCH'].includes((error as NodeJS.ErrnoException).code??''))throw error;
+    return exited();
+  }
+  if(createHash('sha256').update(bytes).digest('hex')!==imageHash)throw new Error('Owned IME receiver image differs');
+  const final=await identity(current.pid);
+  if(final && final.start!==current.start)throw new Error('Owned IME receiver replaced');
+  if(!final || ['Z','X'].includes(final.state))return exited();
+  return current;
+}
+
 /** Deliberately raw wire bytes: DEL erases only two committed ASCII characters. */
 export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
   if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
@@ -497,17 +532,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
           if(text) {
             if(!/^[1-9][0-9]{0,9}\n$/.test(text))throw new Error('Owned IME receiver PID invalid');
             const current=await identity(Number(text.trim()));
-            if(current && !['Z','X'].includes(current.state)) {
-              if(imeObserved && current.start!==imeObserved.start)throw new Error('Owned IME receiver replaced');
-              let ancestor=current,owned=false;
-              for(let depth=0;depth<16;depth++) {
-                if(ancestor.pid===fixture.daemon.child.pid){owned=true;break;}
-                const parent=await identity(ancestor.parent);if(!parent)break;ancestor=parent;
-              }
-              if(!owned || createHash('sha256').update(await readFile(`/proc/${current.pid}/exe`)).digest('hex')!==imeImageHash
-                || (await identity(current.pid))?.start!==current.start)throw new Error('Owned IME receiver identity unavailable');
-              imeObserved=current;
-            }
+            imeObserved=await checkRawReceiverIdentity(current,imeObserved,fixture.daemon.child.pid!,imeImageHash);
           }
         }
       }catch(error){
