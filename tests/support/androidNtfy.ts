@@ -5,8 +5,57 @@ import {join,resolve} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import type {Writable} from 'node:stream';
 import {finished} from 'node:stream/promises';
-import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,compareHostAdbServer,emulatorContinuity,compareEmulatorContinuity} from './androidSsh';
+import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,compareHostAdbServer,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses} from './androidSsh';
 import {attestQrCamera} from './androidQrOwnership';
+
+const toolStages={
+  'native acceptance APK resources':'acceptance-resources',
+  'actual native ntfy instrumentation':'native-instrumentation',
+  'restore ordinary debug trust':'debug-trust-restore',
+  'ordinary release resource assembly':'release-resources',
+  'source checkout identity':'source-identity',
+  'owned package operation':'package-operation',
+  'fixture package absence':'package-absence',
+  'owned reverse cleanup':'reverse-cleanup',
+  'owned TLS reverse':'tls-reverse',
+  'official ntfy artifact download':'artifact-download',
+  'official distributor signature':'distributor-signature',
+  'official distributor identity':'distributor-identity',
+  'owned ntfy HTTPS health':'https-health',
+  'fixture-only trust configuration':'trust-configuration',
+  'fixture-only debuggable APK':'debuggable-apk',
+  'exact owned fixture CA':'fixture-ca',
+} as const;
+/** Closed observations only; process state is sampled after finish's cleanup, not at the failure instant. */
+export async function ntfyToolFailure(stage:string,error:unknown,child:OwnedProcess|undefined,ownershipCheckReturned:boolean) {
+  const known=Object.hasOwn(toolStages,stage),operation=known?toolStages[stage as keyof typeof toolStages]:'unclassified';
+  let outcome:'ownership-check'|'launch'|'deadline'|'nonzero-exit'|'spawn-failed'|'teardown-deadline'|'unknown'=
+    ownershipCheckReturned?'unknown':'ownership-check';
+  let exit:number|null=null;
+  const process={scope:'after-finish-cleanup' as const,state:'unavailable',exitCode:null as number|null};
+  if(child) {
+    try {
+      const row=await child.startupDiagnostic();
+      if(['missing-launcher','launch-denied','launch-failed','early-exit','signaled','running','launch-unavailable'].includes(row.state))process.state=row.state;
+      if(row.exitCode!==null && Number.isInteger(row.exitCode) && row.exitCode>=0 && row.exitCode<=255)process.exitCode=row.exitCode;
+    }catch{ /* Observer failure never replaces the original tool failure. */ }
+  } else if(ownershipCheckReturned)outcome='launch';
+  if(known && child) {
+    let message:unknown;try {message=error instanceof Error?error.message:undefined;}catch{ /* Closed unknown. */ }
+    if(typeof message==='string' && message.length<=512) {
+      if(message===`Owned fixture deadline: ${stage}`)outcome='deadline';
+      else if(message===`Owned fixture process could not start` && ['missing-launcher','launch-denied','launch-failed'].includes(process.state))outcome='spawn-failed';
+      else if(message==='Owned fixture process teardown deadline')outcome='teardown-deadline';
+      else {
+        const prefix=`Owned fixture failed: ${stage}; exit=`;
+        const code=message.startsWith(prefix)?message.slice(prefix.length):'';
+        if(/^(?:0|[1-9][0-9]{0,2})$/.test(code) && Number(code)>0 && Number(code)<=255){outcome='nonzero-exit';exit=Number(code);}
+      }
+    }
+  }
+  return {operation,ownershipCheckReturned,outcome,exit,process,
+    output:gradleFailureClasses(child?.stdout??'',child?.stderr??'')};
+}
 
 const packages=['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client'] as const;
 export class OwnedNtfyPackages {
@@ -410,10 +459,21 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   let receiptValue:Record<string,unknown>|undefined;
   let failureValue:Record<string,unknown>|undefined;
   let originalFailure:Error|undefined;
+  let nativeReceiptValidated=false;
+  let lastRunError:unknown;
+  let lastToolFailure:Awaited<ReturnType<typeof ntfyToolFailure>>|undefined;
   const run=async(stage:string,program:string,args:string[],milliseconds=10_000)=>{
-    phase=stage;
-    await owned.check();
-    return new OwnedProcess(program,args,root).finish(stage,milliseconds);
+    phase=stage;lastRunError=undefined;lastToolFailure=undefined;
+    let child:OwnedProcess|undefined,ownershipCheckReturned=false;
+    try {
+      await owned.check();ownershipCheckReturned=true;
+      child=new OwnedProcess(program,args,root);
+      return await child.finish(stage,milliseconds);
+    }catch(error) {
+      lastRunError=error;
+      try {lastToolFailure=await ntfyToolFailure(stage,error,child,ownershipCheckReturned);}catch{ /* Optional observer only. */ }
+      throw error;
+    }
   };
   const shell=(stage:string,args:string[])=>run(stage,adb,['-s',serial,...args]);
   const installed=new OwnedNtfyPackages(args=>shell('owned package operation',args));
@@ -523,6 +583,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       '-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyAcceptance=true',
       `-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyNonce=${nonce}`],240_000);
     const native=await receipt(directory);
+    nativeReceiptValidated=true;
     await relay.finish('actual relay confirmation and cleanup',10_000);
     if(!relay.stdout.includes('actualServerConfirmed=true oneConfirmation=true'))throw new Error('Owned relay proof missing');
     if(!relay.stdout.includes('boundEventAccepted=true eventReplayPublished=true'))throw new Error('Owned relay event proof missing');
@@ -542,7 +603,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       'apps/client/src-tauri/gen/android/app/build.gradle.kts','tests/support/androidNtfy.ts']){
       source[path]=createHash('sha256').update(await boundedFile(join(root,path),1024*1024)).digest('hex');
     }
-    receiptValue={schemaVersion:1,head,source,...native,clockComparison,serverVersion:pins.server.version,
+    receiptValue={schemaVersion:1,head,source,...native,nativeReceiptValidated,clockComparison,serverVersion:pins.server.version,
       distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
       distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
       activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
@@ -550,7 +611,9 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   }catch(error){
     primary=true;
     const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;
-    failureValue={schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,
+    // Snapshot the primary run's observations before finally invokes cleanup through run again.
+    failureValue={schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,nativeReceiptValidated,
+      ...(lastRunError===error && lastToolFailure?{toolFailure:lastToolFailure}:{}),
       ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false};
     // Framework/private protocol errors may contain values. Keep only the fixed
     // source stage and finite exit; raw logs remain private until owned cleanup.
@@ -569,7 +632,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     try{
       await mkdir(finite,{recursive:true});
       await writeFile(join(finite,failed?'failure.json':'receipt.json'),JSON.stringify({
-        ...(failed?failureValue??{schemaVersion:1,phase:'owned cleanup',exit:null,runtimePassed:false,notificationDelivery:false}:receiptValue),
+        ...(failed?failureValue??{schemaVersion:1,phase:'owned cleanup',exit:null,nativeReceiptValidated,runtimePassed:false,notificationDelivery:false}:receiptValue),
         ...(clock?{controlledClock:clock.observation()}:{}),cleanupFailures})+'\n');
     }catch{if(!failed)throw new Error('Finite ntfy receipt could not be retained');console.error('Finite ntfy failure receipt could not be retained');}
     if(cleanupFailures.length){if(primary)console.error('Owned ntfy cleanup failed after original failure');else throw new Error('Owned ntfy cleanup failed');}
