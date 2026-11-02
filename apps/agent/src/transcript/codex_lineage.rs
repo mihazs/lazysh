@@ -412,7 +412,22 @@ mod tests {
         let mut history = read(&path).unwrap();
         qualify_tree(&path, &mut history).unwrap();
         let retired = directory.path().join("retired");
-        fs::rename(&home, &retired).unwrap();
+        if let Err(error) = fs::rename(&home, &retired) {
+            #[cfg(windows)]
+            {
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(error.raw_os_error(), Some(5));
+                assert!(!retired.try_exists().unwrap());
+                history.sources[0]
+                    .snapshot
+                    .same_file(&open_transcript(&path).unwrap())
+                    .unwrap();
+                history.verify().unwrap();
+                return;
+            }
+            #[cfg(not(windows))]
+            panic!("root replacement fixture could not rename its owned root: {error}");
+        }
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::hard_link(retired.join("sessions/2026/01/02/selected.jsonl"), &path).unwrap();
         history.sources[0]
