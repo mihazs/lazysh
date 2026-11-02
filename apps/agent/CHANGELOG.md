@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.9.4
+
+### Patch Changes
+
+- 0eb395e: Retain closed failure-only stages from the owned WAL crash-recovery fixture while preserving the original panic, child cleanup and storage acceptance limits.
+- @lazysh/account-usage@1.9.4
+  - @lazysh/common@1.9.4
+  - @lazysh/notification-client@1.9.4
+
 ## 1.9.3
 
 ### Patch Changes
