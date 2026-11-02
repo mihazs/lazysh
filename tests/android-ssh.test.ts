@@ -1406,6 +1406,47 @@ test('native D-pad routing preserves default isolation and the packaged/raw-SSH 
   expect(body).toContain('Dead-zone output must stop');expect(body).toContain('Final UP must not repeat or click the original arrow');
 });
 
+test('native IME failed-editor observation exposes each unchanged predicate clause without reading private editor data',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('fun tapTerminal()')[0];
+  const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
+  const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")));
+  expect(expressions).toHaveLength(2);
+  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document',`return (${expressions[1]});`);
+  let count=1,focus=true,hidden=false,active=true,session=true;
+  const area={readOnly:false,disabled:false,type:'textarea',autocomplete:'off',spellcheck:false,
+    getAttribute:(name:string)=>{expect(name).toBe('autocorrect');return autocorrect;}};
+  let autocorrect='off',privateReads=0;
+  for(const key of ['value','textContent','selectionStart','selectionEnd','id'])Object.defineProperty(area,key,{get(){privateReads++;throw new Error('private field');}});
+  const document={hasFocus:()=>focus,get hidden(){return hidden;},get activeElement(){return active?area:null;},
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');return Array.from({length:count},()=>area);},
+    querySelector:(selector:string)=>{expect(selector).toBe("button[aria-label='Disconnect owned']");return session?{getClientRects(){throw new Error('Visibility must not alter DOM session presence');}}:null;}};
+  Object.defineProperty(document,'URL',{get(){privateReads++;throw new Error('private URL');}});
+  const expected={count:'one',focus:true,visible:true,active:true,writable:true,enabled:true,normalType:true,autocompleteOff:true,autocorrectOff:true,spellcheckOff:true,sessionPresent:true};
+  expect(predicate(document)).toBe(true);expect(observe(document)).toEqual(expected);expect(predicate(document)).toBe(true);
+  const cases=[
+    ['focus',()=>{focus=false;},()=>{focus=true;}],['visible',()=>{hidden=true;},()=>{hidden=false;}],
+    ['active',()=>{active=false;},()=>{active=true;}],['writable',()=>{area.readOnly=true;},()=>{area.readOnly=false;}],
+    ['enabled',()=>{area.disabled=true;},()=>{area.disabled=false;}],['normalType',()=>{area.type='password';},()=>{area.type='textarea';}],
+    ['autocompleteOff',()=>{area.autocomplete='on';},()=>{area.autocomplete='off';}],['autocorrectOff',()=>{autocorrect='on';},()=>{autocorrect='off';}],
+    ['spellcheckOff',()=>{area.spellcheck=true;},()=>{area.spellcheck=false;}],['sessionPresent',()=>{session=false;},()=>{session=true;}],
+  ] as const;
+  for(const [field,breakClause,restore]of cases) {
+    breakClause();expect(predicate(document)).toBe(false);expect(observe(document)).toEqual({...expected,[field]:false});expect(predicate(document)).toBe(false);restore();
+  }
+  for(const amount of [0,2]) {
+    count=amount;expect(predicate(document)).toBe(false);
+    const result=observe(document);expect(result.count).toBe(amount===0?'zero':'many');
+    for(const field of ['active','writable','enabled','normalType','autocompleteOff','autocorrectOff','spellcheckOff'])expect(result[field]).toBeNull();
+  }
+  count=1;expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
+  expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}})).toThrow('unavailable');
+  expect(JSON.stringify(observe(document))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
+  const preferences=kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0];
+  expect(preferences).toContain('workspaceElementVisible("button[aria-label=\'Preferences\']")');
+  expect(preferences).toContain('else workspaceMenuAction(scenario,"Preferences")');
+});
+
 test('native D-pad count and neutral observations execute the embedded source with closed current-pad ownership',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0],nonce='0123456789abcdef'.repeat(2);
