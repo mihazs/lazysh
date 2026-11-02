@@ -1838,7 +1838,7 @@ class NativeWorkspaceTest {
             .use { it.readNBytes(16_385) }
         require(fingerSource.size <= 16_384)
         val fingerScript = fingerSource.toString(Charsets.UTF_8)
-        val geometryScript = "(()=>{$fingerScript;return ownedHerdrSwipeGeometry($screens,window.visualViewport,devicePixelRatio,document);})()"
+        val geometryScript = "(()=>{$fingerScript;const screens=$screens,result=ownedHerdrSwipeGeometry(screens,window.visualViewport,devicePixelRatio,document);if(result.ready)result.rowHeight=screens[0].getBoundingClientRect().height/screens[0].querySelectorAll('.xterm-rows > div').length;return result;})()"
         var geometry = JSONObject()
         while (true) {
             val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
@@ -1848,6 +1848,8 @@ class NativeWorkspaceTest {
             val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
             if (pause > 0) Thread.sleep(pause)
         }
+        val shortRowHeight = geometry.getDouble("rowHeight")
+        require(shortRowHeight.isFinite() && shortRowHeight > 0 && shortRowHeight <= 32.0) { "Owned short-drag geometry admission unavailable: rendered row must be finite, positive and at most 32 CSS pixels" }
         val rect = geometry.getJSONArray("rect")
         val viewport = geometry.getJSONArray("viewport")
         val bounds = (0..3).map { rect.getDouble(it) }
@@ -1906,119 +1908,176 @@ class NativeWorkspaceTest {
             assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
             return floatArrayOf((frame[0] + x).toFloat(), (frame[1] + y).toFloat())
         }
-        val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
-        val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
-        assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
-        val downTime = android.os.SystemClock.uptimeMillis()
-        val pointer = android.view.MotionEvent.PointerProperties().apply {
-            id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
-        }
-        var fingerDown = false
-        var lastPoint = floatArrayOf()
-        var fingerFailure: Throwable? = null
         val fingerStarted = System.nanoTime()
         val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
-        val dispatches = JSONArray()
-        fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fingerStarted).coerceIn(0, 65_535)
-        fun sendFinger(action: Int, point: FloatArray) {
-            val coordinate = android.view.MotionEvent.PointerCoords().apply {
-                x = point[0]; y = point[1]; pressure = 1f; size = 1f
+        fun nativeFingerGesture(short: Boolean, before: Int, requireCompletedProgress: Boolean = false): JSONObject {
+            val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
+            val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
+            val downTime = android.os.SystemClock.uptimeMillis()
+            val pointer = android.view.MotionEvent.PointerProperties().apply {
+                id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
             }
-            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
-                1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
-            try {
-                assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
-                assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
-                instrumentation.sendPointerSync(event)
-            } finally {event.recycle()}
-        }
-        fun injectFinger(action: Int, fraction: Double) {
-            val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
-            if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
-            assertTrue("Owned finger dispatch trace is bounded", dispatches.length() < 6)
-            dispatches.put(dispatch)
-            // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
-            instrumentation.runOnMainSync {
-                lastPoint = fingerPoint(fingerView, fraction, dispatch)
-                val global = Rect(); val visibleWindow = Rect()
-                dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
-                fingerView.getWindowVisibleDisplayFrame(visibleWindow)
-                dispatch.put("frame", JSONArray(startFrame)).put("point", JSONArray(lastPoint.map { it.toInt() }))
-                    .put("scroll", JSONArray(listOf(fingerView.scrollX, fingerView.scrollY)))
-                    .put("global", JSONArray(listOf(global.left, global.top, global.right, global.bottom)))
-                    .put("window", JSONArray(listOf(visibleWindow.left, visibleWindow.top, visibleWindow.right, visibleWindow.bottom)))
+            var fingerDown = false
+            var lastPoint = floatArrayOf()
+            var fingerFailure: Throwable? = null
+            val dispatches = JSONArray()
+            fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fingerStarted).coerceIn(0, 65_535)
+            fun sendFinger(action: Int, point: FloatArray) {
+                val coordinate = android.view.MotionEvent.PointerCoords().apply {
+                    x = point[0]; y = point[1]; pressure = 1f; size = 1f
+                }
+                val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                    1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                try {
+                    assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
+                    assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
+                    instrumentation.sendPointerSync(event)
+                } finally {event.recycle()}
             }
-            dispatch.put("injectBeginMs", elapsed()).put("eventAgeMs", android.os.SystemClock.uptimeMillis() - downTime)
-            if (action != android.view.MotionEvent.ACTION_UP)
-                assertTrue("Owned finger injection requires remaining original budget: dispatches=$dispatches", System.nanoTime() < fingerDeadline)
-            sendFinger(action, lastPoint)
-            dispatch.put("injectEndMs", elapsed())
-        }
-        var lastFingerSample = JSONObject()
-        var samplePhase = 0
-        var sampleSequence = 0
-        var sampleAtMs = 0L
-        fun fingerSample(timeoutMillis: Long): String {
-            val result = AtomicReference<String>()
-            val completed = CountDownLatch(1)
-            assertTrue("Owned finger probe dispatch rejected", fingerView.post {
-                if (ownsFingerView() && System.nanoTime() < fingerDeadline) {
-                    fingerView.evaluateJavascript("window[$fingerKey].sample()") { value ->
-                        if (ownsFingerView() && System.nanoTime() < fingerDeadline) result.set(value)
-                        completed.countDown()
+            fun injectFinger(action: Int, fraction: Double) {
+                val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
+                if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
+                assertTrue("Owned finger dispatch trace is bounded", dispatches.length() < 6)
+                dispatches.put(dispatch)
+                // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
+                instrumentation.runOnMainSync {
+                    lastPoint = fingerPoint(fingerView, fraction, dispatch)
+                    val global = Rect(); val visibleWindow = Rect()
+                    dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
+                    fingerView.getWindowVisibleDisplayFrame(visibleWindow)
+                    dispatch.put("frame", JSONArray(startFrame)).put("point", JSONArray(lastPoint.map { it.toInt() }))
+                        .put("scroll", JSONArray(listOf(fingerView.scrollX, fingerView.scrollY)))
+                        .put("global", JSONArray(listOf(global.left, global.top, global.right, global.bottom)))
+                        .put("window", JSONArray(listOf(visibleWindow.left, visibleWindow.top, visibleWindow.right, visibleWindow.bottom)))
+                }
+                dispatch.put("injectBeginMs", elapsed()).put("eventAgeMs", android.os.SystemClock.uptimeMillis() - downTime)
+                if (action != android.view.MotionEvent.ACTION_UP)
+                    assertTrue("Owned finger injection requires remaining original budget: dispatches=$dispatches", System.nanoTime() < fingerDeadline)
+                sendFinger(action, lastPoint)
+                dispatch.put("injectEndMs", elapsed())
+            }
+            var lastFingerSample = JSONObject()
+            var samplePhase = 0
+            var sampleSequence = 0
+            var sampleAtMs = 0L
+            fun fingerRead(expression: String, timeoutMillis: Long): String {
+                val result = AtomicReference<String>()
+                val completed = CountDownLatch(1)
+                assertTrue("Owned finger probe dispatch rejected", fingerView.post {
+                    if (ownsFingerView() && System.nanoTime() < fingerDeadline) {
+                        fingerView.evaluateJavascript(expression) { value ->
+                            if (ownsFingerView() && System.nanoTime() < fingerDeadline) result.set(value)
+                            completed.countDown()
+                        }
+                    } else completed.countDown()
+                })
+                assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
+                return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget" }
+            }
+            fun fingerSample(timeoutMillis: Long) = fingerRead("window[$fingerKey].sample()", timeoutMillis)
+            fun observedDelivery(ended: Boolean, before: Int? = null): JSONObject {
+                while (true) {
+                    val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                    assertTrue("Owned short drag delivery exceeded original cohort budget: ended=$ended dispatches=$dispatches sample=$lastFingerSample", remaining > 0)
+                    val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
+                    lastFingerSample = sample
+                    val events = sample.getJSONObject("global").getJSONArray("events")
+                    val touchStarts = (0 until events.length()).count { events.getJSONObject(it).getString("type") == "touchstart" }
+                    val cancelled = (0 until events.length()).any { events.getJSONObject(it).getString("type") == "touchcancel" }
+                    assertTrue("Short drag must not restart or cancel: sample=$sample", touchStarts <= 1 && !cancelled)
+                    val endedOnce = (0 until events.length()).count { index ->
+                        val event = events.getJSONObject(index)
+                        event.getString("type") == "touchend" && event.getBoolean("trusted") && event.getBoolean("identityMatches")
+                    } == 1
+                    if (ended) {
+                        val progressed = before == null || (sample.getInt("row") in 0..511 && sample.getInt("row") < before && !sample.getBoolean("newest"))
+                        if (touchStarts == 1 && endedOnce && !sample.getBoolean("active") && progressed && System.nanoTime() < fingerDeadline) return sample
+                    } else {
+                        assertTrue("Short drag cancelled or restarted before UP: sample=$sample", sample.getBoolean("active"))
+                        if (sample.getBoolean("held") && sample.getInt("moves") >= 1 && System.nanoTime() < fingerDeadline) return sample
                     }
-                } else completed.countDown()
-            })
-            assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
-            return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget" }
-        }
-        fun progress(before: Int, moves: Int): Int {
-            while (true) {
-                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
-                val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
-                lastFingerSample = sample
-                samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
-                assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
-                val row = sample.getInt("row")
-                if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
-                Thread.sleep(10)
+                    Thread.sleep(10)
+                }
             }
-        }
-        try {
-            instrumentation.runOnMainSync {
-                check(ownsFingerView()) { "Owned finger Window installation lost its view" }
-                val window = fingerActivity.window
-                val observer = OwnedFingerWindowObserver(checkNotNull(window.callback), downTime)
-                window.callback = observer
-                fingerWindow = observer
+            fun progress(before: Int, moves: Int): Int {
+                while (true) {
+                    val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                    assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
+                    val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
+                    lastFingerSample = sample
+                    samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
+                    assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
+                    val row = sample.getInt("row")
+                    if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                    Thread.sleep(10)
+                }
             }
-            fingerDown = true
-            injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
-            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
-            val firstRow = progress(512, 1)
-            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.75)
-            val secondRow = progress(firstRow, 2)
-            assertTrue("Second MOVE must reveal further history before the same finger lifts", secondRow < firstRow)
-            injectFinger(android.view.MotionEvent.ACTION_UP, 0.75)
-            fingerDown = false
-        } catch (failure: Throwable) {fingerFailure = failure; throw failure}
-        finally {
-            var cleanup: Throwable? = null
             try {
-                if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
-            } catch (failure: Throwable) {cleanup = failure}
-            try { instrumentation.runOnMainSync { fingerWindow?.restore(fingerActivity.window) } }
-            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
-            try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
-            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
-            if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
+                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                assertTrue("Owned native gesture requires remaining original cohort budget", remaining > 0)
+                assertEquals("Owned continuous finger observation installed", "true", fingerRead(fingerObservation, remaining))
+                instrumentation.runOnMainSync {
+                    check(ownsFingerView()) { "Owned finger Window installation lost its view" }
+                    val window = fingerActivity.window
+                    val observer = OwnedFingerWindowObserver(checkNotNull(window.callback), downTime)
+                    window.callback = observer
+                    fingerWindow = observer
+                }
+                fingerDown = true
+                injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
+                if (short) {
+                    val destination = 0.25 + 16.0 / (bounds[3] - bounds[1])
+                    require(destination < 0.75)
+                    assertTrue("16 CSS pixel short drag must exceed native touch slop",
+                        16.0 * fingerView.height / visible[3] > ViewConfiguration.get(fingerView.context).scaledTouchSlop)
+                    injectFinger(android.view.MotionEvent.ACTION_MOVE, destination)
+                    observedDelivery(false)
+                    injectFinger(android.view.MotionEvent.ACTION_UP, destination)
+                } else {
+                    injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
+                    val firstRow = progress(before, 1)
+                    injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.75)
+                    val secondRow = progress(firstRow, 2)
+                    assertTrue("Second MOVE must reveal further history before the same finger lifts", secondRow < firstRow)
+                    injectFinger(android.view.MotionEvent.ACTION_UP, 0.75)
+                }
+                fingerDown = false
+                return observedDelivery(true, if (short && requireCompletedProgress) before else null)
+            } catch (failure: Throwable) {fingerFailure = failure; throw failure}
+            finally {
+                var cleanup: Throwable? = null
+                try {
+                    if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
+                } catch (failure: Throwable) {cleanup = failure}
+                try { instrumentation.runOnMainSync { fingerWindow?.restore(fingerActivity.window); fingerWindow = null } }
+                catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+                try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
+                catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+                if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
+            }
         }
+        var shortRow = 512
+        var completedProgress = 0
+        val shortSamples = JSONArray()
+        repeat(5) { index ->
+            // Only completed groups wait for remote redraw; the first short drag may legitimately emit no wheel report.
+            val groupComplete = index == 1 || index == 4
+            val sample = nativeFingerGesture(true, shortRow, groupComplete)
+            val row = sample.getInt("row")
+            val newest = sample.getBoolean("newest")
+            shortSamples.put(JSONObject().put("row", row).put("newest", newest))
+            if (groupComplete) {
+                assertTrue("Completed short-drag group must reveal older receiver history: samples=$shortSamples", row in 0..511 && row < shortRow && !newest)
+                completedProgress++; shortRow = row
+            }
+        }
+        assertEquals("Both completed short-drag groups must advance remote history", 2, completedProgress)
+        nativeFingerGesture(false, shortRow)
         awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
             (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
         """)
         focusTab(originalTab)
-        println("lazysh Herdr finger scroll: two native MOVE phases advanced history before one UP; original tab restored before guarded Chat")
+        println("lazysh Herdr finger scroll: five short native drags advanced history repeatedly, then two MOVE phases advanced before one UP; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -4217,6 +4276,87 @@ class NativeWorkspaceTest {
         raw.start()
         fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
+        var imeOrderInstalled = false
+        var imeOrderFinished = false
+        var imeOrderUnavailable = false
+        val imeOrderInstall = """
+            (()=>{const key='__lazyshOwnedImeOrder',owner=${JSONObject.quote(nonce)};if(Object.hasOwn(window,key))return false;
+              const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+              if(areas.length!==1)return false;const area=areas[0],surface=area.closest('.terminal-canvas');
+              if(!surface)return false;
+              let closed=false,overflow=false,unavailable=false,phase='beforeSelect';
+              const events=[],timers=new Set(),listeners=[];let owned;
+              const flag=value=>typeof value==='boolean'?value:null;
+              const initialReadOnly=flag(area.readOnly);
+              const sample=(event,edge,owner)=>{
+                if(closed)return;if(events.length>=24){overflow=true;return;}
+                try {const current=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                  events.push({event,edge,owner,phase,originalPresent:current.length===1&&current[0]===area,
+                    connected:flag(area.isConnected),focused:document.activeElement===area,
+                    documentFocus:flag(document.hasFocus()),visible:typeof document.hidden==='boolean'?!document.hidden:null,
+                    readOnly:flag(area.readOnly),enabled:typeof area.disabled==='boolean'?!area.disabled:null,
+                    reviewPresent:Boolean(surface.closest('.terminal-pane')?.querySelector('.terminal-edit-review'))});
+                }catch{unavailable=true;}
+              };
+              const cleanup=()=>{closed=true;
+                for(const timer of timers)try{clearTimeout(timer);}catch{unavailable=true;}
+                try{timers.clear();}catch{unavailable=true;}
+                for(const [target,name,callback]of listeners)try{target.removeEventListener(name,callback,true);}catch{unavailable=true;}
+                try{if(window[key]===owned)delete window[key];}catch{unavailable=true;}
+              };
+              const listen=(target,name,owner)=>{const callback=event=>{
+                if(owner==='window'&&event.target!==window)return;
+                sample(name,'capture',owner);if(closed)return;
+                if(events.length+timers.size>=24){overflow=true;return;}
+                try {const timer=setTimeout(()=>{timers.delete(timer);sample(name,'deferred',owner);},0);timers.add(timer);}
+                catch{unavailable=true;}
+              };target.addEventListener(name,callback,true);listeners.push([target,name,callback]);};
+              try {
+                for(const name of ['pointerdown','pointerup','pointercancel','click'])listen(surface,name,'surface');
+                for(const name of ['focus','blur']){listen(area,name,'editor');listen(window,name,'window');}
+                listen(document,'visibilitychange','document');
+                window[key]=owned={owner,mark(next){if(['beforeSelect','afterSelect','beforeTap','afterTap'].includes(next)){phase=next;sample('boundary','boundary','observer');}},
+                  stop(){cleanup();return {state:unavailable?'unavailable':'observed',initialReadOnly,overflow,events};}};
+                sample('installed','boundary','observer');return true;
+              }catch{cleanup();return false;}
+            })()
+        """.trimIndent()
+        fun imeOrderMark(phase: String) {
+            if(imeOrderInstalled)runCatching {
+                require(evaluate(scenario,"(()=>{const observer=window.__lazyshOwnedImeOrder;if(observer?.owner!==${JSONObject.quote(nonce)})return false;observer.mark(${JSONObject.quote(phase)});return true;})()",1_000)=="true")
+            }.onFailure {imeOrderUnavailable=true}
+        }
+        fun retainImeOrder(result: JSONObject?, failure: Throwable?) {
+            runCatching {
+                val observed=requireNotNull(result)
+                if(imeOrderUnavailable)observed.put("state","unavailable")
+                require(observed.keys().asSequence().toSet()==setOf("state","initialReadOnly","overflow","events"))
+                require(observed.getString("state") in listOf("observed","unavailable"))
+                require(observed.get("initialReadOnly") is Boolean || observed.isNull("initialReadOnly"))
+                require(observed.get("overflow") is Boolean)
+                val events=observed.getJSONArray("events");require(events.length()<=24)
+                val flags=setOf("originalPresent","connected","focused","documentFocus","visible","readOnly","enabled","reviewPresent")
+                for(index in 0 until events.length()) {
+                    val event=events.getJSONObject(index)
+                    require(event.keys().asSequence().toSet()==flags+setOf("event","edge","owner","phase"))
+                    require(event.getString("event") in listOf("installed","boundary","pointerdown","pointerup","pointercancel","click","focus","blur","visibilitychange"))
+                    require(event.getString("edge") in listOf("capture","deferred","boundary"))
+                    require(event.getString("owner") in listOf("observer","surface","editor","window","document"))
+                    require(event.getString("phase") in listOf("beforeSelect","afterSelect","beforeTap","afterTap"))
+                    for(name in flags)require(event.get(name) is Boolean || event.isNull(name))
+                }
+                if(failure!=null)failure.addSuppressed(AssertionError("IME passive order[$observed]"))
+            }.onFailure {if(failure!=null)runCatching {failure.addSuppressed(AssertionError("IME passive order[unavailable]"))}}
+        }
+        fun finishImeOrder(failure: Throwable? = null) {
+            if(imeOrderFinished)return
+            imeOrderFinished=true
+            val result=if(imeOrderInstalled)runCatching {
+                JSONObject(evaluate(scenario,"window.__lazyshOwnedImeOrder?.owner===${JSONObject.quote(nonce)} ? window.__lazyshOwnedImeOrder.stop() : {state:'unavailable'}",1_000))
+            }.getOrNull() else null
+            imeOrderInstalled=false
+            retainImeOrder(result,failure)
+        }
         fun terminalEditor() {
             try {
             awaitDocument(scenario, "packaged terminal current normal editable helper", """
@@ -4227,9 +4367,14 @@ class NativeWorkspaceTest {
                     Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
             """)
             } catch(primary:Throwable) {
-                // One failure-only callback; never change the original acceptance predicate or failure.
+                // One existing 1000ms callback timeout; diagnostic dispatch is not a new wall-clock bound.
+                val collectOrder=!imeOrderFinished
+                imeOrderFinished=true; imeOrderInstalled=false
+                var order:JSONObject?=null
                 runCatching {
-                    val state=JSONObject(evaluate(scenario,"""
+                    val envelope=JSONObject(evaluate(scenario,"""
+                        (()=>{let editor=null,order=null;
+                          try {editor=
                         (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
                           const area=areas.length===1?areas[0]:null,pane=area?.closest('.terminal-pane');
                           const rects=pane?.getClientRects?.(),visibility=pane?getComputedStyle(pane).visibility:null;
@@ -4242,8 +4387,16 @@ class NativeWorkspaceTest {
                             endedNoticePresent:pane?Boolean(pane.querySelector(':scope > .session-notice[role=status]')):null,
                             modalPresent:pane?Boolean(document.querySelector('[role=dialog][aria-modal=true]')):null,
                             paneDisplayed:rects&&Number.isInteger(rects.length)&&rects.length>=0&&['visible','hidden','collapse'].includes(visibility)?rects.length>0&&visibility==='visible':null,
-                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})()
+                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})();
+                          }catch{}finally{if($collectOrder)try{
+                            const observer=window.__lazyshOwnedImeOrder;
+                            if(observer?.owner===${JSONObject.quote(nonce)})order=observer.stop();
+                          }catch{}}
+                          return {editor,order};})()
                     """,1_000))
+                    order=envelope.optJSONObject("order")
+                    require(envelope.keys().asSequence().toSet()==setOf("editor","order"))
+                    val state=envelope.getJSONObject("editor")
                     val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent","unappliedReviewPresent","endedNoticePresent","modalPresent","paneDisplayed")
                     require(state.keys().asSequence().toSet()==fields.toSet()+"count")
                     val count=state.get("count");require(count in listOf("zero","one","many"))
@@ -4253,6 +4406,7 @@ class NativeWorkspaceTest {
                     }
                     primary.addSuppressed(AssertionError("IME editor state[count=$count $flags]"))
                 }.onFailure {runCatching {primary.addSuppressed(AssertionError("IME editor state[unavailable]"))}}
+                if(collectOrder)retainImeOrder(order,primary)
                 throw primary
             }
             raw.original()
@@ -4263,6 +4417,7 @@ class NativeWorkspaceTest {
                 (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
                   return [rect.left+rect.width/2,rect.top+Math.min(rect.height/2,40),innerWidth];})()
             """))
+            imeOrderMark("beforeTap")
             onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
                 val location = IntArray(2); view.getLocationOnScreen(location)
                 val scale = view.width / bounds.getDouble(2)
@@ -4270,11 +4425,14 @@ class NativeWorkspaceTest {
                 require(x>0 && x<view.width && y>0 && y<view.height) { "Owned terminal tap outside WebView" }
                 floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
             }, Press.FINGER))
+            imeOrderMark("afterTap")
             terminalEditor()
         }
         var primary: Throwable? = null
         try {
-            ime.arm(); ime.select(); tapTerminal()
+            imeOrderInstalled=runCatching {evaluate(scenario,imeOrderInstall,1_000)=="true"}.getOrDefault(false)
+            ime.arm(); imeOrderMark("beforeSelect"); ime.select(); imeOrderMark("afterSelect"); tapTerminal()
+            finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
             for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
@@ -4305,8 +4463,9 @@ class NativeWorkspaceTest {
             terminalEditor()
             awaitDocument(scenario, "actual receiver wrote the exact transaction stream before disconnect", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_DELIVERED')")
             android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
-        } catch (failure: Throwable) { primary=failure; throw failure }
+        } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
+            finishImeOrder(primary)
             try { ime.restore() } catch (cleanup: Throwable) {
                 if (primary != null) primary!!.addSuppressed(cleanup) else throw cleanup
             }

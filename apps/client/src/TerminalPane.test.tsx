@@ -713,7 +713,7 @@ describe("terminal interactions", () => {
     expect(terminal.hasSelection()).toBe(true);
     expect(mocks.write).not.toHaveBeenCalled();
   });
-  it.each(['none','x10'])('retains sub-row scroll travel in %s mode without leaking it across reversal or lift',mode=>{
+  it.each(['none','x10'])('retains rounded sub-row travel across lifts in %s mode without reversing rounding debt',mode=>{
     terminal.modes.mouseTrackingMode=mode;
     const {wheels,touch}=touchScrollFixture(486);
     const row=20.25;
@@ -731,8 +731,67 @@ describe("terminal interactions", () => {
     touch('touchend',100,290);wheels.length=0;
     touch('touchstart',100,300);touch('touchmove',100,289);touch('touchend',100,289);
     touch('touchstart',100,300);touch('touchmove',100,289);
+    expect(wheels.map(event=>event.deltaY)).toEqual([row]);
+    touch('touchcancel',100,289);wheels.length=0;touch('touchmove',100,200);expect(wheels).toHaveLength(0);
+  });
+  it.each(['none','x10','vt200'])('keeps first short drag responsive and repeated travel proportional in %s mode',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {wheels,touch}=touchScrollFixture(480);
+    for(const direction of [-1,1]) {
+      touch('touchcancel',100,100);wheels.length=0;
+      for(let gesture=0;gesture<5;gesture++) {
+        touch('touchstart',100,100);touch('touchmove',100,100-direction*16);
+        const count=wheels.length;touch('touchmove',100,100-direction*16);expect(wheels).toHaveLength(count);
+        if(gesture===0)expect(wheels.map(event=>event.deltaY)).toEqual(mode==='vt200'?[]:[direction*20]);
+        touch('touchend',100,100-direction*16);
+      }
+      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(direction*(mode==='vt200'?4:80));
+    }
+  });
+  it.each(['none','vt200'])('retires short-drag debt at ownership and gesture boundaries in %s mode',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {view,canvas,wheels,touch,target}=touchScrollFixture(480);
+    const show=(id='ssh',active=true,connected=true)=>view.rerender(<TerminalPane session={{id,name:'Host',connected,terminal} as unknown as LiveSession} active={active} reportError={vi.fn()} />);
+    for(const boundary of ['cancel','multitouch','tap','horizontal','mode','height','buffer','scrollback','inactive','disconnect','session','preferences','reader']) {
+      terminal.modes.mouseTrackingMode=mode;
+      Object.assign(terminal.buffer.active,{type:'normal'});Object.assign(terminal.options,{scrollback:1000});
+      target.querySelector('.xterm-screen')!.getBoundingClientRect=()=>({height:480} as DOMRect);
+      touch('touchcancel',100,100);show();
+      touch('touchstart',100,100);touch('touchmove',100,86);touch('touchend',100,86);
+      if(boundary==='cancel')touch('touchcancel',100,86);
+      if(boundary==='multitouch')canvas.dispatchEvent(new TouchEvent('touchmove',{bubbles:true,touches:[{identifier:1},{identifier:2}] as Touch[]}));
+      if(boundary==='tap'||boundary==='horizontal') {touch('touchstart',100,100);touch('touchmove',boundary==='horizontal'?180:100,boundary==='horizontal'?100:95);touch('touchend',100,100);}
+      if(boundary==='mode')terminal.modes.mouseTrackingMode=mode==='none'?'x10':'drag';
+      if(boundary==='height')target.querySelector('.xterm-screen')!.getBoundingClientRect=()=>({height:600} as DOMRect);
+      if(boundary==='buffer')Object.assign(terminal.buffer.active,{type:'alternate'});
+      if(boundary==='scrollback')Object.assign(terminal.options,{scrollback:0});
+      if(boundary==='inactive'){show('ssh',false);show();}
+      if(boundary==='disconnect'){show('ssh',true,false);show();}
+      if(boundary==='session')show('another');
+      if(boundary==='preferences')act(()=>savePreferences({...getPreferences(),bodyGestures:{...getPreferences().bodyGestures,tap:'escape'}}));
+      if(boundary==='reader'){act(()=>savePreferences({...getPreferences(),screenReader:true}));act(()=>savePreferences({...getPreferences(),screenReader:false}));}
+      wheels.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
+      expect(wheels.map(event=>event.deltaY),boundary).toEqual(mode==='vt200'||boundary==='buffer'||boundary==='scrollback'?[]:[boundary==='height'?25:20]);
+      touch('touchcancel',100,86);
+    }
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['alternate','zero-scrollback'])('keeps untracked %s wheel arrow input on whole notches',route=>{
+    const {wheels,touch}=touchScrollFixture(480);
+    if(route==='alternate')Object.assign(terminal.buffer.active,{type:'alternate'});
+    else Object.assign(terminal.options,{scrollback:0});
+    for(let gesture=0;gesture<5;gesture++) {
+      touch('touchstart',100,100);touch('touchmove',100,84);touch('touchend',100,84);
+      if(gesture===0)expect(wheels).toHaveLength(0);
+    }
+    expect(wheels.map(event=>[event.deltaY,event.deltaMode])).toEqual(Array.from({length:4},()=>[20,WheelEvent.DOM_DELTA_PIXEL]));
+  });
+  it('does not carry capped whole notches from an ended drag into a new gesture',()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const {wheels,touch}=touchScrollFixture(480);
+    touch('touchstart',100,1500);touch('touchmove',100,300);touch('touchend',100,300);
+    wheels.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
     expect(wheels).toHaveLength(0);
-    touch('touchcancel',100,289);touch('touchmove',100,200);expect(wheels).toHaveLength(0);
   });
   it('uses touch distance rather than move frequency for mouse wheel notches, preserving direction and gesture ownership',()=>{
     terminal.modes.mouseTrackingMode='vt200';
