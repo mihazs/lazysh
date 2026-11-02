@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.
+
+
 - Preserve fractional scroll distance between short finger drags in the same active terminal, making small gestures responsive without amplifying repeated movement; navigation, cancellation and connection changes retire pending travel.
 
 - Allow vertical finger scrolling after selecting terminal text, using xterm’s normal wheel selection behavior; horizontal gestures, taps and accessibility safeguards remain unchanged.

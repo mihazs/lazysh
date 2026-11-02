@@ -1749,6 +1749,13 @@ button svg {
 .workspace-live-sessions { display: grid; gap: 6px; margin: 8px 0; }
 .workspace-live-sessions button { display: grid; gap: 5px; min-height: 44px; justify-content: stretch; text-align: left; overflow-wrap: anywhere; }
 .workspace-live-sessions small { color: var(--muted); }
+.workspace-app-sessions[hidden], .workspace-live-sessions[hidden] { display: none; }
+.workspace-session-summary { width: 100%; min-height: 44px; justify-content: space-between; text-align: left; }
+.workspace-session-summary > span { display: grid; gap: 3px; min-width: 0; }
+.workspace-session-summary > span > span { color: var(--muted); font-size: 11px; }
+.workspace-session-summary strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-session-summary > svg { flex: 0 0 auto; }
+
 .workspace-navigation-content .multiplexer-panel { margin-top: 14px; }
 .workspace-navigation-content .tool-bar { flex-wrap: wrap; padding: 8px 0; }
 .workspace-navigation-content .mux-row button { min-height: 44px; white-space: normal; text-align: left; overflow-wrap: anywhere; }

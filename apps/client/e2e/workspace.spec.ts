@@ -98,18 +98,18 @@ async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'applicat
   await page.getByRole('dialog',{name:'Workspace tools',exact:true}).locator(`details.${selector} > summary`).click();
 }
 
-async function installWorkspaceNavigation(page:Page,geometry=false){
+async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?:string[]){
   await installNativeBridge(page);
   await page.clock.install();
-  await page.addInitScript((geometry)=>{
+  await page.addInitScript(({geometry,sessionNames})=>{
     const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
-      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];
+      if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
       if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
-      if(command==='connect')return {sessionId:++state.connects===1?'owned-navigation-ssh':'other-navigation-ssh'};
+      if(command==='connect'){const index=++state.connects;return {sessionId:index===1?'owned-navigation-ssh':index===2||!sessionNames?'other-navigation-ssh':`additional-navigation-ssh-${index}`};}
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
       if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
@@ -159,7 +159,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(['cancel_credential_auth','adopt_session','resize','ack_output','disconnect'].includes(command)||command.startsWith('plugin:event|'))return;
       throw new Error(`Unexpected navigation fixture request: ${command}`);
     };
-  },geometry);
+  },{geometry,sessionNames});
 }
 
 async function openClockedNavigation(page:Page) {
@@ -847,6 +847,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
   const sessions=page.getByRole('group',{name:'Live app sessions',exact:true});
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  if(phone)await page.locator('.workspace-session-summary').click();
   await expect(sessions.getByRole('button')).toHaveCount(2);
   await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{installed:boolean}}).workspaceNavigationState.installed=true);
   const activity=page.getByRole('region',{name:'Agent activity',exact:true,includeHidden:true});
@@ -1019,4 +1020,54 @@ for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable
     await modes.locator('button').evaluateAll(buttons=>buttons.forEach(button=>button.style.fontSize=''));
     if(await page.locator('.sidebar-close:visible').count())await page.locator('.sidebar-close:visible').click();
   }
+});
+
+
+test('Workspaces keeps three long app sessions compact while mobile pane choices stay in view',async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';await page.setViewportSize({width:phone?393:1200,height:852});
+  const names=['Desktop development with a long connection name','Desktop development with a long connection name / review','Desktop development with a long connection name / review / agents'];
+  await installWorkspaceNavigation(page,true,names);await page.goto('/');
+  for(const name of names){if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  const terminal=await page.locator('.terminal-canvas:visible').elementHandle();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});await expect(live.locator('.herdr-navigation-row').first()).toBeVisible();
+  const chrome=()=>modes.evaluate(node=>({mode:node.closest('aside')?.getAttribute('data-navigation'),buttons:Array.from(node.querySelectorAll('button')).map(button=>({text:button.textContent,current:button.getAttribute('aria-current'),hover:button.matches(':hover'),focus:button.matches(':focus-visible'),background:getComputedStyle(button).backgroundColor}))}));
+  const beforeNeutral=await chrome();await page.mouse.move((phone?393:1200)-1,851);
+  await modes.evaluate(async node=>{await Promise.all(node.getAnimations({subtree:true}).map(animation=>animation.finished));});
+  const afterNeutral=await chrome();expect(afterNeutral.mode).toBe('workspaces');
+  expect(afterNeutral.buttons.filter(button=>button.current==='page').map(button=>button.text)).toEqual(['Workspaces']);
+  await testInfo.attach('workspace-mode-receipt',{body:JSON.stringify({beforeNeutral,afterNeutral}),contentType:'application/json'});
+  console.info('Workspace mode receipt',JSON.stringify({phone,beforeNeutral,afterNeutral}));
+  await page.screenshot({path:testInfo.outputPath('three-session-workspaces.png')});
+  const sessions=page.getByRole('group',{name:'Live app sessions',exact:true,includeHidden:true});
+  await expect(sessions.getByRole('button',{includeHidden:true})).toHaveCount(3);
+  if(phone){
+    const pane=live.locator('.herdr-navigation-tree > li > ul > li > ul .herdr-navigation-row').first();
+    await page.setViewportSize({width:393,height:640});
+    await page.screenshot({path:testInfo.outputPath('three-session-short-workspaces.png')});
+    await expect(pane).toBeInViewport({ratio:1});
+    await page.setViewportSize({width:393,height:852});
+    const summary=page.locator('.workspace-session-summary');await expect(summary).toHaveAttribute('aria-expanded','false');
+    for(const locale of ['pt-BR','es','en']) {
+      const label=await page.evaluate(async locale=>{const {uiI18n,t}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(locale);return t('navigationLiveSessions');},locale);
+      await expect(summary).toContainText(label);
+      await summary.evaluate(node=>{node.style.fontSize='20px';});
+      const box=(await summary.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.width).toBeGreaterThanOrEqual(44);expect(box.x+box.width).toBeLessThanOrEqual(393);
+      expect(await summary.evaluate(node=>node.scrollWidth<=node.clientWidth+1)).toBe(true);
+    }
+    await summary.evaluate(node=>{node.style.fontSize='';});
+    await expect(sessions).toBeHidden();await summary.focus();await page.keyboard.press('Enter');
+    await expect(sessions).toBeVisible();await expect(summary).toHaveAttribute('aria-expanded','true');
+    await page.keyboard.press('Tab');await expect(sessions.getByRole('button').first()).toBeFocused();
+  }else await expect(sessions).toBeVisible();
+  await expect(sessions.getByRole('button').last()).toHaveAttribute('aria-current','location');
+  await sessions.getByRole('button').first().click();
+  expect(await terminal!.evaluate(node=>node.isConnected)).toBe(true);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  await expect(sessions.getByRole('button').first()).toHaveAttribute('aria-current','location');
+  await expect(live.getByText('fixture@fixture.invalid',{exact:true})).toBeVisible();
+  if(phone)await expect(page.locator('.workspace-session-summary')).toHaveAttribute('aria-expanded','true');
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['disconnect','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
 });
