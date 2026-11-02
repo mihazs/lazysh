@@ -354,7 +354,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         event.preventDefault(); sendNamedRef.current(event.key === " " ? "Space" : event.key, event); return false;
       }
       const named = {ArrowLeft:"Left", ArrowRight:"Right", ArrowUp:"Up", ArrowDown:"Down", Escape:"Escape", Tab:"Tab", Enter:"Enter", Backspace:"Backspace", Home:"Home", End:"End", PageUp:"PageUp", PageDown:"PageDown", Insert:"Insert", Delete:"Delete"} as Record<string,string>;
-      if (event.type === "keydown" && !event.isComposing && (state.ctrl || state.meta || state.shift) && (named[event.key] || /^F(?:[1-9]|1[0-2])$/.test(event.key))) {
+      if (event.type === "keydown" && !event.isComposing && (state.ctrl || state.meta || state.shift || (event.key === "Enter" && event.shiftKey && !event.metaKey && !event.getModifierState?.("AltGraph"))) && (named[event.key] || /^F(?:[1-9]|1[0-2])$/.test(event.key))) {
         event.preventDefault(); sendNamedRef.current(named[event.key] ?? event.key, event); return false;
       }
       return true;
@@ -387,7 +387,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         // guesses, while retaining the lane for asynchronously committed IME.
         if (!pointerInput && !literalPaste.current && inputLane.current === "keyboard") {
           const state = modifierState.current;
-          value = modifiedTerminalText(data, state.ctrl, state.meta);
+          value = state.shift && !state.ctrl && !state.meta && (data === "\r" || data === "\n")
+            ? parseChord("Shift+Enter")
+            : modifiedTerminalText(data, state.ctrl, state.meta);
           if (value !== data) output.clear();
           consumeModifiers();
         }

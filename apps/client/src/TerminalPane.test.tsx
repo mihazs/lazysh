@@ -68,6 +68,33 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+it('preserves physical and toolbar Shift+Enter without submitting an ordinary Enter',()=>{
+  savePreferences({...defaults,toolbar:['shift','enter']});
+  const owner=mountInputOwner();owner.textarea.focus();
+  const handle=terminal.attachCustomKeyEventHandler.mock.calls[0][0] as (event:KeyboardEvent)=>boolean;
+  const event=new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,cancelable:true});
+  expect(handle(event)).toBe(false);
+  expect(event.defaultPrevented).toBe(true);
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u']);
+  expect(handle(new KeyboardEvent('keyup',{key:'Enter',shiftKey:true}))).toBe(true);
+  expect(handle(new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,isComposing:true}))).toBe(true);
+  expect(handle(new KeyboardEvent('keydown',{key:'Enter'}))).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+  fireEvent.click(screen.getByRole('button',{name:'enter'}));
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u']);
+});
+it('applies latched Shift to keyless keyboard Enter without rewriting paste or terminal replies',()=>{
+  const owner=mountInputOwner();owner.textarea.focus();
+  fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+  for(const data of ['\r','\n']) {
+    fireEvent.input(owner.textarea,{data,inputType:'insertLineBreak'});
+    owner.emit(data);
+  }
+  fireEvent.paste(owner.textarea);
+  owner.emit('\n');
+  owner.emit('\r',false);
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u','\n','\r']);
+});
 function dpadFixture(initial="") {
   vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
   const owner=mountInputOwner(initial);fireEvent.click(screen.getByRole('button',{name:'dpad'}));

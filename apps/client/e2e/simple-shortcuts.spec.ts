@@ -50,6 +50,18 @@ async function observeDpadPointers(page:Page) {
   await page.evaluate(()=>{const events:unknown[]=[];Reflect.set(window,'dpadEvents',events);for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture'])document.addEventListener(type,event=>{const pointer=event as PointerEvent;events.push({type,x:pointer.clientX,y:pointer.clientY,id:pointer.pointerId,primary:pointer.isPrimary,target:(event.target as HTMLElement).className});},true);});
 }
 
+test('physical and toolbar Shift+Enter preserve the agent newline key',async({page})=>{
+  await openShortcutTerminal(page);
+  await page.locator('.terminal-canvas').click();
+  await page.keyboard.press('Shift+Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u']);
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r']);
+  await page.getByRole('button',{name:'Shift',exact:true}).click();
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r','\x1b[13;2u']);
+});
+
 test('expanded D-pad pans one held pointer with paced bytes and an idle dead zone',async({page},testInfo)=>{
   await openExpandedDpad(page,testInfo.project.name==='phone');
   const up=page.getByRole('button',{name:'D-pad up',exact:true});
@@ -110,11 +122,8 @@ test('expanded D-pad rejects a secondary contact and admits a later primary touc
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A','\x03','\x7f']);
 });
 
-test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page},testInfo)=>{
-  await fixture(page);
-  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page})=>{
+  await openShortcutTerminal(page);
   await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toHaveCount(1);
   await page.evaluate(()=>{
     const request=window.requestAnimationFrame,frames:FrameRequestCallback[]=[];

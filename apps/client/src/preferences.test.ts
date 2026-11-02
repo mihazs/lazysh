@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
+    expect(parseChord('Shift+Enter')).toBe('\x1b[13;2u');
+    expect(parseChord('S-Enter')).toBe('\x1b[13;2u');
+    expect(parseChord('Enter')).toBe('\r');
+    expect(parseChord('Ctrl+Enter')).toBe('\r');
+    expect(parseChord('Alt+Enter')).toBe('\x1b\r');
+    expect(parseChord('Ctrl+Shift+Enter')).toBe('\r');
+  });
   it('preserves keystroke boundaries and treats literal Unicode/spaces as one step',()=>{
     expect(parseChordSteps('C-b, S-t')).toEqual(['\x02','T']);
     expect(parseChordSteps('F12, M-h Enter')).toEqual(['\x1b[24~','\x1bh','\r']);
