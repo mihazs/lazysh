@@ -1,3 +1,4 @@
+import {openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
@@ -973,4 +974,49 @@ test('native companion action stays owned during installed and reused results',a
   }
   expect(await page.locator('.terminal-canvas').count()).toBe(1);
   expect(await page.locator('[role=tab]').count()).toBe(1);
+});
+
+for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable at ${width}px with enlarged text`,async({page},testInfo)=>{
+  await page.setViewportSize({width,height:852});await page.goto('/');
+  for(const locale of ['en','pt-BR','es']) {
+    await page.locator('.preferences-button:visible').click();
+    if(locale==='en') {
+      await openPreferenceCategory(page,'Appearance');
+      await page.locator('[data-settings-page="appearance"]').evaluate(async node=>{await Promise.all(node.getAnimations().map(animation=>animation.finished));});
+      await page.screenshot({path:testInfo.outputPath(`appearance-${width}.png`)});
+    }
+    await openPreferenceCategory(page,'Language');
+    await page.locator('[data-settings-page="language"] select').selectOption(locale);
+    await closePreferences(page);
+    if(width<=600) {
+      await page.locator('.mobile-menu:visible').click();
+      const sidebar=page.locator('.sidebar');await expect(sidebar).toHaveClass(/sidebar-open/);
+      await sidebar.evaluate(async node=>{await Promise.all(node.getAnimations().map(animation=>animation.finished));});
+    }
+    const modes=page.locator('.workspace-navigation-modes');
+    for(const enlarged of [false,true]) {
+      const measurements=await modes.evaluate((node,enlarged)=>{
+        const buttons=Array.from(node.querySelectorAll('button'));
+        for(const button of buttons)button.style.fontSize=enlarged?'22px':'';
+        return buttons.map(button=>{
+          const box=button.getBoundingClientRect(),walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT);let splitWord=false;
+          for(let text=walker.nextNode();text;text=walker.nextNode())for(const word of text.textContent!.matchAll(/\S+/g)) {
+            const range=document.createRange();range.setStart(text,word.index!);range.setEnd(text,word.index!+word[0].length);
+            if(range.getClientRects().length>1)splitWord=true;
+          }
+          return {text:button.textContent,splitWord,overflow:button.scrollWidth>button.clientWidth+1,height:box.height,width:box.width,left:box.left,right:box.right};
+        });
+      },enlarged);
+      if(locale==='en'&&!enlarged)await page.screenshot({path:testInfo.outputPath(`navigation-${width}.png`)});
+      expect(measurements).toHaveLength(3);
+      for(const button of measurements) {
+        expect(button.splitWord,`${locale} enlarged=${enlarged} ${button.text}`).toBe(false);
+        expect(button.overflow,`${locale} ${button.text}`).toBe(false);
+        expect(button.height).toBeGreaterThanOrEqual(44);expect(button.width).toBeGreaterThanOrEqual(44);expect(button.left).toBeGreaterThanOrEqual(0);expect(button.right).toBeLessThanOrEqual(width);
+      }
+      expect(await modes.evaluate(node=>node.scrollWidth<=node.clientWidth+1)).toBe(true);
+    }
+    await modes.locator('button').evaluateAll(buttons=>buttons.forEach(button=>button.style.fontSize=''));
+    if(await page.locator('.sidebar-close:visible').count())await page.locator('.sidebar-close:visible').click();
+  }
 });
