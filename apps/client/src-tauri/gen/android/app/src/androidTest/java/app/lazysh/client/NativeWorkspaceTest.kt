@@ -3902,7 +3902,10 @@ class NativeWorkspaceTest {
         raw.start()
         var added = false
         fun preferences(action: String) {
-            if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") raw.clickIcon("Preferences")
+            if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") {
+                if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
+                else workspaceMenuAction(scenario,"Preferences")
+            }
             for (title in listOf("Keyboard and gestures", "Toolbar keys and order")) {
                 if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
                     onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
@@ -4098,6 +4101,7 @@ class NativeWorkspaceTest {
         fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
         fun terminalEditor() {
+            try {
             awaitDocument(scenario, "packaged terminal current normal editable helper", """
                 (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea'),area=areas[0];
                   return areas.length===1 && document.hasFocus() && !document.hidden && document.activeElement===area &&
@@ -4105,8 +4109,33 @@ class NativeWorkspaceTest {
                     area.getAttribute('autocorrect')==='off' && area.spellcheck===false &&
                     Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
             """)
+            } catch(primary:Throwable) {
+                // One failure-only callback; never change the original acceptance predicate or failure.
+                runCatching {
+                    val state=JSONObject(evaluate(scenario,"""
+                        (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                          const area=areas.length===1?areas[0]:null;
+                          return {count:areas.length===0?'zero':areas.length===1?'one':'many',
+                            focus:document.hasFocus(),visible:!document.hidden,active:area?document.activeElement===area:null,
+                            writable:area?!area.readOnly:null,enabled:area?!area.disabled:null,normalType:area?area.type!=='password':null,
+                            autocompleteOff:area?area.autocomplete==='off':null,autocorrectOff:area?area.getAttribute('autocorrect')==='off':null,
+                            spellcheckOff:area?area.spellcheck===false:null,
+                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})()
+                    """,1_000))
+                    val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent")
+                    require(state.keys().asSequence().toSet()==fields.toSet()+"count")
+                    val count=state.get("count");require(count in listOf("zero","one","many"))
+                    val flags=fields.joinToString(" ") { name ->
+                        val value=state.get(name);require(value is Boolean || value===JSONObject.NULL)
+                        "$name=${if(value===JSONObject.NULL)"unavailable" else value}"
+                    }
+                    primary.addSuppressed(AssertionError("IME editor state[count=$count $flags]"))
+                }.onFailure {runCatching {primary.addSuppressed(AssertionError("IME editor state[unavailable]"))}}
+                throw primary
+            }
             raw.original()
         }
+
         fun tapTerminal() {
             val bounds = JSONArray(evaluate(scenario, """
                 (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
