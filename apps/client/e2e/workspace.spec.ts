@@ -120,8 +120,8 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
-        (args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'uploading'});state.installed=true;
-        return {schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
+        const status=state.installed?'reused':'installed';(args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'checkingInstalled'});state.installed=true;
+        return {schemaVersion:1,status,version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
       }
       if(command==='agent_snapshot'){
         if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
@@ -169,6 +169,13 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:`Connect to ${name}`,exact:true}).click();
   await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
   await page.getByRole('button',{name:'Connect',exact:true}).click();
+}
+
+async function openConnectedAgents(page:Page,phone:boolean){
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
 }
 
 const nativeWorkspaceSource=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
@@ -617,10 +624,7 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
 test('empty Activity opens inspected hook repair without inventing reports',async({page},testInfo)=>{
   await installWorkspaceNavigation(page,true);
   await page.goto('/');
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await connectPasswordHost(page);
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await openConnectedAgents(page,testInfo.project.name==='phone');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
   await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
@@ -918,4 +922,55 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
     }))).toBe(true);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
+});
+
+
+function nativeCompanionReadiness(action:string,initialOutcome:string){
+  const method=nativeWorkspaceSource.slice(nativeWorkspaceSource.indexOf('fun verifyCompanionInstallation()'));
+  const panel=/val panel = "([^"]+)"/.exec(method)![1];
+  const code=/val companionReadinessObservation = """([\s\S]*?)"""/.exec(method)![1];
+  const visible=/private fun workspaceButtonVisible[^\n]* = """([\s\S]*?)"""/.exec(nativeWorkspaceSource)![1]
+    .replace('${JSONObject.quote("$scope button")}',JSON.stringify(panel+' button')).replace('${JSONObject.quote(text)}',JSON.stringify(action));
+  const values=[
+    ['${JSONObject.quote(panel)}',JSON.stringify(panel)],['${JSONObject.quote("$panel > .tool-bar > button")}',JSON.stringify(panel+' > .tool-bar > button')],
+    ['${workspaceButtonVisible(panel, action)}',visible],['${workspaceElementVisible(panel)}',nativeWorkspaceVisibility(panel)],
+    ['${workspaceElementVisible("$panel > .tool-bar > button", true)}',nativeWorkspaceVisibility(panel+' > .tool-bar > button',true)],
+    ['${JSONObject.quote(action)}',JSON.stringify(action)],['${JSONObject.quote(if(reused) "installed" else "idle")}',JSON.stringify(initialOutcome)],
+    ...['phases','failures'].map(name=>['${JSONArray('+name+')}',JSON.stringify(JSON.parse('['+new RegExp('val '+name+' = setOf\\(([^)]*)\\)').exec(method)![1]+']'))])
+  ];
+  let expression=code;for(const [key,value] of values)expression=expression.split(key).join(value);
+  return {panel,expression};
+}
+
+test('native companion action stays owned during installed and reused results',async({page},testInfo)=>{
+  if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
+  await openClockedNavigation(page);
+  await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
+  const records:unknown[]=[];
+  for(const [action,before,after] of [['Install companion','idle','installed'],['Update companion','installed','reused']]){
+    const contract=nativeCompanionReadiness(action,before);
+    if(after==='reused'){
+      await page.locator(contract.panel+' > .tool-bar > button').first().evaluate(button=>button.scrollIntoView());
+      records.push({action:'before delayed readiness',observation:await page.evaluate(contract.expression)});
+      await page.evaluate(()=>Reflect.get(window,'finishOldReport')());await page.clock.runFor(200);
+      records.push({action:'after delayed readiness before rescroll',observation:await page.evaluate(contract.expression),geometry:await page.locator('details[data-install-outcome] > .tool-bar > button').evaluate(button=>({top:button.getBoundingClientRect().top,bottom:button.getBoundingClientRect().bottom,hit:document.elementFromPoint(button.getBoundingClientRect().left+button.getBoundingClientRect().width/2,button.getBoundingClientRect().top+button.getBoundingClientRect().height/2)?.tagName}))});
+    }
+    const button=page.getByRole('button',{name:action,exact:true});
+    await expect(button).toBeEnabled();await button.scrollIntoViewIfNeeded();
+    records.push({action,observation:await page.evaluate(contract.expression),matches:await page.locator(contract.panel+' > .tool-bar > button').count()});
+    await button.click();await page.clock.runFor(200);
+    await expect(page.locator('details[data-install-outcome]')).toHaveAttribute('data-install-outcome',after);
+  }
+  await testInfo.attach('native-companion-ownership',{body:JSON.stringify(records),contentType:'application/json'});
+  const actions=records.filter((record):record is {action:string;matches:number;observation:Record<string,unknown>}=>!!record&&typeof record==='object'&&'matches' in record);
+  expect(actions).toHaveLength(2);
+  for(const record of actions){
+    expect(record.matches).toBe(1);
+    expect(record.observation).toMatchObject({expectedActionVisible:true,matchingExpectedActionEnabled:true,outcomeExpected:true,
+      panelPresent:true,panelVisible:true,detailsOpen:true,directActionPresent:true,directActionVisible:true,directActionEnabled:true,
+      labelKind:record.action==='Install companion'?'install':'update',failure:'none'});
+  }
+  expect(await page.locator('.terminal-canvas').count()).toBe(1);
+  expect(await page.locator('[role=tab]').count()).toBe(1);
 });
