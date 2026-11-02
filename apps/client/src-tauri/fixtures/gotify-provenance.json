@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "android": {
+    "version": "2.10.1",
+    "versionCode": 36,
+    "targetSdk": 36,
+    "applicationId": "com.github.gotify",
+    "sourceCommit": "211682fddee06bc1b53e9980c8ec9ad72409685b",
+    "sourceTree": "acc978b9da493f43486dd0345710007559048005",
+    "assetId": 468223910,
+    "url": "https://github.com/gotify/android/releases/download/v2.10.1/Gotify.apk",
+    "size": 6764847,
+    "sha256": "65be77a1f037b2066984c6a59e9c418d619f19060f57c224cc20846ec699a7a5",
+    "observedSignerSha256": "ec876eb960091e4f558c13c3be69dce994b8a25f8021413a6d412367a504d9a3",
+    "signerBasis": "Observed in the verified exact official publisher release asset; not an independently published signing pin."
+  },
+  "server": {
+    "version": "3.1.1",
+    "assetId": 566290671,
+    "url": "https://github.com/gotify/server/releases/download/v3.1.1/gotify-linux-amd64.zip",
+    "size": 15552390,
+    "sha256": "d452faad071981d191d5c95f70d0f9520dc2ef2336b2b03055e12cfabfbae2d2",
+    "member": "gotify-linux-amd64",
+    "executableSha256": "7c5fbcce5fa130c8e7bf643fee4f069a3aed974ead16bc5a84a168e31930e7b7"
+  },
+  "scope": "Owned awake API36 Home/background, official unchanged APK, SAF CA import with TLS/hostname verification, actual relay worker, three OS message records and three visible SystemUI cards. No Doze, force-stop, OEM, reboot or production CLI private-CA claim."
+}
