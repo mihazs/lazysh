@@ -11,10 +11,21 @@ const unlocked = () => ({initialized: true, supported: true, enabled: false, loc
 beforeEach(() => { generation += 10; applyAccessStatus(unlocked()); vi.mocked(invoke).mockReset(); });
 import {t,uiI18n} from './i18n/core';
 afterEach(async()=>{cleanup();await uiI18n.changeLanguage('en');});
-it('does not offer changes on unsupported platforms', async () => {
-  vi.mocked(invoke).mockResolvedValue(status('default', false)); render(<AppIconPanel />);
-  await screen.findByText('Actual UIKit readback');
-  expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Apply app icon'}).disabled).toBe(true);
+it.each(['default','unknown'])('keeps unavailable %s readback compact and preserves explicit refresh recovery',async current=>{
+  vi.mocked(invoke).mockResolvedValueOnce(status(current,false)).mockResolvedValueOnce(status());
+  render(<AppIconPanel />);await screen.findByText('Actual UIKit readback');
+  expect(screen.queryByRole('group',{name:'App icon'})).toBeNull();
+  expect(screen.queryByLabelText('Home Screen icon')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh app icon'}));
+  await screen.findByText('Current icon: Default');
+  expect(screen.getByRole<HTMLButtonElement>('button',{name:'Apply app icon'}).disabled).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.map(([command])=>command)).toEqual(['app_icon_status','app_icon_status']);
+});
+it('keeps an empty native unavailable reason unknown rather than inferring an iOS requirement',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...status('unknown',false),reason:''});render(<AppIconPanel/>);
+  await screen.findByText(t('appUnknownRefreshBeforeChanging'));
+  expect(screen.queryByText(t('iconsAlternateHomeScreenIconsRequireTheIOSApp'))).toBeNull();
+  expect(screen.getByRole('button',{name:'Refresh app icon'})).toHaveProperty('disabled',false);
 });
 it('waits for native completion before reporting the actual icon', async () => {
   let finish!: (value: unknown) => void;
@@ -38,6 +49,17 @@ it('refreshes actual state after failure and can restore the primary icon', asyn
   fireEvent.change(screen.getByLabelText('Home Screen icon'), {target:{value:'default'}});
   fireEvent.click(screen.getByRole('button', {name:'Apply app icon'}));
   await screen.findByText('Current icon: Default');
+});
+it('keeps a rejected change visible when refresh reports unavailable, then allows explicit recovery',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce(status()).mockRejectedValueOnce('Icon request rejected').mockResolvedValueOnce(status('unknown',false)).mockResolvedValueOnce(status());
+  render(<AppIconPanel/>);await screen.findByText('Current icon: Default');
+  fireEvent.change(screen.getByLabelText('Home Screen icon'),{target:{value:'amber'}});
+  fireEvent.click(screen.getByRole('button',{name:'Apply app icon'}));
+  await screen.findByText('Icon request rejected');await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(3));
+  expect(screen.getByRole('group',{name:'App icon'})).toBeTruthy();
+  expect(screen.getByLabelText('Home Screen icon')).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh app icon'}));
+  await screen.findByText('Current icon: Default');expect(screen.queryByRole('alert')).toBeNull();
 });
 it('fails closed on malformed status', async () => {
   vi.mocked(invoke).mockResolvedValue({available:true,current:'fake'}); render(<AppIconPanel />);
