@@ -399,9 +399,32 @@ export async function checkRawReceiverIdentity(current:Awaited<ReturnType<typeof
 
 /** Deliberately raw wire bytes: DEL erases only two committed ASCII characters. */
 export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
-  if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
-  const expected=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const expected=imeExpectedWire(nonce);
   if(!Buffer.from(bytes).equals(expected))throw new Error('Owned IME receiver bytes differ');
+}
+
+function imeExpectedWire(nonce:string) {
+  if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
+  return Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+}
+export async function readRawReceiverBytes(path:string) {
+  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    const before=await file.stat({bigint:true});
+    if(!before.isFile() || before.uid!==BigInt(process.getuid!()) || before.size>16384n)throw new Error('Owned IME receiver output invalid');
+    const bytes=Buffer.alloc(16385),read=await file.read(bytes,0,bytes.length,0),after=await file.stat({bigint:true});
+    if(reportIdentity(before)!==reportIdentity(after) || read.bytesRead!==Number(before.size))throw new Error('Owned IME receiver output changed');
+    return bytes.subarray(0,read.bytesRead);
+  } finally {await file.close();}
+}
+// A point-in-time failure snapshot cannot replace the final receiver oracle.
+export async function observeImeReceiverWire(path:string,nonce:string) {
+  try {
+    const expected=imeExpectedWire(nonce),bytes=await readRawReceiverBytes(path);
+    let prefix=0;
+    while(prefix<Math.min(bytes.length,expected.length)&&bytes[prefix]===expected[prefix])prefix++;
+    return {state:'available' as const,byteLength:bytes.length,exactExpectedMatch:bytes.equals(expected),fixedPrefixMatchLength:prefix};
+  } catch {return {state:'unavailable' as const};}
 }
 
 export function dpadReceipt(text:string,nonce:string) {
@@ -551,24 +574,18 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(rawInput) {
       const pid=await readFile(join(imeDirectory,'receiver-pid'),'utf8');
       if(!imeObserved || pid!==`${imeObserved.pid}\n`)throw new Error('Original owned IME receiver was not observed');
-      const file=await open(join(imeDirectory,'received-bytes'),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
-      try {
-        const before=await file.stat({bigint:true});
-        if(!before.isFile() || before.uid!==BigInt(process.getuid!()) || before.size>16384n)throw new Error('Owned IME receiver output invalid');
-        const bytes=Buffer.alloc(16385),read=await file.read(bytes,0,bytes.length,0),after=await file.stat({bigint:true});
-        if(reportIdentity(before)!==reportIdentity(after) || read.bytesRead!==Number(before.size))throw new Error('Owned IME receiver output changed');
-        if(ime)verifyImeReceiverBytes(bytes.subarray(0,read.bytesRead),fixture.nonce);
-        else {
-          const receiptPath=`files/owned-dpad-${fixture.nonce}.json`;
-          const metadata=()=>shell(['shell','run-as','app.lazysh.client','stat','-c','%F:%d:%i:%s:%Y:%Z',receiptPath]);
-          const before=await metadata(),match=/^regular file:[0-9]+:[0-9]+:([0-9]+):[0-9]+:[0-9]+\s*$/.exec(before);
-          if(!match || Number(match[1])<1 || Number(match[1])>512)throw new Error('Owned D-pad receipt file invalid');
-          const text=await shell(['shell','run-as','app.lazysh.client','cat',receiptPath]);
-          if(await metadata()!==before)throw new Error('Owned D-pad receipt file changed');
-          const counts=dpadReceipt(text,fixture.nonce);
-          verifyDpadReceiverBytes(bytes.subarray(0,read.bytesRead),fixture.nonce,counts);
-        }
-      } finally {await file.close();}
+      const bytes=await readRawReceiverBytes(join(imeDirectory,'received-bytes'));
+      if(ime)verifyImeReceiverBytes(bytes,fixture.nonce);
+      else {
+        const receiptPath=`files/owned-dpad-${fixture.nonce}.json`;
+        const metadata=()=>shell(['shell','run-as','app.lazysh.client','stat','-c','%F:%d:%i:%s:%Y:%Z',receiptPath]);
+        const before=await metadata(),match=/^regular file:[0-9]+:[0-9]+:([0-9]+):[0-9]+:[0-9]+\s*$/.exec(before);
+        if(!match || Number(match[1])<1 || Number(match[1])>512)throw new Error('Owned D-pad receipt file invalid');
+        const text=await shell(['shell','run-as','app.lazysh.client','cat',receiptPath]);
+        if(await metadata()!==before)throw new Error('Owned D-pad receipt file changed');
+        const counts=dpadReceipt(text,fixture.nonce);
+        verifyDpadReceiverBytes(bytes,fixture.nonce,counts);
+      }
       if(createHash('sha256').update(await readFile(receiverImage)).digest('hex')!==imeImageHash)throw new Error('Owned IME receiver image changed');
       console.log(ime?'Owned packaged SSH IME: exact ASCII correction/repeat/current bytes and no stale marker verified':'Owned packaged SSH D-pad: ordered runs equal native stopped-count snapshot and one fixed drain marker');
     }
@@ -615,11 +632,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
+      const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;
       // Sample before an inspection adb command could implicitly restart its server.
       const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(moshBackgroundObservation?{moshBackground:moshBackgroundObservation}:{}),...(herdrHistory?{herdrHistory}:{}),...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
+      const summary={...exitInfo,...(imeWire?{imeWire}:{}),...(moshBackgroundObservation?{moshBackground:moshBackgroundObservation}:{}),...(herdrHistory?{herdrHistory}:{}),...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

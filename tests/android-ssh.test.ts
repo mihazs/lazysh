@@ -9,7 +9,7 @@ import * as ownedProcesses from './support/ownedProcess';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1393,6 +1393,100 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
   expect((await identity(process.pid))?.start).toBe(current.start);
 });
 
+test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
+  try {
+    for(const bytes of samples) {
+      await writeFile(path,bytes,{mode:0o600});let prefix=0;
+      while(prefix<Math.min(bytes.length,expected.length)&&bytes[prefix]===expected[prefix])prefix++;
+      const result=await observeImeReceiverWire(path,nonce);
+      expect(result).toEqual({state:'available',byteLength:bytes.length,exactExpectedMatch:bytes.equals(expected),fixedPrefixMatchLength:prefix});
+      expect(Object.values(result).every(value=>typeof value==='number'||typeof value==='boolean'||value==='available')).toBe(true);
+      expect(JSON.stringify(result)).not.toMatch(/private|owned-current|01234567|received-bytes|sha256/);
+    }
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(typeof process.getuid!=='function')('protected raw reader rejects unsafe files and IME observations redact read failures',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-file-')),path=join(directory,'received-bytes'),nonce='0'.repeat(32);
+  try {
+    await writeFile(path,'fixed',{mode:0o600});expect(await readRawReceiverBytes(path)).toEqual(Buffer.from('fixed'));
+    await symlink(path,join(directory,'link'));
+    for(const unsafe of [directory,join(directory,'missing'),join(directory,'link')]) {
+      await expect(readRawReceiverBytes(unsafe)).rejects.toThrow();
+      expect(await observeImeReceiverWire(unsafe,nonce)).toEqual({state:'unavailable'});
+    }
+    expect(await observeImeReceiverWire(path,'private-invalid')).toEqual({state:'unavailable'});
+    const uid=process.getuid!(),owner=spyOn(process,'getuid').mockReturnValue(uid+1);
+    try {await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');}
+    finally {owner.mockRestore();}
+    await writeFile(path,Buffer.alloc(16385));
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');
+    expect(await observeImeReceiverWire(path,nonce)).toEqual({state:'unavailable'});
+    await writeFile(path,Buffer.alloc(16384));expect((await readRawReceiverBytes(path)).length).toBe(16384);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(process.platform!=='linux')('protected raw reader rejects a FIFO without waiting for a writer',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-fifo-')),path=join(directory,'received-bytes');
+  try {
+    await new OwnedProcess('mkfifo',[path]).finish('owned nonexecuting FIFO fixture',2000);
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');
+  } finally {await rm(directory,{recursive:true,force:true});}
+},3000);
+
+for(const change of ['changed','short'] as const)test.skipIf(typeof process.getuid!=='function')(`protected raw reader closes its file after a ${change} read and exports no guessed bytes`,async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-race-')),path=join(directory,'received-bytes');
+  const original=fileSystem.open;let observed:Awaited<ReturnType<typeof original>>|undefined;
+  const opening=spyOn(fileSystem,'open').mockImplementation(async(...args:Parameters<typeof original>)=>{
+    const file=await original(...args);observed=file;const read=file.read.bind(file);
+    Object.defineProperty(file,'read',{value:async(buffer:Buffer,offset:number,length:number,position:number)=>{
+      const result=await read(buffer,offset,length,position);
+      if(change==='changed')await writeFile(path,'different size');
+      return change==='short'?{...result,bytesRead:result.bytesRead-1}:result;
+    }});return file;
+  });
+  try {
+    await writeFile(path,'fixed',{mode:0o600});
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output changed');
+    expect(observed!.fd).toBe(-1);
+    expect(await observeImeReceiverWire(path,'0'.repeat(32))).toEqual({state:'unavailable'});expect(observed!.fd).toBe(-1);
+  } finally {opening.mockRestore();await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(typeof process.getuid!=='function')('actual Android failure handler keeps its original error and limits wire observations to IME',async()=>{
+  const source=await readFile(new URL('./support/androidSsh.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  } catch(error) {\n    primary=true;',source.indexOf('export async function androidSshAcceptance'));
+  const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
+  expect(start>0 && end>start).toBe(true);
+  const body=source.slice(start+'  } catch(error) {'.length,end);
+  const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
+  const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const logger=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
+    for(const mode of ['available','missing','write-failure','observer-failure','non-ime']) {
+      const root=join(directory,mode),failure=new Error('private-primary'),ime=mode!=='non-ime';let observations=0;
+      const context={root,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
+        observeImeReceiverWire:async(path:string,value:string)=>{observations++;if(mode==='observer-failure')throw new Error('private-observer');return observeImeReceiverWire(path,value);},
+        hostAdbServerIdentity:async()=>({}),packageExitInfo:async()=>({}),emulatorContinuity:async()=>({}),
+        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
+        writeFile:async(...args:Parameters<typeof writeFile>)=>{if(mode==='write-failure')throw new Error('private-receipt');return writeFile(...args);}};
+      expect(await run(context).catch(error=>error)).toBe(failure);expect(observations).toBe(ime?1:0);
+      if(['write-failure','observer-failure'].includes(mode))continue;
+      const receipt=JSON.parse(await readFile(join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui','package-exit.json'),'utf8'));
+      if(mode==='non-ime')expect(Object.hasOwn(receipt,'imeWire')).toBe(false);
+      else expect(receipt.imeWire).toEqual(mode==='missing'?{state:'unavailable'}:{state:'available',byteLength:wire.length,exactExpectedMatch:true,fixedPrefixMatchLength:wire.length});
+      expect(JSON.stringify(receipt)).not.toMatch(/private|owned-current|00000000|received-bytes/);
+    }
+    expect(logger.mock.calls.every(call=>call.length===1&&call[0]==='Owned Android SSH exit diagnostics unavailable')).toBe(true);
+  } finally {logger.mockRestore();await rm(directory,{recursive:true,force:true});}
+});
+
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
   const expected=Buffer.from(`there\x7f\x7fthe${current}`);
@@ -1403,6 +1497,7 @@ test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and 
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
+  expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
   let visible='';for(const byte of Buffer.from('there\x7f\x7fthe'))visible=byte===127?visible.slice(0,-1):visible+String.fromCharCode(byte);
   expect(visible).toBe('thethe');
 });
@@ -1451,7 +1546,8 @@ test('native D-pad routing preserves default isolation and the packaged/raw-SSH 
   expect(native).toContain('androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
   expect(support).toContain("dpad?'-PlazyshSshDpadAcceptance=true'");expect(support).toContain('retainedPackages=!!herdr || attachments || dpad');
-  expect(support).toContain('verifyDpadReceiverBytes(bytes.subarray(0,read.bytesRead),fixture.nonce,counts)');
+  expect(support).toContain("const bytes=await readRawReceiverBytes(join(imeDirectory,'received-bytes'))");
+  expect(support).toContain('verifyDpadReceiverBytes(bytes,fixture.nonce,counts)');
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');expect(gradle).toContain('outputs/androidTest-results/ssh-dpad-ui');
   const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
