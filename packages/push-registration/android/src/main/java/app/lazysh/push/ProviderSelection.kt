@@ -18,7 +18,9 @@ internal class ProviderSelection(private val store:ProviderStore) {
     @Synchronized fun control(expected:Long,action:(String)->Unit):Boolean {
         if(expected<epoch)return false
         epoch=expected
-        action(provider())
+        val selected=provider()
+        store.selected=selected
+        action(selected)
         return true
     }
 }

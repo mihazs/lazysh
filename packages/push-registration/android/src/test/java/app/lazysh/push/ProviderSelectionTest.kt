@@ -21,6 +21,27 @@ class ProviderSelectionTest {
         fresh.legacyFcmActive=true
         assertEquals("unifiedpush",unified.provider())
     }
+    @Test fun acceptedDefaultControlSurvivesLateFcmMarkersAndRestart() {
+        val store=Store();val selection=ProviderSelection(store);val actions=mutableListOf<String>()
+        assertEquals("unifiedpush",selection.provider());assertNull(store.selected)
+        assertTrue(selection.control(1){actions.add(it)})
+        store.legacyFcmActive=true
+        assertEquals("unifiedpush",ProviderSelection(store).provider())
+        assertEquals(listOf("unifiedpush"),actions)
+    }
+    @Test fun failedControlPersistenceNeverStartsTheAction() {
+        var actions=0
+        val selection=ProviderSelection(object:ProviderStore {
+            override val legacyFcmActive=false
+            override var selected:String?
+                get()=null
+                set(value){throw IllegalStateException("private-store-failure")}
+        })
+        try {selection.control(1){actions++};fail("must reject failed persistence")}
+        catch(_:IllegalStateException){}
+        assertFalse(selection.control(0){actions++})
+        assertEquals(0,actions)
+    }
     @Test fun previousFcmCleanupRequiresSeparatePauseAndKeepsSelectedProvider() {
         val choice=ProviderSelection(Store("unifiedpush"))
         val pending=FcmPresence(false,true)
