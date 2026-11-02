@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.1
+
+### Patch Changes
+
+- dce0ea9: Retain bounded focus, viewport, touch-action and context-menu evidence in Android D-pad failure diagnostics without changing input behavior.
+- @lazysh/account-usage@1.9.1
+  - @lazysh/common@1.9.1
+  - @lazysh/display-idle@1.9.1
+  - @lazysh/et-transport@1.9.1
+  - @lazysh/mosh-transport@1.9.1
+
 ## 1.9.0
 
 ### Minor Changes
