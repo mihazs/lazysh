@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.0
+  - @lazysh/common@1.9.0
+  - @lazysh/display-idle@1.9.0
+  - @lazysh/et-transport@1.9.0
+  - @lazysh/mosh-transport@1.9.0
+
 ## 1.8.4
 
 ### Patch Changes

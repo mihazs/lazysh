@@ -1,5 +1,11 @@
 # @lazysh/push-registration
 
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
 ## 1.8.4
 
 No changes in this release.
