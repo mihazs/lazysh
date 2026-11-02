@@ -1850,3 +1850,65 @@ test('Windows standard child observation wires session to the pinned token and f
   expect(wired(standardObservationSource.replace('TokenSession(token,12,out session,4,out needed)','Process.GetProcessById((int)candidate).SessionId'))).toBe(false);
   expect(wired(standardObservationSource.replace('&&CurrentBirth(id,birth);',';'))).toBe(false);
 });
+
+test('Windows sole-thread projection is closed, optional and cannot manufacture process or GUI acceptance',()=>{
+  const row={identity:'VERIFIED',state:'LIVE',cpu:'UNCHANGED',threads:1,thread:{state:'WAIT',waitReason:'SUSPENDED'}},record={sequence:1,sample:row};
+  const projected=standardObservationProjection([record]);expect(projected.samples).toEqual([record]);expect(projected.status).toBe('UNVERIFIED');
+  const first={sequence:1,sample:{identity:'VERIFIED',state:'LIVE',cpu:'UNVERIFIED',threads:4,thread:{state:'UNVERIFIED',waitReason:'UNVERIFIED'}}};
+  expect(standardObservationProjection([first,{...record,sequence:2},{...record,sequence:3}]).status).toBe('OBSERVED');
+  const rejected=standardObservationProjection(undefined);
+  for(const thread of [{state:'WAIT',waitReason:'PRIVATE'},{state:'RUNNING',waitReason:'SUSPENDED'},{state:'UNKNOWN',waitReason:'UNVERIFIED'},{state:'WAIT',waitReason:'USER_REQUEST',tid:99},{state:'WAIT',waitReason:'NOT_WAITING'},null])expect(standardObservationProjection([{...record,sample:{...row,thread}}])).toEqual(rejected);
+  expect(standardObservationProjection([{...record,sample:{...row,threads:2}}])).toEqual(rejected);
+  expect(standardObservationProjection([{...record,sample:{...row,identity:'UNVERIFIED',state:'UNVERIFIED',cpu:'UNVERIFIED',threads:0}}])).toEqual(rejected);
+  expect(()=>parseStandardReceipt(projected,'a'.repeat(40),'b'.repeat(64))).toThrow('Standard owner receipt rejected');
+});
+
+test('Windows sole-thread snapshot actually wires fresh parent birth and count fences around the cached BCL read',()=>{
+  function wired(source:string){
+    const snapshot=source.slice(source.indexOf('static string ThreadSnapshot('),source.indexOf('string Sample(){'));
+    const sole=source.slice(source.indexOf('public static string SoleThread('),source.indexOf('static string ThreadSnapshot('));
+    const sample=source.slice(source.indexOf('string Sample(){'),source.indexOf('static string Unknown(){'));
+    return snapshot.includes('if(!BoundParent(candidate,parent,birth,out count)||count!=1)')
+      &&snapshot.indexOf('BoundParent(candidate,parent,birth,out count)')<snapshot.indexOf('observed.Threads')
+      &&snapshot.includes('snapshot.Count!=1')&&snapshot.includes('return SoleThread(()=>{uint current;return BoundParent(candidate,parent,birth,out current)&&current==1;}')
+      &&sole.split('if(!bound()||count()!=1)return UnverifiedThread();').length===3
+      &&sole.includes('if(observed==(int)System.Diagnostics.ThreadState.Wait)wait=reason();')
+      &&sample.includes('threads==1?ThreadSnapshot(candidate,parent,before):UnverifiedThread()');
+  }
+  expect(wired(standardObservationSource)).toBe(true);
+  expect(wired(standardObservationSource.replace('||count!=1)','||count<1)'))).toBe(false);
+  expect(wired(standardObservationSource.replace('if(!bound()||count()!=1)return UnverifiedThread();return ThreadProjection','return ThreadProjection'))).toBe(false);
+  expect(wired(standardObservationSource.replace('if(observed==(int)System.Diagnostics.ThreadState.Wait)wait=reason();','wait=reason();'))).toBe(false);
+});
+
+const windowsSoleThreadContract=String.raw`
+public static class SoleThreadContract {
+  static void Need(bool value){if(!value)throw new System.InvalidOperationException("SOLE_THREAD_CONTRACT");}
+  public static string Run(){
+    string unknown=StandardChildObservation.ThreadProjection(-1,-1);
+    System.Func<bool> valid=()=>true;System.Func<int> one=()=>1,waiting=()=>5,suspended=()=>5;
+    Need(StandardChildObservation.SoleThread(valid,one,waiting,suspended)==StandardChildObservation.ThreadProjection(5,5));
+    int reasonReads=0;System.Func<int> forbidden=()=>{reasonReads++;throw new System.InvalidOperationException();};
+    Need(StandardChildObservation.SoleThread(valid,one,()=>1,forbidden)==StandardChildObservation.ThreadProjection(1,-1)&&reasonReads==0);
+    foreach(int count in new[]{-1,0,2,4096})Need(StandardChildObservation.SoleThread(valid,()=>count,forbidden,forbidden)==unknown);
+    Need(reasonReads==0);
+    foreach(int state in new[]{-1,7,999})Need(StandardChildObservation.SoleThread(valid,one,()=>state,forbidden)==unknown);
+    Need(reasonReads==0);
+    foreach(int reason in new[]{-1,13,999})Need(StandardChildObservation.SoleThread(valid,one,waiting,()=>reason)==unknown);
+    Need(StandardChildObservation.ThreadProjection(2,5)==unknown);
+    long birth=200;Need(StandardChildObservation.SoleThread(()=>birth==200,one,()=>{birth=201;return 5;},suspended)==unknown);
+    int parent=10;Need(StandardChildObservation.SoleThread(()=>parent==10,one,()=>{parent=11;return 5;},suspended)==unknown);
+    int counts=0;Need(StandardChildObservation.SoleThread(valid,()=>++counts==1?1:2,waiting,suspended)==unknown);
+    System.Func<bool> failed=()=>{throw new System.InvalidOperationException();};
+    Need(StandardChildObservation.SoleThread(failed,one,waiting,suspended)==unknown);
+    Need(StandardChildObservation.SoleThread(valid,forbidden,waiting,suspended)==unknown);
+    Need(StandardChildObservation.SoleThread(valid,one,forbidden,suspended)==unknown);
+    Need(StandardChildObservation.SoleThread(valid,one,waiting,forbidden)==unknown);
+    return "STANDARD_SOLE_THREAD_CONTRACT";
+  }
+}`;
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows sole-thread contract refuses races and query failures and never reads wait reason outside Wait',async()=>{
+  const source=standardObservationSource+windowsSoleThreadContract;expect(Buffer.byteLength(source)).toBeLessThanOrEqual(65536);
+  const script="$ErrorActionPreference='Stop';Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;[Console]::Out.Write([SoleThreadContract]::Run())";
+  expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],process.env,30000,source)).toBe('STANDARD_SOLE_THREAD_CONTRACT');
+},35000);

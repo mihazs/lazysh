@@ -5,6 +5,8 @@ import {insideStandardRoot,standardDiagnosticIdentity} from './windows-standard-
 
 export const standardObservationName='standard-observation.jsonl';
 export const standardObservationHelper='standard-observation.cs';
+const threadStates=['INITIALIZED','READY','RUNNING','STANDBY','TERMINATED','WAIT','TRANSITION'] as const;
+const threadWaitReasons=['EXECUTIVE','FREE_PAGE','PAGE_IN','SYSTEM_ALLOCATION','EXECUTION_DELAY','SUSPENDED','USER_REQUEST','EVENT_PAIR_HIGH','EVENT_PAIR_LOW','LPC_RECEIVE','LPC_REPLY','VIRTUAL_MEMORY','PAGE_OUT'] as const;
 // Separate from the frozen owner compilation. No account, launch, token-write,
 // suspension, termination or GUI operation is available to this type.
 export const standardObservationSource=String.raw`
@@ -61,6 +63,25 @@ public sealed class StandardChildObservation {
     try{long birth,exit,kernel,user;return Id(current)==id&&Times(current,out birth,out exit,out kernel,out user)&&birth==expected;}finally{Close(current);}
   }
   static bool BoundParent(uint id,uint parent,long birth,out uint threads){threads=0;return CurrentBirth(id,birth)&&ParentOf(id,parent,out threads)&&CurrentBirth(id,birth);}
+  static string UnverifiedThread(){return "{\"state\":\"UNVERIFIED\",\"waitReason\":\"UNVERIFIED\"}";}
+  public static string ThreadProjection(int state,int reason){
+    string[] states={${threadStates.map(value=>JSON.stringify(value)).join(',')}},reasons={${threadWaitReasons.map(value=>JSON.stringify(value)).join(',')}};
+    if(state<0||state>=states.Length||(state==5?(reason<0||reason>=reasons.Length):reason!=-1))return UnverifiedThread();
+    return "{\"state\":\""+states[state]+"\",\"waitReason\":\""+(state==5?reasons[reason]:"NOT_WAITING")+"\"}";
+  }
+  // The delegates read one cached BCL snapshot; they are not target callbacks.
+  public static string SoleThread(Func<bool> bound,Func<int> count,Func<int> state,Func<int> reason){
+    try{if(!bound()||count()!=1)return UnverifiedThread();int observed=state(),wait=-1;if(observed==(int)System.Diagnostics.ThreadState.Wait)wait=reason();if(!bound()||count()!=1)return UnverifiedThread();return ThreadProjection(observed,wait);}catch{return UnverifiedThread();}
+  }
+  static string ThreadSnapshot(uint candidate,uint parent,long birth){
+    try{
+      uint count;if(!BoundParent(candidate,parent,birth,out count)||count!=1)return UnverifiedThread();
+      using(var observed=Process.GetProcessById((int)candidate)){
+        observed.Refresh();var snapshot=observed.Threads;if(snapshot.Count!=1)return UnverifiedThread();
+        using(var thread=snapshot[0])return SoleThread(()=>{uint current;return BoundParent(candidate,parent,birth,out current)&&current==1;},()=>snapshot.Count,()=>(int)thread.ThreadState,()=>(int)thread.WaitReason);
+      }
+    }catch{return UnverifiedThread();}
+  }
   string Sample(){
     IntPtr process=IntPtr.Zero,token=IntPtr.Zero;long before,exit,kernel,user,after,kernelAfter,userAfter;uint threads;
     try{
@@ -78,7 +99,8 @@ public sealed class StandardChildObservation {
       if(!BoundParent(candidate,parent,before,out threads)||!Times(process,out after,out exit,out kernelAfter,out userAfter)||before!=after)return Unknown();
       uint state=Wait(process,0);if(state!=0&&state!=258)return Unknown();long cpu=checked(kernelAfter+userAfter);if(cpu<0)return Unknown();
       string activity=previous<0?"UNVERIFIED":cpu>previous?"ADVANCED":cpu==previous?"UNCHANGED":"UNVERIFIED";previous=cpu;selectedId=candidate;selectedBirth=before;
-      return "{\"identity\":\"VERIFIED\",\"state\":\""+(state==0?"EXITED":"LIVE")+"\",\"cpu\":\""+activity+"\",\"threads\":"+threads+"}";
+      string thread=threads==1?ThreadSnapshot(candidate,parent,before):UnverifiedThread();
+      return "{\"identity\":\"VERIFIED\",\"state\":\""+(state==0?"EXITED":"LIVE")+"\",\"cpu\":\""+activity+"\",\"threads\":"+threads+",\"thread\":"+thread+"}";
     }catch{previous=-1;return Unknown();}finally{if(token!=IntPtr.Zero)Close(token);if(process!=IntPtr.Zero)Close(process);}
   }
   static string Unknown(){return "{\"identity\":\"UNVERIFIED\",\"state\":\"UNVERIFIED\",\"cpu\":\"UNVERIFIED\",\"threads\":0}";}
@@ -120,10 +142,14 @@ export function standardObservationProjection(value:unknown){
   for(const [index,item] of value.entries()){
     if(!item||typeof item!=='object'||Object.keys(item).sort().join(',')!=='sample,sequence'||item.sequence!==index+1)return rejected;
     const row=item.sample;
-    if(!row||typeof row!=='object'||Object.keys(row).sort().join(',')!=='cpu,identity,state,threads'||!['VERIFIED','UNVERIFIED'].includes(row.identity)||!['LIVE','EXITED','UNVERIFIED'].includes(row.state)||!['ADVANCED','UNCHANGED','UNVERIFIED'].includes(row.cpu)||!Number.isInteger(row.threads)||row.threads<0||row.threads>4096)return rejected;
+    if(!row||typeof row!=='object'||!['cpu,identity,state,threads','cpu,identity,state,thread,threads'].includes(Object.keys(row).sort().join(','))||!['VERIFIED','UNVERIFIED'].includes(row.identity)||!['LIVE','EXITED','UNVERIFIED'].includes(row.state)||!['ADVANCED','UNCHANGED','UNVERIFIED'].includes(row.cpu)||!Number.isInteger(row.threads)||row.threads<0||row.threads>4096)return rejected;
     if(row.identity==='UNVERIFIED'&&(row.state!=='UNVERIFIED'||row.cpu!=='UNVERIFIED'||row.threads!==0))return rejected;
     if(row.identity==='VERIFIED'&&row.state==='UNVERIFIED')return rejected;
-    samples.push({sequence:item.sequence,sample:{identity:row.identity,state:row.state,cpu:row.cpu,threads:row.threads}});
+    const thread=row.thread===undefined?{state:'UNVERIFIED',waitReason:'UNVERIFIED'}:row.thread;
+    if(!thread||typeof thread!=='object'||Object.keys(thread).sort().join(',')!=='state,waitReason')return rejected;
+    const unknown=thread.state==='UNVERIFIED'&&thread.waitReason==='UNVERIFIED';
+    if(!unknown&&(!threadStates.includes(thread.state)||(thread.state==='WAIT'?!threadWaitReasons.includes(thread.waitReason):thread.waitReason!=='NOT_WAITING')||row.threads!==1||row.identity!=='VERIFIED'))return rejected;
+    samples.push({sequence:item.sequence,sample:{identity:row.identity,state:row.state,cpu:row.cpu,threads:row.threads,thread:{state:thread.state,waitReason:thread.waitReason}}});
   }
   return {...rejected,status:samples.length===3&&samples.every(item=>item.sample.identity==='VERIFIED')?'OBSERVED':'UNVERIFIED',samples};
 }
