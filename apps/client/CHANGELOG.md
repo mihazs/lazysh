@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.9.6
+
+### Patch Changes
+
+- 9d70b38: Exercise repeated short Android finger drags and a continuous held drag against the existing owned Herdr receiver in the packaged native acceptance owner.
+- 5b621d3: Retain bounded passive finger-scroll geometry and wheel metadata, plus closed owned-host history failure stages, without changing native gesture verdicts or input routing.
+- b2574a4: Add native Linux acceptance for an isolated GTK reduced-motion preference, preserved keyboard focus and the original local terminal.
+- 455bb4f: Retain bounded, closed native IME switch and terminal-tap ordering observations after editor admission fails, without changing input state, acceptance guards or deadlines.
+- f8d9836: Retain only the HTTP status when release tag creation fails, preserving private response data and all publication guards.
+- 9af806c: Preserve short finger-scroll distance across admitted gestures in the same active terminal while matching normal scrollback, mouse-report and alternate-buffer wheel semantics.
+- @lazysh/account-usage@1.9.6
+  - @lazysh/common@1.9.6
+  - @lazysh/display-idle@1.9.6
+  - @lazysh/et-transport@1.9.6
+  - @lazysh/mosh-transport@1.9.6
+
 ## 1.9.5
 
 ### Patch Changes
