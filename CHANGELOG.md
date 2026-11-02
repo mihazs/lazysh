@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep vertically dominant finger drags responsive and preserve complete coalesced scroll motion before finger lift.
+
 - Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
 
 - Preserve physical and toolbar Shift+Enter as a distinct modified Enter key for agent newline bindings, instead of submitting an ordinary Enter. Plain Enter and other modifier combinations retain their existing behavior.

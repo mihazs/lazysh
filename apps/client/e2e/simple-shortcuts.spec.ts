@@ -2,7 +2,7 @@ import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceContr
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -457,7 +457,7 @@ test('terminal canvas stays anchored when keyboard-sized resizes reveal its inpu
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });
 
-test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page})=>{
+test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page},testInfo)=>{
   await fixture(page);
   await page.keyboard.press('Escape');
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
@@ -470,6 +470,15 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   const before=await viewport.evaluate(node=>node.scrollTop);
   const box=(await screen.boundingBox())!;
   const x=box.x+60,y=box.y+80;
+  const hitTargets=await page.locator('.terminal-canvas:visible').evaluate(canvas=>{
+    const selectors=['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'];
+    return selectors.map(selector=>{
+      const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
+      const r=element.getBoundingClientRect(),candidates=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]];
+      return {selector,width:r.width,height:r.height,points:candidates.map(([x,y])=>({x,y,hit:document.elementFromPoint(x,y)?.className}))};
+    });
+  });
+  await testInfo.attach('touch-hit-targets',{body:JSON.stringify(hitTargets),contentType:'application/json'});
   const input=await page.context().newCDPSession(page);
   const swipe=async(from:number,to:number)=>{
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:from}]});
@@ -520,24 +529,66 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await expect.poll(reports).toEqual([second]);
   await page.evaluate(()=>{window.simpleShortcutWrites=[];});
-  await page.locator('.terminal-canvas:visible').evaluate(element=>element.addEventListener('touchmove',()=>window.simpleShortcutTouchMoves++,{capture:true,passive:true}));
-  const batches:string[][]=[];
-  for(const segments of [2,8]) {
-    await page.evaluate(()=>{window.simpleShortcutWrites=[];window.simpleShortcutTouchMoves=0;});
+  await page.locator('.terminal-canvas:visible').evaluate(element=>{
+    element.addEventListener('touchmove',()=>window.simpleShortcutTouchMoves++,{capture:true,passive:true});
+    element.addEventListener('pointermove',()=>window.simpleShortcutPointerMoves++,{capture:true,passive:true});
+    element.addEventListener('touchstart',event=>{window.simpleShortcutTouchTarget=event.target instanceof Element?event.target:null;},{capture:true,passive:true});
+  });
+  const batches:string[][]=[],deliveries:unknown[]=[];
+  for(const segments of [1,2,8,48]) {
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];window.simpleShortcutTouchMoves=0;window.simpleShortcutPointerMoves=0;});
     const start={x,y:box.y+20};
     expect(start.y+notch*12).toBeLessThan(box.y+box.height);
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
     try {
       for(let step=1;step<=segments;step++) {
         await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start.y+notch*12*step/segments}]});
-        await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(step);
+        if(segments<=8)await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(step);
       }
       await expect.poll(async()=>(await reports()).length).toBeGreaterThan(0);
       batches.push(await reports());
+      deliveries.push(await page.evaluate(segments=>({segments,pointers:window.simpleShortcutPointerMoves,touches:window.simpleShortcutTouchMoves,
+        target:window.simpleShortcutTouchTarget?.className,writes:window.simpleShortcutWrites}),segments));
     } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
   }
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const diagonal={x:x+10,y:box.y+25};
+  await page.mouse.move(diagonal.x,diagonal.y);await page.mouse.wheel(0,notch);
+  await expect.poll(async()=>(await reports()).length).toBe(1);
+  const angledReport=(await reports())[0];
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  for(const [index,segments] of [1,4,16].entries()) {
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[diagonal]});
+    for(let step=1;step<=segments;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:diagonal.x+notch*.8*step/segments,y:diagonal.y-notch*step/segments}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(reports).toEqual(Array.from({length:index+1},()=>angledReport));
+  }
+  const starts=await page.locator('.terminal-canvas:visible').evaluate(canvas=>{
+    return ['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'].map(selector=>{
+      const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
+      const r=element.getBoundingClientRect();
+      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]]
+        .find(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===element||(selector==='.xterm-screen'&&!!hit&&element.contains(hit));});
+      return {selector,point:point?{x:point[0],y:point[1]}:null};
+    });
+  });
+  const landings:unknown[]=[];
+  for(const {selector,point} of starts) {
+    expect(point,`Real finger landing available on ${selector}`).not.toBeNull();
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+    const origin=point!;
+    const destination=origin.y+(origin.y<box.y+box.height/2?notch:-notch);
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:destination}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(async()=>(await reports()).length,`Finger scrolling starts on ${selector}`).toBe(1);
+    expect((await reports())[0]).toMatch(/^\x1b\[<6[45];\d+;\d+M$/);
+    landings.push(await page.evaluate(selector=>({selector,target:window.simpleShortcutTouchTarget?.className,writes:window.simpleShortcutWrites}),selector));
+  }
+  await testInfo.attach('native-touch-starts',{body:JSON.stringify(landings),contentType:'application/json'});
+  await testInfo.attach('native-touch-delivery',{body:JSON.stringify(deliveries),contentType:'application/json'});
   expect(batches[0]).toHaveLength(12);
-  expect(batches[1]).toEqual(batches[0]);
+  for(const batch of batches.slice(1))expect(batch).toEqual(batches[0]);
   if(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches)) {
     // A real host redraw replaces xterm spans while the same finger is still down.
     await page.evaluate(()=>window.simpleShortcutOutput('\x1b[2J\x1b[H'+Array.from({length:40},(_,i)=>`owned-row-${i} ${' '.repeat(30)}`).join('\r\n')));
