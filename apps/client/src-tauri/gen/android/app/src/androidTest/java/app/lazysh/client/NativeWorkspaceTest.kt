@@ -4282,6 +4282,24 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun ownedImeInputViewHonorsBoundedFrameworkMeasurement() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val context=instrumentation.context
+            for ((legacy,available,expected) in listOf(Triple(true,800,800),Triple(false,800,1),Triple(false,0,0))) {
+                val frame=android.widget.FrameLayout(context)
+                val view=if(legacy) View(context).apply { minimumHeight=1 } else OwnedImeService.inputView(context)
+                // InputMethodService.setInputView replaces child parameters with this exact pair.
+                frame.addView(view,android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT))
+                frame.measure(View.MeasureSpec.makeMeasureSpec(320,View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(available,View.MeasureSpec.AT_MOST))
+                assertEquals("Fixture input child respects bounded height",expected,view.measuredHeight)
+                assertEquals("Fixture input frame respects bounded height",expected,frame.measuredHeight)
+                assertEquals("Fixture input child keeps full width",320,view.measuredWidth)
+            }
+        }
+    }
+
     @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         val arguments=InstrumentationRegistry.getArguments()
