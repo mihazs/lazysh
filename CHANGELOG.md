@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Keep unavailable Home Screen icon settings compact without hiding errors or explicit refresh recovery.
+- Keep sidebar mode labels whole and reachable across narrow layouts, translations and enlarged text.
+
+
 - Preserve slow sub-row finger movement in terminal scrollback instead of losing travel between xterm redraws.
 
 - Expanded terminal D-pad controls now suppress their browser context menu by default.

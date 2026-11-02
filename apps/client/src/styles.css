@@ -1736,8 +1736,8 @@ button svg {
 .sidebar:not([data-navigation="connections"]) .brand > span { flex: 1; min-width: 0; }
 .sidebar:not([data-navigation="connections"]) .sidebar-bottom { padding-top: 0; }
 .sidebar:not([data-navigation="connections"]) .sidebar-bottom > div { display: none; }
-.workspace-navigation-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-block: 8px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--theme-control); }
-.workspace-navigation-modes button { min-height: 44px; min-width: 0; padding: 5px; border-color: transparent; background: transparent; font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.workspace-navigation-modes { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 8px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--theme-control); }
+.workspace-navigation-modes button { flex: 1 1 auto; min-height: 44px; min-width: 44px; padding: 5px 3px; border-color: transparent; background: transparent; font-size: 11px; white-space: normal; overflow-wrap: normal; word-break: normal; hyphens: none; }
 .workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { border-color: var(--accent); }
 .navigation-connections { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .navigation-connections[hidden], .workspace-navigation-scroll[hidden], .workspace-navigation-agents[hidden] { display: none; }

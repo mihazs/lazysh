@@ -194,3 +194,21 @@ test('Preferences starts with compact categories at the top and keeps drafts whi
   await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
 });
+
+test('control contrast composites translucent text and ancestor groups on solid reading surfaces',async({page})=>{
+  await page.setContent(`<main style="background:black;color:white">
+    <p>Opaque positive</p>
+    <p style="color:rgb(255 255 255 / 10%)">Transparent foreground</p>
+    <div style="opacity:.1"><p>Transparent group</p></div>
+    <div style="opacity:.5;background:white"><div style="background:rgb(0 0 0 / 50%)"><p style="color:black">Nested layers</p></div></div>
+    <p style="opacity:.5">Excluded leaf</p>
+  </main>`);
+  const samples=await page.locator('main').evaluate(controlContrast);
+  expect(samples.map(sample=>sample.text)).not.toContain('Excluded leaf');
+  expect(samples.find(sample=>sample.text==='Opaque positive')!.ratio).toBe(21);
+  for(const text of ['Transparent foreground','Transparent group'])expect.soft(samples.find(sample=>sample.text===text)!.ratio,text).toBeLessThan(1.3);
+  // Black text stays black over the outer black; the white panel is first
+  // dimmed by its 50%-black child, then the whole group is composited at 50%.
+  const layered=samples.find(sample=>sample.text==='Nested layers')!.ratio;
+  expect.soft(layered).toBeGreaterThan(1.9);expect.soft(layered).toBeLessThan(2.1);
+});
