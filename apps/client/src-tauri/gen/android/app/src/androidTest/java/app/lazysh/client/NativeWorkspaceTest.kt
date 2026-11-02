@@ -85,6 +85,27 @@ private class OwnedFingerWindowObserver(
     companion object {
         fun coordinate(value: Float): Any = if (value.isFinite()) value.coerceIn(-65_535f, 65_535f).toDouble() else JSONObject.NULL
     }
+    fun failureSummary(): String = try {
+        val snapshot=snapshot();require(snapshot.length<=16_384)
+        val source=JSONObject(snapshot);val state=source.get("state");val overflow=source.get("overflow")
+        require(state in listOf("observed","unavailable") && overflow is Boolean)
+        val events=source.getJSONArray("events");require(events.length()<=6)
+        val projected=JSONArray()
+        for(index in 0 until events.length()) {
+            val event=events.getJSONObject(index);val action=event.get("action");val outcome=event.get("outcome")
+            require(action in listOf("down","move","up","cancel","other") && outcome in listOf("handled","unhandled","threw"))
+            val row=JSONObject().put("action",action).put("outcome",outcome)
+            for(name in listOf("pointerMatches","finger","touchscreen")) {
+                val flag=event.get(name);require(flag is Boolean);row.put(name,flag)
+            }
+            for(name in listOf("eventAtMs","dispatchAtMs","returnedAtMs")) {
+                val value=event.get(name);require(value is Int || value is Long)
+                require((value as Number).toLong() in 0..65_535);row.put(name,value)
+            }
+            projected.put(row)
+        }
+        JSONObject().put("state",state).put("overflow",overflow).put("eventCount",events.length()).put("events",projected).toString()
+    } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
     private fun elapsed(value: Long) = (value - epoch).coerceIn(0, 65_535)
     private fun record(row: JSONObject?, outcome: String) {
         try {
@@ -1635,12 +1656,29 @@ class NativeWorkspaceTest {
                 assertEquals("handled", trace.getJSONArray("events").getJSONObject(1).getString("outcome"))
                 assertEquals("threw", trace.getJSONArray("events").getJSONObject(2).getString("outcome"))
                 assertFalse(trace.toString().contains("private"))
+                val summary=JSONObject(observer.failureSummary())
+                assertEquals(setOf("state","overflow","eventCount","events"),summary.keys().asSequence().toSet())
+                assertEquals(6,summary.getInt("eventCount"));assertTrue(summary.getBoolean("overflow"))
+                val first=summary.getJSONArray("events").getJSONObject(0)
+                assertEquals(setOf("action","outcome","pointerMatches","finger","touchscreen","eventAtMs","dispatchAtMs","returnedAtMs"),first.keys().asSequence().toSet())
+                assertEquals("move",first.getString("action"));assertEquals("unhandled",first.getString("outcome"))
+                assertEquals(1,first.getInt("eventAtMs"));assertEquals(2,first.getInt("dispatchAtMs"));assertEquals(2,first.getInt("returnedAtMs"))
+                assertFalse(summary.toString().contains("\"point\""));assertFalse(summary.toString().contains("private"))
+                for((offset,expectedTime) in listOf(-5L to 0,99_999L to 65_535)) {
+                    val clamped=OwnedFingerWindowObserver(delegate,epoch) { epoch+offset }
+                    clamped.dispatchTouchEvent(event)
+                    val row=JSONObject(clamped.failureSummary()).getJSONArray("events").getJSONObject(0)
+                    assertEquals(expectedTime,row.getInt("dispatchAtMs"));assertEquals(expectedTime,row.getInt("returnedAtMs"))
+                }
                 val unavailable = OwnedFingerWindowObserver(delegate, epoch) { throw IllegalStateException("private observation failure") }
                 handled = false
                 assertFalse(unavailable.dispatchTouchEvent(event))
                 failure = sentinel
                 assertSame(sentinel, runCatching { unavailable.dispatchTouchEvent(event) }.exceptionOrNull())
                 assertEquals("unavailable", JSONObject(unavailable.snapshot()).getString("state"))
+                val unavailableSummary=unavailable.failureSummary()
+                assertEquals("unavailable",JSONObject(unavailableSummary).getString("state"))
+                assertFalse(unavailableSummary.contains("private"));assertFalse(unavailableSummary.contains("\"point\""))
                 assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.NaN))
                 assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.POSITIVE_INFINITY))
                 assertEquals(65_535.0, OwnedFingerWindowObserver.coordinate(Float.MAX_VALUE))
@@ -4072,6 +4110,10 @@ class NativeWorkspaceTest {
                     require(counts==null || (counts.size==4 && counts.all { it in 0..32 }))
                     failure.addSuppressed(AssertionError("D-pad gesture state[phase=$currentPhase lastCounts=${counts?.joinToString(",") ?: "unavailable"}]"))
                 }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad gesture state[unavailable]")) } }
+                runCatching {
+                    val summary=observer?.failureSummary() ?: "{\"state\":\"unavailable\"}"
+                    failure.addSuppressed(AssertionError("D-pad completed Window dispatch[$summary]"))
+                }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad completed Window dispatch[unavailable]")) } }
                 throw failure
             }
             finally {
