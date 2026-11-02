@@ -9,6 +9,8 @@ use std::{
 #[path = "../../src/storage_failure_record.rs"]
 #[allow(dead_code)]
 mod failure_record;
+#[path = "wal_failure.rs"]
+mod wal_failure;
 
 const FILE_LIMIT: usize = 64;
 const EXCERPT_LIMIT: usize = 128 * 1024;
@@ -180,11 +182,13 @@ enum InitializationRecord {
     Phase(failure_record::Failure),
     Worker(InitializationWorker),
     FailedTest(&'static str),
+    WalFailure(wal_failure::Record),
 }
 impl InitializationRecord {
     fn line(&self) -> String {
         match self {
             Self::Phase(record) => record.line(),
+            Self::WalFailure(record) => record.line().expect("finite WAL observation"),
             Self::FailedTest(name) => format!(
                 "lazysh-initialization-failed-test {}\n",
                 serde_json::json!({"name": name})
@@ -418,6 +422,8 @@ pub(super) fn concurrent_workers(
     );
 }
 
+const WAL_OWNER: &str = "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail";
+
 // Only reviewed source names may leave the private owner spool.
 const FAILED_TESTS: &[&str] = &[
     "cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks",
@@ -447,7 +453,7 @@ const FAILED_TESTS: &[&str] = &[
     "hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles",
     "invalid_events_fail_without_files_or_secret_echo",
     "invalid_snapshot_limits_fail_before_creating_storage",
-    "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail",
+    WAL_OWNER,
     "legacy_read_only_transaction_blocks_migration_explicitly_without_losing_data",
     "lifecycle_events_update_status_without_executing_actions",
     "links_public_files_and_special_files_are_refused_without_changing_targets",
@@ -480,6 +486,18 @@ const FAILED_TESTS: &[&str] = &[
     "storage_trace::initialization_worker_stage_drift_still_fails",
     "storage_trace::worker_origins_keep_independent_epochs_and_strict_bounds",
     "storage_trace::child_observations_keep_unknown_sql_phase_and_redact_output",
+    "wal_failure::tests::panic_observation_preserves_payload_and_runs_after_owned_drop",
+    "wal_failure::tests::successful_or_disabled_observation_never_writes",
+    "wal_failure::tests::failed_observation_write_cannot_replace_the_original_panic",
+    "wal_failure::tests::closed_record_rejects_private_unknown_control_and_oversized_fields",
+    "wal_failure::tests::child_stage_and_parent_readiness_cannot_describe_contradictory_progress",
+    "storage_trace::wal_failure::tests::panic_observation_preserves_payload_and_runs_after_owned_drop",
+    "storage_trace::wal_failure::tests::successful_or_disabled_observation_never_writes",
+    "storage_trace::wal_failure::tests::failed_observation_write_cannot_replace_the_original_panic",
+    "storage_trace::wal_failure::tests::closed_record_rejects_private_unknown_control_and_oversized_fields",
+    "storage_trace::wal_failure::tests::child_stage_and_parent_readiness_cannot_describe_contradictory_progress",
+    "storage_trace::wal_failure_projection_requires_the_actual_owner_and_coherent_unique_records",
+    "storage_trace::wal_failure_projection_rejects_private_records_without_leaking_them",
     "storage_trace::project_owned_initialization_diagnostics",
     "storage_trace::trace_export_rejects_symlinks_and_hard_links_without_reading_them",
     "sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code",
@@ -497,6 +515,7 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
     let mut phases = 0;
     let mut workers = std::collections::BTreeSet::new();
     let mut failed_tests = std::collections::BTreeSet::new();
+    let mut wal_failures = Vec::new();
     for line in std::str::from_utf8(bytes).ok()?.lines() {
         if line.starts_with(failure_record::PREFIX) {
             if phases == 4 * 16 {
@@ -518,6 +537,13 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
                 return None;
             }
             records.push(InitializationRecord::Worker(record));
+        } else if line.starts_with(wal_failure::PREFIX) {
+            if wal_failures.len() == 2 {
+                return None;
+            }
+            let record = wal_failure::Record::parse(line)?;
+            wal_failures.push(record);
+            records.push(InitializationRecord::WalFailure(record));
         } else if line.starts_with("test result: ") {
             continue;
         } else if line.starts_with("test ") && line.contains("FAILED") {
@@ -534,6 +560,11 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
                 records.push(InitializationRecord::FailedTest(name));
             }
         }
+    }
+    if !wal_failure::coherent(&wal_failures)
+        || (!wal_failures.is_empty() && !failed_tests.contains(WAL_OWNER))
+    {
+        return None;
     }
     Some(records)
 }
@@ -571,6 +602,72 @@ fn initialization_projection_exports_only_bounded_closed_records() {
         assert!(initialization_projection(raw.as_bytes()).is_none());
     }
     assert!(initialization_projection(&[255]).is_none());
+}
+
+fn wal_failure_line(origin: &str, stage: &str, readiness: &str) -> String {
+    format!(
+        "{}{}\n",
+        wal_failure::PREFIX,
+        serde_json::json!({"schemaVersion":1,"scope":"failureUnwind","origin":origin,"stage":stage,"readiness":readiness})
+    )
+}
+#[test]
+fn wal_failure_projection_requires_the_actual_owner_and_coherent_unique_records() {
+    let parent = wal_failure_line("parent", "readiness", "disconnected");
+    let child = wal_failure_line("child", "spillWrite", "notApplicable");
+    let failed = format!("test {WAL_OWNER} ... FAILED\n");
+    let records = initialization_projection(format!("{child}{parent}{failed}").as_bytes()).unwrap();
+    assert_eq!(records.len(), 3);
+    for child_stage in ["storeOpen", "commit", "readyFlush", "awaitKill"] {
+        let spawned = wal_failure_line("parent", "spawn", "notReached");
+        let progressing = wal_failure_line("child", child_stage, "notApplicable");
+        assert!(
+            initialization_projection(format!("{progressing}{spawned}{failed}").as_bytes())
+                .is_some()
+        );
+    }
+    for record in &records[..2] {
+        assert!(record.line().starts_with(wal_failure::PREFIX));
+    }
+    for raw in [
+        format!("{child}{failed}"),
+        format!("{parent}{parent}{failed}"),
+        format!("{child}{child}{failed}"),
+        format!("{child}{parent}{parent}{failed}"),
+        format!("{parent}{child}"),
+        format!(
+            "{}{child}{failed}",
+            wal_failure_line("parent", "reopen", "ready")
+        ),
+    ] {
+        assert!(initialization_projection(raw.as_bytes()).is_none());
+    }
+    assert!(initialization_projection(
+        format!(
+            "{}{failed}",
+            wal_failure_line("parent", "integrity", "ready")
+        )
+        .as_bytes()
+    )
+    .is_some());
+}
+#[test]
+fn wal_failure_projection_rejects_private_records_without_leaking_them() {
+    let parent = wal_failure_line("parent", "readiness", "timeout");
+    let failed = format!("test {WAL_OWNER} ... FAILED\n");
+    let raw = format!("private panic payload /private/db\n{parent}{failed}private tail\n");
+    let projected = initialization_projection(raw.as_bytes()).unwrap();
+    assert!(projected
+        .iter()
+        .all(|record| !record.line().contains("private")));
+    for invalid in [
+        parent.replace("timeout", "private-error"),
+        parent.replace("1,", "1,\"secret\":\"private\","),
+        parent.replace("{", "{\r"),
+        format!("{}{}\n", wal_failure::PREFIX, "x".repeat(513)),
+    ] {
+        assert!(initialization_projection(format!("{invalid}{failed}").as_bytes()).is_none());
+    }
 }
 
 #[test]
@@ -651,6 +748,11 @@ fn failed_test_allowlist_covers_every_owned_source_test() {
         ("", include_str!("../storage_wal.rs")),
         ("", include_str!("../installation.rs")),
         ("storage_trace::", include_str!("storage_trace.rs")),
+        ("wal_failure::tests::", include_str!("wal_failure.rs")),
+        (
+            "storage_trace::wal_failure::tests::",
+            include_str!("wal_failure.rs"),
+        ),
         (
             "storage_trace::failure_record::tests::",
             include_str!("../../src/storage_failure_record.rs"),
@@ -1136,6 +1238,13 @@ fn project_owned_initialization_diagnostics() {
                 records
                     .iter()
                     .filter(|record| matches!(record, InitializationRecord::FailedTest(_)))
+                    .count()
+            );
+            eprintln!(
+                "initialization-wal-failure-records={}",
+                records
+                    .iter()
+                    .filter(|record| matches!(record, InitializationRecord::WalFailure(_)))
                     .count()
             );
             for record in records {
