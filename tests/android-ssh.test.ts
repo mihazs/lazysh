@@ -1564,3 +1564,27 @@ test('owned receiver probe diagnostic exports closed classifiers without capture
   expect(source).toContain("lane:ownedReceiverRoot?'owned':'legacy'");
   expect(source).toContain("catch{return {state:'observation-unavailable',exitCode:null};}");
 });
+
+test('native D-pad remeasures the actual visible target after its keyboard-opening tap',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=source.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  const expression=body.match(/val heldBoundsExpression = """([\s\S]+?)"""/)?.[1];
+  expect(expression!==undefined).toBe(true);
+  const observe=Function('document','innerWidth','innerHeight',`return (${expression});`);
+  let rect={left:80,top:600,right:120,bottom:640,width:40,height:40},height=800,hit=true,count=1;
+  const button={getBoundingClientRect:()=>rect,contains:(value:unknown)=>value===button,getClientRects:()=>[rect]};
+  const document={querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad button[aria-label="D-pad up"]');return count===1?[button]:[];},elementFromPoint:()=>hit?button:null};
+  const before=observe(document,400,height);expect(before).toEqual([80,600,120,640,400,800]);
+  height=480;expect(observe(document,400,height)).toBeNull();
+  rect={left:80,top:300,right:120,bottom:340,width:40,height:40};
+  expect(observe(document,400,height)).toEqual([80,300,120,340,400,480]);
+  expect(observe(document,400,height)).not.toEqual(before);
+  hit=false;expect(observe(document,400,height)).toBeNull();hit=true;
+  count=2;expect(observe(document,400,height)).toBeNull();count=1;
+  rect={...rect,left:-1};expect(observe(document,400,height)).toBeNull();
+  expect(body.indexOf('val heldBounds =')).toBeGreaterThan(body.indexOf('one native D-pad tap delivered once'));
+  expect(body).toContain('getLocalVisibleRect(visible)');expect(body).toContain('visible.offset(origin[0],origin[1])');
+  expect(body).toContain('getWindowVisibleDisplayFrame');
+  expect(body).toContain('WindowInsetsCompat.Type.ime()');
+  expect(body).toContain('Owned D-pad target must stay above the current keyboard');
+});

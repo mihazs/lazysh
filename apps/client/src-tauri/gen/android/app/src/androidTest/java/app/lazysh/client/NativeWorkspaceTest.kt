@@ -3944,23 +3944,61 @@ class NativeWorkspaceTest {
             val origin = IntArray(2)
             var scale = 0.0
             instrumentation.runOnMainSync { web.getLocationOnScreen(origin); scale = web.width / bounds.getDouble(2) }
-            val start = floatArrayOf((origin[0]+bounds.getDouble(0)*scale).toFloat(), (origin[1]+bounds.getDouble(1)*scale).toFloat())
+            val tapStart = floatArrayOf((origin[0]+bounds.getDouble(0)*scale).toFloat(), (origin[1]+bounds.getDouble(1)*scale).toFloat())
             onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE,
-                { start }, Press.FINGER))
+                { tapStart }, Press.FINGER))
             awaitDocument(scenario, "one native D-pad tap delivered once", "JSON.stringify($countExpression)==='[1,0,0,0]'")
             raw.original()
             val epoch = android.os.SystemClock.uptimeMillis()
             val deadline = System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
             val pointer = android.view.MotionEvent.PointerProperties().apply { id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER }
-            var point = start
-            var held = false
-            var observer: OwnedFingerWindowObserver? = null
-            var fingerFailure: Throwable? = null
             fun remaining(): Long {
                 val value=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
                 assertTrue("Owned D-pad gesture exceeded original five-second budget", value>0)
                 return value.coerceAtMost(1000)
             }
+            // The tap can open the keyboard and move the pad. Never reuse its old screen point.
+            val heldBoundsExpression = """
+                (()=>{const buttons=document.querySelectorAll('.terminal-dpad button[aria-label="D-pad up"]');
+                  if(buttons.length!==1)return null;const button=buttons[0],r=button.getBoundingClientRect();
+                  const values=[r.left,r.top,r.right,r.bottom,innerWidth,innerHeight];
+                  if(!values.every(Number.isFinite)||!button.getClientRects().length||r.width<=0||r.height<=0||
+                    r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight)return null;
+                  const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
+                  return hit&&button.contains(hit)?values:null;})()
+            """.trimIndent()
+            val heldBounds = JSONArray(evaluate(scenario,heldBoundsExpression,remaining()))
+            val start = FloatArray(2)
+            scenario.onActivity { activity ->
+                assertSame("Current D-pad WebView must remain original",web,webView(activity.window.decorView))
+                assertTrue("Current D-pad WebView must be focused and laid out",web.isAttachedToWindow && web.isShown &&
+                    web.hasFocus() && web.hasWindowFocus() && !web.isLayoutRequested && web.width>0 && web.height>0)
+                web.getLocationOnScreen(origin);scale=web.width/heldBounds.getDouble(4)
+                assertTrue("Current D-pad scale must be finite and positive",scale.isFinite() && scale>0)
+                val target=android.graphics.RectF((origin[0]+heldBounds.getDouble(0)*scale).toFloat(),
+                    (origin[1]+heldBounds.getDouble(1)*scale).toFloat(),(origin[0]+heldBounds.getDouble(2)*scale).toFloat(),
+                    (origin[1]+heldBounds.getDouble(3)*scale).toFloat())
+                val visible=android.graphics.Rect();val window=android.graphics.Rect()
+                assertTrue("Current D-pad WebView must have visible app bounds",web.getLocalVisibleRect(visible))
+                visible.offset(origin[0],origin[1])
+                web.getWindowVisibleDisplayFrame(window)
+                assertTrue("Current D-pad target must remain inside visible app bounds",target.left>=visible.left && target.top>=visible.top &&
+                    target.right<=visible.right && target.bottom<=visible.bottom && target.left>=window.left && target.top>=window.top &&
+                    target.right<=window.right && target.bottom<=window.bottom)
+                // Target, local-visible translation, window frame and keyboard top all use device-screen coordinates.
+                val root=activity.window.decorView;assertSame("D-pad decor must be the measured WebView root",root,web.rootView)
+                val rootOrigin=IntArray(2);root.getLocationOnScreen(rootOrigin)
+                val insets=checkNotNull(ViewCompat.getRootWindowInsets(root))
+                val imeVisible=insets.isVisible(WindowInsetsCompat.Type.ime());val imeBottom=insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                assertTrue("Owned D-pad target must stay above the current keyboard",!imeVisible ||
+                    (imeBottom>0 && target.bottom<=rootOrigin[1]+root.height-imeBottom))
+                start[0]=target.centerX();start[1]=target.centerY()
+            }
+            remaining()
+            var point = start
+            var held = false
+            var observer: OwnedFingerWindowObserver? = null
+            var fingerFailure: Throwable? = null
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
