@@ -255,14 +255,20 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   useEffect(() => {
     const element = container.current;
     if (!element || preferences.screenReader) return;
-    let scroll: {x: number; y: number; lastY: number; pending: number; active: boolean} | null = null;
+    let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
+    let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean} | null = null;
+    const cancel = () => {scroll = null; remainder = null;};
     const start = (event: TouchEvent) => {
       const point = event.touches.length === 1 ? event.touches[0] : undefined;
-      scroll = point ? {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, active: false} : null;
+      if (!point) {cancel(); return;}
+      scroll = {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, direction: 0, mode: null, height: 0, active: false};
     };
-    const end = () => {scroll = null;};
+    const end = () => {
+      remainder = scroll?.active && scroll.mode && activeRef.current && session.connected ? {mode: scroll.mode, height: scroll.height, pending: scroll.pending % scroll.height, direction: scroll.direction} : null;
+      scroll = null;
+    };
     const multitouch = (event: TouchEvent) => {
-      if (!activeRef.current) {end(); return;}
+      if (!activeRef.current) {cancel(); return;}
       if (event.touches.length === 1) {
         const point = event.touches[0];
         if (scroll) {
@@ -272,24 +278,36 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
             const tracking = session.terminal.modes.mouseTrackingMode;
+            const pixelWheel = tracking === 'none' || tracking === 'x10';
+            const viewportScroll = pixelWheel && session.terminal.buffer.active.type !== 'alternate' && session.terminal.options.scrollback !== 0;
+            const route = `${tracking}:${viewportScroll}:${session.terminal.buffer.active.type}:${session.terminal.options.scrollback === 0}`;
             const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
             let count = 1, amount = deltaY;
             let mode: number = WheelEvent.DOM_DELTA_PIXEL;
             if (Number.isFinite(height) && height > 0) {
-              // xterm rounds normal scrollback to rows; mouse reports also have no magnitude.
-              // Retain sub-row travel instead of losing each slow sample on redraw.
-              if (deltaY && Math.sign(deltaY) !== Math.sign(scroll.pending)) scroll.pending = 0;
+              // xterm rounds visible rows and retains partial wheel travel between events.
+              // Keep the same debt across admitted drags, fenced by mode and cell geometry.
+              if (scroll.mode !== route || scroll.height !== height) {
+                const previous = remainder?.mode === route && remainder.height === height ? remainder : null;
+                scroll.pending = previous?.pending ?? 0; scroll.direction = previous?.direction ?? 0;
+                scroll.mode = route; scroll.height = height; remainder = null;
+              }
+              if (deltaY) {
+                if (scroll.direction && Math.sign(deltaY) !== scroll.direction) scroll.pending = 0;
+                scroll.direction = Math.sign(deltaY);
+              }
               scroll.pending += deltaY;
               // A coalesced native sample can span the viewport. Drain its full
               // travel now; a later move may never arrive before finger lift.
               const limit = Math.min(256, Math.max(1, Math.ceil(window.innerHeight / height)));
-              count = Math.min(limit, Math.floor(Math.abs(scroll.pending) / height));
-              amount = Math.sign(scroll.pending); mode = WheelEvent.DOM_DELTA_LINE;
+              const rows = viewportScroll ? Math.round(scroll.pending / height) : Math.trunc(scroll.pending / height);
+              count = Math.min(limit, Math.abs(rows));
+              amount = Math.sign(rows); mode = WheelEvent.DOM_DELTA_LINE;
               scroll.pending -= amount * count * height;
-              if (tracking === 'none' || tracking === 'x10') {
+              if (pixelWheel) {
                 amount *= count * height; count = count ? 1 : 0; mode = WheelEvent.DOM_DELTA_PIXEL;
               }
-            } else scroll.pending = 0;
+            } else {scroll.pending = 0; remainder = null; scroll.mode = null; scroll.height = 0;}
             for (let notch = 0; notch < count; notch++) session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
               bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY: amount, deltaMode: mode,
@@ -299,28 +317,28 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             return;
           }
         }
-        if (imeComposing.current) {end(); return;}
+        if (imeComposing.current) {cancel(); return;}
         if (session.terminal.hasSelection()) return;
         const start = press.current;
         if (!start) return;
         const dx = event.touches[0].clientX - start.x, dy = event.touches[0].clientY - start.y;
         const action = preferences.bodyGestures[dx < 0 ? "swipeLeft" : "swipeRight"];
         if (action === "none" || Math.abs(dx) < 16 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      } else {end(); if (imeComposing.current || session.terminal.hasSelection() || event.touches.length !== 2 || !customTouch) return;}
+      } else {cancel(); if (imeComposing.current || session.terminal.hasSelection() || event.touches.length !== 2 || !customTouch) return;}
       event.stopPropagation();
       if (event.cancelable) event.preventDefault();
     };
     element.addEventListener('touchstart', start, {capture: true, passive: true});
     element.addEventListener("touchmove", multitouch, {capture: true, passive: false});
     element.addEventListener('touchend', end, {capture: true});
-    element.addEventListener('touchcancel', end, {capture: true});
+    element.addEventListener('touchcancel', cancel, {capture: true});
     return () => {
       element.removeEventListener('touchstart', start, {capture: true});
       element.removeEventListener('touchmove', multitouch, {capture: true});
       element.removeEventListener('touchend', end, {capture: true});
-      element.removeEventListener('touchcancel', end, {capture: true});
+      element.removeEventListener('touchcancel', cancel, {capture: true});
     };
-  }, [customTouch, preferences.screenReader, session.id, preferences.bodyGestures]);
+  }, [active, customTouch, preferences.screenReader, session.id, session.connected, preferences.bodyGestures]);
 
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
