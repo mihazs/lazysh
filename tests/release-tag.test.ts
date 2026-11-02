@@ -123,6 +123,16 @@ test('create-only tag uses the exact validated source SHA', async () => {
     { path: 'git/refs', body: { ref: `refs/tags/${next.tag}`, sha } },
   ]);
 });
+test('tag creation failure retains only its closed HTTP status', async () => {
+  const refused = response({ message: 'PRIVATE_RESPONSE_BODY', token: 'PRIVATE_TOKEN' }, 403);
+  refused.headers.set('X-Private', 'PRIVATE_RESPONSE_HEADER');
+  const api = requests([main(), response({}, 404), refused]);
+  await expect(createStableTag(next, active, 'success', api.request)).rejects.toMatchObject({
+    message: 'Release gate: tag creation failed (HTTP 403)',
+  });
+  expect(refused.bodyUsed).toBe(false);
+  expect(api.calls).toHaveLength(3);
+});
 test.each([false, true])('same-commit retry is idempotent, including concurrent create: %s', async race => {
   const api = requests([main(), ...(race ? [response({}, 404), response({}, 422)] : []), response(ref())]);
   expect(await createStableTag(next, active, 'success', api.request)).toBe('existing');
