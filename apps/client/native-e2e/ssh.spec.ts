@@ -6,7 +6,7 @@ import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedPr
 import {OwnedSshRelay} from './sshRelay';
 import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
-import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
+import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText} from './sshUi';
 
@@ -390,7 +390,12 @@ it.each(['client','server'] as const)('keeps the owned Mosh UDP daemon alive aft
     expect(await readlink(`/proc/${daemons[0].pid}/ns/pid`)).not.toBe(await readlink('/proc/self/ns/pid'));
     control=await ssh.client(true,undefined,relayPort);
     observer=await ssh.client(true,undefined,relayPort);
-    await vi.waitFor(()=>{expect(control!.stdout).toContain(ssh.prompt);expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+    try {
+      await vi.waitFor(()=>{expect(control!.stdout).toContain(ssh.prompt);expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+    } catch(primary) {
+      try{await reportOwnedSshPromptFailure(ssh,control,observer,relay.active);}catch{/* Preserve primary if sampling arguments are unavailable. */}
+      throw primary;
+    }
     const controlOwner=await control.liveIdentity();expect(controlOwner).toBeDefined();
     await expect(relay.closeOwned({...controlOwner!,start:'stale'})).rejects.toThrow('identity retired');
     expect(relay.active).toBe(2);

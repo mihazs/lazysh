@@ -6,7 +6,7 @@ import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
-import {sshCommand} from './support/sshFixture';
+import {sshCommand,receiverProbeErrors} from './support/sshFixture';
 import {identity,reportOwnedTeardownFailure} from './support/ownedProcess';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
@@ -305,20 +305,6 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
 },20_000);
 
 
-function receiverProbeErrors(text:string) {
-  const flags={auth:/Permission denied|Authentication failed/i.test(text),key:/Load key|bad permissions|invalid format/i.test(text),
-    hostkey:/Host key verification failed|REMOTE HOST IDENTIFICATION/i.test(text),pty:/PTY allocation|openpty|pseudo-terminal/i.test(text),
-    channel:/channel [0-9]+:|session request failed|connection (?:closed|reset|refused)/i.test(text),
-    shell:/shell request failed|Could not chdir|exec.*(?:shell|sh).*failed/i.test(text),
-    fs:/No such file|Read-only file system|(?:open|stat|access|mkdir|chdir)[^\r\n]{0,160}: Permission denied/i.test(text),proc:/procfs|\/proc\/|proc mount/i.test(text),
-    accountLocked:/account is locked/i.test(text),accountMissing:/Invalid user|(?:getpwnam|getpwuid)[^\r\n]{0,80}(?:failed|not found)/i.test(text),
-    uidSwitch:/(?:setresuid|setresgid|seteuid|setegid|initgroups)[^\r\n]{0,80}(?:failed|Operation not permitted|Invalid argument)/i.test(text),
-    authorizedKeyRead:/Could not open user[^\r\n]{0,160}authorized keys|auth_openkeyfile[^\r\n]{0,80}(?:failed|denied)/i.test(text),
-    ownership:/Authentication refused|bad ownership or modes|safe_path[^\r\n]{0,80}(?:fatal|failed|unsafe)/i.test(text),
-    sandbox:/sandbox[^\r\n]{0,80}(?:failed|denied|violation)|seccomp[^\r\n]{0,80}(?:failed|denied|violation|killed)/i.test(text),
-    accountDenied:/PAM[^\r\n]{0,80}(?:denied|failure|error)|account[^\r\n]{0,80}(?:expired|denied)|not allowed because shell/i.test(text)};
-  return {...flags,unknown:text.length>0 && !Object.values(flags).some(Boolean)};
-}
 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{
   const source=process.env.LAZYSH_TEST_RECEIVER_BIN!;
