@@ -23,3 +23,20 @@ for(const provider of ['fcm','apns'] as const)test(`${provider} keeps consent, p
   await root.getByRole('button',{name:copy.retry,exact:true}).click();await expect(root.getByRole('status')).toHaveText('Registration off');await expect(root.getByRole('alert')).toHaveCount(0);expect(await root.locator('img,script').count()).toBe(0);expect(await root.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.evaluate(()=>window.pushUi.dispose());
 });
+
+test('unconfigured Google build can choose Firebase-free push without registration',async({page})=>{
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async()=>{const {mountPush}=await import('/e2e/fixtures/PushHarness.tsx');window.pushUi=mountPush('unconfigured-google');});
+  const root=page.locator('.push-fixture'),service=root.getByRole('combobox',{name:'Push service'});
+  await expect(root.getByRole('status')).toHaveText('No Firebase configuration');
+  await expect(service).toBeEnabled();
+  await service.selectOption('unifiedpush');
+  await expect(service).toHaveValue('unifiedpush');
+  await expect(root.getByRole('status')).toHaveText('Choose your distributor');
+  await expect(root.getByRole('checkbox')).not.toBeChecked();
+  await expect(root.getByRole('button',{name:'Connect or resume delivery service'})).toBeDisabled();
+  await expect(root.getByText(/configure your server in the ntfy distributor/)).toBeVisible();
+  expect(await page.evaluate(()=>window.pushUi.calls)).toEqual(['push_registration_status','push_registration_provider']);
+  expect(await root.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await page.evaluate(()=>window.pushUi.dispose());
+});

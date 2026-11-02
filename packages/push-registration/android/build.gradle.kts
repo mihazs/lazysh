@@ -3,7 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-android { namespace = "app.lazysh.push" }
+extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+    namespace = "app.lazysh.push"
+    defaultConfig { consumerProguardFiles("../android-unifiedpush/consumer-rules.pro") }
+    sourceSets.getByName("main").java.srcDir("../android-unifiedpush/src/main/java")
+}
+apply(from = "../android-shared/unifiedpush.gradle.kts")
 apply(from = "../android-shared/library.gradle.kts")
 
 dependencies {

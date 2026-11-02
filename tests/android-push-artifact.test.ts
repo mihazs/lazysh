@@ -38,7 +38,7 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64',`-PlazyshUnifiedPushAcceptanceCa=${apk}`]);
   } catch(error){rejected=error;}
   const failure=rejected as {stdout?:string;stderr?:string}|undefined;
-  const guardReason=google?'UnifiedPush acceptance trust requires the F-Droid native provider':'UnifiedPush acceptance trust requires an explicit debug acceptance task';
+  const guardReason=google?'UnifiedPush acceptance distribution must match the native provider':'UnifiedPush acceptance trust requires an explicit debug acceptance task';
   const unsafeAcceptanceTaskRejected=Boolean(failure&&`${failure.stdout??''}${failure.stderr??''}`.includes(guardReason));
   expect(unsafeAcceptanceTaskRejected).toBe(true);
   const applicationId=(await run(analyzer,['manifest','application-id',apk])).trim();
@@ -69,7 +69,7 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     nativeConsent:/\bapp\.lazysh\.unifiedpush\.NativeDisplayAuthority\b/.test(dex),
     fixedConsentCommit:/\bapp\.lazysh\.unifiedpush\.DisplayConsentCommit\b/.test(dex),
   };
-  const enrollment=google?null:{
+  const enrollment={
     pinnedHttp:graph.includes('com.squareup.okhttp3:okhttp:5.5.1'),
     nativeHttp:release?null:/\bapp\.lazysh\.unifiedpush\.EnrollmentHttp\b/.test(dex),
     privateStorage:release?null:/\bapp\.lazysh\.unifiedpush\.PrivateEnrollmentStore\b/.test(dex),
@@ -83,10 +83,10 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
   expect(observed).toEqual({
     nativeProject:true,firebaseDependency:google,playDependency:google,firebaseClasses:google,
     playClasses:google,pushService:google,firebaseManifest:google,googleMessagingPermission:google,
-    unifiedDependency:!google,unifiedClasses:!google,unifiedService:!google,androidCrypto:!google,
-    serverCrypto:false,embeddedFcm:false,nativeConsent:!google,fixedConsentCommit:!google,
+    unifiedDependency:true,unifiedClasses:true,unifiedService:true,androidCrypto:true,
+    serverCrypto:false,embeddedFcm:false,nativeConsent:true,fixedConsentCommit:true,
   });
-  if(!google){
+  {
     expect(enrollment?.pinnedHttp).toBe(true);
     if(!release){ expect(enrollment?.nativeHttp).toBe(true); expect(enrollment?.privateStorage).toBe(true); }
     const service=manifest.match(/<service\b[^>]*>/g)?.find(tag=>tag.includes('"app.lazysh.unifiedpush.RegistrationService"'));

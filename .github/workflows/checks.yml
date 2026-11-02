@@ -760,6 +760,10 @@ jobs:
           if-no-files-found: warn
 
   native-android-ntfy:
+    strategy:
+      fail-fast: false
+      matrix:
+        push-variant: [fdroid, google]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -778,6 +782,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
       - run: bun install --frozen-lockfile
+      - name: Build current Google APK for Firebase-free push acceptance
+        if: matrix.push-variant == 'google'
+        run: bun run build:android:emulator
       - name: Admit this runner's owned emulator acceleration
         run: |
           test -c /dev/kvm
@@ -794,12 +801,17 @@ jobs:
           ram-size: 3072M
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
-          script: LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy
+          script: |
+            if [ '${{ matrix.push-variant }}' = 'google' ]; then
+              LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy
+            else
+              LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy
+            fi
       - name: Retain finite ntfy acceptance receipts only
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lazysh-ntfy-acceptance
+          name: lazysh-ntfy-acceptance-${{ matrix.push-variant }}
           path: apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/ntfy/*.json
           if-no-files-found: warn
 

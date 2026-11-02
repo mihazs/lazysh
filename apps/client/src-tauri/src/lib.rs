@@ -151,6 +151,7 @@ pub fn run() {
                 apple_status::apple_status_publish,
                 push::push_registration_status,
                 push::push_registration_register,
+                push::push_registration_provider,
                 push::push_registration_enroll,
                 push::push_registration_disable,
                 push::push_registration_display,

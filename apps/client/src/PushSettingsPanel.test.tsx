@@ -114,3 +114,53 @@ it('can pause pending native enrollment and discards its late success',async()=>
   finish({...unified,enabled:true,reason:'Stale private confirmation'});
   await waitFor(()=>expect(screen.queryByText('Stale private confirmation')).toBeNull());
 });
+
+it('offers UnifiedPush on an unconfigured Google build without registering implicitly',async()=>{
+  const google={...off,configured:false,availableProviders:['unifiedpush','fcm'],reason:'No Firebase configuration'};
+  vi.mocked(invoke).mockResolvedValueOnce(google).mockResolvedValue({...google,provider:'unifiedpush',configured:true,reason:'Choose your distributor'});
+  render(<PushSettingsPanel/>);
+  const services=await screen.findByRole('combobox',{name:'Push service'});
+  expect(services).toHaveProperty('disabled',false);
+  fireEvent.change(services,{target:{value:'unifiedpush'}});
+  await screen.findByText('Choose your distributor');
+  expect(invoke).toHaveBeenLastCalledWith('push_registration_provider',{provider:'unifiedpush'},{headers:{'X-Lazysh-Access':expect.any(String)}});
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',false);
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByText(/configure your server in the ntfy distributor/)).toBeDefined();
+});
+it.each([{enabled:true},{tokenPresent:true},{busy:true}])('keeps provider selection unavailable while native state is active: %j',async state=>{
+  vi.mocked(invoke).mockResolvedValue({...off,availableProviders:['unifiedpush','fcm'],...state});
+  render(<PushSettingsPanel/>);
+  expect(await screen.findByRole('combobox',{name:'Push service'})).toHaveProperty('disabled',true);
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+it('clears old consent when a provider change succeeds natively but its response is lost',async()=>{
+  const initial={...off,availableProviders:['unifiedpush','fcm']};
+  const recovered={...initial,provider:'unifiedpush',reason:'Recovered UnifiedPush status'};
+  vi.mocked(invoke).mockResolvedValueOnce(initial)
+    .mockRejectedValueOnce(new Error('PRIVATE_LOST_PROVIDER_RESPONSE')).mockResolvedValueOnce(recovered);
+  render(<PushSettingsPanel/>);
+  const services=await screen.findByRole('combobox',{name:'Push service'});
+  await waitFor(()=>expect(services).toHaveProperty('disabled',false));
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',true);
+  fireEvent.change(services,{target:{value:'unifiedpush'}});
+  await screen.findByText('Recovered UnifiedPush status');
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',false);
+  expect(screen.getByRole('button',{name:'Connect or resume delivery service'})).toHaveProperty('disabled',true);
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual([
+    'push_registration_status','push_registration_provider','push_registration_status',
+  ]);
+  expect(document.body.textContent).not.toContain('PRIVATE_LOST_PROVIDER_RESPONSE');
+});
+
+it('exposes retained FCM revocation limits and blocks switching when configuration is missing',async()=>{
+  const reason='Saved FCM registration is retained. Use a build configured for the original Firebase project to revoke it before switching services.';
+  vi.mocked(invoke).mockResolvedValue({...off,configured:false,tokenPresent:true,availableProviders:['unifiedpush','fcm'],reason});
+  render(<PushSettingsPanel/>);
+  expect(await screen.findByRole('combobox',{name:'Push service'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('status').textContent).toBe(reason);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  expect(screen.getByRole('button',{name:'Retry token revocation'})).toHaveProperty('disabled',false);
+});

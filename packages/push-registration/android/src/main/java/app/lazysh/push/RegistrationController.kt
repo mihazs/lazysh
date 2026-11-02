@@ -6,6 +6,10 @@ internal interface RegistrationStore {
     var tokenPresent: Boolean
 }
 
+internal data class FcmPresence(val enabled:Boolean,val tokenPresent:Boolean)
+internal fun fcmPresence(controller:RegistrationController?,savedEnabled:Boolean,savedTokenPresent:Boolean) =
+    FcmPresence(controller?.enabled ?: savedEnabled,controller?.tokenPresent ?: savedTokenPresent)
+
 internal interface MessagingDriver {
     fun autoInit(enabled: Boolean)
     fun token(done: (Boolean) -> Unit)

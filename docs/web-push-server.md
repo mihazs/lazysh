@@ -1,6 +1,6 @@
 # Free-software Web Push server foundation
 
-The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. The F-Droid Android build supports explicit native enrollment and separately opted-in local event display. The server alone does not enable either. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours. Actual distributor event/display acceptance is still pending under #422; the existing real ntfy acceptance establishes enrollment only.
+The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. Google and FOSS Android builds with UnifiedPush selected support explicit native enrollment and separately opted-in local event display. The server alone does not enable either. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours. Actual distributor event/display acceptance is still pending under #422; the existing real ntfy acceptance establishes enrollment only.
 
 ## Configure an explicit destination policy
 

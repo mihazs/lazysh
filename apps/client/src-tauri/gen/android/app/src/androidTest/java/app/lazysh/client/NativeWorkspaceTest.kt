@@ -3864,7 +3864,7 @@ class NativeWorkspaceTest {
             Class.forName("app.lazysh.unifiedpush.RegistrationService", false, InstrumentationRegistry.getInstrumentation().targetContext.classLoader)
             true
         } catch (_: ClassNotFoundException) { false }
-        assertTrue("Exactly one native registration transport must be packaged", google != unified)
+        assertTrue("Every Android build must package its authenticated UnifiedPush transport", unified)
         awaitUnlockedWorkspace(scenario, "Push unlocked workspace")
         evaluate(scenario, """(() => {
           window.__lazyshPushProbe=undefined;
@@ -3882,10 +3882,11 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "Push IPC result", "window.__lazyshPushProbe!==undefined")
         assertEquals("Packaged native push status must match its actual plugin", "true", evaluate(scenario, """(() => {
           const result=window.__lazyshPushProbe, status=result.status;
-          return result.ok===true && status?.provider===${JSONObject.quote(if (google) "fcm" else "unifiedpush")} &&
-            status.supported===true && (${google} || (status.configured===false && status.enabled===false &&
+          return result.ok===true && status?.provider==='unifiedpush' &&
+            Array.isArray(status.availableProviders) && status.availableProviders.slice().sort().join(',')===${JSONObject.quote(if (google) "fcm,unifiedpush" else "unifiedpush")} &&
+            status.supported===true && status.configured===false && status.enabled===false &&
               status.tokenPresent===false && status.busy===false && status.reason.includes('distributor') &&
-              status.reason.includes('No delivery service')));
+              status.reason.includes('No delivery service');
         })()"""))
         println("lazysh native push: googlePlugin=$google unifiedPlugin=$unified protectedStatusVerified=true registrationOnly=true")
     }
