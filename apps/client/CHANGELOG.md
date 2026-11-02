@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.8.3
+
+### Patch Changes
+
+- 408e4a8: Retain closed failure-local D-pad phase and last validated receiver counts in Android native acceptance without changing gestures, budgets or input behavior.
+- 2d4bab7: Use a minimum-sized standard Space for the house-owned Android test IME and cover its real framework measurement without changing packaged terminal input behavior.
+- 1eda85b: Calibrate the ntfy acceptance release-assembly build allowance from two to four minutes after a measured two-worker build exceeded two minutes, preserving APK/trust checks, native assertions and outer test limits.
+- 1e05652: Align the opt-in Android raw SSH receiver fixture with the existing bounded UI-host lifetime while preserving ordinary SSH and Mosh lifetimes and all input acceptance deadlines.
+- eb70476: Give each owned SSH/SFTP fixture launch a private host-trust file so concurrent clients cannot rewrite another client's pin, preserving strict verification and cleanup.
+- @lazysh/account-usage@1.8.3
+  - @lazysh/common@1.8.3
+  - @lazysh/display-idle@1.8.3
+  - @lazysh/et-transport@1.8.3
+  - @lazysh/mosh-transport@1.8.3
+
 ## 1.8.2
 
 ### Patch Changes
