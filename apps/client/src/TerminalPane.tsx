@@ -262,7 +262,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     };
     const end = () => {scroll = null;};
     const multitouch = (event: TouchEvent) => {
-      if (!activeRef.current || session.terminal.hasSelection()) {end(); return;}
+      if (!activeRef.current) {end(); return;}
       if (event.touches.length === 1) {
         const point = event.touches[0];
         if (scroll) {
@@ -300,12 +300,13 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           }
         }
         if (imeComposing.current) {end(); return;}
+        if (session.terminal.hasSelection()) return;
         const start = press.current;
         if (!start) return;
         const dx = event.touches[0].clientX - start.x, dy = event.touches[0].clientY - start.y;
         const action = preferences.bodyGestures[dx < 0 ? "swipeLeft" : "swipeRight"];
         if (action === "none" || Math.abs(dx) < 16 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      } else {end(); if (imeComposing.current || event.touches.length !== 2 || !customTouch) return;}
+      } else {end(); if (imeComposing.current || session.terminal.hasSelection() || event.touches.length !== 2 || !customTouch) return;}
       event.stopPropagation();
       if (event.cancelable) event.preventDefault();
     };

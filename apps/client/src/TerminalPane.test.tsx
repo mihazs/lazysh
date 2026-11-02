@@ -691,10 +691,6 @@ describe("terminal interactions", () => {
     expect(wheels).toHaveLength(2);
     touch('touchstart',100,100); touch('touchmove',180,103);
     expect(wheels).toHaveLength(2);
-    terminal.hasSelection.mockReturnValue(true);
-    touch('touchstart',100,100); touch('touchmove',100,160);
-    expect(wheels).toHaveLength(2);
-    terminal.hasSelection.mockReturnValue(false);
     fireEvent.compositionStart(canvas);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
@@ -702,6 +698,19 @@ describe("terminal interactions", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['none','vt200'])('routes selected vertical drags through xterm wheels in %s mode without consuming taps or horizontal selection gestures',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    terminal.hasSelection.mockReturnValue(true);
+    const {wheels,touch}=touchScrollFixture();
+    touch('touchstart',100,100); touch('touchmove',100,105); touch('touchend',100,105);
+    touch('touchstart',100,100); touch('touchmove',180,103); touch('touchend',180,103);
+    expect(wheels).toHaveLength(0);
+    touch('touchstart',100,100);
+    for (const offset of [5,8,15,60]) touch('touchmove',100,100+offset);
+    expect(wheels.length).toBeGreaterThan(0);
+    expect(terminal.hasSelection()).toBe(true);
     expect(mocks.write).not.toHaveBeenCalled();
   });
   it.each(['none','x10'])('retains sub-row scroll travel in %s mode without leaking it across reversal or lift',mode=>{

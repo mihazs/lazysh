@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Allow vertical finger scrolling after selecting terminal text, using xterm’s normal wheel selection behavior; horizontal gestures, taps and accessibility safeguards remain unchanged.
+
 - Preserve slow sub-row finger movement in terminal scrollback instead of losing travel between xterm redraws.
 
 - Expanded terminal D-pad controls now suppress their browser context menu by default.
