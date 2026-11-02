@@ -4231,15 +4231,20 @@ class NativeWorkspaceTest {
                 runCatching {
                     val state=JSONObject(evaluate(scenario,"""
                         (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
-                          const area=areas.length===1?areas[0]:null;
+                          const area=areas.length===1?areas[0]:null,pane=area?.closest('.terminal-pane');
+                          const rects=pane?.getClientRects?.(),visibility=pane?getComputedStyle(pane).visibility:null;
                           return {count:areas.length===0?'zero':areas.length===1?'one':'many',
                             focus:document.hasFocus(),visible:!document.hidden,active:area?document.activeElement===area:null,
                             writable:area?!area.readOnly:null,enabled:area?!area.disabled:null,normalType:area?area.type!=='password':null,
                             autocompleteOff:area?area.autocomplete==='off':null,autocorrectOff:area?area.getAttribute('autocorrect')==='off':null,
                             spellcheckOff:area?area.spellcheck===false:null,
+                            unappliedReviewPresent:pane?Boolean(pane.querySelector('.terminal-edit-review')):null,
+                            endedNoticePresent:pane?Boolean(pane.querySelector(':scope > .session-notice[role=status]')):null,
+                            modalPresent:pane?Boolean(document.querySelector('[role=dialog][aria-modal=true]')):null,
+                            paneDisplayed:rects&&Number.isInteger(rects.length)&&rects.length>=0&&['visible','hidden','collapse'].includes(visibility)?rects.length>0&&visibility==='visible':null,
                             sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})()
                     """,1_000))
-                    val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent")
+                    val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent","unappliedReviewPresent","endedNoticePresent","modalPresent","paneDisplayed")
                     require(state.keys().asSequence().toSet()==fields.toSet()+"count")
                     val count=state.get("count");require(count in listOf("zero","one","many"))
                     val flags=fields.joinToString(" ") { name ->
