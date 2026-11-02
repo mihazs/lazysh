@@ -267,7 +267,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         const point = event.touches[0];
         if (scroll) {
           const dx = point.clientX - scroll.x, dy = point.clientY - scroll.y;
-          if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx) * 1.5)) {
+          if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx))) {
             const deltaY = scroll.lastY - point.clientY;
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
@@ -280,7 +280,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
               // Mouse reports have no magnitude; accumulate travel into rendered-row notches.
               if (deltaY && Math.sign(deltaY) !== Math.sign(scroll.pending)) scroll.pending = 0;
               scroll.pending += deltaY;
-              count = Math.min(10, Math.floor(Math.abs(scroll.pending) / height));
+              // A coalesced native sample can span the viewport. Drain its full
+              // travel now; a later move may never arrive before finger lift.
+              const limit = Math.min(256, Math.max(1, Math.ceil(window.innerHeight / height)));
+              count = Math.min(limit, Math.floor(Math.abs(scroll.pending) / height));
               amount = Math.sign(scroll.pending); mode = WheelEvent.DOM_DELTA_LINE;
               scroll.pending -= amount * count * height;
             } else scroll.pending = 0;

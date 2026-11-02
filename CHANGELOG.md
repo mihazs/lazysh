@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep vertically dominant finger drags responsive and preserve complete coalesced scroll motion before finger lift.
+
 - Replace mobile Preferences disclosures with category navigation and contextual Back; simplify workspace and agent controls, refine theme-derived glass navigation chrome, and honor reduced motion for short navigation transitions. Settings values, credentials and transport defaults are unchanged.
 
 - Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
