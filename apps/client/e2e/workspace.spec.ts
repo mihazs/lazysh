@@ -102,7 +102,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
@@ -130,7 +130,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         if(args.sessionId==='other-navigation-ssh')return {schemaVersion:1,sessions:[]};
         const report={schemaVersion:1,sessions:[{sessionId:'r'.repeat(256),agent:'Codex',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
         if(state.holdReport)return new Promise(resolve=>{Object.assign(window,{finishOldReport:()=>{state.holdReport=false;resolve(report);}});});
-        return report;
+        return {...report,sessions:Array.from({length:Math.min(80,Math.max(1,state.reportCount))},(_,index)=>({...report.sessions[0],sessionId:index===0?report.sessions[0].sessionId:`owned-report-${index}`,project:index===0?report.sessions[0].project:`/nav/project-${index}`}))};
       }
       if(command==='companion_hook_discovery'){
         const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
@@ -177,6 +177,10 @@ async function openConnectedAgents(page:Page,phone:boolean){
   await connectPasswordHost(page);
   if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   await page.getByRole('button',{name:'Agents',exact:true}).click();
+}
+
+async function selectAgentSection(page:Page,section:'live'|'activity') {
+  await page.getByRole('navigation',{name:'Agent sections',exact:true}).getByRole('button',{name:section==='live'?'Live Herdr agents':'Reported agent activity',exact:true}).click();
 }
 
 const nativeWorkspaceSource=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
@@ -233,6 +237,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await views.getByRole('button').first().scrollIntoViewIfNeeded();
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command)))).toEqual([]);
   await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
   await expect(board.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();
@@ -249,6 +254,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await setup.click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
+  await selectAgentSection(page,'live');
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   const serverSetup=live.locator('.herdr-server-setup');
@@ -330,10 +336,13 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect((await live.getByRole('button',{name:/^codex-builder/}).boundingBox())!.x).toBeGreaterThanOrEqual(13);
   await page.screenshot({path:testInfo.outputPath('herdr-live-discovery.png')});
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{missing:boolean}}).workspaceNavigationState.missing=true;});
+  await selectAgentSection(page,'activity');
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(board.getByRole('alert')).toHaveText('Owned fixture companion unavailable');
+  await selectAgentSection(page,'live');
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{missing:boolean}}).workspaceNavigationState.missing=false;});
+  await selectAgentSection(page,'activity');
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
@@ -351,6 +360,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const before=await commands();await page.clock.runFor(11000);expect(await commands()).toEqual(before);
   if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'activity');
   await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
   const installer=board.getByRole('button',{name:'Update companion',exact:true,includeHidden:true});
   await expect(installer).toHaveCount(1);await expect(installer).toBeHidden();
@@ -378,8 +388,10 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'activity');
   await expect(board).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
+  await selectAgentSection(page,'activity');
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishOldReport?:()=>void}).finishOldReport)).toBe('function');
   await modes.getByRole('button',{name:'Connections',exact:true}).click();
@@ -402,7 +414,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   }else await page.getByRole('tab',{name:'Navigation host',exact:true}).click();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
-  await expect(live.getByText('Shared focus changes focus for other connections to this server.',{exact:true})).toBeVisible();
+  await expect(live.getByText('Changes focus for other connections.',{exact:true})).toBeVisible();
   await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead)).toBe('function');
   expect(await page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(false);
   await page.evaluate(()=>(window as unknown as {finishHerdrRead:()=>void}).finishHerdrRead());
@@ -488,9 +500,7 @@ test('mobile terminal keeps one compact header and reaches every session control
       await expect(strip).toBeHidden();await expect(tabs).toBeHidden();await expect(restore).toBeHidden();
       expect((await header.boundingBox())!.height).toBe(44);
       expect((await page.locator('.session-body').boundingBox())!.y).toBe(44);
-      const text=(await composer.getByRole('textbox',{name:'Compose text',exact:true}).boundingBox())!;
       const buttons=(await composer.locator('.terminal-compose-actions').boundingBox())!;
-      expect(text.x+text.width).toBeLessThanOrEqual(buttons.x);
       expect(buttons.y+buttons.height).toBeLessThanOrEqual(height);
       const withKeys=(await page.locator('.terminal-canvas:visible').boundingBox())!.height;
       await actions.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
@@ -626,6 +636,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   await installWorkspaceNavigation(page,true);
   await page.goto('/');
   await openConnectedAgents(page,testInfo.project.name==='phone');
+  await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
   await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
@@ -708,19 +719,20 @@ for(const shorter of [false,true])test(`Activity scroll returns to the same mobi
   test.skip(shorter && testInfo.project.name!=='phone','Mobile restoration clamp');
   await openClockedNavigation(page);const phone=testInfo.project.name==='phone';
   if(phone)await page.setViewportSize({width:393,height:852});
-  await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number}}).workspaceNavigationState;state.installed=true;state.agentCount=80;});
+  await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number;reportCount:number}}).workspaceNavigationState;state.installed=true;state.agentCount=80;state.reportCount=80;});
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await selectAgentSection(page,'activity');
   const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
   const scroller=sidebar.locator('.workspace-navigation-scroll'),board=sidebar.getByRole('region',{name:'Agent activity',exact:true});
   await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(80);
-  await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
-  const original=await board.elementHandle();await board.getByRole('heading',{name:'Agent activity',exact:true}).scrollIntoViewIfNeeded();
+  await expect(board.getByText('Reported work',{exact:true})).toHaveCount(80);
+  const original=await board.elementHandle();await board.locator('.agent-report-row').last().scrollIntoViewIfNeeded();
   await page.screenshot({path:testInfo.outputPath('activity-before-usage.png'),animations:'disabled'});
   const before=await scroller.evaluate(node=>node.scrollTop);expect(before).toBeGreaterThan(2000);
   await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
-  if(shorter)await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{agentCount:number}}).workspaceNavigationState.agentCount=1;});
+  if(shorter)await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{agentCount:number;reportCount:number}}).workspaceNavigationState;state.agentCount=1;state.reportCount=1;});
   await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
   await expect(sidebar.locator('.herdr-navigation-row')).toHaveCount(shorter?1:80);
   const after=await scroller.evaluate(node=>node.scrollTop),retained=await original!.evaluate(node=>node.isConnected);
@@ -730,7 +742,7 @@ for(const shorter of [false,true])test(`Activity scroll returns to the same mobi
 });
 
 
-for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':'reported'} activity behind many live agents without changing owners`,async({page},testInfo)=>{
+for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'reported'} activity separately from many live agents without changing owners`,async({page},testInfo)=>{
   await openClockedNavigation(page);
   const phone=testInfo.project.name==='phone';if(phone)await page.setViewportSize({width:393,height:852});
   await page.evaluate(empty=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number;empty:boolean}}).workspaceNavigationState;state.installed=true;state.agentCount=80;state.empty=empty;},empty);
@@ -741,13 +753,11 @@ for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':
   await page.getByRole('button',{name:'Agents',exact:true}).click();
   const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
   const jumps=sidebar.getByRole('navigation',{name:'Agent sections',exact:true});
-  const activity=sidebar.getByRole('group',{name:'Reported agent activity',exact:true});
-  const board=activity.getByRole('region',{name:'Agent activity',exact:true}),originalBoard=await board.elementHandle();
+  const activity=sidebar.getByRole('group',{name:'Reported agent activity',exact:true,includeHidden:true});
+  const board=activity.getByRole('region',{name:'Agent activity',exact:true,includeHidden:true}),originalBoard=await board.elementHandle();
   const live=sidebar.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.locator('.herdr-navigation-row')).toHaveCount(80);
-  await expect(live).toHaveAttribute('aria-busy','false');await expect(board.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
-  if(empty)await expect(board.getByRole('button',{name:'Agent hook setup',exact:true})).toHaveCount(1);
-  else await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
+  await expect(live).toHaveAttribute('aria-busy','false');
   const scroller=sidebar.locator('.workspace-navigation-scroll');
   await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).not.toBeInViewport();
   const calls=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
@@ -756,7 +766,10 @@ for(const empty of [false,true])test(`top Activity jump reaches ${empty?'empty':
   await expect(jumpActivity).toBeInViewport({ratio:0.9});
   if(phone)await jumpActivity.tap();else{await jumpActivity.focus();await page.keyboard.press('Enter');}
   await expect(activity).toBeFocused();await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).toBeInViewport({ratio:0.9});
-  expect(await scroller.evaluate(node=>node.scrollTop)).toBeGreaterThan(2000);
+  expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
+  await expect(board.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+  if(empty)await expect(board.getByRole('button',{name:'Agent hook setup',exact:true})).toHaveCount(1);
+  else await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
   expect(await page.evaluate(()=>({x:scrollX,y:scrollY}))).toEqual(windowScroll);expect(await calls()).toEqual(before);
   await expect(jumps.getByRole('button',{name:'Live Herdr agents',exact:true})).toBeInViewport({ratio:0.9});
   await page.screenshot({path:testInfo.outputPath('direct-activity.png'),animations:'disabled'});
@@ -853,11 +866,13 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   const activity=page.getByRole('region',{name:'Agent activity',exact:true,includeHidden:true});
   const reader=await activity.elementHandle(),terminal=await page.locator('.terminal-canvas:visible').elementHandle();
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'activity');
   const draft=activity.getByRole('searchbox',{name:'Search reported agents',exact:true});await draft.fill('preserved query');
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
   expect(await reader!.evaluate(node=>node.isConnected)).toBe(true);
   expect(await terminal!.evaluate(node=>node.isConnected)).toBe(true);
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'activity');
   await expect(draft).toHaveValue('preserved query');
   expect(await reader!.evaluate(node=>node===document.querySelector('.agent-panel'))).toBe(true);
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
@@ -870,6 +885,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   const setup=live.locator('.herdr-server-setup');
   await expect(setup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
+  const summary=live.getByText('Changes focus for other connections.',{exact:true});await expect(summary).toBeVisible();await summary.click();
   const warning=live.getByText('Shared focus changes focus for other connections to this server.',{exact:true});
   await expect(warning).toHaveCount(1);await expect(warning).toBeVisible();
   await live.getByRole('button',{name:'Herdr server',exact:true}).click();
@@ -894,7 +910,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   await expect(setup).toBeVisible();
   await expect(selector).toBeVisible();await expect(selector).toHaveValue('');
   await expect(live.locator('.herdr-navigation-tree')).toHaveCount(0);await expect(warning).toHaveCount(0);
-  await selector.selectOption('default');await expect(setup).toBeHidden();await expect(warning).toBeVisible();
+  await selector.selectOption('default');await expect(setup).toBeHidden();await expect(summary).toBeVisible();
   await page.evaluate(()=>{
     const original=window.nativeFixtureInvoke;
     Object.assign(window,{restoreNavigationReader:()=>{window.nativeFixtureInvoke=original;}});
@@ -948,6 +964,7 @@ test('native companion action stays owned during installed and reused results',a
   if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
   await openClockedNavigation(page);
   await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
+  await selectAgentSection(page,'activity');
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
   const records:unknown[]=[];
   for(const [action,before,after] of [['Install companion','idle','installed'],['Update companion','installed','reused']]){
@@ -1070,4 +1087,28 @@ test('Workspaces keeps three long app sessions compact while mobile pane choices
   await expect(live.getByText('fixture@fixture.invalid',{exact:true})).toBeVisible();
   if(phone)await expect(page.locator('.workspace-session-summary')).toHaveAttribute('aria-expanded','true');
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['disconnect','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
+});
+
+test('agent Live and Activity views keep one pending approval reachable without sending input',async({page},info)=>{
+  await installWorkspaceNavigation(page);await page.goto('/');
+  await page.evaluate(()=>{
+    window.workspaceNavigationState.installed=true;
+    const original=window.nativeFixtureInvoke;
+    window.nativeFixtureInvoke=async(command,args,options)=>command==='agent_approvals'?{schemaVersion:1,requests:[{
+      id:'b714333f-82b1-4ee0-a383-6fd6dc1eca01',expectedHash:'a'.repeat(64),agent:'claude',sessionId:'pending-agent',project:'/owned/review',paneId:'%7',toolName:'Bash',toolInput:{command:'git status'},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),
+    }]}:original(command,args,options);
+  });
+  await openConnectedAgents(page,info.project.name==='phone');
+  const allow=page.getByRole('button',{name:'Allow this request',exact:true});
+  await expect(allow).toBeVisible();await expect(allow).toHaveCount(1);
+  const live=page.getByRole('button',{name:'Live Herdr agents',exact:true});
+  const activity=page.getByRole('button',{name:'Reported agent activity',exact:true});
+  await expect(live).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeHidden();
+  await activity.click();await expect(activity).toHaveAttribute('aria-pressed','true');
+  await expect(allow).toBeVisible();await expect(allow).toHaveCount(1);
+  await expect(page.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeVisible();
+  await live.click();await expect(live).toHaveAttribute('aria-pressed','true');await expect(allow).toBeVisible();
+  const calls=await page.evaluate(()=>window.workspaceNavigationCalls);
+  expect(calls).not.toContain('write_stdin');expect(calls).not.toContain('resolve_agent_approval');
 });

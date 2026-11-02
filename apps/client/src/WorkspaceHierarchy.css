@@ -1,0 +1,2 @@
+.agent-section-jumps button[aria-pressed=true] { border-color: var(--accent); background: var(--theme-control); color: var(--theme-text); }
+.workspace-navigation-scroll > [hidden] { display: none; }

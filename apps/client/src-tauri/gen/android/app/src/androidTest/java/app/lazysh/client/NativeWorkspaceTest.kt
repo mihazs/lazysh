@@ -2351,6 +2351,8 @@ class NativeWorkspaceTest {
                         !panel.querySelector('input[readonly]') &&
                         !Array.from(panel.querySelectorAll('[role=status]')).some(x=>x.textContent==='Uploaded to this host. Copy its path or edit the prompt below.');})()
                 """)
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".attachment-options > summary"))
+                    .perform(webScrollIntoView()).perform(webClick())
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".attachment-panel input[type=checkbox]"))
                     .perform(webScrollIntoView()).perform(webClick())
                 awaitDocument(scenario, "native $extension clipboard image preview", """

@@ -1,0 +1,8 @@
+.terminal-compose.terminal-draft-composer { display: flex; flex-direction: column; align-items: stretch; padding: 0; margin: 8px; border: 1px solid var(--theme-border, var(--border)); border-radius: 16px; background: var(--theme-panel, var(--panel)); flex: 0 1 auto; min-height: 0; max-height: 45%; overflow: auto; }
+.terminal-draft-composer:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.terminal-compose.terminal-draft-composer > .terminal-draft-editor { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 10px 12px 0; }
+.terminal-compose.terminal-draft-composer textarea { display: block; width: 100%; min-height: min(48px, 100%); max-height: min(25vh, 100%); flex: 1 1 auto; resize: vertical; border: 0; border-radius: 0; padding: 0; background: transparent; color: var(--theme-text, var(--text)); font: inherit; line-height: 1.4; outline: none; field-sizing: content; }
+.terminal-compose .terminal-draft-actions { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 4px; flex: 0 0 auto; }
+.terminal-draft-actions .icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
+.terminal-draft-actions .terminal-draft-paste { background: var(--accent); color: var(--theme-on-accent); border-radius: 50%; }
+.terminal-draft-actions .terminal-draft-paste:disabled { opacity: .45; }

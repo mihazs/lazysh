@@ -30,6 +30,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
   await page.getByRole('button',{name:'Connect to History host',exact:true}).click();
   await page.getByLabel('Password',{exact:true}).fill('synthetic-entry');await page.getByRole('button',{name:'Connect',exact:true}).click();
   await (await workspaceControl(page,'Agents')).click();
+  await page.getByRole('button',{name:'Reported agent activity',exact:true}).click();
   await page.getByRole('button',{name:'Use reported history',exact:true}).click();
   await expect(page.getByLabel('Transcript path',{exact:true})).toHaveValue('/workspace/Claude 世界.jsonl ');
   await expect(page.getByRole('combobox',{name:'Agent',exact:true})).toHaveValue('claude');
