@@ -1,5 +1,41 @@
 # @lazysh/account-usage
 
+## 1.9.3
+
+No changes in this release.
+
+## 1.9.2
+
+No changes in this release.
+
+## 1.9.1
+
+No changes in this release.
+
+## 1.9.0
+
+No changes in this release.
+
+## 1.8.4
+
+No changes in this release.
+
+## 1.8.3
+
+No changes in this release.
+
+## 1.8.2
+
+No changes in this release.
+
+## 1.8.1
+
+No changes in this release.
+
+## 1.8.0
+
+No changes in this release.
+
 ## 1.7.8
 
 No changes in this release.

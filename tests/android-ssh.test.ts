@@ -1,13 +1,17 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readFile,rename,rm,symlink,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
+import * as fileSystem from 'node:fs/promises';
+import * as ownedProcesses from './support/ownedProcess';
+import {reportOwnedTeardownFailure} from './support/ownedProcess';
+import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -35,8 +39,10 @@ test.skipIf(process.platform!=='linux')('owned startup separates live process me
   try {
     expect(await child.liveIdentity()).toBeDefined();
     expect(await child.startupDiagnostic()).toEqual({state:'running',exitCode:null});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',originalAvailable:true,currentIdentity:'matching-live',leaderExitObserved:false,closeObserved:false});
     await child.stop();
     expect(await child.startupDiagnostic()).toEqual({state:'signaled',exitCode:null});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',leaderExitObserved:true,closeObserved:true,streams:{stdin:{destroyed:true},stdout:{destroyed:true},stderr:{destroyed:true}}});
   } finally {await child.stop();}
 });
 
@@ -76,6 +82,8 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     }
     originalStart=await start();
     expect(originalStart.length).toBeGreaterThan(0);
+    if(child.child.exitCode===null)await new Promise<void>(resolve=>{child.child.once('exit',()=>resolve());});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',leaderExitObserved:true,closeObserved:false,streams:{stdout:{closed:false,destroyed:false}}});
     expect((await pending as Error).message).toBe('Owned fixture deadline: unsupported background escape');
     expect(warning).toHaveBeenCalledWith('Owned fixture cleanup failed after original failure');
     // This negative fixture, not the foreground helper, owns the still-live child.
@@ -92,6 +100,54 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     warning.mockRestore();await child.stop();
   }
 },5000);
+
+test('teardown reporter whitelists closed fields and cannot throw over a primary failure',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
+  await child.finish('owned observation fixture',1000);
+  const secret='private-pid-path-argv-output-error';
+  const lines:string[]=[];
+  const warning=spyOn(console,'error').mockImplementation(value=>{lines.push(String(value));});
+  const diagnostic=spyOn(child,'teardownDiagnostic');
+  try {
+    diagnostic.mockResolvedValue({scope:secret,originalAvailable:secret,currentIdentity:secret,leaderExitObserved:secret,closeObserved:secret,
+      streams:{stdin:{closed:secret,destroyed:secret,private:secret},stdout:{},stderr:null},private:secret} as unknown as Awaited<ReturnType<OwnedProcess['teardownDiagnostic']>>);
+    for(const stage of ['attach-stop','herdr-stop','ssh-stop'] as const)await reportOwnedTeardownFailure(child,stage);
+    expect(lines).toHaveLength(3);
+    for(const [index,line] of lines.entries()) {
+      expect(line).not.toContain(secret);
+      expect(JSON.parse(line.slice('Owned teardown observation '.length))).toEqual({stage:['attach-stop','herdr-stop','ssh-stop'][index],observation:{scope:'post-stop-sample',originalAvailable:null,currentIdentity:'unavailable',leaderExitObserved:null,closeObserved:null,
+        streams:{stdin:{closed:null,destroyed:null},stdout:{closed:null,destroyed:null},stderr:{closed:null,destroyed:null}}}});
+    }
+    await reportOwnedTeardownFailure(child,secret as 'attach-stop');
+    expect(lines).toHaveLength(3);
+    diagnostic.mockRejectedValue(new Error(secret));
+    await reportOwnedTeardownFailure(child,'attach-stop');
+    expect(lines.at(-1)).toBe('Owned teardown observation '+JSON.stringify({stage:'attach-stop',observation:{scope:'post-stop-sample',state:'unavailable'}}));
+    warning.mockImplementation(()=>{throw new Error(secret);});
+    await expect(reportOwnedTeardownFailure(child,'attach-stop')).resolves.toBeUndefined();
+  } finally {diagnostic.mockRestore();warning.mockRestore();await child.stop();}
+});
+
+test.each(['attach','fixture'] as const)('actual Herdr host %s cleanup block preserves body and cleanup error identities',async(stage)=>{
+  const source=await readFile(join(import.meta.dir,'android-ssh-host.test.ts'),'utf8');
+  const host=source.slice(source.indexOf('  const owned=await HerdrFixture.start(herdrTools(),mosh?'));
+  const start=host.indexOf(stage==='attach'?'    } catch(error){attachPrimary=true;throw error;}':'  } catch(error){primary=true;throw error;}');
+  const end=host.indexOf(stage==='attach'?"    expect(await owned.history()).toMatchObject({offset:8":'  expect(await listening(owned.ssh.port))',start);
+  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+  const block=host.slice(start,end),flag=stage==='attach'?'attachPrimary':'primary';
+  const execute=new Function('body','client','owned','reportOwnedTeardownFailure',`return (async()=>{let ${flag}=false;try{await body();\n${block}})()`);
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    for(const bodyFails of [false,true])for(const cleanupFails of [false,true]) {
+      const original=new Error('private-body-failure'),cleanup=new Error('private-cleanup-failure'),calls:string[]=[];
+      const owner={stop:async()=>{calls.push('stop');if(cleanupFails)throw cleanup;}};
+      const result=await execute(async()=>{calls.push('body');if(bodyFails)throw original;},owner,owner,reportOwnedTeardownFailure).catch((error:unknown)=>error);
+      expect(result).toBe(bodyFails?original:cleanupFails?cleanup:undefined);
+      expect(calls).toEqual(['body','stop']);
+    }
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('private-');
+  } finally {warning.mockRestore();}
+});
 
 const exitFixture=`ApplicationExitInfo #0:
   timestamp=2026-10-27 22:19:33.701 pid=3389 realUid=10155 packageUid=10155 definingUid=10155 user=0
@@ -1139,7 +1195,7 @@ test('owned attachment readback detects changed content, inode, size and timesta
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
   const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
   const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
   expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
@@ -1151,7 +1207,7 @@ test('manual attachment native checkpoint is selected by the existing uncached S
   expect(support).toContain("attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi'");
   expect(support).toContain("attachments?'-PlazyshAttachmentAcceptance=true'");
   expect(support).toContain('retainedPackages=!!herdr || attachments');
-  expect(support).toContain("(herdr || attachments)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
+  expect(support).toContain("(herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']");
   expect(support).toContain('(herdrMosh || attachments) && await readFile');
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/attachment-ui');
@@ -1270,12 +1326,12 @@ async function companionReadinessFixture(expected='Update companion',expectedOut
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const source=kotlin.match(/val companionReadinessObservation = """([\s\S]*?)"""/);
   expect(source).not.toBeNull();
-  const scope='details.companion-install',direct=scope+' > .tool-bar > button';
+  const install=kotlin.slice(kotlin.indexOf('fun verifyCompanionInstallation()'));
+  const scope=install.match(/val panel = "([^"]+)"/)![1],direct=scope+' > .tool-bar > button';
   const element=kotlin.match(/private fun workspaceElementVisible\([^\n]* = """([\s\S]*?)"""/)![1];
   const visible=(selector:string,touchable=false)=>element.replaceAll('${JSONObject.quote(selector)}',JSON.stringify(selector)).replaceAll('$touchable',String(touchable));
   const button=kotlin.match(/private fun workspaceButtonVisible\([^\n]* = """([\s\S]*?)"""/)![1]
     .replaceAll('${JSONObject.quote("$scope button")}',JSON.stringify(scope+' button')).replaceAll('${JSONObject.quote(text)}',JSON.stringify(expected));
-  const install=kotlin.slice(kotlin.indexOf('fun verifyCompanionInstallation()'));
   const allowed=(name:string)=>JSON.parse('['+install.match(new RegExp('val '+name+' = setOf\\(([^)]*)\\)'))![1]+']');
   const expression=source![1].replaceAll('${JSONObject.quote(panel)}',JSON.stringify(scope))
     .replaceAll('${JSONObject.quote("$panel > .tool-bar > button")}',JSON.stringify(direct))
@@ -1339,6 +1395,154 @@ test('companion readiness observation retains only closed enums and booleans',as
 });
 
 
+test.skipIf(process.platform!=='linux')('raw receiver identity checker rejects live foreign, substituted and falsely terminal observations',async()=>{
+  const current=(await identity(process.pid))!;
+  const hash=createHash('sha256').update(await readFile(`/proc/${process.pid}/exe`)).digest('hex');
+  expect(await checkRawReceiverIdentity(current,undefined,process.pid,hash)).toEqual(current);
+  await expect(checkRawReceiverIdentity(current,current,process.pid,'0'.repeat(64))).rejects.toThrow('image differs');
+  await expect(checkRawReceiverIdentity(current,{...current,start:'0'},process.pid,hash)).rejects.toThrow('replaced');
+  await expect(checkRawReceiverIdentity(current,{...current,pid:current.pid+1},process.pid,hash)).rejects.toThrow('replaced');
+  await expect(checkRawReceiverIdentity(current,current,2147483647,hash)).rejects.toThrow('identity unavailable');
+  await expect(checkRawReceiverIdentity(undefined,undefined,process.pid,hash)).rejects.toThrow('not observed');
+  // A missing/terminal first sample cannot excuse an independently still-live
+  // original. Every purported terminal state requires the real fresh readback.
+  for(const state of ['Z','X']) {
+    await expect(checkRawReceiverIdentity({...current,state},current,process.pid,hash)).rejects.toThrow('identity unavailable');
+    await expect(checkRawReceiverIdentity({...current,state},undefined,process.pid,hash)).rejects.toThrow('not observed');
+  }
+  await expect(checkRawReceiverIdentity(undefined,current,process.pid,hash)).rejects.toThrow('identity unavailable');
+});
+
+test.skipIf(process.platform!=='linux')('raw receiver checker preserves exact filesystem errors and rejects missing executable for a still-live receiver',async()=>{
+  const current=(await identity(process.pid))!,path=`/proc/${process.pid}/exe`;
+  const original=fileSystem.readFile;
+  const hash=createHash('sha256').update(await original(path)).digest('hex');
+  for(const code of ['EACCES','EIO',undefined,'ENOENT','ESRCH']) {
+    const failure=Object.assign(new Error('private-receiver-read-error'),{code});
+    const read=spyOn(fileSystem,'readFile').mockImplementation((...args:Parameters<typeof original>)=>{
+      if(args[0]===path)return Promise.reject(failure);
+      return original(...args);
+    });
+    try {
+      const result=await checkRawReceiverIdentity(current,current,process.pid,hash).catch(error=>error);
+      if(code==='ENOENT' || code==='ESRCH')expect(result.message).toBe('Owned IME receiver identity unavailable');
+      else expect(result).toBe(failure);
+      expect((await identity(process.pid))?.start).toBe(current.start);
+    } finally {read.mockRestore();}
+  }
+  expect(await checkRawReceiverIdentity(current,current,process.pid,hash)).toEqual(current);
+});
+
+test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observed terminal replacement before any later disappearance',async()=>{
+  const current=(await identity(process.pid))!;
+  const hash=createHash('sha256').update(await readFile(`/proc/${process.pid}/exe`)).digest('hex');
+  for(const state of ['Z','X']) {
+    let reads=0;
+    const sample=spyOn(ownedProcesses,'identity').mockImplementation(async()=>++reads===1?{...current,start:'0',state}:undefined);
+    try {
+      await expect(checkRawReceiverIdentity(current,current,process.pid,hash)).rejects.toThrow('replaced');
+      expect(reads).toBe(1);
+    } finally {sample.mockRestore();}
+  }
+  expect((await identity(process.pid))?.start).toBe(current.start);
+});
+
+test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
+  try {
+    for(const bytes of samples) {
+      await writeFile(path,bytes,{mode:0o600});let prefix=0;
+      while(prefix<Math.min(bytes.length,expected.length)&&bytes[prefix]===expected[prefix])prefix++;
+      const result=await observeImeReceiverWire(path,nonce);
+      expect(result).toEqual({state:'available',byteLength:bytes.length,exactExpectedMatch:bytes.equals(expected),fixedPrefixMatchLength:prefix});
+      expect(Object.values(result).every(value=>typeof value==='number'||typeof value==='boolean'||value==='available')).toBe(true);
+      expect(JSON.stringify(result)).not.toMatch(/private|owned-current|01234567|received-bytes|sha256/);
+    }
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(typeof process.getuid!=='function')('protected raw reader rejects unsafe files and IME observations redact read failures',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-file-')),path=join(directory,'received-bytes'),nonce='0'.repeat(32);
+  try {
+    await writeFile(path,'fixed',{mode:0o600});expect(await readRawReceiverBytes(path)).toEqual(Buffer.from('fixed'));
+    await symlink(path,join(directory,'link'));
+    for(const unsafe of [directory,join(directory,'missing'),join(directory,'link')]) {
+      await expect(readRawReceiverBytes(unsafe)).rejects.toThrow();
+      expect(await observeImeReceiverWire(unsafe,nonce)).toEqual({state:'unavailable'});
+    }
+    expect(await observeImeReceiverWire(path,'private-invalid')).toEqual({state:'unavailable'});
+    const uid=process.getuid!(),owner=spyOn(process,'getuid').mockReturnValue(uid+1);
+    try {await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');}
+    finally {owner.mockRestore();}
+    await writeFile(path,Buffer.alloc(16385));
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');
+    expect(await observeImeReceiverWire(path,nonce)).toEqual({state:'unavailable'});
+    await writeFile(path,Buffer.alloc(16384));expect((await readRawReceiverBytes(path)).length).toBe(16384);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(process.platform!=='linux')('protected raw reader rejects a FIFO without waiting for a writer',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-fifo-')),path=join(directory,'received-bytes');
+  try {
+    await new OwnedProcess('mkfifo',[path]).finish('owned nonexecuting FIFO fixture',2000);
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output invalid');
+  } finally {await rm(directory,{recursive:true,force:true});}
+},3000);
+
+for(const change of ['changed','short'] as const)test.skipIf(typeof process.getuid!=='function')(`protected raw reader closes its file after a ${change} read and exports no guessed bytes`,async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-race-')),path=join(directory,'received-bytes');
+  const original=fileSystem.open;let observed:Awaited<ReturnType<typeof original>>|undefined;const readSizes:number[]=[];
+  const opening=spyOn(fileSystem,'open').mockImplementation(async(...args:Parameters<typeof original>)=>{
+    const file=await original(...args);observed=file;const read=file.read.bind(file);
+    Object.defineProperty(file,'read',{value:async(buffer:Buffer,offset:number,length:number,position:number)=>{
+      const result=await read(buffer,offset,length,position);readSizes.push(result.bytesRead);
+      if(change==='changed')await writeFile(path,'different size');
+      return change==='short'?{...result,bytesRead:result.bytesRead-1}:result;
+    }});return file;
+  });
+  try {
+    await writeFile(path,'fixed',{mode:0o600});
+    await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output changed');
+    expect(observed!.fd).toBe(-1);
+    await writeFile(path,'fixed');
+    expect(await observeImeReceiverWire(path,'0'.repeat(32))).toEqual({state:'unavailable'});expect(observed!.fd).toBe(-1);
+    expect(readSizes).toEqual([5,5]);
+  } finally {opening.mockRestore();await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(typeof process.getuid!=='function')('actual Android failure handler keeps its original error and limits wire observations to IME',async()=>{
+  const source=await readFile(new URL('./support/androidSsh.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  } catch(error) {\n    primary=true;',source.indexOf('export async function androidSshAcceptance'));
+  const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
+  expect(start>0 && end>start).toBe(true);
+  const body=source.slice(start+'  } catch(error) {'.length,end);
+  const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
+  const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const logger=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
+    for(const mode of ['available','missing','write-failure','observer-failure','non-ime']) {
+      const root=join(directory,mode),failure=new Error('private-primary'),ime=mode!=='non-ime';let observations=0;
+      const context={root,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
+        observeImeReceiverWire:async(path:string,value:string)=>{observations++;if(mode==='observer-failure')throw new Error('private-observer');return observeImeReceiverWire(path,value);},
+        hostAdbServerIdentity:async()=>({}),packageExitInfo:async()=>({}),emulatorContinuity:async()=>({}),
+        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
+        writeFile:async(...args:Parameters<typeof writeFile>)=>{if(mode==='write-failure')throw new Error('private-receipt');return writeFile(...args);}};
+      expect(await run(context).catch(error=>error)).toBe(failure);expect(observations).toBe(ime?1:0);
+      if(['write-failure','observer-failure'].includes(mode))continue;
+      const receipt=JSON.parse(await readFile(join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui','package-exit.json'),'utf8'));
+      if(mode==='non-ime')expect(Object.hasOwn(receipt,'imeWire')).toBe(false);
+      else expect(receipt.imeWire).toEqual(mode==='missing'?{state:'unavailable'}:{state:'available',byteLength:wire.length,exactExpectedMatch:true,fixedPrefixMatchLength:wire.length});
+      expect(JSON.stringify(receipt)).not.toMatch(/private|owned-current|00000000|received-bytes/);
+    }
+    expect(logger.mock.calls.every(call=>call.length===1&&call[0]==='Owned Android SSH exit diagnostics unavailable')).toBe(true);
+  } finally {logger.mockRestore();await rm(directory,{recursive:true,force:true});}
+});
+
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
   const expected=Buffer.from(`there\x7f\x7fthe${current}`);
@@ -1349,6 +1553,7 @@ test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and 
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
+  expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
   let visible='';for(const byte of Buffer.from('there\x7f\x7fthe'))visible=byte===127?visible.slice(0,-1):visible+String.fromCharCode(byte);
   expect(visible).toBe('thethe');
 });
@@ -1361,16 +1566,450 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
-  expect(support).toContain("ime?{privateTtyGroup:true}");
+  expect(support).toContain("rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}");
   expect(support).toContain("ime?'-PlazyshSshImeAcceptance=true'");
   expect(support).toContain("ime?'ownedSshImeTransactionsThroughRealUi'");
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/ssh-ime-ui');
-  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshAttachmentAcceptance"');
+  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance"');
   const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
   for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
   expect(/\.value\s*=(?!=)/.test(body)).toBe(false);
   expect(body).toContain('ime.restore()');expect(body).toContain('ime.call("old")');expect(body).toContain('ime.call("current")');
-  expect(body).toContain('assertSame("Packaged WebView must remain original"');
+  const setup=kotlin.split('private inner class OwnedRawSshInput(')[1].split('private fun verifySshImeTransactions(')[0];
+  expect(setup).toContain('assertSame("Packaged WebView must remain original"');
+  for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(setup).not.toContain(forbidden);
+});
+
+
+test('D-pad receipt and wire oracle reject malformed counts, stale/reordered arrows and repeats after the stopped snapshot',()=>{
+  const nonce='0123456789abcdef'.repeat(2),row={schemaVersion:1,nonce,up:4,left:2,down:3,right:2};
+  const counts=dpadReceipt(JSON.stringify(row),nonce),wire=Buffer.from('\x1b[A'.repeat(4)+'\x1b[D'.repeat(2)+'\x1b[B'.repeat(3)+'\x1b[C'.repeat(2)+`owned-dpad-${nonce}`);
+  expect(counts).toEqual([4,2,3,2]);expect(()=>verifyDpadReceiverBytes(wire,nonce,counts)).not.toThrow();
+  for(const invalid of [{...row,up:2},{...row,left:33},{...row,right:'2'},{...row,down:2.5},{...row,extra:'private text'},{...row,nonce:'0'.repeat(32)}])
+    expect(()=>dpadReceipt(JSON.stringify(invalid),nonce)).toThrow('Owned D-pad receipt invalid');
+  for(const invalid of [Buffer.concat([wire,Buffer.from('\x1b[C')]),Buffer.from(wire.toString().replace('owned-dpad','\x1b[Cowned-dpad')),
+    Buffer.from(wire.toString().replace('\x1b[D','\x1b[B')),Buffer.from(wire.toString().replace('owned-dpad','\x1b[Aowned-dpad')),Buffer.from('owned-dpad-'+nonce)])
+    expect(()=>verifyDpadReceiverBytes(invalid,nonce,counts)).toThrow('Owned D-pad receiver bytes differ');
+});
+
+test('native D-pad routing preserves default isolation and the packaged/raw-SSH ownership path',async()=>{
+  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_DPAD=1');
+  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
+  const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')");
+  expect(native).toContain('androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true)');
+  const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
+  expect(support).toContain("dpad?'-PlazyshSshDpadAcceptance=true'");expect(support).toContain('retainedPackages=!!herdr || attachments || dpad');
+  expect(support).toContain("const bytes=await readRawReceiverBytes(join(imeDirectory,'received-bytes'))");
+  expect(support).toContain('verifyDpadReceiverBytes(bytes,fixture.nonce,counts)');
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');expect(gradle).toContain('outputs/androidTest-results/ssh-dpad-ui');
+  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
+  expect(body).toContain('MotionEvent.ACTION_MOVE');expect(body).toContain('MotionEvent.ACTION_CANCEL');expect(body).toContain('observer?.restore(activity.window)');
+  expect(body).toContain('Dead-zone output must stop');expect(body).toContain('Final UP must not repeat or click the original arrow');
+});
+
+test('native IME failed-editor observation exposes each unchanged predicate clause without reading private editor data',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('fun tapTerminal()')[0];
+  const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
+  const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")));
+  expect(expressions).toHaveLength(2);
+  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document','getComputedStyle',`return (${expressions[1]});`);
+  let count=1,focus=true,hidden=false,active=true,session=true,panePresent=true,review=false,ended=false,modal=false,visibility:unknown='visible',rects:unknown=[{}];
+  const pane={getClientRects:()=>rects,querySelector:(selector:string)=>{expect(['.terminal-edit-review',':scope > .session-notice[role=status]']).toContain(selector);return (selector==='.terminal-edit-review'?review:ended)?{}:null;}};
+  const computedStyle=(target:unknown)=>{expect(target).toBe(pane);return {display:'flex',visibility};};
+  const area={readOnly:false,disabled:false,type:'textarea',autocomplete:'off',spellcheck:false,
+    getAttribute:(name:string)=>{expect(name).toBe('autocorrect');return autocorrect;},
+    closest:(selector:string)=>{expect(selector).toBe('.terminal-pane');return panePresent?pane:null;}};
+  let autocorrect='off',privateReads=0;
+  for(const target of [area,pane])for(const key of ['value','textContent','selectionStart','selectionEnd','id'])Object.defineProperty(target,key,{get(){privateReads++;throw new Error('private field');}});
+  const document={hasFocus:()=>focus,get hidden(){return hidden;},get activeElement(){return active?area:null;},
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');return Array.from({length:count},()=>area);},
+    querySelector:(selector:string)=>{if(selector==='[role=dialog][aria-modal=true]')return modal?{}:null;expect(selector).toBe("button[aria-label='Disconnect owned']");return session?{getClientRects(){throw new Error('Visibility must not alter DOM session presence');}}:null;}};
+  Object.defineProperty(document,'URL',{get(){privateReads++;throw new Error('private URL');}});
+  const expected={count:'one',focus:true,visible:true,active:true,writable:true,enabled:true,normalType:true,autocompleteOff:true,autocorrectOff:true,spellcheckOff:true,sessionPresent:true,unappliedReviewPresent:false,endedNoticePresent:false,modalPresent:false,paneDisplayed:true};
+  expect(predicate(document)).toBe(true);expect(observe(document,computedStyle)).toEqual(expected);expect(predicate(document)).toBe(true);
+  const cases=[
+    ['focus',()=>{focus=false;},()=>{focus=true;}],['visible',()=>{hidden=true;},()=>{hidden=false;}],
+    ['active',()=>{active=false;},()=>{active=true;}],['writable',()=>{area.readOnly=true;},()=>{area.readOnly=false;}],
+    ['enabled',()=>{area.disabled=true;},()=>{area.disabled=false;}],['normalType',()=>{area.type='password';},()=>{area.type='textarea';}],
+    ['autocompleteOff',()=>{area.autocomplete='on';},()=>{area.autocomplete='off';}],['autocorrectOff',()=>{autocorrect='on';},()=>{autocorrect='off';}],
+    ['spellcheckOff',()=>{area.spellcheck=true;},()=>{area.spellcheck=false;}],['sessionPresent',()=>{session=false;},()=>{session=true;}],
+  ] as const;
+  for(const [field,breakClause,restore]of cases) {
+    breakClause();expect(predicate(document)).toBe(false);expect(observe(document,computedStyle)).toEqual({...expected,[field]:false});expect(predicate(document)).toBe(false);restore();
+  }
+  for(const amount of [0,2]) {
+    count=amount;expect(predicate(document)).toBe(false);
+    const result=observe(document,computedStyle);expect(result.count).toBe(amount===0?'zero':'many');
+    for(const field of ['active','writable','enabled','normalType','autocompleteOff','autocorrectOff','spellcheckOff','unappliedReviewPresent','endedNoticePresent','modalPresent','paneDisplayed'])expect(result[field]).toBeNull();
+  }
+  count=1;
+  for(const [field,change,restore] of [
+    ['unappliedReviewPresent',()=>{review=true;},()=>{review=false;}],['endedNoticePresent',()=>{ended=true;},()=>{ended=false;}],
+    ['modalPresent',()=>{modal=true;},()=>{modal=false;}],['paneDisplayed',()=>{rects=[];},()=>{rects=[{}];}],
+  ] as const) {
+    change();expect(observe(document,computedStyle)).toEqual({...expected,[field]:field!=='paneDisplayed'});expect(predicate(document)).toBe(true);restore();
+  }
+  panePresent=false;const missing=observe(document,computedStyle);
+  for(const field of ['unappliedReviewPresent','endedNoticePresent','modalPresent','paneDisplayed'])expect(missing[field]).toBeNull();
+  expect(predicate(document)).toBe(true);panePresent=true;
+  for(const value of ['hidden','collapse']){visibility=value;expect(observe(document,computedStyle).paneDisplayed).toBe(false);}visibility='visible';
+  for(const unavailable of [undefined,{length:-1},{length:1.5}]){rects=unavailable;expect(observe(document,computedStyle).paneDisplayed).toBeNull();}rects=[{}];
+  for(const unavailable of [undefined,'private-visibility']){visibility=unavailable;expect(observe(document,computedStyle).paneDisplayed).toBeNull();}visibility='visible';
+  const geometry={};for(const key of ['x','y','width','height','left','top'])Object.defineProperty(geometry,key,{get(){privateReads++;throw new Error('Private rectangle read');}});
+  rects=[geometry];expect(observe(document,computedStyle).paneDisplayed).toBe(true);
+  expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
+  expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}},computedStyle)).toThrow('unavailable');
+  expect(JSON.stringify(observe(document,computedStyle))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
+  const preferences=kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0];
+  expect(preferences).toContain('workspaceElementVisible("button[aria-label=\'Preferences\']")');
+  expect(preferences).toContain('else workspaceMenuAction(scenario,"Preferences")');
+});
+
+test('native D-pad count and neutral observations execute the embedded source with closed current-pad ownership',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0],nonce='0123456789abcdef'.repeat(2);
+  const source=body.match(/val countExpression = """([\s\S]*?)"""\.trimIndent\(\)/)![1].replaceAll('${nonce}',nonce);
+  const neutral=body.match(/while\(evaluate\(scenario,"([^"\n]+)",remaining\(\)\)!="true"\)/)![1];
+  let padCount=1,buttonCount=4,outline='',text=`PRIVATE_CONTEXT D_${nonce}_3_2_2_2`;
+  const buttons=()=>Array.from({length:buttonCount},()=>({style:{outline}}));
+  const document={querySelectorAll:(selector:string)=>selector==='.terminal-dpad'?Array.from({length:padCount},()=>({querySelectorAll:buttons})):buttons(),querySelector:()=>({textContent:text})};
+  const counts=new Function('document',`return (${source});`),quiet=new Function('document',`return (${neutral});`);
+  const first=counts(document);
+  expect(first).toEqual([3,2,2,2]);expect(quiet(document)).toBe(true);
+  text+=` D_${nonce}_3_2_2_3`;expect(counts(document)).toEqual([3,2,2,3]);
+  expect(first).toEqual([3,2,2,2]);
+  expect(JSON.stringify(first)).not.toMatch(/PRIVATE_CONTEXT|D_|0123456789abcdef/);
+  for(const index of [0,1,2,3]) {
+    const invalid=[3,2,2,2];invalid[index]=33;text=`PRIVATE_CONTEXT D_${nonce}_${invalid.join('_')}`;
+    expect(counts(document)).toBeNull();
+  }
+  text=`PRIVATE_CONTEXT D_${nonce}_3_2_2_3`;
+  outline='1px solid';expect(quiet(document)).toBe(false);outline='';
+  for(const invalidPads of [0,2]){padCount=invalidPads;expect(counts(document)).toBeNull();}
+  padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
+  buttonCount=3;expect(counts(document)).toBeNull();buttonCount=4;text=`PRIVATE_CONTEXT D_${nonce}_99_2_2_2`;expect(counts(document)).toBeNull();
+  text='PRIVATE_CONTEXT_WITHOUT_A_RECEIVER_STATE';expect(counts(document)).toBeNull();
+});
+
+test.each([
+  {privateTtyGroup:false},
+  {privateTtyGroup:true,companion:true},
+  {privateTtyGroup:true,moshBinary:'/owned-not-executed'},
+  {privateTtyGroup:true,sharedNavigation:true},
+])('owned receiver root denies incompatible fixture scope before any process $privateTtyGroup $companion $moshBinary $sharedNavigation',async options=>{
+  const spawn=spyOn(childProcess,'spawn').mockImplementation(()=>{throw new Error('No fixture process admitted');});
+  try {
+    await expect(SshFixture.start(undefined,{...options,ownedReceiverRoot:true})).rejects.toThrow('Owned receiver root requires its isolated private TTY fixture');
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {spawn.mockRestore();}
+});
+
+test('owned receiver root refuses tool identity before any process',async()=>{
+  const spawn=spyOn(childProcess,'spawn').mockImplementation(()=>{throw new Error('No fixture process admitted');});
+  try {
+    await expect(SshFixture.start({} as never,{privateTtyGroup:true,ownedReceiverRoot:true})).rejects.toThrow('Owned receiver root requires its isolated private TTY fixture');
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {spawn.mockRestore();}
+});
+
+test('owned receiver root reuses protected mounts only for raw Android input fixtures',async()=>{
+  const fixture=await readFile(new URL('./support/sshFixture.ts',import.meta.url),'utf8');
+  const support=await readFile(new URL('./support/androidSsh.ts',import.meta.url),'utf8');
+  expect(fixture).toContain('const ownedRoot=!!tools || options.ownedReceiverRoot===true');
+  expect(fixture).toContain('if(ownedRoot) {');
+  expect(fixture).toContain("if(tools)toolNamespace=[...namespace,'--proc','/proc']");
+  expect(fixture).toContain(":ownedRoot?['--proc','/proc']:[]");
+  expect(support.match(/ownedReceiverRoot:true/g)?.length).toBe(1);
+  expect(support).toContain('rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}');
+});
+
+test('owned receiver metadata uses its actual bounded CRLF and LF parser',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const expression=source.match(/const metadata=\(\)=>client!\.stdout\.match\((new RegExp\(marker\+'[^']+'\))\);/)?.[1];
+  expect(expression!==undefined).toBe(true);
+  const marker='ROOT_'+'0'.repeat(32)+':';
+  const parser=Function('marker',`return ${expression}`)(marker) as RegExp;
+  for(const ending of ['\r\n','\n'])expect((marker+'1000:65534:0:1000'+ending).match(parser)?.slice(1)).toEqual(['1000','65534','0','1000']);
+  for(const value of [marker+'1000:65534:0:1000',marker+'1000:65534::1000\n',marker+'1000:65534:0:no\n',marker+'1000:65534:0:12345678901\n',"printf 'ROOT_%s:%s:%s:%s:%s\\n' '"+'0'.repeat(32)+"'\r\n"])
+    expect(parser.test(value)).toBe(false);
+  expect(source).toContain("'owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery'");
+  expect(source).toContain('(image.mode&0o100)!==0 && (image.mode&0o022)===0');
+  expect(source).toContain("writeFile(binary,bytes,{mode:0o500,flag:'wx'})");
+});
+
+
+test('owned receiver source admits Cargo hardlinks but execution copies stay private',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const sourceExpression=source.match(/const sourceAdmitted=([^;]+);/)?.[1];
+  const copyExpression=source.match(/const copyAdmitted=([^;]+);/)?.[1];
+  expect(sourceExpression!==undefined && copyExpression!==undefined).toBe(true);
+  const admitsSource=Function('image','bytes',`return ${sourceExpression}`) as (image:Awaited<ReturnType<typeof lstat>>,bytes:Buffer)=>boolean;
+  const admitsCopy=Function('copy',`return ${copyExpression}`) as (copy:Awaited<ReturnType<typeof lstat>>)=>boolean;
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-receiver-admission-'));
+  const cargo=join(directory,'cargo'),alias=join(directory,'cargo-alias'),copy=join(directory,'copy');
+  const bytes=Buffer.from('owned-nonexecuted-fixture');
+  try {
+    await writeFile(cargo,bytes,{mode:0o755,flag:'wx'});await link(cargo,alias);
+    const image=await lstat(cargo);expect(image.nlink).toBe(2);
+    expect(admitsSource(image,bytes)).toBe(true);expect(admitsCopy(image)).toBe(false);
+    await writeFile(copy,bytes,{mode:0o500,flag:'wx'});
+    expect(admitsCopy(await lstat(copy))).toBe(true);
+    expect((await readFile(copy)).equals(bytes)).toBe(true);
+    await chmod(cargo,0o775);expect(admitsSource(await lstat(cargo),bytes)).toBe(false);
+    await chmod(cargo,0o655);expect(admitsSource(await lstat(cargo),bytes)).toBe(false);
+    await symlink(copy,join(directory,'symlink'));
+    expect(admitsSource(await lstat(join(directory,'symlink')),bytes)).toBe(false);
+    expect(admitsCopy(await lstat(join(directory,'symlink')))).toBe(false);
+    expect(admitsSource(image,Buffer.alloc(1024*1024))).toBe(false);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('owned receiver probe diagnostic exports closed classifiers without captured values',async()=>{
+  const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
+  const classify=receiverProbeErrors;
+  const categories=['auth','key','hostkey','pty','channel','shell','fs','proc','accountLocked','accountMissing','uidSwitch','authorizedKeyRead','ownership','sandbox','accountDenied','unknown'];
+  for(const [text,expected] of [['Permission denied (publickey)','auth'],['Load key private-fixture: invalid format','key'],['Host key verification failed','hostkey'],['PTY allocation request failed','pty'],['channel 0: open failed','channel'],['shell request failed','shell'],['No such file or directory','fs'],['cannot mount /proc/owned','proc'],['User private-fixture not allowed because account is locked','accountLocked'],['Invalid user private-fixture','accountMissing'],['setresuid private-fixture: Operation not permitted','uidSwitch'],["Could not open user 'private-fixture' authorized keys 'private-path': Permission denied",'authorizedKeyRead'],['Authentication refused: bad ownership or modes for private-path','ownership'],['safe_path private-path: fatal','ownership'],['sandbox private-path failed','sandbox'],['seccomp violation private-fixture','sandbox'],['PAM account management error for private-fixture','accountDenied'],['User private-fixture not allowed because shell private-path does not exist','accountDenied'],['private-fixture-secret','unknown']]) {
+    const result=classify(text);
+    expect(Object.keys(result)).toEqual(categories);
+    expect(Object.values(result).every(value=>typeof value==='boolean')).toBe(true);
+    expect(result[expected]).toBe(true);
+    expect(JSON.stringify(result).includes('private-fixture')).toBe(false);
+  }
+  expect(Object.values(classify('')).some(Boolean)).toBe(false);
+  expect(classify('Permission denied (publickey)').fs).toBe(false);
+  expect(classify('open private-path: Permission denied').fs).toBe(true);
+  for(const text of ['ordinary account private-fixture','sandbox ordinary','seccomp ordinary','safe_path ordinary','getpwnam ordinary']) {
+    const result=classify(text);
+    expect(result.unknown).toBe(true);
+    expect(Object.entries(result).filter(([key])=>key!=='unknown').some(([,value])=>value)).toBe(false);
+  }
+  expect(source).toContain("stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery'");
+  expect(source).toContain("lane:ownedReceiverRoot?'owned':'legacy'");
+  expect(source).toContain("catch{return {state:'observation-unavailable',exitCode:null};}");
+});
+
+test('native D-pad remeasures the actual visible target after its keyboard-opening tap',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=source.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  const expression=body.match(/val heldBoundsExpression = """([\s\S]+?)"""/)?.[1];
+  expect(expression!==undefined).toBe(true);
+  const observe=Function('document','innerWidth','innerHeight',`return (${expression});`);
+  let rect={left:80,top:600,right:120,bottom:640,width:40,height:40},height=800,hit=true,count=1;
+  const button={getBoundingClientRect:()=>rect,contains:(value:unknown)=>value===button,getClientRects:()=>[rect]};
+  const document={querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad button[aria-label="D-pad up"]');return count===1?[button]:[];},elementFromPoint:()=>hit?button:null};
+  const before=observe(document,400,height);expect(before).toEqual([80,600,120,640,400,800]);
+  height=480;expect(observe(document,400,height)).toBeNull();
+  rect={left:80,top:300,right:120,bottom:340,width:40,height:40};
+  expect(observe(document,400,height)).toEqual([80,300,120,340,400,480]);
+  expect(observe(document,400,height)).not.toEqual(before);
+  hit=false;expect(observe(document,400,height)).toBeNull();hit=true;
+  count=2;expect(observe(document,400,height)).toBeNull();count=1;
+  rect={...rect,left:-1};expect(observe(document,400,height)).toBeNull();
+  expect(body.indexOf('val heldBounds =')).toBeGreaterThan(body.indexOf('one native D-pad tap delivered once'));
+  expect(body).toContain('getLocalVisibleRect(visible)');expect(body).toContain('visible.offset(origin[0],origin[1])');
+  expect(body).toContain('getWindowVisibleDisplayFrame');
+  expect(body).toContain('WindowInsetsCompat.Type.ime()');
+  expect(body).toContain('Owned D-pad target must stay above the current keyboard');
+});
+
+async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe') {
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/OwnedDpadDomObservation.kt'),'utf8');
+  const key='owned-observation-key',owner='owned-observation-token',window:Record<string,unknown>={};
+  type Listener=(event:Record<string,unknown>)=>void;
+  const listeners=new Map<string,Set<Listener>>(),windowListeners=new Map<string,Set<Listener>>(),viewportListeners=new Map<string,Set<Listener>>(),removed:string[]=[];
+  let clock=100,captured=true,disconnected=false,padCount=1,mutated=()=>{},focused:unknown=true,touchAction:unknown='none';
+  class FixtureNode {inside=false;}
+  const arrows=['up','left','down','right'].map(direction=>Object.assign(new FixtureNode(),{inside:true,dataset:{dpadDirection:direction},style:{outline:''},closest:()=>({inside:true})}));
+  const pad=Object.assign(new FixtureNode(),{isConnected:true,contains:(target:unknown)=>{expect(target instanceof FixtureNode).toBe(true);return target===pad||(target as FixtureNode).inside;},
+    querySelectorAll:()=>arrows,hasPointerCapture:()=>captured,
+    setPointerCapture:()=>{throw new Error('Passive observation cannot capture');},releasePointerCapture:()=>{throw new Error('Passive observation cannot release');}});
+  const outside=Object.assign(new FixtureNode(),{closest:()=>null});
+  const terminal=Object.assign(new FixtureNode(),{matches:(selector:string)=>selector==='.terminal-canvas .xterm-helper-textarea'});
+  for(const target of [...arrows,outside,terminal])for(const field of ['id','textContent','value'])Object.defineProperty(target,field,{get(){throw new Error('Private DOM field read');}});
+  const eventTarget=(map:Map<string,Set<Listener>>,prefix='')=>({
+    addEventListener:(type:string,listener:Listener,options:{capture:boolean;passive:boolean})=>{
+      expect(options).toEqual({capture:true,passive:true});if((failure==='listener'&&type==='pointerup')||(failure==='context'&&prefix==='window:'&&type==='blur'))throw new Error('private install failure');
+      if(!map.has(type))map.set(type,new Set());map.get(type)!.add(listener);
+    },removeEventListener:(type:string,listener:Listener,capture:boolean)=>{expect(capture).toBe(true);removed.push(prefix+type);map.get(type)?.delete(listener);}});
+  const document=Object.assign(new FixtureNode(),eventTarget(listeners),{activeElement:null as unknown,visibilityState:'visible' as unknown,hasFocus:()=>focused,
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad');return Array.from({length:padCount},()=>pad);}});
+  const viewport={width:411,height:733,offsetLeft:0,offsetTop:0,scale:1,...eventTarget(viewportListeners,'viewport:')};
+  Object.assign(window,eventTarget(windowListeners,'window:'),{innerWidth:411,innerHeight:733,visualViewport:viewport});
+  class Observer { constructor(callback:()=>void){mutated=callback;}observe(target:unknown,options:unknown){expect(target).toBe(pad);expect(options).toEqual({attributes:true,attributeFilter:['style'],childList:true,subtree:true});if(failure==='observe')throw new Error('private observe failure');}disconnect(){disconnected=true;} }
+  const run=(name:'INSTALL'|'READ'|'CLEANUP')=>{
+    const expression=source.match(new RegExp(`private val ${name} = """([\\s\\S]+?)"""\\.trimIndent\\(\\)`))?.[1];expect(expression!==undefined).toBe(true);
+    const bound=expression!.replaceAll('@@KEY@@',JSON.stringify(key)).replaceAll('@@OWNER@@',JSON.stringify(owner));
+    return Function('window','document','Node','MutationObserver','performance','getComputedStyle','setTimeout','setInterval',`return (${bound});`)(window,document,FixtureNode,Observer,{now:()=>clock},(target:unknown)=>{expect(target).toBe(pad);return {touchAction};},()=>{throw new Error('No timer');},()=>{throw new Error('No timer');});
+  };
+  const emit=(type:string,change:Record<string,unknown>={},map=listeners)=>{
+    const event={type,isTrusted:true,isPrimary:true,button:0,buttons:1,pointerId:777777,pointerType:'touch',clientX:100,clientY:100,target:arrows[0],
+      preventDefault:()=>{throw new Error('Passive observation cannot prevent input');},stopPropagation:()=>{throw new Error('Passive observation cannot stop input');},...change};
+    for(const listener of map.get(type)??[])listener(event);
+  };
+  return {run,emit,pad,arrows,outside,terminal,window,document,viewport,key,owner,listeners,windowListeners,viewportListeners,removed,
+    mutate:()=>mutated(),setClock:(value:number)=>{clock=value;},setCapture:(value:boolean)=>{captured=value;},setPadCount:(value:number)=>{padCount=value;},
+    setFocus:(value:unknown)=>{focused=value;},setTouchAction:(value:unknown)=>{touchAction=value;},disconnected:()=>disconnected};
+}
+
+test('passive owned D-pad DOM evidence observes retargeting and capture without private fields or input changes',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);
+  f.emit('pointerdown',{target:f.outside});f.emit('pointerdown',{isTrusted:false});f.emit('pointerdown',{isPrimary:false});
+  expect(f.run('READ')).toMatchObject({admitted:false,events:[]});
+  f.emit('pointerdown');f.emit('gotpointercapture',{target:f.arrows[0]});f.setClock(124);
+  f.emit('pointermove',{target:f.outside,clientX:76});f.emit('lostpointercapture',{target:f.arrows[0]});
+  const before=f.run('READ');f.emit('pointermove',{target:f.outside,pointerId:7,clientX:1});
+  expect(f.run('READ')).toEqual(before);
+  expect(before.events.map((row:Record<string,unknown>)=>[row.kind,row.target,row.displacement,row.capture])).toEqual([
+    ['pointerdown','arrow','neutral','yes'],['gotpointercapture','arrow','neutral','yes'],['pointermove','other','left','yes'],['lostpointercapture','arrow','neutral','yes']]);
+  expect(before.events[2]).toMatchObject({atMs:24,trusted:true,samePointer:true,primary:true,touch:true,pressed:true,connected:true});
+  expect(Object.keys(before).sort()).toEqual(['admitted','connected','events','overflow','schemaVersion','state']);
+  expect(Object.keys(before.events[0]).sort()).toEqual(['activeElement','atMs','capture','connected','displacement','documentFocus','kind','outline','pressed','primary','samePointer','target','touch','touchAction','trusted','viewport','visibility']);
+  expect(JSON.stringify(before)).not.toMatch(/777777|clientX|clientY|pointerId|textContent|owned-observation|Private/);
+  expect(f.run('CLEANUP')).toBe(true);expect([...f.listeners.values()].every(rows=>rows.size===0)).toBe(true);expect(f.disconnected()).toBe(true);
+});
+
+test('passive D-pad outline observations use only original-pad state and stop exactly on cleanup',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);f.emit('pointerdown');
+  f.arrows[0].style.outline='1px solid';f.mutate();f.mutate();
+  f.arrows[0].style.outline='';f.arrows[1].style.outline='1px solid';f.mutate();
+  f.arrows[0].style.outline='1px solid';f.mutate();f.arrows.forEach(arrow=>{arrow.style.outline='';});f.mutate();
+  f.pad.isConnected=false;f.mutate();
+  expect(f.run('READ').events.filter((row:Record<string,unknown>)=>row.kind==='outline').map((row:Record<string,unknown>)=>row.outline)).toEqual(['up','left','multiple','none','unavailable']);
+  const foreign=()=>{};f.listeners.get('pointermove')!.add(foreign);
+  expect(f.run('CLEANUP')).toBe(true);expect(f.listeners.get('pointermove')).toEqual(new Set([foreign]));
+  expect(f.run('READ')).toEqual({state:'unavailable'});f.mutate();expect(f.run('READ')).toEqual({state:'unavailable'});
+  expect(f.removed).toEqual(['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture','contextmenu','focusin','focusout','visibilitychange','window:focus','window:blur','window:resize','viewport:resize','viewport:scroll']);
+  expect([...f.windowListeners.values(),...f.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);
+});
+
+test('passive D-pad evidence caps rows and relative time and retires partial installation without adopting foreign state',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);f.emit('pointerdown');f.setClock(0);f.emit('pointermove');f.setClock(999999);f.emit('pointermove');
+  for(let index=0;index<40;index++)f.emit('pointermove');
+  const result=f.run('READ');expect(result.events).toHaveLength(32);expect(result.overflow).toBe(true);expect(result.events[1].atMs).toBe(0);expect(result.events[2].atMs).toBe(65535);expect(f.run('CLEANUP')).toBe(true);
+  for(const failure of ['listener','context','observe'] as const){const partial=await ownedDpadDomFixture(failure);expect(partial.run('INSTALL')).toBe(false);expect([...partial.listeners.values(),...partial.windowListeners.values(),...partial.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);expect(partial.run('READ')).toEqual({state:'unavailable'});}
+  const foreign=await ownedDpadDomFixture();foreign.window[foreign.key]={owner:'foreign',cleanup:()=>{throw new Error('Foreign cleanup must not run');}};
+  expect(foreign.run('INSTALL')).toBe(false);expect(foreign.run('CLEANUP')).toBe(false);expect(foreign.listeners.size).toBe(0);
+  for(const count of [0,2]){const unavailable=await ownedDpadDomFixture();unavailable.setPadCount(count);expect(unavailable.run('INSTALL')).toBe(false);expect(unavailable.listeners.size).toBe(0);}
+});
+
+
+test('passive D-pad cancellation context distinguishes focus viewport and unavailable without private values',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);
+  f.emit('visibilitychange',{target:f.document});f.emit('resize',{target:f.window},f.windowListeners);
+  expect(f.run('READ').events).toEqual([]);
+  f.emit('pointerdown');
+  expect(f.run('READ').events[0]).toMatchObject({touchAction:'none',activeElement:'none',documentFocus:'yes',visibility:'visible',viewport:'same'});
+  f.document.activeElement=f.terminal;f.emit('focusin',{target:f.terminal,pointerId:undefined});
+  f.setFocus(false);f.emit('blur',{target:f.window,pointerId:undefined},f.windowListeners);
+  f.document.visibilityState='hidden';f.emit('visibilitychange',{target:f.document,pointerId:undefined});
+  f.viewport.height=399;f.emit('resize',{target:f.viewport,pointerId:undefined},f.viewportListeners);
+  const changed=f.run('READ');f.emit('resize',{target:f.window},f.windowListeners);f.emit('scroll',{target:f.viewport},f.viewportListeners);
+  expect(f.run('READ')).toEqual(changed);
+  expect(changed.events.map((row:Record<string,unknown>)=>[row.kind,row.activeElement,row.documentFocus,row.visibility,row.viewport])).toEqual([
+    ['pointerdown','none','yes','visible','same'],['focusin','terminal','yes','visible','same'],['blur','terminal','no','visible','same'],
+    ['visibilitychange','terminal','no','hidden','same'],['viewport','terminal','no','hidden','changed']]);
+  f.viewport.height=733;f.emit('resize',{target:f.window,pointerId:undefined},f.windowListeners);expect(f.run('READ').events.at(-1).viewport).toBe('same');
+  f.document.activeElement=f.pad;f.setTouchAction('pan-y');f.emit('focusout',{target:f.document,pointerId:undefined});
+  expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'other',activeElement:'pad'});
+  f.document.activeElement=f.outside;f.emit('focusin',{target:f.outside,pointerId:undefined});expect(f.run('READ').events.at(-1).activeElement).toBe('other');
+  f.document.activeElement=f.window;f.setTouchAction(undefined);f.setFocus(undefined);f.document.visibilityState=undefined;f.window.visualViewport=undefined;
+  f.emit('resize',{target:f.window,pointerId:undefined},f.windowListeners);
+  expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'unavailable',activeElement:'unavailable',documentFocus:'unavailable',visibility:'unavailable',viewport:'unavailable'});
+  f.document.activeElement=null;f.setFocus(true);f.setTouchAction('private-fixture');f.document.visibilityState='private-fixture';f.window.visualViewport=f.viewport;
+  f.emit('focus',{target:f.window,pointerId:undefined},f.windowListeners);expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'other',activeElement:'none',documentFocus:'yes',visibility:'other',viewport:'same'});
+  const output=JSON.stringify(f.run('READ'));expect(output).not.toMatch(/clientX|clientY|pointerId|innerWidth|height|offset|scale|777777|399|733|textContent|value|owned-observation|private-fixture/);
+  expect(f.run('CLEANUP')).toBe(true);
+});
+
+test('passive D-pad contextmenu admission and transition dedup retain cap and exact document window viewport cleanup',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);
+  f.emit('contextmenu');f.emit('pointerdown',{target:f.window});f.emit('pointerdown',{target:f.document});expect(f.run('READ').admitted).toBe(false);
+  f.emit('pointerdown');f.emit('contextmenu',{target:f.arrows[0],pointerId:undefined});
+  expect(f.run('READ').events.at(-1)).toMatchObject({kind:'contextmenu',target:'arrow',trusted:true,samePointer:false});
+  const before=f.run('READ');f.emit('contextmenu',{target:f.window,pointerId:undefined});f.emit('contextmenu',{target:f.outside,pointerId:55});expect(f.run('READ')).toEqual(before);
+  f.emit('pointermove',{target:f.window});expect(f.run('READ').events.at(-1).target).toBe('other');
+  for(let index=0;index<60;index++){f.setFocus(index%2===0);f.emit('blur',{target:f.window,pointerId:undefined},f.windowListeners);f.emit('focus',{target:f.window,pointerId:undefined},f.windowListeners);}
+  const result=f.run('READ');expect(result.events).toHaveLength(32);expect(result.overflow).toBe(true);
+  const foreign=()=>{};f.windowListeners.get('focus')!.add(foreign);expect(f.run('CLEANUP')).toBe(true);
+  expect(f.windowListeners.get('focus')).toEqual(new Set([foreign]));expect([...f.listeners.values(),...f.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);
+  f.emit('contextmenu');f.mutate();f.emit('resize',{target:f.viewport},f.viewportListeners);expect(f.run('READ')).toEqual({state:'unavailable'});
+});
+
+
+test('native SSH prompt failure preserves its original error when diagnostic reads or emission fail',async()=>{
+  const source=await readFile(new URL('../apps/client/native-e2e/ssh.spec.ts',import.meta.url),'utf8');
+  const body=source.split('observer=await ssh.client(true,undefined,relayPort);')[1].split('const controlOwner=')[0];
+  const script=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(){${body}}`);
+  const run=Function('vi','expect','reportOwnedSshPromptFailure','ssh','control','observer','relay',`${script};return run();`);
+  const primary=new Error('original prompt admission failure');
+  let calls=0;
+  const wait={waitFor:async(_predicate:unknown,options:unknown)=>{expect(options).toEqual({timeout:3000,interval:10});throw primary;}};
+  const report=async()=>{calls++;throw new Error('private diagnostic failure');};
+  await expect(run(wait,expect,report,{},undefined,undefined,{active:2})).rejects.toBe(primary);
+  expect(calls).toBe(1);
+  calls=0;
+  await expect(run(wait,expect,report,{},undefined,undefined,{get active(){throw new Error('private relay failure');}})).rejects.toBe(primary);
+  expect(calls).toBe(0);
+  await run({waitFor:async(predicate:()=>void)=>predicate()},expect,report,{prompt:'owned'}, {stdout:'owned'},{stdout:'owned'},{active:2});
+  expect(calls).toBe(0);
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation separates original processes and never emits their captured text',async()=>{
+  const prompt='UI_PROMPT_'+'a'.repeat(32)+'>';
+  const control=new OwnedProcess(process.execPath,['-e',`process.stdout.write('private-output'.repeat(2000)+${JSON.stringify(prompt)});process.stderr.write('Permission denied private-key');setInterval(()=>{},1000)`],undefined,{PATH:'/usr/bin:/bin'});
+  const observer=new OwnedProcess(process.execPath,['-e',"process.stderr.write('Host key verification failed private-host');process.exit(31)"],undefined,{PATH:'/usr/bin:/bin'});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    await observer.done;
+    const deadline=performance.now()+1000;
+    while(!control.stdout.includes(prompt)){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    await reportOwnedSshPromptFailure({prompt,daemon:control},control,observer,2);
+    expect(events).toHaveLength(1);
+    const state=JSON.parse(events[0]);
+    expect(state).toMatchObject({scope:'ssh-prompt-admission',state:'sampled',activeStreams:2,activeStreamsCapped:false,
+      control:{startup:{state:'running',exitCode:null},ownedLive:true,stdout:'limit',promptSeen:true,errors:{auth:true}},
+      observer:{startup:{state:'early-exit',exitCode:31},ownedLive:false,stdout:'empty',promptSeen:false,errors:{hostkey:true}},daemon:{promptSeen:null}});
+    expect(events[0]).not.toMatch(/private-|UI_PROMPT_|Permission denied|Host key verification/);
+    expect(Object.keys(state)).toEqual(['scope','state','activeStreams','activeStreamsCapped','control','observer','daemon']);
+  } finally {emit.mockRestore();await Promise.all([control.stop(),observer.stop()]);}
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation retains unavailable states, capped counts and failed emitters without throwing',async()=>{
+  const child=new OwnedProcess('sleep',['120']);
+  const descriptor=Object.getOwnPropertyDescriptor(child,'stdout')!;
+  const startup=spyOn(child,'startupDiagnostic').mockRejectedValue(new Error('private startup failure'));
+  const live=spyOn(child,'liveIdentity').mockRejectedValue(new Error('private identity failure'));
+  Object.defineProperty(child,'stdout',{get(){throw new Error('private stream failure');},configurable:true});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    const fixture={prompt:'owned-prompt',daemon:child};
+    await reportOwnedSshPromptFailure(fixture,child,child,99);
+    expect(JSON.parse(events[0])).toMatchObject({state:'sampled',activeStreams:8,activeStreamsCapped:true,
+      control:{startup:{state:'unavailable',exitCode:null},ownedLive:null,stdout:'unavailable',promptSeen:null}});
+    startup.mockResolvedValue({state:'private-state',exitCode:999} as never);
+    await reportOwnedSshPromptFailure(fixture,child,child,NaN);
+    expect(JSON.parse(events[1])).toMatchObject({activeStreams:null,activeStreamsCapped:null,control:{startup:{state:'unavailable',exitCode:null}}});
+    await reportOwnedSshPromptFailure({get prompt(){throw new Error('private fixture failure');},daemon:child},child,child,2);
+    expect(JSON.parse(events[2])).toEqual({scope:'ssh-prompt-admission',state:'unavailable'});
+    expect(events.join('')).not.toContain('private');
+    emit.mockImplementation(()=>{throw new Error('private emitter failure');});
+    await expect(reportOwnedSshPromptFailure(fixture,child,child,2)).resolves.toBeUndefined();
+  } finally {Object.defineProperty(child,'stdout',descriptor);startup.mockRestore();live.mockRestore();emit.mockRestore();await child.stop();}
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation distinguishes a missing original launcher from an empty live stream',async()=>{
+  const child=new OwnedProcess('/nonexistent-owned-prompt-launcher',[]);const completion=child.done.catch(()=>{});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    await completion;
+    await reportOwnedSshPromptFailure({prompt:'owned-prompt',daemon:child},child,child,0);
+    expect(JSON.parse(events[0])).toMatchObject({activeStreams:0,control:{startup:{state:'missing-launcher',exitCode:null},ownedLive:false,stdout:'empty',promptSeen:false}});
+  } finally {emit.mockRestore();await child.stop().catch(()=>{});}
 });

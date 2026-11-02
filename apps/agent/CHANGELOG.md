@@ -1,5 +1,78 @@
 # @lazysh/agent
 
+## 1.9.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.3
+  - @lazysh/common@1.9.3
+  - @lazysh/notification-client@1.9.3
+
+## 1.9.2
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.2
+  - @lazysh/common@1.9.2
+  - @lazysh/notification-client@1.9.2
+
+## 1.9.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.1
+  - @lazysh/common@1.9.1
+  - @lazysh/notification-client@1.9.1
+
+## 1.9.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.0
+  - @lazysh/common@1.9.0
+  - @lazysh/notification-client@1.9.0
+
+## 1.8.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.4
+  - @lazysh/common@1.8.4
+  - @lazysh/notification-client@1.8.4
+
+## 1.8.3
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.3
+  - @lazysh/common@1.8.3
+  - @lazysh/notification-client@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- 9ce9d81: Correlate opt-in concurrent-hook fixture SQL failure phases with their exact owned child workers without changing storage behavior or acceptance gates.
+- @lazysh/account-usage@1.8.2
+  - @lazysh/common@1.8.2
+  - @lazysh/notification-client@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.1
+  - @lazysh/common@1.8.1
+  - @lazysh/notification-client@1.8.1
+
+## 1.8.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.0
+  - @lazysh/common@1.8.0
+  - @lazysh/notification-client@1.8.0
+
 ## 1.7.8
 
 ### Patch Changes

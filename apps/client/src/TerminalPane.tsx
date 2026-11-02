@@ -21,6 +21,8 @@ const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"term
 const labels: Partial<Record<ToolbarKey, string>> = {left: "←", up: "↑", down: "↓", right: "→"};
 type InputCaller = 'terminal-user' | 'terminal-nonuser' | 'named-key' | 'chord' | 'gesture';
 type InputOwner = {session: LiveSession; disposed: boolean};
+type DpadDirection = keyof typeof arrowLabelKeys;
+type DpadGesture = {pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;terminal:LiveSession['terminal'];id:string};
 
 export function terminalWebUrl(value: string): string | undefined {
   if (value.length > 4096 || /[\s\x00-\x1f\x7f-\x9f\\]/.test(value) || !/^https?:\/\//i.test(value)) return;
@@ -70,11 +72,23 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
   const repeat = useRef<{delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
+  const dpad = useRef<{pointers:Map<number,string>;pointerType:string;gesture:DpadGesture|null;blocked:boolean;suppressClick:boolean}>({pointers:new Map(),pointerType:"",gesture:null,blocked:false,suppressClick:false});
+  const dpadView = useRef({session,enabled:false});
+  const [dpadDirection,setDpadDirection] = useState<DpadDirection|null>(null);
   function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {};}
-  function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; stopRepeat();}
+  function startRepeat(action:()=>void,delay=400) {
+    stopRepeat();const owner:typeof repeat.current={};repeat.current=owner;
+    const tick=()=>{if(repeat.current===owner)action();};
+    owner.delay=setTimeout(()=>{if(repeat.current!==owner)return;repeated.current=true;tick();if(repeat.current===owner&&!document.hidden)owner.timer=setInterval(tick,80);},delay);
+  }
+  function cancelDpad() {
+    stopRepeat();dpad.current.gesture=null;dpad.current.blocked=dpad.current.pointers.size>0;dpad.current.suppressClick=true;
+    if(mounted.current)setDpadDirection(null);
+  }
+  function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; cancelDpad();}
   function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);}}
   function pasteLiteral(text: string) {if (imeInput.current?.flush() === false) return false; literalPaste.current = true; try {session.terminal.paste(text); return true;} finally {literalPaste.current = false;}}
-  const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent) => void>(() => {});
+  const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent, owner?:InputOwner) => boolean>(() => false);
   const [unappliedEdit, setUnappliedEdit] = useState<UnappliedTerminalEdit | null>(null);
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
@@ -134,6 +148,78 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const taps = useRef<{count: number; when: number; x: number; y: number; timer?: ReturnType<typeof setTimeout>} | null>(null);
   const gesture = useRef<{x: number; y: number; distance: number; fontSize: number; zoomed: boolean; moved: Set<number>} | null>(null);
   const toolbarVisible = toolbarOverride ?? !(preferences.autoHideToolbar && desktopPointer);
+  const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
+  dpadView.current={session,enabled:dpadEnabled};
+  function ownsDpad(gesture:DpadGesture) {
+    return dpadView.current.enabled&&dpadView.current.session.id===gesture.id&&dpadView.current.session.terminal===gesture.terminal
+      &&inputOwner.current===gesture.owner&&!gesture.owner.disposed&&gesture.owner.session.id===gesture.id&&gesture.owner.session.terminal===gesture.terminal
+      &&activeRef.current&&dpadView.current.session.connected&&mounted.current&&access.current()&&!document.hidden
+      &&!document.querySelector('[role="dialog"][aria-modal="true"]');
+  }
+  function armDpad(gesture:DpadGesture) {
+    if(!gesture.direction){stopRepeat();return;}
+    const age=performance.now()-gesture.started;
+    startRepeat(()=>{
+      if(dpad.current.gesture!==gesture||!ownsDpad(gesture)||!gesture.direction){cancelDpad();return;}
+      if(!sendNamedRef.current(gesture.direction[0].toUpperCase()+gesture.direction.slice(1),undefined,gesture.owner)){cancelDpad();return;}
+      gesture.sent=true;
+    },age>=400?80:400-age);
+  }
+  function dpadDown(event:ReactPointerEvent<HTMLDivElement>) {
+    const state=dpad.current;
+    if(event.isPrimary===false){state.suppressClick=true;return;}
+    if(state.pointers.size||state.blocked)return;
+    state.suppressClick=false;
+    const button=(event.target as Element).closest<HTMLButtonElement>('button[data-dpad-direction]');
+    if(!button||event.button!==0||!inputOwner.current)return;
+    event.preventDefault();
+    const gesture:DpadGesture={pointer:event.pointerId,x:event.clientX,y:event.clientY,started:performance.now(),direction:button.dataset.dpadDirection as DpadDirection,panned:false,sent:false,owner:inputOwner.current,terminal:session.terminal,id:session.id};
+    if(!ownsDpad(gesture)||!Number.isFinite(event.clientX)||!Number.isFinite(event.clientY))return;
+    // Without capture, preserve ordinary clicks but do not start an unowned hold.
+    if(!event.currentTarget.setPointerCapture)return;
+    try {event.currentTarget.setPointerCapture(event.pointerId);}catch{return;}
+    state.pointers.set(event.pointerId,event.pointerType);state.pointerType=event.pointerType;state.gesture=gesture;setDpadDirection(gesture.direction);armDpad(gesture);
+  }
+  function dpadMove(event:ReactPointerEvent<HTMLDivElement>) {
+    const gesture=dpad.current.gesture;
+    if(!gesture||event.pointerId!==gesture.pointer)return;
+    if(!ownsDpad(gesture)||!Number.isFinite(event.clientX)||!Number.isFinite(event.clientY)){cancelDpad();return;}
+    event.preventDefault();const dx=event.clientX-gesture.x,dy=event.clientY-gesture.y;
+    // Original displacement design: twelve CSS pixels separates drift from pan.
+    if(Math.max(Math.abs(dx),Math.abs(dy))>=12)gesture.panned=true;
+    if(!gesture.panned)return;
+    const direction:DpadDirection|null=Math.max(Math.abs(dx),Math.abs(dy))<12?null:Math.abs(dx)>Math.abs(dy)?dx>0?'right':'left':dy>0?'down':'up';
+    if(direction===gesture.direction)return;
+    gesture.direction=direction;setDpadDirection(direction);armDpad(gesture);
+  }
+  useEffect(()=>{
+    const down=(event:PointerEvent)=>{
+      const state=dpad.current;
+      // A new primary of the same pointer type proves its old contacts ended,
+      // even when their release was lost outside this document. Other types
+      // remain tracked: a mouse must not rearm while a touch is still held.
+      if(!state.gesture&&state.blocked&&event.isPrimary&&event.pointerType===state.pointerType){
+        for(const [id,type] of state.pointers)if(type===event.pointerType)state.pointers.delete(id);
+        state.blocked=state.pointers.size>0;
+      }
+      if(state.pointers.size&&!state.pointers.has(event.pointerId)){state.pointers.set(event.pointerId,event.pointerType);cancelDpad();}
+    };
+    const end=(event:PointerEvent)=>{
+      const state=dpad.current,gesture=state.gesture;
+      if(gesture?.pointer===event.pointerId){
+        if(!Number.isFinite(event.clientX)||!Number.isFinite(event.clientY)||Math.max(Math.abs(event.clientX-gesture.x),Math.abs(event.clientY-gesture.y))>=12)gesture.panned=true;
+        if(event.type==='pointerup'&&!gesture.panned&&!gesture.sent&&ownsDpad(gesture)&&gesture.direction)sendNamedRef.current(gesture.direction[0].toUpperCase()+gesture.direction.slice(1),undefined,gesture.owner);
+        cancelDpad();
+      }
+      state.pointers.delete(event.pointerId);if(state.pointers.size===0)state.blocked=false;
+    };
+    const blur=()=>{if(dpad.current.pointers.size)cancelDpad();};
+    const focus=()=>{if(document.querySelector('[role="dialog"][aria-modal="true"]'))blur();};
+    document.addEventListener('pointerdown',down,true);document.addEventListener('pointerup',end,true);document.addEventListener('pointercancel',end,true);
+    document.addEventListener('focusin',focus,true);window.addEventListener('blur',blur);
+    return()=>{cancelDpad();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointerup',end,true);document.removeEventListener('pointercancel',end,true);document.removeEventListener('focusin',focus,true);window.removeEventListener('blur',blur);};
+  },[]);
+  useEffect(()=>{if(!active||!session.connected||!dpadEnabled)cancelDpad();return cancelDpad;},[active,session.id,session.terminal,session.connected,dpadEnabled]);
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || Object.values(preferences.bodyGestures).some(action => action !== "none"));
 
   useEffect(() => {
@@ -181,22 +267,28 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         const point = event.touches[0];
         if (scroll) {
           const dx = point.clientX - scroll.x, dy = point.clientY - scroll.y;
-          if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx) * 1.5)) {
+          if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx))) {
             const deltaY = scroll.lastY - point.clientY;
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
             const tracking = session.terminal.modes.mouseTrackingMode;
-            const height = tracking !== 'none' && tracking !== 'x10'
-              ? (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows : 0;
+            const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
             let count = 1, amount = deltaY;
             let mode: number = WheelEvent.DOM_DELTA_PIXEL;
             if (Number.isFinite(height) && height > 0) {
-              // Mouse reports have no magnitude; accumulate travel into rendered-row notches.
+              // xterm rounds normal scrollback to rows; mouse reports also have no magnitude.
+              // Retain sub-row travel instead of losing each slow sample on redraw.
               if (deltaY && Math.sign(deltaY) !== Math.sign(scroll.pending)) scroll.pending = 0;
               scroll.pending += deltaY;
-              count = Math.min(10, Math.floor(Math.abs(scroll.pending) / height));
+              // A coalesced native sample can span the viewport. Drain its full
+              // travel now; a later move may never arrive before finger lift.
+              const limit = Math.min(256, Math.max(1, Math.ceil(window.innerHeight / height)));
+              count = Math.min(limit, Math.floor(Math.abs(scroll.pending) / height));
               amount = Math.sign(scroll.pending); mode = WheelEvent.DOM_DELTA_LINE;
               scroll.pending -= amount * count * height;
+              if (tracking === 'none' || tracking === 'x10') {
+                amount *= count * height; count = count ? 1 : 0; mode = WheelEvent.DOM_DELTA_PIXEL;
+              }
             } else scroll.pending = 0;
             for (let notch = 0; notch < count; notch++) session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
@@ -268,7 +360,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         event.preventDefault(); sendNamedRef.current(event.key === " " ? "Space" : event.key, event); return false;
       }
       const named = {ArrowLeft:"Left", ArrowRight:"Right", ArrowUp:"Up", ArrowDown:"Down", Escape:"Escape", Tab:"Tab", Enter:"Enter", Backspace:"Backspace", Home:"Home", End:"End", PageUp:"PageUp", PageDown:"PageDown", Insert:"Insert", Delete:"Delete"} as Record<string,string>;
-      if (event.type === "keydown" && !event.isComposing && (state.ctrl || state.meta || state.shift) && (named[event.key] || /^F(?:[1-9]|1[0-2])$/.test(event.key))) {
+      if (event.type === "keydown" && !event.isComposing && (state.ctrl || state.meta || state.shift || (event.key === "Enter" && event.shiftKey && !event.metaKey && !event.getModifierState?.("AltGraph"))) && (named[event.key] || /^F(?:[1-9]|1[0-2])$/.test(event.key))) {
         event.preventDefault(); sendNamedRef.current(named[event.key] ?? event.key, event); return false;
       }
       return true;
@@ -301,7 +393,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         // guesses, while retaining the lane for asynchronously committed IME.
         if (!pointerInput && !literalPaste.current && inputLane.current === "keyboard") {
           const state = modifierState.current;
-          value = modifiedTerminalText(data, state.ctrl, state.meta);
+          value = state.shift && !state.ctrl && !state.meta && (data === "\r" || data === "\n")
+            ? parseChord("Shift+Enter")
+            : modifiedTerminalText(data, state.ctrl, state.meta);
           if (value !== data) output.clear();
           consumeModifiers();
         }
@@ -355,17 +449,18 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (target !== undefined) target?.focus();
     else {imeInput.current?.resume(); session.terminal.focus();}
   }
-  function sendNamed(key: string, physical?: KeyboardEvent) {
-    if (!activeRef.current || !session.connected || !mounted.current || !access.current()) return;
-    if (document.hidden) {clearModifiers(); repeated.current = true; return;}
-    if (imeInput.current?.flush() === false) return;
+  function sendNamed(key: string, physical?: KeyboardEvent, expectedOwner?:InputOwner) {
+    const current=()=>activeRef.current&&session.connected&&mounted.current&&access.current()&&(!expectedOwner||(inputOwner.current===expectedOwner&&!expectedOwner.disposed&&expectedOwner.session.id===session.id&&expectedOwner.session.terminal===session.terminal&&dpadView.current.session===session&&pasteView.current.id===session.id&&pasteView.current.terminal===session.terminal&&!document.querySelector('[role="dialog"][aria-modal="true"]')));
+    if (!current()) return false;
+    if (document.hidden) {clearModifiers(); repeated.current = true; return false;}
+    if (imeInput.current?.flush() === false || !current() || document.hidden) return false;
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
-    try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(captureUiError(error)));}
-    catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return;}
+    try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`),expectedOwner).catch(error => reportError(captureUiError(error)));}
+    catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return false;}
     consumeModifiers();
     if (key === "Tab") {modifierState.current.shift = false; setShift(false);}
-    focusTerminal();
+    focusTerminal();return true;
   }
   sendNamedRef.current = sendNamed;
   function sendKey(key: string) {
@@ -547,6 +642,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     press.current = null;
     gesture.current = null;
   }
+  function dpadArrow(direction:DpadDirection) {
+    const label={left:'terminalDpadLeft',up:'terminalDpadUp',down:'terminalDpadDown',right:'terminalDpadRight'} as const;
+    return <button key={direction} disabled={!session.connected} data-dpad-direction={direction} aria-label={t(label[direction])} style={dpadDirection===direction?{outline:'1px solid var(--theme-accent)'}:undefined} onClick={()=>{if(inputOwner.current)sendNamed(direction[0].toUpperCase()+direction.slice(1),undefined,inputOwner.current);}}>{labels[direction]}</button>;
+  }
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
@@ -585,11 +684,14 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </div>}
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
-    {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')}>
+    {dpadEnabled && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
+      if(document.querySelector('[role="dialog"][aria-modal="true"]')||(event.detail>0&&dpad.current.suppressClick)){cancelDpad();event.preventDefault();event.stopPropagation();return;}
+      if(event.detail===0)cancelDpad();
+    }}>
       {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadLeftCorner')} title={preferences.gestureChords.cornerLeft ?? t(gestureLabelKeys[preferences.dpadCorners.left])} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}
-      <button disabled={!session.connected} aria-label={t('terminalDpadUp')} onClick={() => sendKey("\x1b[A")}>↑</button>
+      {dpadArrow('up')}
       {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadRightCorner')} title={preferences.gestureChords.cornerRight ?? t(gestureLabelKeys[preferences.dpadCorners.right])} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
-      <button disabled={!session.connected} aria-label={t('terminalDpadLeft')} onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label={t('terminalDpadDown')} onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label={t('terminalDpadRight')} onClick={() => sendKey("\x1b[C")}>→</button>
+      {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
       {preferences.toolbar.map(key => {
@@ -617,7 +719,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
           aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
           title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : undefined}
-          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {stopRepeat(); repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); repeat.current.delay = setTimeout(() => {repeated.current = true; action(); if (!document.hidden) repeat.current.timer = setInterval(action, 80);}, 400);}}}
+          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); startRepeat(action);}}}
           onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onLostPointerCapture={stopRepeat} onBlur={stopRepeat}
           onClick={event => {if (!repeatable || !repeated.current || event.detail === 0) action();}}>
           {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}

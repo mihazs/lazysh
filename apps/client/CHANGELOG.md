@@ -1,5 +1,133 @@
 # @lazysh/client
 
+## 1.9.3
+
+### Patch Changes
+
+- 50b1569: Preserve slow sub-row finger movement in normal terminal scrollback without changing gesture sensitivity or mouse-report routing.
+- @lazysh/account-usage@1.9.3
+  - @lazysh/common@1.9.3
+  - @lazysh/display-idle@1.9.3
+  - @lazysh/et-transport@1.9.3
+  - @lazysh/mosh-transport@1.9.3
+
+## 1.9.2
+
+### Patch Changes
+
+- 0bc9cc4: Retain closed terminal review, ended-session, modal and pane-display context when Android IME editor admission fails.
+- 42c2134: Suppress browser context menus on expanded D-pad controls while preserving their normal terminal input.
+- 7dadc4e: Bind native companion installation acceptance to the installer panel rather than the shared hook styling class; retain strict action and outcome checks.
+- e3e0e63: Dispatch complete Google/FOSS ntfy native-acceptance commands through the pinned emulator runner without changing provider guards or deadlines.
+- e0f7115: Retain closed failure-only observations when owned native SSH control prompts fail admission, preserving the original deadline and failure.
+- @lazysh/account-usage@1.9.2
+  - @lazysh/common@1.9.2
+  - @lazysh/display-idle@1.9.2
+  - @lazysh/et-transport@1.9.2
+  - @lazysh/mosh-transport@1.9.2
+
+## 1.9.1
+
+### Patch Changes
+
+- dce0ea9: Retain bounded focus, viewport, touch-action and context-menu evidence in Android D-pad failure diagnostics without changing input behavior.
+- @lazysh/account-usage@1.9.1
+  - @lazysh/common@1.9.1
+  - @lazysh/display-idle@1.9.1
+  - @lazysh/et-transport@1.9.1
+  - @lazysh/mosh-transport@1.9.1
+
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- 86ef821: Make Android protected-receiver changed-read checks deterministic by restoring the original fixture size before each observation.
+- e9c15fc: Align browser acceptance with dedicated Preferences screens and settle pointer hover transitions before checking attachment control styling.
+- fb3388c: Persist the selected Android push provider before explicit controls so late Firebase cleanup markers cannot change the chosen transport after restart.
+- @lazysh/account-usage@1.9.0
+  - @lazysh/common@1.9.0
+  - @lazysh/display-idle@1.9.0
+  - @lazysh/et-transport@1.9.0
+  - @lazysh/mosh-transport@1.9.0
+
+## 1.8.4
+
+### Patch Changes
+
+- b6487ee: Add bounded passive pointer/capture and rendered-direction evidence to Android D-pad acceptance without changing production input or gesture budgets.
+- e882bae: Retain a closed failure-only summary of cached completed native Window dispatch events and relative timings without changing Android D-pad input or acceptance budgets.
+- 3ea1476: Navigate Preferences through focused category screens, simplify workspace and agent chrome, and refine accessible glass and motion treatments.
+- af07d0f: Identify failed Herdr host teardown stages using closed post-stop observations and preserve the original test failure when cleanup also fails.
+- f77f54f: Retain a bounded failure-only comparison of the owned Android IME receiver wire without exporting input or changing runtime assertions.
+- 05e9410: Keep owned Android autocomplete corrections editable when the keyboard leaves its caret inside the composing range.
+- 8ee297e: Preserve a previously admitted raw SSH fixture receiver's normal exit between process-identity observations while retaining replacement, live ownership and exact-byte checks.
+- cd99c29: Admit vertically dominant terminal finger drags and preserve coalesced native scroll distance before finger lift.
+- 1330e4c: Preserve physical and toolbar Shift+Enter as a modified Enter key so agent terminals can insert a newline without ordinary Enter submission.
+- @lazysh/account-usage@1.8.4
+  - @lazysh/common@1.8.4
+  - @lazysh/display-idle@1.8.4
+  - @lazysh/et-transport@1.8.4
+  - @lazysh/mosh-transport@1.8.4
+
+## 1.8.3
+
+### Patch Changes
+
+- 408e4a8: Retain closed failure-local D-pad phase and last validated receiver counts in Android native acceptance without changing gestures, budgets or input behavior.
+- 2d4bab7: Use a minimum-sized standard Space for the house-owned Android test IME and cover its real framework measurement without changing packaged terminal input behavior.
+- 1eda85b: Calibrate the ntfy acceptance release-assembly build allowance from two to four minutes after a measured two-worker build exceeded two minutes, preserving APK/trust checks, native assertions and outer test limits.
+- 1e05652: Align the opt-in Android raw SSH receiver fixture with the existing bounded UI-host lifetime while preserving ordinary SSH and Mosh lifetimes and all input acceptance deadlines.
+- eb70476: Give each owned SSH/SFTP fixture launch a private host-trust file so concurrent clients cannot rewrite another client's pin, preserving strict verification and cleanup.
+- @lazysh/account-usage@1.8.3
+  - @lazysh/common@1.8.3
+  - @lazysh/display-idle@1.8.3
+  - @lazysh/et-transport@1.8.3
+  - @lazysh/mosh-transport@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- 17ce060: Remeasure the Android native D-pad target after its initial keyboard-opening tap, preserving owned-window injection and exact receiver-byte acceptance.
+- 1d4c8c5: Retain closed owned-tool failure observations and explicit validated native-receipt progress in ntfy acceptance failures, without changing process cleanup, deadlines or trust checks.
+- 99422b0: Use the visible workspace Preferences action in Android D-pad acceptance and retain closed failure-only IME editor-clause diagnostics without changing input or acceptance behavior.
+- @lazysh/account-usage@1.8.2
+  - @lazysh/common@1.8.2
+  - @lazysh/display-idle@1.8.2
+  - @lazysh/et-transport@1.8.2
+  - @lazysh/mosh-transport@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- d36533a: Retain fixed test-only startup stage breadcrumbs when owned Mosh multiplexer acceptance fails, without changing connection errors or runtime behavior.
+- f9150ac: Forward the pinned disposable Secret Service executable through the native GUI Turbo task and give Android raw-input acceptance fixtures an owned SSH root, preserving strict environment filtering and receiver ownership checks.
+- 14597f5: Retain one closed distributor UI snapshot only after the native ntfy trust-topic flow fails, preserving the original navigation timing, action, deadline and failure.
+- @lazysh/account-usage@1.8.1
+  - @lazysh/common@1.8.1
+  - @lazysh/display-idle@1.8.1
+  - @lazysh/et-transport@1.8.1
+  - @lazysh/mosh-transport@1.8.1
+
+## 1.8.0
+
+### Minor Changes
+
+- 35722cf: Add held-pointer panning and paced arrow repeats to the expanded terminal D-pad, preserving single taps and stopping input on interruption or session replacement.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.8.0
+  - @lazysh/common@1.8.0
+  - @lazysh/display-idle@1.8.0
+  - @lazysh/et-transport@1.8.0
+  - @lazysh/mosh-transport@1.8.0
+
 ## 1.7.8
 
 ### Patch Changes

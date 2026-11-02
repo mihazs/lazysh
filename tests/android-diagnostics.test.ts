@@ -10,10 +10,35 @@ const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/che
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
-const commands = decoded.trim().split(/\r\n|\n|\r/).map(line => line.trim()).filter(line => !line.startsWith('#') && line.length > 0);
+function emulatorCommands(script:string) {return script.trim().split(/\r\n|\n|\r/).map(line=>line.trim()).filter(line=>!line.startsWith('#') && line.length>0);}
+const commands=emulatorCommands(decoded);
 
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google',23],['fdroid',23]] as const)('ntfy %s dispatch executes complete runner lines and preserves enrollment argv/environment with exit %i',async (variant,exit)=>{
+  const job=workflow.jobs['native-android-ntfy'];
+  const step=job.steps.find(step=>step.name==='Real ntfy encrypted native enrollment')!;
+  expect(step.uses).toBe('mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b');
+  expect(job['timeout-minutes']).toBe(35);
+  expect(job.env).toEqual({ANDROID_SERIAL:'emulator-5580'});
+  const lines=emulatorCommands(step.with!.script!.replaceAll('${{ matrix.push-variant }}',variant));
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ntfy-dispatch-'));temporary.push(directory);
+  const bin=join(directory,'bin'),receipt=join(directory,'invocation');await mkdir(bin);
+  await writeFile(join(bin,'bun'),"#!/bin/sh\nprintf '%s\\n' \"$LAZYSH_ANDROID_QR_EMULATOR_PID_FILE\" \"$LAZYSH_NTFY_ANDROID_VARIANT\" \"$@\" >> \"$INVOCATION\"\nexit \"$NATIVE_EXIT\"\n",{mode:0o700});
+  const runnerTemp=join(directory,'owned temporary directory');
+  for(const line of lines){
+    const child=new OwnedProcess('/bin/sh',['-c',line],directory,{PATH:bin,RUNNER_TEMP:runnerTemp,INVOCATION:receipt,NATIVE_EXIT:String(exit)});
+    const result=child.finish('decoded ntfy enrollment dispatch',5000);
+    if(exit===0)await result;else await expect(result).rejects.toThrow('Owned fixture failed: decoded ntfy enrollment dispatch; exit=23');
+    expect(child.stdout).toBe('');expect(child.stderr).toBe('');
+  }
+  expect(lines).toHaveLength(1);
+  expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
+    join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
+    ...(variant==='google'?['run','--cwd','apps/client','test:android-ntfy']:['run','test:android-ntfy']),'',
+  ]);
 });
 
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
@@ -137,24 +162,26 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   for(const task of ['test:android-ssh','test:native-gui'])expect(tasks[task].passThroughEnv).toContain('LAZYSH_NATIVE_MOSH_SERVER');
 });
 
-test('actual Turbo task forwards pinned Mosh path, companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+for(const {taskName,keys,values,required} of [
+  {taskName:'test:android-ssh',keys:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'],values:['1','/owned/pinned/mosh-server','true','github-hosted'],required:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER']},
+  {taskName:'test:native-gui',keys:['LAZYSH_NATIVE_GUI_SECRET_SERVICE'],values:['/owned/pinned/gnome-keyring-daemon'],required:['LAZYSH_NATIVE_GUI_SECRET_SERVICE']},
+])test(`actual Turbo ${taskName} forwards admitted native fixture environment and filters unrelated values`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
   const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
   const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
   const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
   await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
-  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
-  const keys=['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{[taskName]:'bun env-probe.ts'}}));
   await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
   for(const admitted of [true,false]) {
-    const task={...config.tasks['test:android-ssh']};
-    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER'].includes(key));
-    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
+    const task={...config.tasks[taskName]};
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!required.includes(key));
+    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,[taskName]:task}}));
     await rm(join(directory,'observed.json'),{force:true});
-    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
-      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',LAZYSH_NATIVE_MOSH_SERVER:'/owned/pinned/mosh-server',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run',taskName,'--filter=@lazysh/client','--only'],directory,
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',...Object.fromEntries(keys.map((key,index)=>[key,values[index]])),LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
     await child.finish('actual Turbo task environment',10_000);
-    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,admitted?'/owned/pinned/mosh-server':null,'true','github-hosted'],unrelatedFiltered:true});
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:values.map((value,index)=>admitted||!required.includes(keys[index])?value:null),unrelatedFiltered:true});
   }
 },25_000);
 

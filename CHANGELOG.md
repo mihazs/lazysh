@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+- Preserve slow sub-row finger movement in terminal scrollback instead of losing travel between xterm redraws.
+
+- Expanded terminal D-pad controls now suppress their browser context menu by default.
+
+- Run each Google/FOSS ntfy acceptance branch as a complete emulator-runner shell command, preserving the existing native checks and deadlines.
+
+- Keep browser acceptance aligned with dedicated Preferences screens and compare attachment file-picker styling in a settled normal state; application behavior and defaults are unchanged.
+
+- Persist the selected Android push provider before explicit registration or cleanup so late previous-provider token callbacks cannot change it after restart. Status inspection remains read-only, and failed persistence prevents the control action.
+
+- Add Firebase-free UnifiedPush setup to Google Android builds alongside explicit FCM. New/off Google installations select UnifiedPush without registering; existing active FCM registrations remain selected. Provider changes require paused/revoked registration. Add opt-in Gotify relay delivery to the separate Gotify client; encrypted lazysh event display remains behind its original private enrollment and consent gates.
+
+- Keep vertically dominant finger drags responsive and preserve complete coalesced scroll motion before finger lift.
+
+- Replace mobile Preferences disclosures with category navigation and contextual Back; simplify workspace and agent controls, refine theme-derived glass navigation chrome, and honor reduced motion for short navigation transitions. Settings values, credentials and transport defaults are unchanged.
+
+- Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
+
+- Preserve physical and toolbar Shift+Enter as a distinct modified Enter key for agent newline bindings, instead of submitting an ordinary Enter. Plain Enter and other modifier combinations retain their existing behavior.
+
+- Add held-pointer panning to the expanded terminal D-pad, with paced arrow repeats, a pause zone and cancellation when input ownership or session availability changes. Existing arrow taps, keyboard activation, corner shortcuts and toolbar defaults remain unchanged.
+
 - Organize documentation by learning, tasks, reference and explanation; add a guided first SSH session and separate companion setup, settings and event-storage contracts. Preserve established links, security limits and platform acceptance boundaries. No application defaults change.
 
 - Prioritize connected app sessions above discovered Herdr spaces and refine compact themed navigation. Healthy Herdr server setup in Workspaces is now collapsed by default. Missing selections and unhealthy readers still reveal setup automatically. Keep shared-focus warnings visible and preserve session identity, reader drafts, contextual return, authentication and transport defaults.

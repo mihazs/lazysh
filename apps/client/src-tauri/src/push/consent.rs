@@ -24,7 +24,7 @@ impl Authority {
             token,
         })
     }
-    #[cfg(any(test, all(target_os = "android", feature = "fdroid")))]
+    #[cfg(any(test, target_os = "android"))]
     fn commit(&self, token: &str, action: impl FnOnce() -> bool) -> bool {
         let Ok(mut pending) = self.0.lock() else {
             return false;
@@ -62,7 +62,7 @@ pub(super) fn register(access: AccessLease) -> Result<Permit<'static>, String> {
     AUTHORITY.register(access)
 }
 
-#[cfg(all(target_os = "android", feature = "fdroid"))]
+#[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_app_lazysh_unifiedpush_NativeDisplayAuthority_commit(
     mut env: tauri::wry::prelude::JNIEnv<'_>,

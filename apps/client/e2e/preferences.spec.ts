@@ -71,6 +71,7 @@ test('brand, light and dark themes keep controls readable and reset', async ({ p
   }
   await openPreferenceCategory(page,'Reset');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
+  await openPreferenceCategory(page,'Appearance');
   await expect(appTheme).toHaveValue('forest');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'forest');
@@ -136,7 +137,7 @@ test('long settings use a mobile page with a persistent close action and short c
     }
     await page.setViewportSize({width:393,height:844});
   }else{
-    const bounds=(await dialog.boundingBox())!; expect(bounds.width).toBe(480);expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);
+    const bounds=(await dialog.boundingBox())!; expect(bounds.width).toBe(920);expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);
   }
   await page.screenshot({path:testInfo.outputPath('settings-presentation.png')});
   await close.click(); await page.keyboard.press('Control+k');
@@ -155,17 +156,41 @@ test('Preferences starts with compact categories at the top and keeps drafts whi
   const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
   await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
   expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
-  expect(await dialog.locator('.preferences-category').evaluateAll(nodes=>nodes.every(node=>!(node as HTMLDetailsElement).open))).toBe(true);
+  expect(await dialog.locator('[data-settings-page]:visible').count()).toBe(0);
   await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();
-  await expect(dialog.locator('.preferences-category > summary').first()).toBeInViewport({ratio:0.9});
-  await expect(dialog.locator('.preferences-category > summary').last()).toBeInViewport({ratio:0.9});
+  await expect(dialog.locator('.settings-index button').first()).toBeInViewport({ratio:0.9});
+  await expect(dialog.locator('.settings-index button').last()).toBeInViewport({ratio:0.9});
   await page.screenshot({path:testInfo.outputPath('preferences-category-entry.png'),animations:'disabled'});
-  await openPreferenceCategory(page,'Input');await page.getByText('Text snippets',{exact:true}).click();
+  await openPreferenceCategory(page,'Input');await page.getByRole('button',{name:'Text snippets',exact:true}).click();
   const name=dialog.getByRole('textbox',{name:'Snippet name',exact:true}),text=dialog.getByRole('textbox',{name:'Snippet text',exact:true});
   await name.fill('Unsent');await text.fill(' exact local draft ');const original=await text.elementHandle();
-  await dialog.locator('.preferences-category > summary').filter({hasText:'Keyboard and gestures'}).click();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
   await openPreferenceCategory(page,'Appearance');await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeVisible();
-  await openPreferenceCategory(page,'Input');await expect(name).toHaveValue('Unsent');await expect(text).toHaveValue(' exact local draft ');
+  await openPreferenceCategory(page,'Input');await dialog.getByRole('button',{name:'Text snippets',exact:true}).click();await expect(name).toHaveValue('Unsent');await expect(text).toHaveValue(' exact local draft ');
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
   expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  const handled=await page.evaluate(()=>{const back=new Event('lazysh-workspace-back',{cancelable:true});window.dispatchEvent(back);return back.defaultPrevented;});
+  expect(handled).toBe(true);
+  await expect(dialog.getByRole('button',{name:'Text snippets',exact:true})).toBeFocused();
+  await dialog.getByRole('button',{name:'Close Preferences',exact:true}).focus();
+  await page.keyboard.press('Escape');
+  await expect(dialog.getByRole('button',{name:'Keyboard and gestures',exact:true})).toBeFocused();
+  await openPreferenceCategory(page,'Appearance');
+  if(testInfo.project.name==='desktop'){
+    const language=dialog.locator('.settings-index').getByRole('button',{name:'Language and region',exact:true});
+    await expect(language).toBeVisible();await language.focus();await page.keyboard.press('Shift+Tab');
+    await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  }
+  await page.emulateMedia({reducedMotion:'reduce',forcedColors:'active'});
+  await expect(dialog.locator('[data-settings-page="appearance"]')).toHaveCSS('animation-name','none');
+  await expect(dialog.locator('.settings-detail-header')).toHaveCSS('backdrop-filter','none');
+  for(const width of [320,600,768,1280]){
+    await page.setViewportSize({width,height:852});
+    await dialog.locator('.settings-navigation').evaluate(node=>{(node as HTMLElement).style.fontSize='20px';});
+    expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+    await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeInViewport();
+  }
+  await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
 });

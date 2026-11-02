@@ -1,5 +1,73 @@
 # @lazysh/notification-service
 
+## 1.9.3
+
+### Patch Changes
+
+- @lazysh/common@1.9.3
+  - @lazysh/notification-client@1.9.3
+
+## 1.9.2
+
+### Patch Changes
+
+- 3fd9542: Qualify finite relay events against an owned real Gotify server over verified TLS.
+- @lazysh/common@1.9.2
+  - @lazysh/notification-client@1.9.2
+
+## 1.9.1
+
+### Patch Changes
+
+- @lazysh/common@1.9.1
+  - @lazysh/notification-client@1.9.1
+
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- @lazysh/common@1.9.0
+  - @lazysh/notification-client@1.9.0
+
+## 1.8.4
+
+### Patch Changes
+
+- @lazysh/common@1.8.4
+  - @lazysh/notification-client@1.8.4
+
+## 1.8.3
+
+### Patch Changes
+
+- @lazysh/common@1.8.3
+  - @lazysh/notification-client@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- @lazysh/common@1.8.2
+  - @lazysh/notification-client@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- @lazysh/common@1.8.1
+  - @lazysh/notification-client@1.8.1
+
+## 1.8.0
+
+### Patch Changes
+
+- @lazysh/common@1.8.0
+  - @lazysh/notification-client@1.8.0
+
 ## 1.7.8
 
 ### Patch Changes

@@ -1,3 +1,4 @@
+import {controlContrast} from './fixtures/controlContrast';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 import {readFileSync} from 'node:fs';
@@ -119,8 +120,8 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
-        (args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'uploading'});state.installed=true;
-        return {schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
+        const status=state.installed?'reused':'installed';(args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'checkingInstalled'});state.installed=true;
+        return {schemaVersion:1,status,version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
       }
       if(command==='agent_snapshot'){
         if(geometry || state.empty)return {schemaVersion:1,sessions:[]};
@@ -168,6 +169,13 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:`Connect to ${name}`,exact:true}).click();
   await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
   await page.getByRole('button',{name:'Connect',exact:true}).click();
+}
+
+async function openConnectedAgents(page:Page,phone:boolean){
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
 }
 
 const nativeWorkspaceSource=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
@@ -243,11 +251,11 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   const serverSetup=live.locator('.herdr-server-setup');
-  await expect(serverSetup).not.toHaveAttribute('open');
+  await expect(serverSetup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
-  await serverSetup.locator('summary').click();
+  await live.getByRole('button',{name:'Herdr server',exact:true}).click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
-  await serverSetup.locator('summary').click();
+  await live.getByRole('button',{name:'Back',exact:true}).click();
   if(phone){
     await page.setViewportSize({width:393,height:852});
     const navigation=await page.locator('.sidebar').boundingBox();
@@ -301,7 +309,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await details.locator('summary').click();
   await expect(details.getByText('/nav/project',{exact:true})).toBeVisible();
   await expect(details.getByText('Unverified reference; may be stale.',{exact:true})).toBeVisible();
-  expect(await details.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  expect(await details.locator('..').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('herdr-reported-session.png')});
   await details.locator('summary').click();
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([]);
@@ -379,7 +387,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.getByRole('button',{name:'Connect',exact:true}).click();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
-  await live.getByText('Reported session',{exact:true}).click();
+  await live.locator('.herdr-report-reference > summary').click();
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
   await page.evaluate(()=>(window as unknown as {finishOldReport:()=>void}).finishOldReport());
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
@@ -616,10 +624,7 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
 test('empty Activity opens inspected hook repair without inventing reports',async({page},testInfo)=>{
   await installWorkspaceNavigation(page,true);
   await page.goto('/');
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await connectPasswordHost(page);
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await openConnectedAgents(page,testInfo.project.name==='phone');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
   await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
@@ -797,6 +802,15 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
     const box=(await target.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.y).toBeGreaterThanOrEqual(0);expect(box.y+box.height).toBeLessThanOrEqual(852);
     expect(await target.evaluate(node=>{const box=node.getBoundingClientRect();return document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)?.closest('button')===node;})).toBe(true);
   }
+  const contrast=await dialog.evaluate(controlContrast);
+  expect(contrast.filter(item=>item.ratio<4.5)).toEqual([]);
+  const material=await dialog.evaluate(node=>({background:getComputedStyle(node).backgroundColor,blur:getComputedStyle(node).backdropFilter}));
+  expect(material.blur).toContain('blur(16px)');
+  const media=await page.context().newCDPSession(page);
+  await media.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
+  await expect(dialog).toHaveCSS('backdrop-filter','none');
+  expect(await dialog.evaluate(node=>getComputedStyle(node).backgroundColor)).not.toBe(material.background);
+  await media.send('Emulation.setEmulatedMedia',{features:[]});
   await page.screenshot({path:testInfo.outputPath('workspace-tools-default-393.png')});
   await testInfo.attach('default-sheet-measurement',{body:JSON.stringify({viewport:{width:393,height:852},...metrics}),contentType:'application/json'});
   for(const group of ['more','connections','application'] as const)await openWorkspaceGroup(page,group);
@@ -850,15 +864,15 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   expect(await sessions.evaluate(node=>!!(node.compareDocumentPosition(document.querySelector('.herdr-navigation')!)&Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   expect((await sessions.boundingBox())!.y).toBeLessThan((await live.boundingBox())!.y);
   await first.focus();await page.keyboard.press('Tab');await expect(second).toBeFocused();
-  await page.keyboard.press('Tab');await expect(live.getByRole('button',{name:'Refresh Herdr tree',exact:true})).toBeFocused();
+  await page.keyboard.press('Tab');await expect(live.getByRole('button',{name:'Herdr server',exact:true})).toBeFocused();
   const setup=live.locator('.herdr-server-setup');
-  await expect(setup).not.toHaveAttribute('open');
+  await expect(setup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
   const warning=live.getByText('Shared focus changes focus for other connections to this server.',{exact:true});
   await expect(warning).toHaveCount(1);await expect(warning).toBeVisible();
-  await setup.locator('summary').click();
+  await live.getByRole('button',{name:'Herdr server',exact:true}).click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
-  await expect(warning).toHaveCount(1);await setup.locator('summary').click();
+  await expect(warning).toHaveCount(1);await live.getByRole('button',{name:'Back',exact:true}).click();
   await first.click();
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
@@ -875,10 +889,10 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   });
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   const selector=live.getByRole('combobox',{name:'Herdr server',exact:true});
-  await expect(setup).toHaveAttribute('open','');
+  await expect(setup).toBeVisible();
   await expect(selector).toBeVisible();await expect(selector).toHaveValue('');
   await expect(live.locator('.herdr-navigation-tree')).toHaveCount(0);await expect(warning).toHaveCount(0);
-  await selector.selectOption('default');await expect(setup).not.toHaveAttribute('open');await expect(warning).toBeVisible();
+  await selector.selectOption('default');await expect(setup).toBeHidden();await expect(warning).toBeVisible();
   await page.evaluate(()=>{
     const original=window.nativeFixtureInvoke;
     Object.assign(window,{restoreNavigationReader:()=>{window.nativeFixtureInvoke=original;}});
@@ -886,11 +900,11 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   });
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   await expect(live.getByRole('status')).toContainText('Synthetic navigation unavailable');
-  await expect(setup).toHaveAttribute('open','');await expect(selector).toBeVisible();await expect(warning).toHaveCount(1);
+  await expect(setup).toBeVisible();await expect(selector).toBeVisible();await expect(warning).toHaveCount(1);
   await page.screenshot({path:testInfo.outputPath('workspace-unhealthy-setup.png')});
   await page.evaluate(()=>Reflect.get(window,'restoreNavigationReader')());
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
-  await expect(setup).not.toHaveAttribute('open');
+  await expect(setup).toBeHidden();
   for(const [locale,hint] of [
     ['pt-BR','Use o gerenciador de sessões para descobrir e gerenciar sessões tmux, Herdr ou Zellij.'],
     ['es','Usa el gestor de sesiones para descubrir y gestionar sesiones tmux, Herdr o Zellij.'],
@@ -908,4 +922,55 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
     }))).toBe(true);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
+});
+
+
+function nativeCompanionReadiness(action:string,initialOutcome:string){
+  const method=nativeWorkspaceSource.slice(nativeWorkspaceSource.indexOf('fun verifyCompanionInstallation()'));
+  const panel=/val panel = "([^"]+)"/.exec(method)![1];
+  const code=/val companionReadinessObservation = """([\s\S]*?)"""/.exec(method)![1];
+  const visible=/private fun workspaceButtonVisible[^\n]* = """([\s\S]*?)"""/.exec(nativeWorkspaceSource)![1]
+    .replace('${JSONObject.quote("$scope button")}',JSON.stringify(panel+' button')).replace('${JSONObject.quote(text)}',JSON.stringify(action));
+  const values=[
+    ['${JSONObject.quote(panel)}',JSON.stringify(panel)],['${JSONObject.quote("$panel > .tool-bar > button")}',JSON.stringify(panel+' > .tool-bar > button')],
+    ['${workspaceButtonVisible(panel, action)}',visible],['${workspaceElementVisible(panel)}',nativeWorkspaceVisibility(panel)],
+    ['${workspaceElementVisible("$panel > .tool-bar > button", true)}',nativeWorkspaceVisibility(panel+' > .tool-bar > button',true)],
+    ['${JSONObject.quote(action)}',JSON.stringify(action)],['${JSONObject.quote(if(reused) "installed" else "idle")}',JSON.stringify(initialOutcome)],
+    ...['phases','failures'].map(name=>['${JSONArray('+name+')}',JSON.stringify(JSON.parse('['+new RegExp('val '+name+' = setOf\\(([^)]*)\\)').exec(method)![1]+']'))])
+  ];
+  let expression=code;for(const [key,value] of values)expression=expression.split(key).join(value);
+  return {panel,expression};
+}
+
+test('native companion action stays owned during installed and reused results',async({page},testInfo)=>{
+  if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
+  await openClockedNavigation(page);
+  await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
+  const records:unknown[]=[];
+  for(const [action,before,after] of [['Install companion','idle','installed'],['Update companion','installed','reused']]){
+    const contract=nativeCompanionReadiness(action,before);
+    if(after==='reused'){
+      await page.locator(contract.panel+' > .tool-bar > button').first().evaluate(button=>button.scrollIntoView());
+      records.push({action:'before delayed readiness',observation:await page.evaluate(contract.expression)});
+      await page.evaluate(()=>Reflect.get(window,'finishOldReport')());await page.clock.runFor(200);
+      records.push({action:'after delayed readiness before rescroll',observation:await page.evaluate(contract.expression),geometry:await page.locator('details[data-install-outcome] > .tool-bar > button').evaluate(button=>({top:button.getBoundingClientRect().top,bottom:button.getBoundingClientRect().bottom,hit:document.elementFromPoint(button.getBoundingClientRect().left+button.getBoundingClientRect().width/2,button.getBoundingClientRect().top+button.getBoundingClientRect().height/2)?.tagName}))});
+    }
+    const button=page.getByRole('button',{name:action,exact:true});
+    await expect(button).toBeEnabled();await button.scrollIntoViewIfNeeded();
+    records.push({action,observation:await page.evaluate(contract.expression),matches:await page.locator(contract.panel+' > .tool-bar > button').count()});
+    await button.click();await page.clock.runFor(200);
+    await expect(page.locator('details[data-install-outcome]')).toHaveAttribute('data-install-outcome',after);
+  }
+  await testInfo.attach('native-companion-ownership',{body:JSON.stringify(records),contentType:'application/json'});
+  const actions=records.filter((record):record is {action:string;matches:number;observation:Record<string,unknown>}=>!!record&&typeof record==='object'&&'matches' in record);
+  expect(actions).toHaveLength(2);
+  for(const record of actions){
+    expect(record.matches).toBe(1);
+    expect(record.observation).toMatchObject({expectedActionVisible:true,matchingExpectedActionEnabled:true,outcomeExpected:true,
+      panelPresent:true,panelVisible:true,detailsOpen:true,directActionPresent:true,directActionVisible:true,directActionEnabled:true,
+      labelKind:record.action==='Install companion'?'install':'update',failure:'none'});
+  }
+  expect(await page.locator('.terminal-canvas').count()).toBe(1);
+  expect(await page.locator('[role=tab]').count()).toBe(1);
 });

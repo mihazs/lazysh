@@ -1,3 +1,4 @@
+import {Info} from 'lucide-react';
 import {t,formatDateTime} from './i18n/core';
 import type {AccessLease} from './access';
 import type {AgentSession} from './AgentPanel';
@@ -18,7 +19,7 @@ export default function HerdrSessionDetails({reference,count,sessionId,available
   const readable=available && reports?.available && reports.host===sessionId && reports.lease.current();
   const matches=readable?reports.rows.filter(report=>report.agent===labels[reference.agent] && report.sessionId===reference.value):[];
   const report=matches.length===1?matches[0]:undefined;
-  return <details><summary>{t('herdrReferenceDetails')}</summary>
+  return <details className="herdr-report-reference"><summary title={t('herdrReferenceDetails')}><Info size={16} aria-hidden="true"/><span className="sr-only">{t('herdrReferenceDetails')}</span></summary>
     <p>{t('herdrReferenceUnverified')}</p><code>{reference.agent}: {reference.value}</code>
     {count>1 && <p>{t('herdrReferenceShared',{count})}</p>}
     {report?<><p>{t(({working:'agentsWorking',needs_attention:'agentsNeedsYou',done:'agentsDone'} as const)[report.state])}</p><p>{t('agentsReportProject')}: <code>{report.project}</code></p><time dateTime={report.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(report.updatedAt))})}</time></>:<p>{t(readable && matches.length===0?'herdrReferenceNoMatch':'herdrReferenceUnavailable')}</p>}

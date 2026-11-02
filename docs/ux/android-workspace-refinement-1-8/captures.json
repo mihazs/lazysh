@@ -1,0 +1,150 @@
+{
+  "baseline": "312acef54213a88eff048908941bd1da0614d399",
+  "integratedBase": "1ee3857b518bd6005637094578b178b301f1f020",
+  "sourceState": "Uncommitted UX refinement; public release pending",
+  "synthetic": true,
+  "nativeAcceptance": false,
+  "admissionNotes": "Initial before capture used existing workspace fixture without nativeEvents option and retained two unregisterListener page errors; no navigation/render assertions were concealed. Final after capture enables existing nativeEvents fixture contract and records zero page errors. Animations disabled for settled screenshots because the synthetic fixture clock otherwise holds initial opacity. Actual keyboard/browser focus tests execute separately.",
+  "images": [
+    {
+      "file": "phone-settings-before.png",
+      "sha256": "7b60d7c4453f999854d20a5e3e002c411296884daa07307c5a720668fefdffa7",
+      "stage": "before",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "settings"
+    },
+    {
+      "file": "phone-settings-after.png",
+      "sha256": "e3f04c5f2550f82e12329d577469c2d36dced48e2a1f15c95a0533689ec5ee46",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "settings"
+    },
+    {
+      "file": "phone-settings-input-before.png",
+      "sha256": "c8528d04831c7fbc556c7c674a575a02147a909eddb20e94cb271670d53291e8",
+      "stage": "before",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "settings-input"
+    },
+    {
+      "file": "phone-settings-input-after.png",
+      "sha256": "bd566c4e593c7ba4f1b0782527c741b8da7d543fd09aac50e90559eaed06d4e0",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "settings-input"
+    },
+    {
+      "file": "phone-workspaces-before.png",
+      "sha256": "480557124cb30fba1a0d26eb2a83ae6c9d41f6a763604eda1ab78064e73e191e",
+      "stage": "before",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "workspaces"
+    },
+    {
+      "file": "phone-workspaces-after.png",
+      "sha256": "497c0ca9e6adb49db819d7ad67a64f1541bfef98770d42b22eb7ca1da11cb5c2",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "workspaces"
+    },
+    {
+      "file": "phone-agents-before.png",
+      "sha256": "c6bc2faa1e01008fe11afd5e61cfd7147b5472d784304b5861a75ce09eb0625c",
+      "stage": "before",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "agents"
+    },
+    {
+      "file": "phone-agents-after.png",
+      "sha256": "0afa2a301e1df176711278ac0fef8d6501a5923e913fc751087df1d8dcc94dbd",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "agents"
+    },
+    {
+      "file": "desktop-settings-before.png",
+      "sha256": "f67355974c9656417d66ca794d83036e7a792ea05d29a6defebb7d92116bf1ce",
+      "stage": "before",
+      "viewport": {
+        "width": 1280,
+        "height": 850
+      },
+      "state": "settings"
+    },
+    {
+      "file": "desktop-settings-after.png",
+      "sha256": "76f24ae5a468bda6d6b0f840dbf9640d2c4d6b4e80af57629520d42e781798c5",
+      "stage": "after",
+      "viewport": {
+        "width": 1280,
+        "height": 850
+      },
+      "state": "settings"
+    },
+    {
+      "file": "desktop-agents-before.png",
+      "sha256": "b2242988368dbb717bc6bfddd53fb6902dbe9fab0787c77b9a8af14ccad1749f",
+      "stage": "before",
+      "viewport": {
+        "width": 1280,
+        "height": 850
+      },
+      "state": "agents"
+    },
+    {
+      "file": "desktop-agents-after.png",
+      "sha256": "de116bce4c3ccf8ac5fb51ce4b8e72863f1ba08339a1fc45f77325ca6ad8887d",
+      "stage": "after",
+      "viewport": {
+        "width": 1280,
+        "height": 850
+      },
+      "state": "agents"
+    },
+    {
+      "file": "phone-glass-normal.png",
+      "sha256": "6aa91921f70c3e43a32ba099b5baa85a313a22598c4bdc14767e6a9a1eb7e609",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "Actual synthetic xterm ANSI status rows, default Workspace tools sheet; normal transparency"
+    },
+    {
+      "file": "phone-glass-reduced.png",
+      "sha256": "de0d0765976fab1a38c27fa5efc1b393359e3744e412c911e77639bd2eb6b462",
+      "stage": "after",
+      "viewport": {
+        "width": 393,
+        "height": 852
+      },
+      "state": "Actual synthetic xterm ANSI status rows, default Workspace tools sheet; reduced transparency"
+    }
+  ]
+}

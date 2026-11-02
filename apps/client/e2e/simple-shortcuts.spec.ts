@@ -2,7 +2,7 @@ import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceContr
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -37,11 +37,118 @@ async function fixture(page:Page) {
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
 
-test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page},testInfo)=>{
+async function openExpandedDpad(page:Page,phone:boolean) {
   await fixture(page);
+  await openPreferenceCategory(page,'Input');
+  await page.getByText('Toolbar keys and order',{exact:true}).click();
+  await page.getByRole('button',{name:'Add dpad',exact:true}).click();
   await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await page.getByRole('button',{name:'dpad',exact:true}).click();
+}
+async function observeDpadPointers(page:Page) {
+  await page.evaluate(()=>{const events:unknown[]=[];Reflect.set(window,'dpadEvents',events);for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture'])document.addEventListener(type,event=>{const pointer=event as PointerEvent;events.push({type,x:pointer.clientX,y:pointer.clientY,id:pointer.pointerId,primary:pointer.isPrimary,target:(event.target as HTMLElement).className});},true);});
+}
+
+test('D-pad context menus are cancelled without consuming unrelated menus or terminal input',async({page},testInfo)=>{
+  await openExpandedDpad(page,testInfo.project.name==='phone');
+  await page.evaluate(()=>{
+    const events:unknown[]=[];Reflect.set(window,'dpadMenus',events);
+    document.addEventListener('contextmenu',event=>events.push({
+      pad:event.target instanceof Element && Boolean(event.target.closest('.terminal-dpad')),
+      trusted:event.isTrusted,cancelable:event.cancelable,prevented:event.defaultPrevented,
+    }));
+  });
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});
+  await up.click({button:'right'});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadMenus'))).toEqual([
+    {pad:true,trusted:true,cancelable:true,prevented:true},
+  ]);
+  await page.getByRole('button',{name:'Compose',exact:true}).click({button:'right'});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadMenus'))).toEqual([
+    {pad:true,trusted:true,cancelable:true,prevented:true},
+    {pad:false,trusted:true,cancelable:true,prevented:false},
+  ]);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await up.click();
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+});
+
+test('physical and toolbar Shift+Enter preserve the agent newline key',async({page})=>{
+  await openShortcutTerminal(page);
+  await page.locator('.terminal-canvas').click();
+  await page.keyboard.press('Shift+Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u']);
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r']);
+  await page.getByRole('button',{name:'Shift',exact:true}).click();
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r','\x1b[13;2u']);
+});
+
+test('expanded D-pad pans one held pointer with paced bytes and an idle dead zone',async({page},testInfo)=>{
+  await openExpandedDpad(page,testInfo.project.name==='phone');
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});
+  await up.scrollIntoViewIfNeeded();await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+  const box=(await up.boundingBox())!,origin={x:box.x+box.width/2,y:box.y+box.height/2};
+  const cdp=await page.context().newCDPSession(page);
+  const touch=testInfo.project.name==='phone';
+  const move=async(x:number,y:number)=>{
+    if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y}]});
+    else await page.mouse.move(x,y);
+    await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadEvents').filter((event:{type:string})=>event.type==='pointermove').at(-1))).toMatchObject({x,y});
+  };
+  await observeDpadPointers(page);
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+  else{await page.mouse.move(origin.x,origin.y);await page.mouse.down();}
+  await page.clock.runFor(399);expect(await writes()).toEqual([]);
+  await page.clock.runFor(1);expect(await writes()).toEqual(['\x1b[A']);
+  await move(origin.x+40,origin.y);
+  expect(await writes()).toEqual(['\x1b[A']);await page.clock.runFor(80);
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C']);
+  await move(origin.x,origin.y);await page.clock.runFor(800);
+  expect(await writes(),JSON.stringify(await page.evaluate(()=>Reflect.get(window,'dpadEvents')))).toEqual(['\x1b[A','\x1b[C']);
+  await move(origin.x,origin.y+40);await page.clock.runFor(80);
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B']);
+  if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  else await page.mouse.up();
+  await page.clock.runFor(1000);expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B']);
+  await expect(up).not.toHaveAttribute('aria-pressed');
+  await up.focus();await page.keyboard.press('Enter');
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B','\x1b[A']);
+  await page.screenshot({path:testInfo.outputPath('expanded-dpad.png')});
+});
+
+test('expanded D-pad rejects a secondary contact and admits a later primary touch',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Requires two real touch contacts.');
+  await openExpandedDpad(page,true);await observeDpadPointers(page);
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});await up.scrollIntoViewIfNeeded();
+  const box=(await up.boundingBox())!,first={id:1,x:5,y:5},second={id:2,x:box.x+box.width/2,y:box.y+box.height/2};
+  await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first,second]});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadEvents').filter((event:{type:string})=>event.type==='pointerdown').map((event:{primary:boolean})=>event.primary))).toEqual([true,false]);
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...second,id:3}]});
+  await page.clock.runFor(400);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+  const events=await page.evaluate(()=>Reflect.get(window,'dpadEvents')) as Array<{type:string;primary:boolean;id:number;target:string}>;
+  const starts=events.filter(event=>event.type==='pointerdown');expect(starts.map(event=>event.primary)).toEqual([true,false,true]);
+  for(const type of ['gotpointercapture','lostpointercapture'])expect(events.some(event=>event.type===type&&event.id===starts[2].id&&event.target==='terminal-dpad')).toBe(true);
+  await testInfo.attach('dpad-primary-capture-events.json',{body:JSON.stringify(events),contentType:'application/json'});
+  await page.getByRole('button',{name:'D-pad left corner',exact:true}).tap();
+  await page.getByRole('button',{name:'D-pad right corner',exact:true}).tap();
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A','\x03','\x7f']);
+});
+
+test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page})=>{
+  await openShortcutTerminal(page);
   await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toHaveCount(1);
   await page.evaluate(()=>{
     const request=window.requestAnimationFrame,frames:FrameRequestCallback[]=[];
@@ -219,6 +326,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
   await page.getByLabel('Two-finger swipe right Option / Alt',{exact:true}).check();
   await page.getByRole('textbox',{name:'Two-finger swipe right custom shortcut text',exact:true}).fill('b1');
   await page.getByRole('button',{name:'Save Two-finger swipe right chord',exact:true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Toolbar keys and order',{exact:true}).click();
   await page.getByRole('button',{name:'Add dpad',exact:true}).click();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
@@ -358,9 +466,7 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
 
 
 test('terminal canvas stays anchored when keyboard-sized resizes reveal its input',async({page})=>{
-  await fixture(page); await page.keyboard.press('Escape');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await openShortcutTerminal(page);
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
   const width=(page.viewportSize()?.width??1280)<=600?412:1280;
@@ -375,11 +481,45 @@ test('terminal canvas stays anchored when keyboard-sized resizes reveal its inpu
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });
 
-test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page})=>{
-  await fixture(page);
-  await page.keyboard.press('Escape');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+for(const fontSize of [14,17])test(`slow fractional finger motion preserves normal-buffer scroll distance at font ${fontSize}`,async({page},testInfo)=>{
+  await openShortcutTerminal(page);
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  if(fontSize!==14) {
+    await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Appearance');
+    await page.getByLabel('Font size',{exact:true}).fill(String(fontSize));
+    await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  }
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:300},(_,i)=>`fractional history ${i}\r\n`).join('')));
+  const viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(1000);
+  const box=(await page.locator('.terminal-canvas:visible .xterm-screen').boundingBox())!;
+  const input=await page.context().newCDPSession(page);
+  const distance=await page.locator('.terminal-canvas:visible .xterm-screen').evaluate(node=>node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length*3);
+  const results:unknown[]=[];
+  await viewport.evaluate(node=>{const samples:number[]=[];Reflect.set(window,'fractionalWheels',samples);node.closest('.xterm')!.addEventListener('wheel',event=>samples.push((event as WheelEvent).deltaY));});
+  for(const segments of [1,120]) {
+    await viewport.evaluate(node=>{node.scrollTop=node.scrollHeight;});
+    await expect(page.locator('.terminal-canvas:visible .xterm-rows')).toContainText('fractional history 299');
+    const before=await viewport.evaluate(node=>node.scrollTop);
+    await page.evaluate(()=>{(Reflect.get(window,'fractionalWheels') as number[]).length=0;});
+    const bounds=(await page.locator('.terminal-canvas:visible').boundingBox())!;
+    const origin={x:testInfo.project.name==='phone'?box.x+60:bounds.x+bounds.width-1,y:box.y+60};
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    for(let step=1;step<=segments;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+distance*step/segments}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(async()=>before-await viewport.evaluate(node=>node.scrollTop)).toBeGreaterThanOrEqual(distance-1);
+    const travel=before-await viewport.evaluate(node=>node.scrollTop);
+    results.push({segments,travel,wheels:await page.evaluate(()=>Reflect.get(window,'fractionalWheels'))});
+    await testInfo.attach(`normal-fractional-${segments}`,{body:JSON.stringify(results),contentType:'application/json'});
+    expect(travel).toBeGreaterThanOrEqual(distance-1);
+    expect(travel).toBeLessThanOrEqual(distance+1);
+  }
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+});
+
+test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page},testInfo)=>{
+  await openShortcutTerminal(page);
   const screen=page.locator('.terminal-canvas:visible .xterm-screen');
   await expect(screen).toBeVisible();
   await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
@@ -388,6 +528,15 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   const before=await viewport.evaluate(node=>node.scrollTop);
   const box=(await screen.boundingBox())!;
   const x=box.x+60,y=box.y+80;
+  const hitTargets=await page.locator('.terminal-canvas:visible').evaluate(canvas=>{
+    const selectors=['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'];
+    return selectors.map(selector=>{
+      const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
+      const r=element.getBoundingClientRect(),candidates=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]];
+      return {selector,width:r.width,height:r.height,points:candidates.map(([x,y])=>({x,y,hit:document.elementFromPoint(x,y)?.className}))};
+    });
+  });
+  await testInfo.attach('touch-hit-targets',{body:JSON.stringify(hitTargets),contentType:'application/json'});
   const input=await page.context().newCDPSession(page);
   const swipe=async(from:number,to:number)=>{
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:from}]});
@@ -438,24 +587,66 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await expect.poll(reports).toEqual([second]);
   await page.evaluate(()=>{window.simpleShortcutWrites=[];});
-  await page.locator('.terminal-canvas:visible').evaluate(element=>element.addEventListener('touchmove',()=>window.simpleShortcutTouchMoves++,{capture:true,passive:true}));
-  const batches:string[][]=[];
-  for(const segments of [2,8]) {
-    await page.evaluate(()=>{window.simpleShortcutWrites=[];window.simpleShortcutTouchMoves=0;});
+  await page.locator('.terminal-canvas:visible').evaluate(element=>{
+    element.addEventListener('touchmove',()=>window.simpleShortcutTouchMoves++,{capture:true,passive:true});
+    element.addEventListener('pointermove',()=>window.simpleShortcutPointerMoves++,{capture:true,passive:true});
+    element.addEventListener('touchstart',event=>{window.simpleShortcutTouchTarget=event.target instanceof Element?event.target:null;},{capture:true,passive:true});
+  });
+  const batches:string[][]=[],deliveries:unknown[]=[];
+  for(const segments of [1,2,8,48]) {
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];window.simpleShortcutTouchMoves=0;window.simpleShortcutPointerMoves=0;});
     const start={x,y:box.y+20};
     expect(start.y+notch*12).toBeLessThan(box.y+box.height);
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
     try {
       for(let step=1;step<=segments;step++) {
         await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start.y+notch*12*step/segments}]});
-        await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(step);
+        if(segments<=8)await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(step);
       }
       await expect.poll(async()=>(await reports()).length).toBeGreaterThan(0);
       batches.push(await reports());
+      deliveries.push(await page.evaluate(segments=>({segments,pointers:window.simpleShortcutPointerMoves,touches:window.simpleShortcutTouchMoves,
+        target:window.simpleShortcutTouchTarget?.className,writes:window.simpleShortcutWrites}),segments));
     } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
   }
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const diagonal={x:x+10,y:box.y+25};
+  await page.mouse.move(diagonal.x,diagonal.y);await page.mouse.wheel(0,notch);
+  await expect.poll(async()=>(await reports()).length).toBe(1);
+  const angledReport=(await reports())[0];
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  for(const [index,segments] of [1,4,16].entries()) {
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[diagonal]});
+    for(let step=1;step<=segments;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:diagonal.x+notch*.8*step/segments,y:diagonal.y-notch*step/segments}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(reports).toEqual(Array.from({length:index+1},()=>angledReport));
+  }
+  const starts=await page.locator('.terminal-canvas:visible').evaluate(canvas=>{
+    return ['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'].map(selector=>{
+      const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
+      const r=element.getBoundingClientRect();
+      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]]
+        .find(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===element||(selector==='.xterm-screen'&&!!hit&&element.contains(hit));});
+      return {selector,point:point?{x:point[0],y:point[1]}:null};
+    });
+  });
+  const landings:unknown[]=[];
+  for(const {selector,point} of starts) {
+    expect(point,`Real finger landing available on ${selector}`).not.toBeNull();
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+    const origin=point!;
+    const destination=origin.y+(origin.y<box.y+box.height/2?notch:-notch);
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:destination}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(async()=>(await reports()).length,`Finger scrolling starts on ${selector}`).toBe(1);
+    expect((await reports())[0]).toMatch(/^\x1b\[<6[45];\d+;\d+M$/);
+    landings.push(await page.evaluate(selector=>({selector,target:window.simpleShortcutTouchTarget?.className,writes:window.simpleShortcutWrites}),selector));
+  }
+  await testInfo.attach('native-touch-starts',{body:JSON.stringify(landings),contentType:'application/json'});
+  await testInfo.attach('native-touch-delivery',{body:JSON.stringify(deliveries),contentType:'application/json'});
   expect(batches[0]).toHaveLength(12);
-  expect(batches[1]).toEqual(batches[0]);
+  for(const batch of batches.slice(1))expect(batch).toEqual(batches[0]);
   if(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches)) {
     // A real host redraw replaces xterm spans while the same finger is still down.
     await page.evaluate(()=>window.simpleShortcutOutput('\x1b[2J\x1b[H'+Array.from({length:40},(_,i)=>`owned-row-${i} ${' '.repeat(30)}`).join('\r\n')));

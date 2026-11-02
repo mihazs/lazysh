@@ -2,6 +2,8 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 
 export const OUTPUT_LIMIT=16*1024;
+const teardownFlag=(value:unknown)=>typeof value==='boolean'?value:null;
+const teardownStream=(value:{closed?:unknown;destroyed?:unknown}|null|undefined)=>({closed:teardownFlag(value?.closed),destroyed:teardownFlag(value?.destroyed)});
 // shortcut: foreground fixture tools only. A background child can outlive a reaped
 // leader; never signal a recycled PGID or claim that orphan was cleaned. Add a real
 // supervisor/OS ownership facility before using this helper for daemonizing tools.
@@ -9,6 +11,7 @@ export class OwnedProcess {
   readonly child:ChildProcess;
   readonly done:Promise<number>;
   private readonly original:Promise<OwnedPid|undefined>;
+  private closeObserved=false;
   private launchFailure:'missing-launcher'|'launch-denied'|'launch-failed'|undefined;
   stdout=''; stderr='';
   constructor(program:string,args:string[],cwd?:string,env=process.env,captureOutput=true) {
@@ -21,7 +24,7 @@ export class OwnedProcess {
         this.launchFailure=error.code==='ENOENT'?'missing-launcher':['EACCES','EPERM'].includes(error.code??'')?'launch-denied':'launch-failed';
         reject(new Error('Owned fixture process could not start'));
       });
-      this.child.once('close',code=>resolve(code??1));
+      this.child.once('close',code=>{this.closeObserved=true;resolve(code??1);});
     });
   }
   async startupDiagnostic() {
@@ -36,6 +39,21 @@ export class OwnedProcess {
     const exit=this.child.exitCode;
     return {state:this.launchFailure??(exit!==null?'early-exit':this.child.signalCode?'signaled':this.child.pid?'running':'launch-unavailable'),
       exitCode:exit!==null && Number.isInteger(exit) && exit>=0 && exit<=255?exit:null};
+  }
+  async teardownDiagnostic() {
+    let originalAvailable=false,currentIdentity:'matching-live'|'terminal'|'changed'|'missing'|'unavailable'='unavailable';
+    try {
+      const original=await this.original;
+      originalAvailable=!!original;
+      if(original) {
+        const current=await identity(original.pid);
+        currentIdentity=!current?'missing':current.start!==original.start || current.parent!==original.parent?'changed':
+          ['Z','X'].includes(current.state)?'terminal':'matching-live';
+      }
+    } catch {/* A failed read never proves the original process exited. */}
+    return {scope:'post-stop-sample' as const,originalAvailable:teardownFlag(originalAvailable),currentIdentity,
+      leaderExitObserved:teardownFlag(this.child.exitCode!==null || this.child.signalCode!==null),closeObserved:teardownFlag(this.closeObserved),
+      streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}};
   }
   async liveIdentity() {
     const original=await this.original;
@@ -76,6 +94,21 @@ export class OwnedProcess {
       try{await this.stop();}catch(error){if(!primary)throw error;console.error('Owned fixture cleanup failed after original failure');}
     }
   }
+}
+export async function reportOwnedTeardownFailure(owned:OwnedProcess,stage:'attach-stop'|'herdr-stop'|'ssh-stop') {
+  if(!['attach-stop','herdr-stop','ssh-stop'].includes(stage))return;
+  try {
+    let observation:Awaited<ReturnType<OwnedProcess['teardownDiagnostic']>>|{scope:'post-stop-sample';state:'unavailable'};
+    try {
+      const sample=await owned.teardownDiagnostic();
+      observation={scope:'post-stop-sample',originalAvailable:teardownFlag(sample.originalAvailable),
+        currentIdentity:['matching-live','terminal','changed','missing','unavailable'].includes(sample.currentIdentity)?sample.currentIdentity:'unavailable',
+        leaderExitObserved:teardownFlag(sample.leaderExitObserved),closeObserved:teardownFlag(sample.closeObserved),
+        streams:{stdin:teardownStream(sample.streams?.stdin),stdout:teardownStream(sample.streams?.stdout),stderr:teardownStream(sample.streams?.stderr)}};
+    }
+    catch {observation={scope:'post-stop-sample',state:'unavailable'};}
+    console.error('Owned teardown observation '+JSON.stringify({stage,observation}));
+  } catch {/* Observation and reporting must never replace the original failure. */}
 }
 export type OwnedPid={pid:number,parent:number,start:string,state:string};
 export async function identity(pid:number):Promise<OwnedPid|undefined> {

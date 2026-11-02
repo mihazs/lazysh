@@ -39,7 +39,7 @@ it.each([['pt-BR','Idioma do aplicativo','Preferências do terminal'],['es','Idi
   const view=render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
   fireEvent.change(screen.getByLabelText('App language'),{target:{value:locale}});
   await waitFor(()=>expect(document.documentElement.lang).toBe(locale));
-  expect(screen.getByRole('heading',{name:title})).toBeTruthy();
+  expect(screen.getByRole('region',{name:title})).toBeTruthy();
   window.dispatchEvent(new Event('languagechange'));
   view.unmount();render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
   await waitFor(()=>expect(screen.getByLabelText(label)).toHaveProperty('value',locale));

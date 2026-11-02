@@ -33,10 +33,10 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const foreground = () => acceptsInput() && document.hasFocus() && !document.hidden;
   const focused = () => foreground() && document.activeElement === area && !area.readOnly;
   const ownedDelta = (value: string) => {
-    // Blink can report caret 0 for a fresh keyless insertion after refocus. With
-    // an empty baseline there is no sent span to erase or replay.
-    if (value.slice(0, start) !== previous.slice(0, start)
-      || (previous.length > 0 && (area.selectionStart !== value.length || area.selectionEnd !== value.length))) return;
+    // InputConnection selection is independent of its composing range. The
+    // native caret may remain inside a corrected word; our remote cursor stays
+    // at the end of this owned suffix, so translate the text change from there.
+    if (value.slice(0, start) !== previous.slice(0, start)) return;
     const old = Array.from(previous.slice(start)), next = Array.from(value.slice(start));
     let common = 0;
     while (common < old.length && old[common] === next[common]) common++;

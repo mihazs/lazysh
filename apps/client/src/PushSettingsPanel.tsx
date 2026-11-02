@@ -5,6 +5,7 @@ import { isTauri } from '@tauri-apps/api/core';
 
 type RegistrationStatus = {
   provider: 'apns' | 'fcm' | 'unifiedpush' | 'none';
+  availableProviders?: ('fcm'|'unifiedpush')[];
   supported: boolean;
   configured: boolean;
   enabled: boolean;
@@ -25,11 +26,12 @@ export default function PushSettingsPanel() {
   const [error, setError] = useState<''|'pushPauseFailed'|'pushOperationFailed'>('');
   const request = useRef(0);
 
-  async function run(command: string) {
+  async function run(command: string,args?:Record<string,unknown>) {
     const current = ++request.current;
     setPending(true); setActiveCommand(command); setError('');
+    if (command === 'push_registration_provider') setConsent(false);
     try {
-      const next = await invoke<RegistrationStatus>(command);
+      const next = await invoke<RegistrationStatus>(command,args);
       if (request.current === current) { setStatus(next); setConsent(false); }
     } catch {
       if (request.current === current) {
@@ -54,9 +56,13 @@ export default function PushSettingsPanel() {
   const apple = status?.provider === 'apns';
   const unified = status?.provider === 'unifiedpush';
   const provider = apple ? 'Apple APNs' : unified ? 'UnifiedPush' : 'Google Firebase';
+  const choices=[...new Set(status?.availableProviders??[])].filter(provider=>provider==='fcm'||provider==='unifiedpush');
+  const choosingDisabled=busy||status?.enabled===true||status?.tokenPresent===true;
   const registering = ['push_registration_register','push_registration_enroll'].includes(activeCommand);
   return <section className="tool-panel" aria-label={t('pushTitle')}>
     <h3>{t('pushTitle')}</h3>
+    {choices.length>1&&<label>{t('pushProvider')}<select value={status?.provider} disabled={choosingDisabled} onChange={event=>void run('push_registration_provider',{provider:event.target.value})}>{choices.map(choice=><option key={choice} value={choice}>{choice==='unifiedpush'?'UnifiedPush':'Google Firebase'}</option>)}</select></label>}
+    {choices.length>1&&choosingDisabled&&<p>{t('pushProviderChoiceHint')}</p>}
     {status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}
     <p role="status">{!isTauri() ? t('pushNativeRequired') : status?.provider === 'none' ? t('pushUnavailable') : status?.reason ?? t('pushInspecting')}</p>
     {status && status.provider !== 'none' && <p>{t('pushPrivacy',{provider})}</p>}
@@ -80,7 +86,7 @@ export default function PushSettingsPanel() {
       </button>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}
-    {unified && <p>{t('pushUnifiedHint')}</p>}
+    {unified && <><p>{t('pushUnifiedSetup')}</p><p>{t('pushUnifiedHint')}</p></>}
     {error && <p role="alert">{t(error)}</p>}
   </section>;
 }
