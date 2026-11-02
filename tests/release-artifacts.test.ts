@@ -1,4 +1,5 @@
 import {windowsStandardInstallation,windowsStandardBootstrapExit,windowsStandardNodeBootstrapExit,standardOwnerCompletion,standardOwnerBroker,standardNodeToolcache,standardNodeRuntimeIdentity,stageStandardNodeEntry,verifyStandardNodeEntry,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection,standardWorker,standardSourceFiles} from '../.changeset/windows-standard-user';
+import {windowsStandardNodeEntryExit,stageStandardNodeWitness,standardNodeEntryObservation,standardNodeWitnessName} from '../.changeset/windows-standard-user';
 import {standardObservationSource,standardObservationHash,standardObservationBroker,standardObservationHeader,standardObservationProjection,stageStandardObservation,readStandardObservation,standardObservationName,standardObservationHelper} from '../.changeset/windows-standard-observation';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
@@ -691,8 +692,8 @@ test('Windows required gate uses complete standard context and retains unconditi
   const gui=steps.find((step:any)=>step.id==='windows_gui');expect(gui.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBeUndefined();expect(gui['timeout-minutes']).toBe(12);
   const recovery=steps.find((step:any)=>step.id==='windows_gui_retirement');expect(recovery.if).toBe("${{ always() && runner.os == 'Windows' }}");expect(recovery['continue-on-error']).toBeUndefined();expect(recovery.run).toBe('bun .changeset/windows-standard-user.ts --recover');
   const control=steps.find((step:any)=>step.id==='windows_bootstrap_control');expect(control.if).toBe("${{ always() && runner.os == 'Windows' && steps.windows_package.outcome == 'success' && steps.windows_installer.outcome == 'success' && contains(fromJSON('[\"success\",\"failure\"]'), steps.windows_gui.outcome) && steps.windows_gui_retirement.outcome == 'success' }}");
-  expect(control['continue-on-error']).toBeUndefined();expect(control['timeout-minutes']).toBe(12);expect(control.env.LAZYSH_TEST_WINDOWS_NODE_BOOTSTRAP_EXIT).toBe('1');expect(control.env.LAZYSH_TEST_WINDOWS_BOOTSTRAP_EXIT).toBeUndefined();expect(control.env.LAZYSH_TEST_WINDOWS_GUI).toBeUndefined();
-  expect(control.run).toBe("bun test tests/release-artifacts.test.ts --test-name-pattern '^actual Windows Node bootstrap exit is a non-acceptance control$'");
+  expect(control['continue-on-error']).toBeUndefined();expect(control['timeout-minutes']).toBe(12);expect(control.env.LAZYSH_TEST_WINDOWS_NODE_ENTRY_EXIT).toBe('1');expect(control.env.LAZYSH_TEST_WINDOWS_NODE_BOOTSTRAP_EXIT).toBeUndefined();expect(control.name).toBe('Observe the Windows Node entry witness non-acceptance control');expect(control.env.LAZYSH_TEST_WINDOWS_BOOTSTRAP_EXIT).toBeUndefined();expect(control.env.LAZYSH_TEST_WINDOWS_GUI).toBeUndefined();
+  expect(control.run).toBe("bun test tests/release-artifacts.test.ts --test-name-pattern '^actual Windows Node entry witness is a non-acceptance control$'");
   expect(gui.run).toBe("bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows (installed GUI|GUI (endpoint|window))'");
   expect(steps.indexOf(gui)).toBeLessThan(steps.indexOf(recovery));expect(steps.indexOf(recovery)).toBeLessThan(steps.indexOf(control));
   const retirements=steps.filter((step:any)=>step.run==='bun .changeset/windows-standard-user.ts --recover');expect(retirements).toHaveLength(2);
@@ -984,6 +985,13 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_NODE_BOOTSTRAP_EXIT!=='1')('actual W
   const {version}=await Bun.file(join(import.meta.dir,'../apps/client/package.json')).json();
   const observed=await windowsStandardNodeBootstrapExit(installer,binary,version);
   expect(observed.kind).toBe('NON_ACCEPTANCE_NODE_BOOTSTRAP');expect(observed.observation).toBe('NODE_CHILD_EXITED_ZERO');expect(observed.runtimeVersion).toMatch(/^v24\.\d+\.\d+$/);expect(observed.runtimeSha256).toMatch(/^[a-f0-9]{64}$/);console.info('NON_ACCEPTANCE '+JSON.stringify(observed));
+},650000);
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_NODE_ENTRY_EXIT!=='1')('actual Windows Node entry witness is a non-acceptance control',async()=>{
+  const installer=await exactlyOne('nsis/*.exe',join(import.meta.dir,'../target/release/bundle')),binary=join(import.meta.dir,'../target/release/lazysh.exe');
+  const {version}=await Bun.file(join(import.meta.dir,'../apps/client/package.json')).json();
+  const observed=await windowsStandardNodeEntryExit(installer,binary,version);
+  expect(observed.kind).toBe('NON_ACCEPTANCE_NODE_ENTRY_BOOTSTRAP');expect(observed.observation).toBe('NODE_ENTRY_OBSERVED');expect(observed.exit).toBe('NODE_CHILD_EXITED_ZERO');expect(observed.runtimeVersion).toMatch(/^v24\.\d+\.\d+$/);expect(observed.runtimeSha256).toMatch(/^[a-f0-9]{64}$/);expect(observed.entrySha256).toMatch(/^[a-f0-9]{64}$/);console.info('NON_ACCEPTANCE '+JSON.stringify(observed));
 },650000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
@@ -1548,7 +1556,7 @@ test('Windows Node admitted-runtime receipt stays closed and follows every admis
   const line="if(selected==='node-bootstrap-exit')console.info(JSON.stringify({kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED',...standardNodeRuntimeIdentity(runtime)}));",admitted=owner.indexOf(line);
   expect(admitted).toBeGreaterThanOrEqual(0);expect(owner.match(/kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED'/g)).toHaveLength(1);
   for(const prerequisite of ['standardNodeToolcache(await realpath(node),await realpath(cache),expectedVersion)','standardNodeToolcache(node,cache,version)',"if(runtime&&(await digestFile(join(root,'bin','node.exe'))).sha256!==runtime.runtimeSha256)",'if(runtime&&runtime.runtimeSha256!==imageHash)']){const position=owner.indexOf(prerequisite);expect(position).toBeGreaterThanOrEqual(0);expect(position).toBeLessThan(admitted);}
-  for(const required of ['try{wire=await native(pwsh,',"if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')",'standardOwnerCompletion(selected,receiptPresent,receipt,runtime)']){const position=owner.indexOf(required);expect(position).toBeGreaterThan(admitted);}
+  for(const required of ['try{wire=await native(pwsh,',"if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')",'standardOwnerCompletion(selected,receiptPresent,receipt,runtime,entryObservation)']){const position=owner.indexOf(required);expect(position).toBeGreaterThan(admitted);}
 
 });
 
@@ -1798,8 +1806,8 @@ test('Windows standard child observation preserves frozen owner bytes, original 
   expect(standardObservationSource).toContain('QueryProcess(0x101000,false,candidate)');expect(standardObservationSource).toContain('new[]{30000,120000,300000}');
   expect(standardObservationSource).toContain('worker.IsBackground=true');expect(standardObservationSource).toContain('worker.Join(50)');
   const source=await Bun.file(new URL('../.changeset/windows-standard-user.ts',import.meta.url)).text();
-  expect(source).toContain('finally{try{console.info(JSON.stringify(await readStandardObservation(');
-  expect(source).toContain('catch{}}\n    let receipt:');
+  expect(source).toContain('finally{\n      try{console.info(JSON.stringify(await readStandardObservation(');
+  expect(source).toContain('catch{}}\n    }\n    let receipt:');
 });
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard child observation compiles separately and refuses wrong birth parent image SID session and partial queries without native calls',async()=>{
@@ -1828,7 +1836,7 @@ test('Windows standard child observation staging is optional and preserves colli
     expect(await readFile(join(root,standardObservationName),'utf8')).toBe('foreign diagnostic');
     expect(await stageStandardObservation(join(parent,'missing'),source,binary)).toBe(false);
     const sourceText=await Bun.file(new URL('../.changeset/windows-standard-user.ts',import.meta.url)).text();
-    expect(sourceText).toContain('script=observed?standardObservationBroker(originalBroker,selected):originalBroker');
+    expect(sourceText).toContain("script=observed?standardObservationBroker(originalBroker,selected==='node-entry-exit'?'node-bootstrap-exit':selected):originalBroker");
     expect(sourceText.indexOf('const observed=await stageStandardObservation(')).toBeLessThan(sourceText.indexOf('const remaining=deadline-Date.now()-1000'));
   });
 });
@@ -1912,3 +1920,76 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows sole-thread cont
   const script="$ErrorActionPreference='Stop';Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;[Console]::Out.Write([SoleThreadContract]::Run())";
   expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],process.env,30000,source)).toBe('STANDARD_SOLE_THREAD_CONTRACT');
 },35000);
+
+test('Windows instrumented Node entry mode is distinct while retaining the exact pure-zero mode',()=>{
+  expect(standardOwnerBroker('node-entry-exit')).toBe(standardOwnerBroker('node-bootstrap-exit'));
+  expect(standardWorker('private','private','private','node-entry-exit')).toBe('');
+  expect(standardWorker('private','private','private','bootstrap-exit')).toBe('process.exit(0);');
+});
+
+test('Windows Node entry observation stays after the native attempt and behind its primary acceptance gate',async()=>{
+  const source=await Bun.file(new URL('../.changeset/windows-standard-user.ts',import.meta.url)).text();
+  const owner=source.slice(source.indexOf('async function runStandardOwner('));
+  const stage=owner.indexOf("const witness=selected==='node-entry-exit'?await stageStandardNodeWitness("),budget=owner.indexOf('const remaining=deadline-Date.now()-1000');
+  const attempt=owner.indexOf('try{wire=await native(pwsh,'),observe=owner.indexOf('entryObservation=await standardNodeEntryObservation(witness,runtime)'),gate=owner.indexOf("if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')"),complete=owner.indexOf('standardOwnerCompletion(selected,receiptPresent,receipt,runtime,entryObservation)');
+  expect(stage).toBeGreaterThan(0);expect(stage).toBeLessThan(budget);expect(attempt).toBeLessThan(observe);expect(observe).toBeLessThan(gate);expect(gate).toBeLessThan(complete);
+  expect(owner).toContain("standardObservationBroker(originalBroker,selected==='node-entry-exit'?'node-bootstrap-exit':selected)");
+});
+
+test('Windows Node entry witness validates canonical private bytes and never seeds or repairs evidence',async()=>fixture(async parent=>{
+  const root=join(parent,'lazysh-standard-140-1'),source='a'.repeat(40),binary='b'.repeat(64),nonce='c'.repeat(32),runtime={runtimeVersion:'v24.22.1',runtimeSha256:'d'.repeat(64)};
+  await mkdir(join(root,'work'),{recursive:true});const path=join(root,'work',standardNodeWitnessName),witness=await stageStandardNodeWitness(root,source,binary,runtime,nonce);
+  const payload={point:'NODE_ENTRY',fixture:'lazysh-standard-140-1',source,binary,runtimeSha256:runtime.runtimeSha256,nonce},bytes=JSON.stringify(payload);
+  expect(await Bun.file(path).exists()).toBe(false);expect(await witness.read()).toBe('UNVERIFIED');
+  await writeFile(path,bytes);expect(await witness.read()).toBe('NODE_ENTRY_OBSERVED');
+  const observation=await standardNodeEntryObservation(witness,runtime);expect(observation).toEqual({kind:'NON_ACCEPTANCE_NODE_ENTRY_WITNESS',observation:'NODE_ENTRY_OBSERVED',...runtime,entrySha256:witness.entrySha256});
+  expect(JSON.stringify(observation)).not.toContain(nonce);expect(JSON.stringify(observation)).not.toContain(root);
+  const bad=[{...payload,point:'NODE_ENTRY_PRIVATE'},{...payload,fixture:'lazysh-standard-141-1'},{...payload,source:'e'.repeat(40)},{...payload,binary:'e'.repeat(64)},{...payload,runtimeSha256:'e'.repeat(64)},{...payload,nonce:'e'.repeat(32)},{...payload,private:'never emit'}];
+  for(const value of bad){const input=JSON.stringify(value);await writeFile(path,input);expect(await witness.read()).toBe('UNVERIFIED');expect(await readFile(path,'utf8')).toBe(input);}
+  for(const input of [bytes.slice(0,-1),bytes+'\n',' '.repeat(513),Buffer.alloc(Buffer.byteLength(bytes),255)]){await writeFile(path,input);expect(await witness.read()).toBe('UNVERIFIED');}
+  await writeFile(path,bytes);const entry=join(root,'run'),code=await readFile(entry);await writeFile(entry,'process.exit(1);');expect(await witness.read()).toBe('UNVERIFIED');await writeFile(entry,code);
+  await unlink(path);await mkdir(path);expect(await witness.read()).toBe('UNVERIFIED');await rmdir(path);
+  const foreign=join(parent,'foreign');await writeFile(foreign,bytes);await symlink(foreign,path);expect(await witness.read()).toBe('UNVERIFIED');await unlink(path);await link(foreign,path);expect(await witness.read()).toBe('UNVERIFIED');await unlink(path);
+  expect(await readFile(foreign,'utf8')).toBe(bytes);
+  const {rename}=await import('node:fs/promises');await rename(join(root,'work'),join(root,'held-work'));await symlink(join(root,'held-work'),join(root,'work'));
+  expect(await witness.read()).toBe('UNVERIFIED');
+}));
+
+test('Windows Node entry witness setup refuses collisions, invalid identities and namespace aliases without foreign mutation',async()=>fixture(async parent=>{
+  const root=join(parent,'lazysh-standard-142-1'),source='a'.repeat(40),binary='b'.repeat(64),nonce='c'.repeat(32),runtime={runtimeVersion:'v24.22.1',runtimeSha256:'d'.repeat(64)};await mkdir(join(root,'work'),{recursive:true});
+  const path=join(root,'work',standardNodeWitnessName);await writeFile(path,'foreign');await expect(stageStandardNodeWitness(root,source,binary,runtime,nonce)).rejects.toThrow('Node entry witness setup unverified');expect(await readFile(path,'utf8')).toBe('foreign');expect(await Bun.file(join(root,'run')).exists()).toBe(false);await unlink(path);
+  for(const args of [[source+'\n',binary,runtime,nonce],[source,binary+'\n',runtime,nonce],[source,binary,runtime,nonce+'\n'],[source,binary,runtime,'c'.repeat(31)],[source,binary,{...runtime,runtimeVersion:'v26.1.0'},nonce]] as const)await expect(stageStandardNodeWitness(root,...args)).rejects.toThrow('Node entry witness setup unverified');
+  await writeFile(join(root,'run'),'foreign entry');await expect(stageStandardNodeWitness(root,source,binary,runtime,nonce)).rejects.toThrow();expect(await readFile(join(root,'run'),'utf8')).toBe('foreign entry');await unlink(join(root,'run'));
+  const alias=join(parent,'lazysh-standard-143-1');await symlink(root,alias);await expect(stageStandardNodeWitness(alias,source,binary,runtime,nonce)).rejects.toThrow();expect(await Bun.file(join(root,'run')).exists()).toBe(false);
+}));
+
+test('Windows Node entry diagnostics cannot mask a primary rejection or become GUI and zero-exit authority',async()=>{
+  const runtime={runtimeVersion:'v24.22.1',runtimeSha256:'a'.repeat(64)},unknown={kind:'NON_ACCEPTANCE_NODE_ENTRY_WITNESS',observation:'UNVERIFIED'},primary=new Error('STANDARD_OWNER_TIMEOUT');
+  for(const witness of [undefined,{entrySha256:'a'.repeat(64)+'\n',read:async()=> 'NODE_ENTRY_OBSERVED'},{entrySha256:'a'.repeat(64),read:async()=>{throw Error('private read failure');}},{entrySha256:'a'.repeat(64),read:async()=> 'NODE_ENTRY_OBSERVED\n'}]){
+    try{try{throw primary;}finally{expect(await standardNodeEntryObservation(witness as any,runtime)).toEqual(unknown);}}catch(error){expect(error).toBe(primary);}
+  }
+  const record=await standardNodeEntryObservation({entrySha256:'b'.repeat(64),read:async()=> 'NODE_ENTRY_OBSERVED'},runtime);
+  expect(standardOwnerCompletion('node-entry-exit',false,undefined,runtime,record)).toEqual({kind:'NON_ACCEPTANCE_NODE_ENTRY_BOOTSTRAP',observation:'NODE_ENTRY_OBSERVED',exit:'NODE_CHILD_EXITED_ZERO',...runtime,entrySha256:'b'.repeat(64)});
+  expect(()=>standardOwnerCompletion('node-entry-exit',false,undefined,runtime,unknown)).toThrow('Node entry witness unverified');
+  expect(()=>standardOwnerCompletion('node-entry-exit',true,undefined,runtime,record)).toThrow('Bootstrap control unexpectedly wrote a receipt');
+  expect(()=>standardOwnerCompletion('node-entry-exit',false,undefined,runtime,{...record,entrySha256:'b'.repeat(64)+'\n'})).toThrow('Node entry witness unverified');
+  expect(()=>parseStandardReceipt(record,'a'.repeat(40),'b'.repeat(64))).toThrow('Standard owner receipt rejected');
+  expect(()=>standardOwnerCompletion('gui',false,undefined,runtime,record)).toThrow('Standard owner receipt rejected');
+});
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_NODE_ENTRY_EXIT!=='1')('owned local Node24 witness reaches the write point, leaves poisoned worker inert and preserves collisions',async()=>fixture(async parent=>{
+  const deadline=performance.now()+8000,remaining=()=>{const value=Math.floor(deadline-performance.now()-1000);if(value<=0)throw Error('Owned Node witness budget exhausted');return value;};
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');
+  const node=(await native('node',['-p','process.execPath'],process.env,Math.min(2000,remaining()))).trim(),runtimeVersion=(await native(node,['--version'],process.env,Math.min(2000,remaining()))).trim(),runtimeSha256=(await digestFile(node)).sha256;
+  expect(runtimeVersion).toMatch(/^v24\.\d+\.\d+$/);const runtime={runtimeVersion,runtimeSha256};console.info(JSON.stringify({kind:'OWNED_LOCAL_NODE_ENTRY_RUNTIME',...runtime,platform:process.platform}));
+  for(const collision of [false,true]){
+    const root=join(parent,"quoted'parent",collision?'lazysh-standard-145-1':'lazysh-standard-144-1');await mkdir(join(root,'work'),{recursive:true});
+    const worker=join(root,'worker.ts');await writeFile(worker,"throw new Error('POISON_WORKER_MUST_STAY_INERT');");await writeFile(join(root,'package.json'),'{"type":"module"}');
+    const witness=await stageStandardNodeWitness(root,'a'.repeat(40),'b'.repeat(64),runtime,'c'.repeat(32)),path=join(root,'work',standardNodeWitnessName);
+    if(collision)await writeFile(path,'foreign');
+    const executed=await promisify(execFile)(node,['run',worker],{cwd:root,env:{PATH:process.env.PATH},timeout:Math.min(5000,remaining()),killSignal:'SIGKILL',maxBuffer:1024});expect(executed.stdout).toBe('');expect(executed.stderr).toBe('');
+    expect(await witness.read()).toBe(collision?'UNVERIFIED':'NODE_ENTRY_OBSERVED');
+    if(collision)expect(await readFile(path,'utf8')).toBe('foreign');
+    expect((await digestFile(join(root,'run'))).sha256).toBe(witness.entrySha256);
+  }
+}),10000);
