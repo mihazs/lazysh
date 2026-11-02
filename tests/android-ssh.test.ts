@@ -1618,18 +1618,21 @@ test('native IME failed-editor observation exposes each unchanged predicate clau
   const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
   const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")));
   expect(expressions).toHaveLength(2);
-  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document',`return (${expressions[1]});`);
-  let count=1,focus=true,hidden=false,active=true,session=true;
+  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document','getComputedStyle',`return (${expressions[1]});`);
+  let count=1,focus=true,hidden=false,active=true,session=true,panePresent=true,review=false,ended=false,modal=false,visibility:unknown='visible',rects:unknown=[{}];
+  const pane={getClientRects:()=>rects,querySelector:(selector:string)=>{expect(['.terminal-edit-review',':scope > .session-notice[role=status]']).toContain(selector);return (selector==='.terminal-edit-review'?review:ended)?{}:null;}};
+  const computedStyle=(target:unknown)=>{expect(target).toBe(pane);return {display:'flex',visibility};};
   const area={readOnly:false,disabled:false,type:'textarea',autocomplete:'off',spellcheck:false,
-    getAttribute:(name:string)=>{expect(name).toBe('autocorrect');return autocorrect;}};
+    getAttribute:(name:string)=>{expect(name).toBe('autocorrect');return autocorrect;},
+    closest:(selector:string)=>{expect(selector).toBe('.terminal-pane');return panePresent?pane:null;}};
   let autocorrect='off',privateReads=0;
-  for(const key of ['value','textContent','selectionStart','selectionEnd','id'])Object.defineProperty(area,key,{get(){privateReads++;throw new Error('private field');}});
+  for(const target of [area,pane])for(const key of ['value','textContent','selectionStart','selectionEnd','id'])Object.defineProperty(target,key,{get(){privateReads++;throw new Error('private field');}});
   const document={hasFocus:()=>focus,get hidden(){return hidden;},get activeElement(){return active?area:null;},
     querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');return Array.from({length:count},()=>area);},
-    querySelector:(selector:string)=>{expect(selector).toBe("button[aria-label='Disconnect owned']");return session?{getClientRects(){throw new Error('Visibility must not alter DOM session presence');}}:null;}};
+    querySelector:(selector:string)=>{if(selector==='[role=dialog][aria-modal=true]')return modal?{}:null;expect(selector).toBe("button[aria-label='Disconnect owned']");return session?{getClientRects(){throw new Error('Visibility must not alter DOM session presence');}}:null;}};
   Object.defineProperty(document,'URL',{get(){privateReads++;throw new Error('private URL');}});
-  const expected={count:'one',focus:true,visible:true,active:true,writable:true,enabled:true,normalType:true,autocompleteOff:true,autocorrectOff:true,spellcheckOff:true,sessionPresent:true};
-  expect(predicate(document)).toBe(true);expect(observe(document)).toEqual(expected);expect(predicate(document)).toBe(true);
+  const expected={count:'one',focus:true,visible:true,active:true,writable:true,enabled:true,normalType:true,autocompleteOff:true,autocorrectOff:true,spellcheckOff:true,sessionPresent:true,unappliedReviewPresent:false,endedNoticePresent:false,modalPresent:false,paneDisplayed:true};
+  expect(predicate(document)).toBe(true);expect(observe(document,computedStyle)).toEqual(expected);expect(predicate(document)).toBe(true);
   const cases=[
     ['focus',()=>{focus=false;},()=>{focus=true;}],['visible',()=>{hidden=true;},()=>{hidden=false;}],
     ['active',()=>{active=false;},()=>{active=true;}],['writable',()=>{area.readOnly=true;},()=>{area.readOnly=false;}],
@@ -1638,16 +1641,31 @@ test('native IME failed-editor observation exposes each unchanged predicate clau
     ['spellcheckOff',()=>{area.spellcheck=true;},()=>{area.spellcheck=false;}],['sessionPresent',()=>{session=false;},()=>{session=true;}],
   ] as const;
   for(const [field,breakClause,restore]of cases) {
-    breakClause();expect(predicate(document)).toBe(false);expect(observe(document)).toEqual({...expected,[field]:false});expect(predicate(document)).toBe(false);restore();
+    breakClause();expect(predicate(document)).toBe(false);expect(observe(document,computedStyle)).toEqual({...expected,[field]:false});expect(predicate(document)).toBe(false);restore();
   }
   for(const amount of [0,2]) {
     count=amount;expect(predicate(document)).toBe(false);
-    const result=observe(document);expect(result.count).toBe(amount===0?'zero':'many');
-    for(const field of ['active','writable','enabled','normalType','autocompleteOff','autocorrectOff','spellcheckOff'])expect(result[field]).toBeNull();
+    const result=observe(document,computedStyle);expect(result.count).toBe(amount===0?'zero':'many');
+    for(const field of ['active','writable','enabled','normalType','autocompleteOff','autocorrectOff','spellcheckOff','unappliedReviewPresent','endedNoticePresent','modalPresent','paneDisplayed'])expect(result[field]).toBeNull();
   }
-  count=1;expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
-  expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}})).toThrow('unavailable');
-  expect(JSON.stringify(observe(document))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
+  count=1;
+  for(const [field,change,restore] of [
+    ['unappliedReviewPresent',()=>{review=true;},()=>{review=false;}],['endedNoticePresent',()=>{ended=true;},()=>{ended=false;}],
+    ['modalPresent',()=>{modal=true;},()=>{modal=false;}],['paneDisplayed',()=>{rects=[];},()=>{rects=[{}];}],
+  ] as const) {
+    change();expect(observe(document,computedStyle)).toEqual({...expected,[field]:field!=='paneDisplayed'});expect(predicate(document)).toBe(true);restore();
+  }
+  panePresent=false;const missing=observe(document,computedStyle);
+  for(const field of ['unappliedReviewPresent','endedNoticePresent','modalPresent','paneDisplayed'])expect(missing[field]).toBeNull();
+  expect(predicate(document)).toBe(true);panePresent=true;
+  for(const value of ['hidden','collapse']){visibility=value;expect(observe(document,computedStyle).paneDisplayed).toBe(false);}visibility='visible';
+  for(const unavailable of [undefined,{length:-1},{length:1.5}]){rects=unavailable;expect(observe(document,computedStyle).paneDisplayed).toBeNull();}rects=[{}];
+  for(const unavailable of [undefined,'private-visibility']){visibility=unavailable;expect(observe(document,computedStyle).paneDisplayed).toBeNull();}visibility='visible';
+  const geometry={};for(const key of ['x','y','width','height','left','top'])Object.defineProperty(geometry,key,{get(){privateReads++;throw new Error('Private rectangle read');}});
+  rects=[geometry];expect(observe(document,computedStyle).paneDisplayed).toBe(true);
+  expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
+  expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}},computedStyle)).toThrow('unavailable');
+  expect(JSON.stringify(observe(document,computedStyle))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
   const preferences=kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0];
   expect(preferences).toContain('workspaceElementVisible("button[aria-label=\'Preferences\']")');
   expect(preferences).toContain('else workspaceMenuAction(scenario,"Preferences")');
