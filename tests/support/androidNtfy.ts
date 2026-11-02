@@ -593,7 +593,8 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await run('restore ordinary debug trust',join(android,'gradlew'),[':app:assembleUniversalDebug',...ordinaryArgs,'-x',':app:rustBuildX86_64Debug'],120_000);
     await normalArtifact();
     if(await nativeDigest(apk)!==baselineNative)throw new Error('Normal artifact changed its owned native library');
-    await run('ordinary release resource assembly',join(android,'gradlew'),[':app:assembleUniversalRelease',...ordinaryArgs,'-x',':app:rustBuildX86_64Release'],120_000);
+    // An isolated two-worker release assembly exceeded the old two-minute build allowance.
+    await run('ordinary release resource assembly',join(android,'gradlew'),[':app:assembleUniversalRelease',...ordinaryArgs,'-x',':app:rustBuildX86_64Release'],240_000);
     await normalArtifact('universalReleaseRuntimeClasspath',join(android,'app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk'));
     const head=(await run('source checkout identity','git',['rev-parse','HEAD'])).trim();
     if(!/^[a-f0-9]{40}$/.test(head))throw invalid();
