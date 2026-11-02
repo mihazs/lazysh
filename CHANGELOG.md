@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an explicit recorded Codex Conversation view with turn rollback, canonical item updates and protected fork/revert prefixes; Records remains the default and recorded history does not grant live-agent or approval authority.
+
 - Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.
 
 

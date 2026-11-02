@@ -827,3 +827,45 @@ this behavior and does not infer this client's selection from global snapshot
 focus fields. Navigation retires prior guarded Chat confirmation; sending input
 still requires a fresh, separately validated confirmation. Pane navigation is
 bounded and never falls back to terminal input or another pane after a failure.
+
+### Recorded Codex Conversation
+
+Choose Codex → Latest branch to reconstruct recorded display history, or run
+`lazysh-agent transcript --agent codex --path /owned/rollout.jsonl --view conversation`.
+This does not establish a running agent, provider acceptance or an actionable request.
+Records remains the default and retains its independent model-record view.
+Conversation refresh replaces the previous projection; Follow is explicitly enabled,
+pauses while hidden, and never starts Codex or submits a draft automatically.
+
+The reducer is qualified against official Codex tag `rust-v0.166.0`, commit
+[`6ff1e1ca`](https://github.com/openai/codex/tree/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856).
+Its [persisted event policy](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/rollout/src/policy.rs)
+and [UI history projection](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server-protocol/src/protocol/thread_history.rs)
+distinguish legacy display events from paginated canonical completed items. The
+reader applies recorded turn rollback, preserves interrupted turns, upserts item
+IDs within their turn, and retains visible history across model-context compaction.
+It never renders replacement model history, raw reasoning or encrypted reasoning.
+Visible text, public reasoning summaries, plans, command and function results,
+and dynamic/MCP tool text use existing message and tool cards. Unsupported item
+families (including hook prompts and interactive question/approval controls) are
+omitted; recorded tool metadata never authorizes an action. Codex inline image
+previews remain available in Records, not Conversation.
+
+Paginated forks/reverts may reference immutable earlier rollout prefixes. The
+[official lineage contract](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/thread-store/src/local/rollout_lineage.rs)
+uses a physical rollout ID and exclusive ordinal/byte cutoffs; that ID can differ
+from the stable thread ID after revert. Lazysh follows only exact UUID-named plain
+JSONL files in the selected owned `sessions` / `archived_sessions` tree, using a
+normalized absolute selection for reference-bearing files. It checks
+source and directory identity again before publication and rejects missing,
+ambiguous, cyclic, replaced or rewritten prefixes. Standalone exports must be
+self-contained. Aggregate capture is capped at 16 MiB, 10,000 records/directory
+entries per lookup, 16 rollout sources and three date-directory levels. The latest
+100 messages and existing page-size limit apply; truncation is explicit.
+
+Unknown history modes, compressed-only dependencies and attached-child projection
+are unsupported and fail closed. A declared subagent history boundary excludes
+inherited model context from that child's conversation. An incomplete trailing
+JSONL record waits for its newline; append-only growth does not silently splice a
+new source into the captured page. These are offline reader checks, not proof of
+an actual Codex/provider lifecycle or native Android/desktop acceptance.
