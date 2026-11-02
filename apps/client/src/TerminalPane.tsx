@@ -272,12 +272,12 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
             const tracking = session.terminal.modes.mouseTrackingMode;
-            const height = tracking !== 'none' && tracking !== 'x10'
-              ? (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows : 0;
+            const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
             let count = 1, amount = deltaY;
             let mode: number = WheelEvent.DOM_DELTA_PIXEL;
             if (Number.isFinite(height) && height > 0) {
-              // Mouse reports have no magnitude; accumulate travel into rendered-row notches.
+              // xterm rounds normal scrollback to rows; mouse reports also have no magnitude.
+              // Retain sub-row travel instead of losing each slow sample on redraw.
               if (deltaY && Math.sign(deltaY) !== Math.sign(scroll.pending)) scroll.pending = 0;
               scroll.pending += deltaY;
               // A coalesced native sample can span the viewport. Drain its full
@@ -286,6 +286,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
               count = Math.min(limit, Math.floor(Math.abs(scroll.pending) / height));
               amount = Math.sign(scroll.pending); mode = WheelEvent.DOM_DELTA_LINE;
               scroll.pending -= amount * count * height;
+              if (tracking === 'none' || tracking === 'x10') {
+                amount *= count * height; count = count ? 1 : 0; mode = WheelEvent.DOM_DELTA_PIXEL;
+              }
             } else scroll.pending = 0;
             for (let notch = 0; notch < count; notch++) session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
