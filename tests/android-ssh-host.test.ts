@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {chmod,lstat,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -372,6 +372,25 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         await wait('delivery',()=>client!.stdout.includes(delivered));
         expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
         expect((await identity(saved!.pid))?.start===saved!.start).toBe(true);
+        const admitted=await checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash);
+        expect(admitted).toEqual(saved);
+        await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!, '0'.repeat(64))).rejects.toThrow('image differs');
+        await expect(checkRawReceiverIdentity(saved,{...saved!,start:'0'},fixture.daemon.child.pid!,hash)).rejects.toThrow('replaced');
+        await expect(checkRawReceiverIdentity(saved,admitted,2147483647,hash)).rejects.toThrow('identity unavailable');
+        await client.stop();
+        const exitDeadline=performance.now()+5000;
+        while(true) {
+          const current=await identity(saved!.pid);
+          if(!current || ['Z','X'].includes(current.state))break;
+          if(performance.now()>=exitDeadline)throw new Error('Owned receiver did not exit after normal disconnect');
+          await Bun.sleep(10);
+        }
+        // The monitor already read a live snapshot; ordinary disconnect can occur
+        // before its next ancestry/executable/final identity observation.
+        await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash)).rejects.toThrow('not observed');
+        expect(await checkRawReceiverIdentity(saved,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
+        expect(await checkRawReceiverIdentity(undefined,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
+        expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
       }
     } catch(error){primary=error;}
     finally {
