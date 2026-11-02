@@ -56,6 +56,8 @@ export default function AppIconPanel() {
       }
     } finally { if (alive.current && lease.current()) { changing.current = false; setBusy(false); } }
   }
+  const refresh=<button disabled={busy} onClick={() => { setError(''); void read(); }}>{t("iconsRefreshAppIcon")}</button>;
+  if(status?.available===false && !busy && !error)return <p role="status">{status.reason || t(isTauri()?"appUnknownRefreshBeforeChanging":"iconsAlternateHomeScreenIconsRequireTheIOSApp")}{' '}{refresh}</p>;
   return <fieldset><legend>{t("iconsAppIcon")}</legend>
     <p>{!isTauri() ? t("iconsAlternateHomeScreenIconsRequireTheIOSApp") : status?.reason ?? t("iconsReadingTheCurrentIOSIcon")}</p>
     {error && <p role="alert">{uiErrorText(error)}</p>}
@@ -64,7 +66,7 @@ export default function AppIconPanel() {
       <option value="default">{t("iconsDefault")}</option><option value="amber">{t("iconsAmber")}</option>
     </select></label>
     <button disabled={!status?.available || busy || status.current === choice} onClick={() => void apply()}>{busy ? t("iconsChangingIcon") : t("iconsApplyAppIcon")}</button>
-    <button disabled={busy} onClick={() => { setError(''); void read(); }}>{t("iconsRefreshAppIcon")}</button>
+    {refresh}
     <p>{t("iconsDeviceLocalIOSSettingItDoesNotChangeTerminal")}</p>
   </fieldset>;
 }

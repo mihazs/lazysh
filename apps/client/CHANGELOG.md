@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.9.5
+
+### Patch Changes
+
+- a539963: Add native Linux acceptance for public appearance settings, rendered text contrast, keyboard category navigation and focus restoration while preserving the original local terminal.
+
+  Keep unavailable icon settings compact with explicit recovery, and prevent sidebar mode labels from breaking mid-word across narrow and enlarged-text layouts.
+- 822ae17: Route vertical finger drags with selected terminal text through xterm’s ordinary wheel handling, including mouse-tracking multiplexers.
+- @lazysh/account-usage@1.9.5
+  - @lazysh/common@1.9.5
+  - @lazysh/display-idle@1.9.5
+  - @lazysh/et-transport@1.9.5
+  - @lazysh/mosh-transport@1.9.5
+
 ## 1.9.4
 
 ### Patch Changes
