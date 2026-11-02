@@ -63,12 +63,32 @@ function ownedHerdrObserveFinger(window, key, screens) {
     } catch {traceAvailable=false;}
   };
   globalEvents.forEach(type=>window.addEventListener(type,globalRecord,{capture:true,passive:true}));
+  const reading=()=>{
+    const match=screen.textContent.match(/OLD([0-9]{3})/);
+    return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512')};
+  };
+  const visual=()=>{
+    const unknown={state:'unavailable',mouseTrackingMode:'unknown',activeBuffer:'unknown'};
+    try {
+      if(!terminal?.classList || !surface || typeof screen.querySelectorAll!=='function')return unknown;
+      const rows=screen.querySelectorAll('.xterm-rows > div').length,height=screen.getBoundingClientRect().height;
+      const values=[height,surface.scrollTop,surface.scrollHeight,surface.clientHeight];
+      if(!Number.isInteger(rows)||rows<0||!values.every(Number.isFinite))return unknown;
+      return {state:'observed',mouseTrackingMode:'unknown',activeBuffer:'unknown',mouseCaptureClass:terminal.classList.contains('enable-mouse-events'),
+        renderedRows:Math.min(4096,rows),rowsClamped:rows>4096,screenHeight:bounded(height),
+        viewport:{top:bounded(values[1]),height:bounded(values[2]),client:bounded(values[3])}};
+    } catch {return unknown;}
+  };
+  const wheelRecords=[];let wheelRecordsOverflow=false;
   const wheel=event=>{
     wheels=Math.min(64,wheels+1);
     if(!Number.isFinite(event.deltaY))wheelInvalid=Math.min(64,wheelInvalid+1);
     else if(event.deltaY<0)wheelUp=Math.min(64,wheelUp+1);
     else if(event.deltaY>0)wheelDown=Math.min(64,wheelDown+1);
     else wheelZero=Math.min(64,wheelZero+1);
+    if(wheelRecords.length<8)wheelRecords.push({mode:[0,1,2].includes(event.deltaMode)?event.deltaMode:'unavailable',
+      deltaY:bounded(event.deltaY),point:[bounded(event.clientX),bounded(event.clientY)]});
+    else wheelRecordsOverflow=true;
   };
   const record=event=>{
     valid=valid && event.isTrusted && canvas.contains(event.target);
@@ -82,10 +102,10 @@ function ownedHerdrObserveFinger(window, key, screens) {
   const events=['touchstart','touchmove','touchend','touchcancel'];
   events.forEach(type=>canvas.addEventListener(type,record,{capture:true,passive:true}));
   canvas.addEventListener('wheel',wheel,{capture:true,passive:true});
+  const baseline={...reading(),visual:visual()};
   Object.defineProperty(window,key,{configurable:true,value:{
     sample:()=>{
-      const match=screen.textContent.match(/OLD([0-9]{3})/);
-      return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512'),
+      return {...reading(),baseline,visual:visual(),wheelRecords:wheelRecords.slice(),wheelRecordsOverflow,
         active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
         held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice()}};
     },dispose:()=>{events.forEach(type=>canvas.removeEventListener(type,record,true));canvas.removeEventListener('wheel',wheel,true);globalEvents.forEach(type=>window.removeEventListener(type,globalRecord,true));}}});

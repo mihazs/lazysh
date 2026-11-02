@@ -16,6 +16,21 @@ export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];
     throw new Error('Owned Herdr navigation context changed');
   return [workspaces[0].label,tabs[0].label,cwd].join(' / ');
 }
+export function herdrHistoryFailureStage(error:unknown) {
+  try {
+    if(!(error instanceof Error))return 'unknown';
+    const stages:Record<string,string>={
+      'Owned history unavailable':'server-or-history-identity','Owned history request invalid':'history-identity',
+      'Owned history socket identity invalid':'socket-identity','Owned history socket unavailable':'socket-unavailable',
+      'Owned history API failed':'history-reply','Owned history observation invalid':'history-validation',
+      'Owned receiver output missing':'receiver-output','Owned receiver bytes differ':'receiver-bytes',
+      'Owned receiver identity changed':'receiver-identity',
+    };
+    const message=error.message;
+    return Object.hasOwn(stages,message)?stages[message]:'unknown';
+  } catch {return 'unknown';}
+}
+
 export class HerdrFixture {
   readonly name:string;
   readonly record:string;
@@ -255,13 +270,16 @@ export class HerdrFixture {
       oldRows:rows.filter((line:string)=>/^OLD[0-9]{3}$/.test(line)).length,newTail:rows.includes('NEW512')};
   }
   async historyDiagnostic() {
+    const scope='post-instrumentation-pre-host-stop';
+    let stage:'history-read'|'focus-read'='history-read';
     try {
       const {offset,max,rows,oldRows,newTail}=await this.history();
+      stage='focus-read';
       const focused=JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id;
-      return {state:'available',offset,max,rows,oldRows,newTail,
-        focusHistory:typeof focused==='string' && focused===this.historyPane?.paneId,
-        focusOriginal:typeof focused==='string' && focused===this.agent?.paneId};
-    } catch {return {state:'unavailable'};}
+      if(typeof focused!=='string'||!focused||focused.length>128||/[\x00-\x1f\x7f-\x9f]/.test(focused))return {scope,state:'unavailable',stage};
+      return {scope,state:'available',offset,max,rows,oldRows,newTail,
+        focusHistory:focused===this.historyPane?.paneId,focusOriginal:focused===this.agent?.paneId};
+    } catch(error) {return {scope,state:'unavailable',stage:stage==='focus-read'?stage:herdrHistoryFailureStage(error)};}
   }
   async expectHistoryScrolled() {
     const sample=await this.history();
