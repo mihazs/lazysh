@@ -1326,12 +1326,12 @@ async function companionReadinessFixture(expected='Update companion',expectedOut
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const source=kotlin.match(/val companionReadinessObservation = """([\s\S]*?)"""/);
   expect(source).not.toBeNull();
-  const scope='details.companion-install',direct=scope+' > .tool-bar > button';
+  const install=kotlin.slice(kotlin.indexOf('fun verifyCompanionInstallation()'));
+  const scope=install.match(/val panel = "([^"]+)"/)![1],direct=scope+' > .tool-bar > button';
   const element=kotlin.match(/private fun workspaceElementVisible\([^\n]* = """([\s\S]*?)"""/)![1];
   const visible=(selector:string,touchable=false)=>element.replaceAll('${JSONObject.quote(selector)}',JSON.stringify(selector)).replaceAll('$touchable',String(touchable));
   const button=kotlin.match(/private fun workspaceButtonVisible\([^\n]* = """([\s\S]*?)"""/)![1]
     .replaceAll('${JSONObject.quote("$scope button")}',JSON.stringify(scope+' button')).replaceAll('${JSONObject.quote(text)}',JSON.stringify(expected));
-  const install=kotlin.slice(kotlin.indexOf('fun verifyCompanionInstallation()'));
   const allowed=(name:string)=>JSON.parse('['+install.match(new RegExp('val '+name+' = setOf\\(([^)]*)\\)'))![1]+']');
   const expression=source![1].replaceAll('${JSONObject.quote(panel)}',JSON.stringify(scope))
     .replaceAll('${JSONObject.quote("$panel > .tool-bar > button")}',JSON.stringify(direct))
