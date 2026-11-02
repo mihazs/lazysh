@@ -2379,15 +2379,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          {native && <details className="preferences-category"><summary>{t('preferencesCategoryConnections')}</summary><section aria-label={t('defaultMuxLabel')}>
+          <PreferencesPanel before={native?[{id:'connections',title:t('preferencesCategoryConnections'),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
             {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
-          </section></details>}
-          <PreferencesPanel />
-          <details className="preferences-category"><summary>{t("preferencesCategorySecurity")}</summary><AccessPanel /></details>
-          <details className="preferences-category"><summary>{t("preferencesCategoryNotifications")}</summary><button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button></details>
+          </section>}]:[]} after={[
+            {id:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
+            {id:'notifications',title:t('preferencesCategoryNotifications'),content:<button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t('appRemotePushSettings')}</button>},
+          ]}/>
           </div>
         </Dialog>
       )}

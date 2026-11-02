@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Replace mobile Preferences disclosures with category navigation and contextual Back; simplify workspace and agent controls, refine theme-derived glass navigation chrome, and honor reduced motion for short navigation transitions. Settings values, credentials and transport defaults are unchanged.
+
 - Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
 
 - Preserve physical and toolbar Shift+Enter as a distinct modified Enter key for agent newline bindings, instead of submitting an ordinary Enter. Plain Enter and other modifier combinations retain their existing behavior.

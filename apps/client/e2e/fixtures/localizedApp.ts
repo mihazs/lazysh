@@ -9,6 +9,7 @@ export async function openLocalizedApp(page: Page, locale: string) {
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
   await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale);
-  await page.keyboard.press('Escape');
+  const close=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('appCloseValue1',{value1:t('appPreferences')});});
+  await page.getByRole('dialog').getByRole('button',{name:close,exact:true}).click();
   return external;
 }
