@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.9.7
+
+### Patch Changes
+
+- c525664: Add bounded passive native D-pad IME/geometry and final context-menu observations for Android acceptance diagnostics. This does not qualify or change D-pad behavior.
+- 0c12b4c: Keep locale workflow acceptance aligned with compact native status recovery while preserving the visible case-sensitive untranslated reason.
+- 82bfca4: Keep mobile Workspaces focused on Spaces with compact selected-session context and an explicit connected-session disclosure. Preserve the expanded desktop list, session selection and navigation state.
+- @lazysh/account-usage@1.9.7
+  - @lazysh/common@1.9.7
+  - @lazysh/display-idle@1.9.7
+  - @lazysh/et-transport@1.9.7
+  - @lazysh/mosh-transport@1.9.7
+
 ## 1.9.6
 
 ### Patch Changes

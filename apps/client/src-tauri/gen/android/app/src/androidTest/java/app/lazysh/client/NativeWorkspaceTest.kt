@@ -4008,6 +4008,17 @@ class NativeWorkspaceTest {
         throw AssertionError("Preferences category was not reachable through its visible navigation")
     }
 
+    @Test fun dpadViewportProjectionRejectsIncompleteOrInvalidGeometry() {
+        val web=listOf(0,10,400,600);val root=listOf(0,0,400,800);val frame=listOf(0,10,400,610)
+        fun row(ime:Boolean?=true,bottom:Int?=190,point:List<Int>?=web)=OwnedDpadViewportObservation.project("down-before",7,ime,bottom,point,root,frame)
+        assertEquals("visible",row().getString("ime"));assertEquals("hidden",row(false,0).getString("ime"))
+        for(value in listOf(row(null),row(bottom=null),row(bottom=-1),row(bottom=65536),row(point=listOf(0,0,0,1)),row(point=listOf(0,0,1)),row(point=listOf(Int.MAX_VALUE,0,1,1)))) {
+            assertEquals("unavailable",value.getString("state"));assertFalse(value.has("imeBottom"));assertFalse(value.has("web"))
+        }
+        for(phase in listOf("private","down-before\n")) assertTrue(runCatching { OwnedDpadViewportObservation.project(phase,0,true,0,web,root,frame) }.isFailure)
+        for(at in listOf(-1L,65536L)) assertTrue(runCatching { OwnedDpadViewportObservation.project("layout",at,true,0,web,root,frame) }.isFailure)
+    }
+
     private fun verifySshDpadPan(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val raw = OwnedRawSshInput(scenario, fixture, label, "dpad")
         val nonce = raw.nonce
@@ -4109,6 +4120,7 @@ class NativeWorkspaceTest {
             var point = start
             var held = false
             var observer: OwnedFingerWindowObserver? = null
+            var viewportObserver: OwnedDpadViewportObservation? = null
             var fingerFailure: Throwable? = null
             var currentPhase = "up"
             var lastCounts: IntArray? = null
@@ -4146,6 +4158,8 @@ class NativeWorkspaceTest {
                     val target=activity.window
                     val owned=OwnedFingerWindowObserver(checkNotNull(target.callback),epoch)
                     target.callback=owned;observer=owned
+                    viewportObserver=OwnedDpadViewportObservation(target,web,epoch)
+                    viewportObserver?.install()
                 }
                 held=true;dispatch(android.view.MotionEvent.ACTION_DOWN);phase(0)
                 for ((index,offset) in listOf(-24 to 0,0 to 24,24 to 0).withIndex()) {
@@ -4189,6 +4203,8 @@ class NativeWorkspaceTest {
                     val summary=observer?.failureSummary() ?: "{\"state\":\"unavailable\"}"
                     failure.addSuppressed(AssertionError("D-pad completed Window dispatch[$summary]"))
                 }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad completed Window dispatch[unavailable]")) } }
+                runCatching { failure.addSuppressed(AssertionError("D-pad native viewport[${viewportObserver?.failureSummary() ?: "unavailable"}]")) }
+                    .onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad native viewport[unavailable]")) } }
                 runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[${dom.failureSummary()}]")) }
                     .onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[unavailable]")) } }
                 throw failure
@@ -4196,6 +4212,7 @@ class NativeWorkspaceTest {
             finally {
                 var cleanup: Throwable?=null
                 try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
+                try {scenario.onActivity {viewportObserver?.close()}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 try {dom.close()}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
