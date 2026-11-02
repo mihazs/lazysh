@@ -852,3 +852,74 @@ for(const truncated of [false,true])test(`unapplied inline input review preserve
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx','new']);
   if(truncated)expect(await page.evaluate(()=>window.simpleShortcutCopies)).toEqual([]);
 });
+
+
+async function dragSelectedTerminalBody(page:Page,origin:{x:number;y:number},notch:number) {
+  const input=await page.context().newCDPSession(page);
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+notch}]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  return input;
+}
+
+async function selectScrollSearchResult(page:Page,row:number) {
+  await page.getByRole('button',{name:'Find',exact:true}).click();
+  await page.locator('.terminal-search input').fill(`OWNED_SELECTION_ROW ${row}`);
+  await page.locator('.terminal-search input').press('Enter');
+  await expect.poll(()=>page.locator('.terminal-canvas .xterm-selection > div').count()).toBeGreaterThan(0);
+  await page.locator('.terminal-search button').last().click();
+}
+
+test('normal scrollback finger scrolling preserves selected text',async({page},testInfo)=>{
+  await openShortcutTerminal(page);
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  await page.evaluate(()=>{
+    window.simpleShortcutCopies=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{window.simpleShortcutCopies.push(text);}}});
+    window.simpleShortcutOutput(Array.from({length:100},(_,i)=>`OWNED_SELECTION_ROW ${i}`).join('\r\n'));
+  });
+  const viewport=page.locator('.terminal-canvas:visible .xterm-viewport'),screen=page.locator('.terminal-canvas:visible .xterm-screen');
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(0);
+  await selectScrollSearchResult(page,96);
+  await page.getByRole('button',{name:'Copy',exact:true}).click();
+  const selected=await page.evaluate(()=>window.simpleShortcutCopies.at(-1));expect(selected).toContain('OWNED_SELECTION_ROW 96');
+  const box=(await screen.boundingBox())!,origin={x:box.x+80,y:box.y+Math.min(240,box.height/2)};
+  const notch=await screen.evaluate(node=>Math.ceil(node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length)+1);
+  const beforeWheel=await viewport.evaluate(node=>node.scrollTop);
+  await page.mouse.move(origin.x,origin.y);await page.mouse.wheel(0,-notch);
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeWheel);
+  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  const beforeTouch=await viewport.evaluate(node=>node.scrollTop);
+  const input=await dragSelectedTerminalBody(page,origin,notch);
+  await testInfo.attach('selected-scrollback',{body:JSON.stringify({beforeWheel,beforeTouch,afterTouch:await viewport.evaluate(node=>node.scrollTop),selected,writes:await page.evaluate(()=>window.simpleShortcutWrites)}),contentType:'application/json'});
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeTouch);
+  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await input.detach();
+});
+
+test('selected multiplexer finger scrolling matches xterm mouse wheel selection behavior',async({page},testInfo)=>{
+  await openShortcutTerminal(page);
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[H'+Array.from({length:20},(_,i)=>`OWNED_SELECTION_ROW ${i}`).join('\r\n')));
+  await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);
+  await selectScrollSearchResult(page,6);
+  const screen=page.locator('.terminal-canvas:visible .xterm-screen'),box=(await screen.boundingBox())!;
+  const notch=await screen.evaluate(node=>Math.ceil(node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length)+1);
+  const origin={x:testInfo.project.name==='phone'?box.x+80:box.x+box.width-20,y:box.y+Math.min(240,box.height/2)};
+  await page.mouse.move(origin.x,origin.y);await page.mouse.wheel(0,-notch);
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(1);
+  const wheel=await page.evaluate(()=>window.simpleShortcutWrites[0]);
+  expect(wheel).toMatch(/^\x1b\[<64;\d+;\d+M$/);
+  const wheelSelection=await page.locator('.xterm-selection').innerHTML();
+  expect(wheelSelection).toBe('');
+  await selectScrollSearchResult(page,6);
+  expect(await page.locator('.xterm-selection').innerHTML()).not.toBe('');
+  await testInfo.attach('selected-geometry',{body:JSON.stringify(await page.evaluate(({x,y})=>({x,y,hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,300),screen:document.querySelector('.terminal-canvas .xterm-screen')?.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight}}),origin)),contentType:'application/json'});
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];Reflect.set(window,'selectedScrollEvents',[]);for(const type of ['touchstart','touchmove','touchend','touchcancel','pointercancel'])document.addEventListener(type,event=>{const rows=Reflect.get(window,'selectedScrollEvents');if(rows.length<16)rows.push({type,trusted:event.isTrusted,target:(event.target as Element)?.className});},true);});
+  const input=await dragSelectedTerminalBody(page,origin,notch);
+  await testInfo.attach('selected-finger-scroll',{body:JSON.stringify(await page.evaluate(()=>({events:Reflect.get(window,'selectedScrollEvents'),writes:window.simpleShortcutWrites}))),contentType:'application/json'});
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([wheel]);
+  expect(await page.locator('.xterm-selection').innerHTML()).toBe(wheelSelection);
+  await input.detach();
+});

@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
+- Allow vertical finger scrolling after selecting terminal text, using xterm’s normal wheel selection behavior; horizontal gestures, taps and accessibility safeguards remain unchanged.
 - Keep unavailable Home Screen icon settings compact without hiding errors or explicit refresh recovery.
 - Keep sidebar mode labels whole and reachable across narrow layouts, translations and enlarged text.
-
 
 - Preserve slow sub-row finger movement in terminal scrollback instead of losing travel between xterm redraws.
 
