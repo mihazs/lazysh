@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve fractional scroll distance between short finger drags in the same active terminal, making small gestures responsive without amplifying repeated movement; navigation, cancellation and connection changes retire pending travel.
+
 - Allow vertical finger scrolling after selecting terminal text, using xterm’s normal wheel selection behavior; horizontal gestures, taps and accessibility safeguards remain unchanged.
 - Keep unavailable Home Screen icon settings compact without hiding errors or explicit refresh recovery.
 - Keep sidebar mode labels whole and reachable across narrow layouts, translations and enlarged text.

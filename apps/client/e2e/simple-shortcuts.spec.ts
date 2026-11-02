@@ -593,14 +593,15 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
     element.addEventListener('touchstart',event=>{window.simpleShortcutTouchTarget=event.target instanceof Element?event.target:null;},{capture:true,passive:true});
   });
   const batches:string[][]=[],deliveries:unknown[]=[];
+  const row=await screen.evaluate(element=>element.getBoundingClientRect().height/element.querySelectorAll('.xterm-rows > div').length);
   for(const segments of [1,2,8,48]) {
     await page.evaluate(()=>{window.simpleShortcutWrites=[];window.simpleShortcutTouchMoves=0;window.simpleShortcutPointerMoves=0;});
     const start={x,y:box.y+20};
-    expect(start.y+notch*12).toBeLessThan(box.y+box.height);
+    expect(start.y+row*12).toBeLessThan(box.y+box.height);
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
     try {
       for(let step=1;step<=segments;step++) {
-        await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start.y+notch*12*step/segments}]});
+        await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:start.y+row*12*step/segments}]});
         if(segments<=8)await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(step);
       }
       await expect.poll(async()=>(await reports()).length).toBeGreaterThan(0);
@@ -921,5 +922,45 @@ test('selected multiplexer finger scrolling matches xterm mouse wheel selection 
   await testInfo.attach('selected-finger-scroll',{body:JSON.stringify(await page.evaluate(()=>({events:Reflect.get(window,'selectedScrollEvents'),writes:window.simpleShortcutWrites}))),contentType:'application/json'});
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([wheel]);
   expect(await page.locator('.xterm-selection').innerHTML()).toBe(wheelSelection);
+  await input.detach();
+});
+
+for(const route of ['normal','mouse','alternate'] as const)for(const direction of [-1,1])test(`short repeated finger drags match actual wheel sensitivity route=${route} direction=${direction}`,async({page},testInfo)=>{
+  const tracked=route!=='normal';
+  await openShortcutTerminal(page);
+  const screen=page.locator('.terminal-canvas:visible .xterm-screen'),viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
+  await expect(screen).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:300},(_,i)=>`short history ${i}\r\n`).join('')));
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(1000);
+  if(route==='alternate'){await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h'+Array.from({length:22},(_,i)=>`short alt ${i}\r\n`).join('')));await expect(page.locator('.terminal-canvas:visible .xterm-rows')).toContainText('short alt 21');}
+  if(route==='mouse'){await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000h\x1b[?1006h'));await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);}
+  const bounds=(await screen.boundingBox())!,origin={x:bounds.x+bounds.width-20,y:bounds.y+80};
+  const distance=await screen.evaluate(node=>node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length*.8);
+  await viewport.evaluate((node,height)=>{node.scrollTop=Math.floor(node.scrollHeight/2/height)*height;},distance/.8);
+  const beforeWheel=await viewport.evaluate(node=>node.scrollTop);
+  await page.mouse.move(origin.x,origin.y);
+  for(let n=0;n<5;n++)await page.mouse.wheel(0,direction*distance);
+  if(tracked)await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(4);
+  else await expect.poll(async()=>direction*(await viewport.evaluate(node=>node.scrollTop)-beforeWheel)).toBeGreaterThan(0);
+  const wheel={travel:beforeWheel-await viewport.evaluate(node=>node.scrollTop),writes:await page.evaluate(()=>window.simpleShortcutWrites)};
+  await viewport.evaluate((node,top)=>{node.scrollTop=top;},beforeWheel);
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBe(beforeWheel);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];Reflect.set(window,'shortTouchEvents',[]);document.addEventListener('touchmove',event=>{const rows=Reflect.get(window,'shortTouchEvents');if(rows.length<10)rows.push({trusted:event.isTrusted,target:(event.target as Element).tagName});},true);});
+  const beforeTouch=await viewport.evaluate(node=>node.scrollTop),input=await page.context().newCDPSession(page);
+  for(let n=0;n<5;n++){
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y-direction*distance}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    if(n===0){
+      await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'shortTouchEvents').length)).toBe(1);
+      if(tracked)expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+      else await expect.poll(async()=>direction*(await viewport.evaluate(node=>node.scrollTop)-beforeTouch)).toBeGreaterThan(0);
+    }
+  }
+  await testInfo.attach('short-touch-vs-wheel',{body:JSON.stringify({route,direction,distance,wheel,touch:{travel:beforeTouch-await viewport.evaluate(node=>node.scrollTop),writes:await page.evaluate(()=>window.simpleShortcutWrites),events:await page.evaluate(()=>Reflect.get(window,'shortTouchEvents'))}}),contentType:'application/json'});
+  if(tracked)await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(wheel.writes);
+  else await expect.poll(async()=>beforeTouch-await viewport.evaluate(node=>node.scrollTop)).toBe(wheel.travel);
+  const moves=await page.evaluate(()=>Reflect.get(window,'shortTouchEvents') as {trusted:boolean;target:string}[]);
+  expect(moves).toHaveLength(5);expect(moves.every(event=>event.trusted&&event.target==='DIV')).toBe(true);
   await input.detach();
 });
