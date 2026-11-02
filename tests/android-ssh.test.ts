@@ -7,6 +7,7 @@ import * as childProcess from 'node:child_process';
 import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
+import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
@@ -1754,9 +1755,7 @@ test('owned receiver source admits Cargo hardlinks but execution copies stay pri
 
 test('owned receiver probe diagnostic exports closed classifiers without captured values',async()=>{
   const source=await readFile(new URL('./android-ssh-host.test.ts',import.meta.url),'utf8');
-  const body=source.match(/function receiverProbeErrors\(text:string\) \{([\s\S]+?)\n\}/)?.[1];
-  expect(body!==undefined).toBe(true);
-  const classify=Function('text',body!) as (text:string)=>Record<string,boolean>;
+  const classify=receiverProbeErrors;
   const categories=['auth','key','hostkey','pty','channel','shell','fs','proc','accountLocked','accountMissing','uidSwitch','authorizedKeyRead','ownership','sandbox','accountDenied','unknown'];
   for(const [text,expected] of [['Permission denied (publickey)','auth'],['Load key private-fixture: invalid format','key'],['Host key verification failed','hostkey'],['PTY allocation request failed','pty'],['channel 0: open failed','channel'],['shell request failed','shell'],['No such file or directory','fs'],['cannot mount /proc/owned','proc'],['User private-fixture not allowed because account is locked','accountLocked'],['Invalid user private-fixture','accountMissing'],['setresuid private-fixture: Operation not permitted','uidSwitch'],["Could not open user 'private-fixture' authorized keys 'private-path': Permission denied",'authorizedKeyRead'],['Authentication refused: bad ownership or modes for private-path','ownership'],['safe_path private-path: fatal','ownership'],['sandbox private-path failed','sandbox'],['seccomp violation private-fixture','sandbox'],['PAM account management error for private-fixture','accountDenied'],['User private-fixture not allowed because shell private-path does not exist','accountDenied'],['private-fixture-secret','unknown']]) {
     const result=classify(text);
@@ -1923,4 +1922,76 @@ test('passive D-pad contextmenu admission and transition dedup retain cap and ex
   const foreign=()=>{};f.windowListeners.get('focus')!.add(foreign);expect(f.run('CLEANUP')).toBe(true);
   expect(f.windowListeners.get('focus')).toEqual(new Set([foreign]));expect([...f.listeners.values(),...f.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);
   f.emit('contextmenu');f.mutate();f.emit('resize',{target:f.viewport},f.viewportListeners);expect(f.run('READ')).toEqual({state:'unavailable'});
+});
+
+
+test('native SSH prompt failure preserves its original error when diagnostic reads or emission fail',async()=>{
+  const source=await readFile(new URL('../apps/client/native-e2e/ssh.spec.ts',import.meta.url),'utf8');
+  const body=source.split('observer=await ssh.client(true,undefined,relayPort);')[1].split('const controlOwner=')[0];
+  const script=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(){${body}}`);
+  const run=Function('vi','expect','reportOwnedSshPromptFailure','ssh','control','observer','relay',`${script};return run();`);
+  const primary=new Error('original prompt admission failure');
+  let calls=0;
+  const wait={waitFor:async(_predicate:unknown,options:unknown)=>{expect(options).toEqual({timeout:3000,interval:10});throw primary;}};
+  const report=async()=>{calls++;throw new Error('private diagnostic failure');};
+  await expect(run(wait,expect,report,{},undefined,undefined,{active:2})).rejects.toBe(primary);
+  expect(calls).toBe(1);
+  calls=0;
+  await expect(run(wait,expect,report,{},undefined,undefined,{get active(){throw new Error('private relay failure');}})).rejects.toBe(primary);
+  expect(calls).toBe(0);
+  await run({waitFor:async(predicate:()=>void)=>predicate()},expect,report,{prompt:'owned'}, {stdout:'owned'},{stdout:'owned'},{active:2});
+  expect(calls).toBe(0);
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation separates original processes and never emits their captured text',async()=>{
+  const prompt='UI_PROMPT_'+'a'.repeat(32)+'>';
+  const control=new OwnedProcess(process.execPath,['-e',`process.stdout.write('private-output'.repeat(2000)+${JSON.stringify(prompt)});process.stderr.write('Permission denied private-key');setInterval(()=>{},1000)`],undefined,{PATH:'/usr/bin:/bin'});
+  const observer=new OwnedProcess(process.execPath,['-e',"process.stderr.write('Host key verification failed private-host');process.exit(31)"],undefined,{PATH:'/usr/bin:/bin'});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    await observer.done;
+    const deadline=performance.now()+1000;
+    while(!control.stdout.includes(prompt)){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    await reportOwnedSshPromptFailure({prompt,daemon:control},control,observer,2);
+    expect(events).toHaveLength(1);
+    const state=JSON.parse(events[0]);
+    expect(state).toMatchObject({scope:'ssh-prompt-admission',state:'sampled',activeStreams:2,activeStreamsCapped:false,
+      control:{startup:{state:'running',exitCode:null},ownedLive:true,stdout:'limit',promptSeen:true,errors:{auth:true}},
+      observer:{startup:{state:'early-exit',exitCode:31},ownedLive:false,stdout:'empty',promptSeen:false,errors:{hostkey:true}},daemon:{promptSeen:null}});
+    expect(events[0]).not.toMatch(/private-|UI_PROMPT_|Permission denied|Host key verification/);
+    expect(Object.keys(state)).toEqual(['scope','state','activeStreams','activeStreamsCapped','control','observer','daemon']);
+  } finally {emit.mockRestore();await Promise.all([control.stop(),observer.stop()]);}
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation retains unavailable states, capped counts and failed emitters without throwing',async()=>{
+  const child=new OwnedProcess('sleep',['120']);
+  const descriptor=Object.getOwnPropertyDescriptor(child,'stdout')!;
+  const startup=spyOn(child,'startupDiagnostic').mockRejectedValue(new Error('private startup failure'));
+  const live=spyOn(child,'liveIdentity').mockRejectedValue(new Error('private identity failure'));
+  Object.defineProperty(child,'stdout',{get(){throw new Error('private stream failure');},configurable:true});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    const fixture={prompt:'owned-prompt',daemon:child};
+    await reportOwnedSshPromptFailure(fixture,child,child,99);
+    expect(JSON.parse(events[0])).toMatchObject({state:'sampled',activeStreams:8,activeStreamsCapped:true,
+      control:{startup:{state:'unavailable',exitCode:null},ownedLive:null,stdout:'unavailable',promptSeen:null}});
+    startup.mockResolvedValue({state:'private-state',exitCode:999} as never);
+    await reportOwnedSshPromptFailure(fixture,child,child,NaN);
+    expect(JSON.parse(events[1])).toMatchObject({activeStreams:null,activeStreamsCapped:null,control:{startup:{state:'unavailable',exitCode:null}}});
+    await reportOwnedSshPromptFailure({get prompt(){throw new Error('private fixture failure');},daemon:child},child,child,2);
+    expect(JSON.parse(events[2])).toEqual({scope:'ssh-prompt-admission',state:'unavailable'});
+    expect(events.join('')).not.toContain('private');
+    emit.mockImplementation(()=>{throw new Error('private emitter failure');});
+    await expect(reportOwnedSshPromptFailure(fixture,child,child,2)).resolves.toBeUndefined();
+  } finally {Object.defineProperty(child,'stdout',descriptor);startup.mockRestore();live.mockRestore();emit.mockRestore();await child.stop();}
+});
+
+test.skipIf(process.platform!=='linux')('SSH prompt observation distinguishes a missing original launcher from an empty live stream',async()=>{
+  const child=new OwnedProcess('/nonexistent-owned-prompt-launcher',[]);const completion=child.done.catch(()=>{});
+  const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
+  try {
+    await completion;
+    await reportOwnedSshPromptFailure({prompt:'owned-prompt',daemon:child},child,child,0);
+    expect(JSON.parse(events[0])).toMatchObject({activeStreams:0,control:{startup:{state:'missing-launcher',exitCode:null},ownedLive:false,stdout:'empty',promptSeen:false}});
+  } finally {emit.mockRestore();await child.stop().catch(()=>{});}
 });

@@ -1,10 +1,54 @@
-import {reportOwnedTeardownFailure,OwnedProcess, identity, descendants, type OwnedPid} from './ownedProcess';
+import {reportOwnedTeardownFailure,OwnedProcess, OUTPUT_LIMIT, identity, descendants, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
 import {isAbsolute, join, normalize} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+
+export function receiverProbeErrors(text:string) {
+  const flags={auth:/Permission denied|Authentication failed/i.test(text),key:/Load key|bad permissions|invalid format/i.test(text),
+    hostkey:/Host key verification failed|REMOTE HOST IDENTIFICATION/i.test(text),pty:/PTY allocation|openpty|pseudo-terminal/i.test(text),
+    channel:/channel [0-9]+:|session request failed|connection (?:closed|reset|refused)/i.test(text),
+    shell:/shell request failed|Could not chdir|exec.*(?:shell|sh).*failed/i.test(text),
+    fs:/No such file|Read-only file system|(?:open|stat|access|mkdir|chdir)[^\r\n]{0,160}: Permission denied/i.test(text),proc:/procfs|\/proc\/|proc mount/i.test(text),
+    accountLocked:/account is locked/i.test(text),accountMissing:/Invalid user|(?:getpwnam|getpwuid)[^\r\n]{0,80}(?:failed|not found)/i.test(text),
+    uidSwitch:/(?:setresuid|setresgid|seteuid|setegid|initgroups)[^\r\n]{0,80}(?:failed|Operation not permitted|Invalid argument)/i.test(text),
+    authorizedKeyRead:/Could not open user[^\r\n]{0,160}authorized keys|auth_openkeyfile[^\r\n]{0,80}(?:failed|denied)/i.test(text),
+    ownership:/Authentication refused|bad ownership or modes|safe_path[^\r\n]{0,80}(?:fatal|failed|unsafe)/i.test(text),
+    sandbox:/sandbox[^\r\n]{0,80}(?:failed|denied|violation)|seccomp[^\r\n]{0,80}(?:failed|denied|violation|killed)/i.test(text),
+    accountDenied:/PAM[^\r\n]{0,80}(?:denied|failure|error)|account[^\r\n]{0,80}(?:expired|denied)|not allowed because shell/i.test(text)};
+  return {...flags,unknown:text.length>0 && !Object.values(flags).some(Boolean)};
+}
+
+// Failure-only metadata; never wait for or act on another SSH admission.
+export async function reportOwnedSshPromptFailure(fixture:Pick<SshFixture,'prompt'|'daemon'>,control:OwnedProcess,observer:OwnedProcess,activeStreams:number) {
+  const sample=async(child:OwnedProcess,prompt?:string)=>{
+    let startup:{state:string;exitCode:number|null}={state:'unavailable',exitCode:null};
+    let ownedLive:boolean|null=null,promptSeen:boolean|null=null;
+    type OutputState='unavailable'|'empty'|'some'|'limit';
+    let stdout:OutputState='unavailable',stderr:OutputState='unavailable';
+    let errors:ReturnType<typeof receiverProbeErrors>|null=null;
+    try {
+      const value=await child.startupDiagnostic();
+      if(['missing-launcher','launch-denied','launch-failed','early-exit','signaled','running','launch-unavailable'].includes(value.state) &&
+        (value.exitCode===null || (Number.isInteger(value.exitCode)&&value.exitCode>=0&&value.exitCode<=255)))startup={state:value.state,exitCode:value.exitCode};
+    } catch {/* Unavailable is not a healthy process. */}
+    try{ownedLive=!!await child.liveIdentity();}catch{/* Preserve unknown ownership. */}
+    const size=(text:string)=>text.length===0?'empty':text.length>=OUTPUT_LIMIT?'limit':'some';
+    try{const text=child.stdout.slice(-OUTPUT_LIMIT);stdout=size(text);if(prompt!==undefined)promptSeen=text.includes(prompt);}catch{/* No captured text leaves this sample. */}
+    try{const text=child.stderr.slice(-OUTPUT_LIMIT);stderr=size(text);errors=receiverProbeErrors(text);}catch{/* Unavailable is not an empty error stream. */}
+    return {startup,ownedLive,stdout,promptSeen,stderr,errors};
+  };
+  try {
+    const [first,second,daemon]=await Promise.all([sample(control,fixture.prompt),sample(observer,fixture.prompt),sample(fixture.daemon)]);
+    const valid=Number.isSafeInteger(activeStreams)&&activeStreams>=0;
+    console.error(JSON.stringify({scope:'ssh-prompt-admission',state:'sampled',activeStreams:valid?Math.min(activeStreams,8):null,
+      activeStreamsCapped:valid?activeStreams>8:null,control:first,observer:second,daemon}));
+  } catch {
+    try{console.error(JSON.stringify({scope:'ssh-prompt-admission',state:'unavailable'}));}catch{/* Preserve the original prompt failure even if emission fails. */}
+  }
+}
 
 export async function sshCommand(stage:string,program:string,args:string[],cwd?:string) {
   return new OwnedProcess(program,args,cwd).finish(stage,5000);
