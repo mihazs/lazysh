@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.3
+
+### Patch Changes
+
+- 50b1569: Preserve slow sub-row finger movement in normal terminal scrollback without changing gesture sensitivity or mouse-report routing.
+- @lazysh/account-usage@1.9.3
+  - @lazysh/common@1.9.3
+  - @lazysh/display-idle@1.9.3
+  - @lazysh/et-transport@1.9.3
+  - @lazysh/mosh-transport@1.9.3
+
 ## 1.9.2
 
 ### Patch Changes
