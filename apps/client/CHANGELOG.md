@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.9.2
+
+### Patch Changes
+
+- 0bc9cc4: Retain closed terminal review, ended-session, modal and pane-display context when Android IME editor admission fails.
+- 42c2134: Suppress browser context menus on expanded D-pad controls while preserving their normal terminal input.
+- 7dadc4e: Bind native companion installation acceptance to the installer panel rather than the shared hook styling class; retain strict action and outcome checks.
+- e3e0e63: Dispatch complete Google/FOSS ntfy native-acceptance commands through the pinned emulator runner without changing provider guards or deadlines.
+- e0f7115: Retain closed failure-only observations when owned native SSH control prompts fail admission, preserving the original deadline and failure.
+- @lazysh/account-usage@1.9.2
+  - @lazysh/common@1.9.2
+  - @lazysh/display-idle@1.9.2
+  - @lazysh/et-transport@1.9.2
+  - @lazysh/mosh-transport@1.9.2
+
 ## 1.9.1
 
 ### Patch Changes
