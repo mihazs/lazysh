@@ -1,4 +1,6 @@
 mod bound_push;
+#[cfg(target_os = "linux")]
+mod gotify_server;
 #[cfg(unix)]
 mod ntfy_android;
 mod push_delivery;
@@ -112,6 +114,24 @@ struct TlsReceiver {
     entered: Arc<Semaphore>,
     release: Arc<Semaphore>,
     task: JoinHandle<()>,
+}
+
+async fn finite_state_receipts(service: &Service) -> Vec<Receipt> {
+    let mut receipts = Vec::new();
+    for kind in [Kind::Working, Kind::NeedsAttention, Kind::Done] {
+        receipts.push(
+            enqueue(
+                service,
+                SOURCE,
+                &Event {
+                    event_id: Uuid::new_v4(),
+                    kind,
+                },
+            )
+            .await,
+        );
+    }
+    receipts
 }
 impl TlsReceiver {
     async fn new(code: u16, held: bool) -> Self {
@@ -1285,20 +1305,7 @@ async fn gotify_destination_sends_only_finite_public_events_with_private_applica
         StatusCode::CONFLICT
     );
     enable(&service).await;
-    let mut receipts = Vec::new();
-    for kind in [Kind::Working, Kind::NeedsAttention, Kind::Done] {
-        receipts.push(
-            enqueue(
-                &service,
-                SOURCE,
-                &Event {
-                    event_id: Uuid::new_v4(),
-                    kind,
-                },
-            )
-            .await,
-        );
-    }
+    let receipts = finite_state_receipts(&service).await;
     let (done, task) = start(service.clone()).await;
     for receipt in &receipts {
         receiver.received().await;
