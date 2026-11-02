@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- 86ef821: Make Android protected-receiver changed-read checks deterministic by restoring the original fixture size before each observation.
+- e9c15fc: Align browser acceptance with dedicated Preferences screens and settle pointer hover transitions before checking attachment control styling.
+- fb3388c: Persist the selected Android push provider before explicit controls so late Firebase cleanup markers cannot change the chosen transport after restart.
+- @lazysh/account-usage@1.9.0
+  - @lazysh/common@1.9.0
+  - @lazysh/display-idle@1.9.0
+  - @lazysh/et-transport@1.9.0
+  - @lazysh/mosh-transport@1.9.0
+
 ## 1.8.4
 
 ### Patch Changes
