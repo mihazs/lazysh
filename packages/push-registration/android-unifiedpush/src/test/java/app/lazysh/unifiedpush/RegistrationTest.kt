@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RegistrationTest {
+    @Test fun enrollmentReservationBlocksProviderSwitchUntilReleaseOrDisable() {
+        val f=Fixture()
+        assertTrue(f.controller.reserveEnrollment(1))
+        assertTrue(f.controller.busy)
+        assertTrue(f.controller.reserveEnrollment(2))
+        f.controller.releaseEnrollment(1)
+        assertTrue(f.controller.busy)
+        f.controller.releaseEnrollment(2)
+        assertFalse(f.controller.busy)
+        assertFalse(f.controller.withReserved(2){fail("released reservation must not run")})
+        assertTrue(f.controller.reserveEnrollment(3))
+        assertTrue(f.controller.disable(4))
+        assertFalse(f.controller.busy)
+        assertFalse(f.controller.withReserved(3){fail("disabled reservation must not run")})
+    }
+
     private class Fixture(initial: Registration = Registration()) {
         val store = object : RegistrationStore { override var value = initial }
         val requested = mutableListOf<String>()

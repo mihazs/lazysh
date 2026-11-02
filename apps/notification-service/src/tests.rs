@@ -1211,3 +1211,172 @@ async fn bound_https_responses_cannot_forge_receipt_identity_or_expand_the_close
         assert!(!error.to_string().contains(SOURCE));
     }
 }
+
+#[test]
+fn gotify_config_rejects_unsafe_endpoint_or_application_token_without_echoing_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let make = |endpoint: &str, token: &str| {
+        Config::with_format(
+            directory.path().into(),
+            ADMIN,
+            endpoint,
+            token,
+            DestinationFormat::Gotify,
+        )
+    };
+    assert!(make("https://gotify.example/message", "A.nonhex-app-token").is_ok());
+    assert!(make(
+        "https://gotify.example/prefix/message",
+        "A.nonhex-app-token"
+    )
+    .is_ok());
+    for endpoint in [
+        "http://gotify.example/message",
+        "https://user:private@gotify.example/message",
+        "https://gotify.example/message?token=private",
+        "https://gotify.example/message#private",
+        "https://gotify.example/events",
+    ] {
+        let error = make(endpoint, "private-app-token").err().unwrap();
+        assert!(!error.contains("private"));
+    }
+    for token in [
+        "",
+        "bad token",
+        "private\r\nheader",
+        "private\u{7f}",
+        "privaté",
+        ADMIN,
+        &"x".repeat(513),
+    ] {
+        let error = make("https://gotify.example/message", token).err().unwrap();
+        assert!(!error.contains("private"));
+    }
+    let gotify = make("https://gotify.example/message", "A.nonhex-app-token").unwrap();
+    assert!(gotify.reserved(&digest("A.nonhex-app-token")));
+}
+
+#[tokio::test]
+async fn gotify_destination_sends_only_finite_public_events_with_private_application_header() {
+    let receiver = TlsReceiver::new(202, false).await;
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = receiver.url.replace("/events", "/message");
+    let token = "owned-gotify-application-token";
+    let config = Config::with_format(
+        directory.path().into(),
+        ADMIN,
+        &endpoint,
+        token,
+        DestinationFormat::Gotify,
+    )
+    .unwrap();
+    let service = Service::open_with(config, receiver.client.clone(), false).unwrap();
+    let id = source(&service, SOURCE, "public-terminal").await;
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            "/v1/events",
+            SOURCE,
+            serde_json::to_value(event()).unwrap()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    enable(&service).await;
+    let mut receipts = Vec::new();
+    for kind in [Kind::Working, Kind::NeedsAttention, Kind::Done] {
+        receipts.push(
+            enqueue(
+                &service,
+                SOURCE,
+                &Event {
+                    event_id: Uuid::new_v4(),
+                    kind,
+                },
+            )
+            .await,
+        );
+    }
+    let (done, task) = start(service.clone()).await;
+    for receipt in &receipts {
+        receiver.received().await;
+        state(&service, id, &receipt.receipt_id, "accepted").await;
+    }
+    stop(done, task).await;
+    let capture = receiver.requests.lock().unwrap();
+    assert_eq!(capture.len(), 3);
+    for (headers, body) in capture.iter() {
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.starts_with("post /message "));
+        assert!(headers.contains(&format!("x-gotify-key: {token}")));
+        assert!(!headers.contains("authorization:"));
+        assert!(headers.contains("idempotency-key:"));
+        assert_eq!(body.as_object().unwrap().len(), 3);
+        assert_eq!(body["title"], "lazysh");
+        let message = body["message"].as_str().unwrap();
+        assert!([
+            "public-terminal: working",
+            "public-terminal: needs_attention",
+            "public-terminal: done"
+        ]
+        .contains(&message));
+        assert_eq!(
+            body["priority"],
+            if message.ends_with("needs_attention") {
+                5
+            } else {
+                2
+            }
+        );
+        for secret in [
+            token,
+            ADMIN,
+            SOURCE,
+            "sourceId",
+            "eventId",
+            "receiptId",
+            "transcript",
+            "prompt",
+        ] {
+            assert!(!body.to_string().contains(secret));
+        }
+    }
+}
+
+#[tokio::test]
+async fn switching_webhook_to_gotify_requires_reconfiguration_and_cancels_old_pending_events() {
+    let receiver = TlsReceiver::new(202, false).await;
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = receiver.url.replace("/events", "/message");
+    let old = Service::open_with(
+        config(directory.path(), &endpoint),
+        receiver.client.clone(),
+        false,
+    )
+    .unwrap();
+    let id = source(&old, SOURCE, "public").await;
+    enable(&old).await;
+    let saved = enqueue(&old, SOURCE, &event()).await;
+    let old_status = old.db(|store| store.status()).await.unwrap();
+    drop(old);
+    let changed = || {
+        Config::with_format(
+            directory.path().into(),
+            ADMIN,
+            &endpoint,
+            TARGET,
+            DestinationFormat::Gotify,
+        )
+        .unwrap()
+    };
+    assert!(Service::open_with(changed(), receiver.client.clone(), false).is_err());
+    Service::reconfigure(changed()).unwrap();
+    let current = Service::open_with(changed(), receiver.client.clone(), false).unwrap();
+    let status = current.db(|store| store.status()).await.unwrap();
+    assert_eq!(status.generation, old_status.generation + 1);
+    assert!(!status.enabled);
+    state(&current, id, &saved.receipt_id, "cancelled").await;
+    assert!(receiver.requests.lock().unwrap().is_empty());
+}

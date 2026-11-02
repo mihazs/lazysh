@@ -77,9 +77,9 @@ class RegistrationService : PushService() {
 }
 
 @TauriPlugin
-class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) {
+open class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) {
     private fun controller() = PushRegistration.controller(activity)
-    private fun statusValue() = run {
+    protected open fun statusValue() = run {
         val controller = controller()
         val registration = controller.registration
         val enrollment=PushEnrollment.controller(activity)
@@ -100,10 +100,10 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
                 put("displayEnabled",try { PushDisplay.enabled(activity) } catch (_:Exception) { false })
             }
     }
-    @Command fun status(invoke: Invoke) {
+    @Command open fun status(invoke: Invoke) {
         try { invoke.resolve(statusValue()) } catch (_: Exception) { invoke.reject("Cannot inspect UnifiedPush registration") }
     }
-    @Command fun display(invoke:Invoke) {
+    @Command open fun display(invoke:Invoke) {
         val permit=try { invoke.parseArgs(DisplayControl::class.java).permit }
             catch (_:Exception) { invoke.reject("Cannot start native notification consent"); return }
         DisplayConsentDialog.show(activity,permit) { success ->
@@ -113,7 +113,7 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
             } catch (_:Exception) { invoke.reject("Cannot inspect notification display") }
         }
     }
-    @Command fun register(invoke: Invoke) {
+    @Command open fun register(invoke: Invoke) {
         try {
             if (!notificationPermission()) { invoke.reject("Enable system notification permission from the inbox first"); return }
             val state=PushEnrollment.controller(activity).state()
@@ -137,10 +137,12 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
                 }
             },done)
     }
-    @Command fun enroll(invoke:Invoke) {
+    @Command open fun enroll(invoke:Invoke) {
         val completed=AtomicBoolean(false)
+        var reservedEpoch:Long?=null
         fun finish(success:Boolean) {
             if (!completed.compareAndSet(false,true)) return
+            reservedEpoch?.let { controller().releaseEnrollment(it) }
             try { if (success) invoke.resolve(statusValue()) else invoke.reject("Private enrollment was cancelled or failed; inspect status") }
             catch (_:Exception) { invoke.reject("Cannot complete private enrollment") }
         }
@@ -154,6 +156,7 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
             if (state?.phase==EnrollmentPhase.REVOKE_PENDING || !controller().reserveEnrollment(epoch)) {
                 invoke.reject("Pause existing registration or finish private relay removal first"); return
             }
+            reservedEpoch=epoch
             EnrollmentDialog.show(activity,state,{ origin,code ->
                 val ready:(Boolean)->Unit={ success ->
                     if (!success || activity.isFinishing || activity.isDestroyed) finish(false)
@@ -166,7 +169,7 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
             },{ finish(false) })
         } catch (_:Exception) { finish(false) }
     }
-    @Command fun disable(invoke: Invoke) {
+    @Command open fun disable(invoke: Invoke) {
         try {
             val enrollment=PushEnrollment.controller(activity)
             var admitted=false

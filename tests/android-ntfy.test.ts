@@ -3,8 +3,35 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
+
+test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
+  expect(ntfyAndroidVariant()).toBe('fdroid');
+  for(const value of ['google','fdroid'] as const)expect(ntfyAndroidVariant(value)).toBe(value);
+  for(const value of ['','Google','foss','google ','fdroid\n','private-provider-token']) {
+    let failure:unknown;
+    try{ntfyAndroidVariant(value);}catch(error){failure=error;}
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('Owned ntfy Android distribution is unsupported');
+  }
+});
+test('ntfy CI retains FOSS native coverage and separately builds the real Google variant',async()=>{
+  const root=resolve(import.meta.dir,'..');
+  const jobs=Bun.YAML.parse(await readFile(join(root,'.github/workflows/checks.yml'),'utf8')) as {jobs:Record<string,any>};
+  const job=jobs.jobs['native-android-ntfy'];
+  expect(job.strategy.matrix['push-variant']).toEqual(['fdroid','google']);
+  expect(job.strategy['fail-fast']).toBe(false);
+  expect(job['timeout-minutes']).toBe(35);
+  const build=job.steps.find((step:any)=>step.name==='Build current Google APK for Firebase-free push acceptance');
+  expect(build.if).toBe("matrix.push-variant == 'google'");
+  expect(build.run).toBe('bun run build:android:emulator');
+  const runtime=job.steps.find((step:any)=>step.name==='Real ntfy encrypted native enrollment').with;
+  expect([runtime['api-level'],runtime.target,runtime.arch,runtime['emulator-port']]).toEqual([36,'default','x86_64',5580]);
+  expect(runtime.script).toContain('LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy');
+  expect(runtime.script).toContain('bun run test:android-ntfy');
+  expect(job.steps.find((step:any)=>step.name==='Retain finite ntfy acceptance receipts only').with.name).toBe('lazysh-ntfy-acceptance-${{ matrix.push-variant }}');
+});
 
 const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
 test('controlled clock admits only an entire positive interval within the declared bound',()=>{

@@ -19,7 +19,7 @@ their SHA256 digests and the documented Android signing certificate. Both upstre
 sources use Apache-2.0. The fixture verifies archive/member type, whole artifact
 hashes, APK identity/signature and a complete bounded dex scan for Google/Firebase
 components before installation. The existing app artifact oracle independently
-checks lazysh's native FOSS dependency graph. No upstream Go code is authored or
+checks lazysh's variant-specific native dependency graph. No upstream Go code is authored or
 modified; the unmodified official server is an external test dependency.
 
 The pinned F-Droid APK retains an inert Firebase action and notification-icon
@@ -35,8 +35,20 @@ AND_3.1.0 feature or enforces the application's VAPID key at registration.
 ## Ownership and trust
 
 Run `bun run test:android-ntfy` only on the explicitly selected owned Linux/x86_64
-emulator. The task builds the current F-Droid native app and native Rust test
-fixture through Turbo/Cargo. The existing PID/start identity/UID/executable/AVD,
+emulator. The original task builds the current FOSS native app and native Rust test
+fixture through Turbo/Cargo. CI retains that route and adds an independent Google
+variant of the same three native cases. The Google matrix job first builds the
+current Google emulator APK with `bun run build:android:emulator`, then invokes
+`LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy`.
+It deliberately avoids the root task's FOSS build dependency. Only `google` and
+`fdroid` are accepted; absent input preserves the FOSS route. The fixture-only CA
+requires the matching explicit distribution/provider project and only the original
+debug acceptance tasks. Ordinary debug/release artifacts must still exclude it.
+Variant-labelled finite receipts retain APK/native-library/source bindings; the
+Google app may contain its optional FCM classes, while the pinned ntfy distributor
+must remain Firebase-free. This source route is not a passing Google native result:
+new-source CI must actually execute enrollment, authenticated notification/replay
+and cleanup before interoperability is qualified. The existing PID/start identity/UID/executable/AVD,
 unique port and imagefile/front-none attestation runs before commands and cleanup.
 All three fixture packages must initially be absent; no personal app data is
 cleared to make that precondition pass.
@@ -54,7 +66,7 @@ receipt. Input bytes are erased after both process teardown and writable-stream
 settlement, including asynchronous pipe failure; only finite errors are reported.
 
 The native Gradle property `lazyshUnifiedPushAcceptanceCa` is accepted only for
-an explicit small debug-task allowlist with the exact F-Droid provider project.
+an explicit small debug-task allowlist with the exact selected Google/FOSS provider project. The Google route must supply `lazyshUnifiedPushAcceptanceVariant=google`; absent input retains the FOSS guard. Unknown or mismatched distributions fail closed.
 It generates a debug resource overlay containing one owned bounded CA and
 Android's `debug-overrides`; the base network policy is preserved. The CA is not
 an IPC/preference/environment HTTP override. Enrollment uses its unchanged

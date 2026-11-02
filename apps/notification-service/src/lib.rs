@@ -27,6 +27,13 @@ use tokio::sync::{watch, Notify};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum DestinationFormat {
+    #[default]
+    Webhook,
+    Gotify,
+}
+
 pub struct Config {
     directory: PathBuf,
     admin_hash: [u8; 32],
@@ -34,7 +41,8 @@ pub struct Config {
     destination: Destination,
 }
 enum Destination {
-    Webhook {
+    Http {
+        format: DestinationFormat,
         endpoint: reqwest::Url,
         bearer: Zeroizing<String>,
     },
@@ -47,24 +55,63 @@ impl Config {
         endpoint: &str,
         bearer: &str,
     ) -> Result<Self, String> {
-        if !valid_token(admin) || !valid_token(bearer) || admin == bearer {
-            return Err(
-                "Require distinct 256-bit hexadecimal admin and destination capabilities".into(),
-            );
+        Self::with_format(
+            directory,
+            admin,
+            endpoint,
+            bearer,
+            DestinationFormat::Webhook,
+        )
+    }
+    pub fn with_format(
+        directory: PathBuf,
+        admin: &str,
+        endpoint: &str,
+        bearer: &str,
+        format: DestinationFormat,
+    ) -> Result<Self, String> {
+        let token_valid = match format {
+            DestinationFormat::Webhook => valid_token(bearer),
+            DestinationFormat::Gotify => {
+                !bearer.is_empty()
+                    && bearer.len() <= 512
+                    && bearer.bytes().all(|byte| byte.is_ascii_graphic())
+            }
+        };
+        if !valid_token(admin) || !token_valid || admin == bearer {
+            return Err(match format {
+                DestinationFormat::Webhook => {
+                    "Require distinct 256-bit hexadecimal admin and destination capabilities"
+                }
+                DestinationFormat::Gotify => {
+                    "Require a valid admin capability and a distinct Gotify application token"
+                }
+            }
+            .into());
         }
         let endpoint = https(endpoint)?;
+        if matches!(format, DestinationFormat::Gotify) && !endpoint.path().ends_with("/message") {
+            return Err("Require the HTTPS Gotify message endpoint".into());
+        }
+        let identity = format!(
+            "{}\0{}",
+            endpoint,
+            digest(bearer)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
         Ok(Self {
             directory,
             admin_hash: digest(admin),
-            target_hash: digest(&format!(
-                "{}\0{}",
-                endpoint,
-                digest(bearer)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            )),
-            destination: Destination::Webhook {
+            // Preserve existing webhook identities; Gotify is a different destination
+            // even when its endpoint and application token happen to be identical.
+            target_hash: digest(&match format {
+                DestinationFormat::Webhook => identity,
+                DestinationFormat::Gotify => format!("gotify\0{identity}"),
+            }),
+            destination: Destination::Http {
+                format,
                 endpoint,
                 bearer: Zeroizing::new(bearer.into()),
             },
@@ -93,7 +140,7 @@ impl Config {
     }
     fn reserved(&self, hash: &[u8]) -> bool {
         hash == self.admin_hash
-            || matches!(&self.destination, Destination::Webhook { bearer, .. } if hash == digest(bearer))
+            || matches!(&self.destination, Destination::Http { bearer, .. } if hash == digest(bearer))
     }
 }
 #[derive(Debug)]
@@ -225,13 +272,29 @@ impl Service {
             };
             let body = serde_json::json!({"schemaVersion":1,"receiptId":job.receipt.receipt_id,"eventId":job.receipt.event_id,"kind":job.receipt.kind,"alias":job.receipt.alias});
             let request = match &self.0.config.destination {
-                Destination::Webhook { endpoint, bearer } => self
-                    .0
-                    .client
-                    .post(endpoint.clone())
-                    .bearer_auth(bearer.as_str())
-                    .header("Idempotency-Key", &job.receipt.receipt_id)
-                    .json(&body),
+                Destination::Http {
+                    format,
+                    endpoint,
+                    bearer,
+                } => {
+                    let request = self
+                        .0
+                        .client
+                        .post(endpoint.clone())
+                        .header("Idempotency-Key", &job.receipt.receipt_id);
+                    match format {
+                        DestinationFormat::Webhook => {
+                            request.bearer_auth(bearer.as_str()).json(&body)
+                        }
+                        DestinationFormat::Gotify => request
+                            .header("X-Gotify-Key", bearer.as_str())
+                            .json(&serde_json::json!({
+                                "title":"lazysh",
+                                "message":format!("{}: {}",job.receipt.alias,job.receipt.kind),
+                                "priority":if job.receipt.kind=="needs_attention" {5} else {2},
+                            })),
+                    }
+                }
                 Destination::WebPush(config) => config
                     .request(
                         job.push.as_ref().ok_or_else(ApiError::storage)?,

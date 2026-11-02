@@ -439,8 +439,15 @@ async function nativeFailure(directory:string) {
   }catch{return {};}
 }
 
+export function ntfyAndroidVariant(value?:string):'fdroid'|'google' {
+  if(value===undefined)return 'fdroid';
+  if(value==='fdroid'||value==='google')return value;
+  throw new Error('Owned ntfy Android distribution is unsupported');
+}
+
 export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   if(process.platform!=='linux'||process.arch!=='x64')throw invalid();
+  const variant=ntfyAndroidVariant(process.env.LAZYSH_NTFY_ANDROID_VARIANT);
   const owned=await attestQrCamera(process.env,root);
   const sdk=process.env.ANDROID_HOME,serial=process.env.ANDROID_SERIAL;
   if(!sdk||!serial)throw invalid();
@@ -496,10 +503,10 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     return hash.digest('hex');
   };
   const normalArtifact=async(configuration='universalDebugRuntimeClasspath',apk?:string)=>{
-    phase='normal APK trust and FOSS absence';
+    phase='normal APK trust and provider composition';
     await owned.check();
     const child=new OwnedProcess(process.execPath,['test',join(root,'tests/android-push-artifact.test.ts')],root,
-      {...process.env,LAZYSH_ANDROID_PUSH_VARIANT:'fdroid',LAZYSH_ANDROID_PUSH_CONFIGURATION:configuration,
+      {...process.env,LAZYSH_ANDROID_PUSH_VARIANT:variant,LAZYSH_ANDROID_PUSH_CONFIGURATION:configuration,
         ...(apk?{LAZYSH_ANDROID_PUSH_APK:apk}:{})});
     await child.finish('normal APK trust and FOSS absence',120_000);
   };
@@ -548,7 +555,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       await shell('owned TLS reverse',['reverse','--no-rebind',`tcp:${port}`,`tcp:${port}`]);reverses.push(port);
     }
     const gradleArgs=['-p',android,'--no-daemon','-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64',
-      '-x',':app:rustBuildX86_64Debug',`-PlazyshUnifiedPushAcceptanceCa=${join(directory,'ca.pem')}`];
+      '-x',':app:rustBuildX86_64Debug',`-PlazyshUnifiedPushAcceptanceCa=${join(directory,'ca.pem')}`,`-PlazyshUnifiedPushAcceptanceVariant=${variant}`];
     await run('native acceptance APK resources',join(android,'gradlew'),[':app:assembleUniversalDebug',...gradleArgs],120_000);
     if(await nativeDigest(apk)!==baselineNative)throw new Error('Acceptance cannot replace the current native library');
     await inspectAcceptanceTrust(apk,join(directory,'ca.pem'),sdk,run);
@@ -601,19 +608,23 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     const source:Record<string,string>={};
     for(const path of ['apps/notification-service/src/tests/ntfy_android.rs',
       'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',
-      'apps/client/src-tauri/gen/android/app/build.gradle.kts','tests/support/androidNtfy.ts']){
+      'apps/client/src-tauri/gen/android/app/build.gradle.kts','tests/support/androidNtfy.ts',
+      'packages/push-registration/android/src/main/java/app/lazysh/push/PushPlugin.kt',
+      'packages/push-registration/android/src/main/java/app/lazysh/push/ProviderSelection.kt',
+      'packages/push-registration/android-unifiedpush/src/main/java/app/lazysh/unifiedpush/EventDisplay.kt',
+      'apps/client/src-tauri/src/push/consent.rs']){
       source[path]=createHash('sha256').update(await boundedFile(join(root,path),1024*1024)).digest('hex');
     }
-    receiptValue={schemaVersion:1,head,source,...native,nativeReceiptValidated,clockComparison,serverVersion:pins.server.version,
+    receiptValue={schemaVersion:1,variant,head,source,...native,nativeReceiptValidated,clockComparison,serverVersion:pins.server.version,
       distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
-      distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
+      distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:variant==='fdroid',distributorGoogleComponentsAbsent:true,actualEncryptedChallenge:true,
       activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
       releaseRustCompilation:false,notificationDelivery:true,replayCallbackObserved:true,privateGenericNotification:true};
   }catch(error){
     primary=true;
     const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;
     // Snapshot the primary run's observations before finally invokes cleanup through run again.
-    failureValue={schemaVersion:1,phase,exit:code?Number(code[1]):null,clockComparison,nativeReceiptValidated,
+    failureValue={schemaVersion:1,variant,phase,exit:code?Number(code[1]):null,clockComparison,nativeReceiptValidated,
       ...(lastRunError===error && lastToolFailure?{toolFailure:lastToolFailure}:{}),
       ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false};
     // Framework/private protocol errors may contain values. Keep only the fixed
@@ -633,7 +644,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     try{
       await mkdir(finite,{recursive:true});
       await writeFile(join(finite,failed?'failure.json':'receipt.json'),JSON.stringify({
-        ...(failed?failureValue??{schemaVersion:1,phase:'owned cleanup',exit:null,nativeReceiptValidated,runtimePassed:false,notificationDelivery:false}:receiptValue),
+        ...(failed?failureValue??{schemaVersion:1,variant,phase:'owned cleanup',exit:null,nativeReceiptValidated,runtimePassed:false,notificationDelivery:false}:receiptValue),
         ...(clock?{controlledClock:clock.observation()}:{}),cleanupFailures})+'\n');
     }catch{if(!failed)throw new Error('Finite ntfy receipt could not be retained');console.error('Finite ntfy failure receipt could not be retained');}
     if(cleanupFailures.length){if(primary)console.error('Owned ntfy cleanup failed after original failure');else throw new Error('Owned ntfy cleanup failed');}

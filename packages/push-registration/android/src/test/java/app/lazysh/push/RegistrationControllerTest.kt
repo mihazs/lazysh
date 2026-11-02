@@ -15,6 +15,14 @@ class RegistrationControllerTest {
         override fun token(done: (Boolean) -> Unit) { tokenRequests++; tokenDone = done }
         override fun delete(done: (Boolean) -> Unit) { deletions++; deleteDone = done }
     }
+    @Test fun unconfiguredBuildRetainsConservativeFcmMarkersWithoutStartingRequests() {
+        for(enabled in listOf(false,true))for(token in listOf(false,true)) {
+            assertEquals(FcmPresence(enabled,token),fcmPresence(null,enabled,token))
+        }
+        val store=Store();val driver=Driver();val controller=RegistrationController(store,driver)
+        assertEquals(FcmPresence(false,false),fcmPresence(controller,true,true))
+        assertEquals(0,driver.tokenRequests);assertEquals(0,driver.deletions)
+    }
     @Test fun registerRequiresExplicitCallAndTracksNativeRotation() {
         val store = Store(); val driver = Driver(); val controller = RegistrationController(store, driver)
         assertFalse(controller.enabled); assertEquals(0, driver.tokenRequests)
@@ -38,6 +46,26 @@ class RegistrationControllerTest {
         assertTrue(controller.tokenPresent); assertFalse(controller.enabled)
         controller.disable { assertTrue(it) }; driver.deleteDone(true)
         assertFalse(controller.tokenPresent); assertEquals(2, driver.deletions)
+    }
+    @Test fun rotationAfterCompletedPauseRetainsFailedDeletionUntilExplicitRetry() {
+        val store=Store();val driver=Driver();val controller=RegistrationController(store,driver)
+        controller.disable(1){assertTrue(it)};driver.deleteDone(true)
+        assertFalse(controller.tokenPresent)
+        controller.rotated();assertTrue(controller.busy);driver.deleteDone(false)
+        assertFalse(controller.enabled);assertTrue(controller.tokenPresent);assertFalse(controller.busy)
+        val choice=ProviderSelection(object:ProviderStore {
+            override var selected:String?="unifiedpush"
+            override val legacyFcmActive=true
+        })
+        fun cleanup(active:Boolean)=previousFcmCleanup(choice.provider(),active,fcmPresence(controller,false,false),controller.busy)
+        assertEquals(PreviousFcmCleanup(true,false),cleanup(true))
+        assertEquals(2,driver.deletions) // inspecting/pausing UP never deletes previous FCM
+        assertEquals(PreviousFcmCleanup(true,true),cleanup(false))
+        controller.disable(2){assertFalse(it)};driver.deleteDone(false)
+        assertTrue(controller.tokenPresent);assertTrue(cleanup(false).pending)
+        controller.disable(3){assertTrue(it)};driver.deleteDone(true)
+        assertFalse(controller.tokenPresent);assertFalse(cleanup(false).pending)
+        assertEquals("unifiedpush",choice.provider());assertEquals(0,driver.tokenRequests)
     }
     @Test fun unsolicitedRotationWhilePausedIsRevokedWithoutOptingIn() {
         val store = Store(); val driver = Driver(); val controller = RegistrationController(store, driver)
