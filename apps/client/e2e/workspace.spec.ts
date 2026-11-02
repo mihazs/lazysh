@@ -1,3 +1,4 @@
+import {controlContrast} from './fixtures/controlContrast';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 import {readFileSync} from 'node:fs';
@@ -243,11 +244,11 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   const serverSetup=live.locator('.herdr-server-setup');
-  await expect(serverSetup).not.toHaveAttribute('open');
+  await expect(serverSetup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
-  await serverSetup.locator('summary').click();
+  await live.getByRole('button',{name:'Herdr server',exact:true}).click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
-  await serverSetup.locator('summary').click();
+  await live.getByRole('button',{name:'Back',exact:true}).click();
   if(phone){
     await page.setViewportSize({width:393,height:852});
     const navigation=await page.locator('.sidebar').boundingBox();
@@ -301,7 +302,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await details.locator('summary').click();
   await expect(details.getByText('/nav/project',{exact:true})).toBeVisible();
   await expect(details.getByText('Unverified reference; may be stale.',{exact:true})).toBeVisible();
-  expect(await details.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  expect(await details.locator('..').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('herdr-reported-session.png')});
   await details.locator('summary').click();
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([]);
@@ -379,7 +380,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.getByRole('button',{name:'Connect',exact:true}).click();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
-  await live.getByText('Reported session',{exact:true}).click();
+  await live.locator('.herdr-report-reference > summary').click();
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
   await page.evaluate(()=>(window as unknown as {finishOldReport:()=>void}).finishOldReport());
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
@@ -797,6 +798,15 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
     const box=(await target.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.y).toBeGreaterThanOrEqual(0);expect(box.y+box.height).toBeLessThanOrEqual(852);
     expect(await target.evaluate(node=>{const box=node.getBoundingClientRect();return document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)?.closest('button')===node;})).toBe(true);
   }
+  const contrast=await dialog.evaluate(controlContrast);
+  expect(contrast.filter(item=>item.ratio<4.5)).toEqual([]);
+  const material=await dialog.evaluate(node=>({background:getComputedStyle(node).backgroundColor,blur:getComputedStyle(node).backdropFilter}));
+  expect(material.blur).toContain('blur(16px)');
+  const media=await page.context().newCDPSession(page);
+  await media.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
+  await expect(dialog).toHaveCSS('backdrop-filter','none');
+  expect(await dialog.evaluate(node=>getComputedStyle(node).backgroundColor)).not.toBe(material.background);
+  await media.send('Emulation.setEmulatedMedia',{features:[]});
   await page.screenshot({path:testInfo.outputPath('workspace-tools-default-393.png')});
   await testInfo.attach('default-sheet-measurement',{body:JSON.stringify({viewport:{width:393,height:852},...metrics}),contentType:'application/json'});
   for(const group of ['more','connections','application'] as const)await openWorkspaceGroup(page,group);
@@ -850,15 +860,15 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   expect(await sessions.evaluate(node=>!!(node.compareDocumentPosition(document.querySelector('.herdr-navigation')!)&Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   expect((await sessions.boundingBox())!.y).toBeLessThan((await live.boundingBox())!.y);
   await first.focus();await page.keyboard.press('Tab');await expect(second).toBeFocused();
-  await page.keyboard.press('Tab');await expect(live.getByRole('button',{name:'Refresh Herdr tree',exact:true})).toBeFocused();
+  await page.keyboard.press('Tab');await expect(live.getByRole('button',{name:'Herdr server',exact:true})).toBeFocused();
   const setup=live.locator('.herdr-server-setup');
-  await expect(setup).not.toHaveAttribute('open');
+  await expect(setup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
   const warning=live.getByText('Shared focus changes focus for other connections to this server.',{exact:true});
   await expect(warning).toHaveCount(1);await expect(warning).toBeVisible();
-  await setup.locator('summary').click();
+  await live.getByRole('button',{name:'Herdr server',exact:true}).click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
-  await expect(warning).toHaveCount(1);await setup.locator('summary').click();
+  await expect(warning).toHaveCount(1);await live.getByRole('button',{name:'Back',exact:true}).click();
   await first.click();
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
@@ -875,10 +885,10 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   });
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   const selector=live.getByRole('combobox',{name:'Herdr server',exact:true});
-  await expect(setup).toHaveAttribute('open','');
+  await expect(setup).toBeVisible();
   await expect(selector).toBeVisible();await expect(selector).toHaveValue('');
   await expect(live.locator('.herdr-navigation-tree')).toHaveCount(0);await expect(warning).toHaveCount(0);
-  await selector.selectOption('default');await expect(setup).not.toHaveAttribute('open');await expect(warning).toBeVisible();
+  await selector.selectOption('default');await expect(setup).toBeHidden();await expect(warning).toBeVisible();
   await page.evaluate(()=>{
     const original=window.nativeFixtureInvoke;
     Object.assign(window,{restoreNavigationReader:()=>{window.nativeFixtureInvoke=original;}});
@@ -886,11 +896,11 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   });
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   await expect(live.getByRole('status')).toContainText('Synthetic navigation unavailable');
-  await expect(setup).toHaveAttribute('open','');await expect(selector).toBeVisible();await expect(warning).toHaveCount(1);
+  await expect(setup).toBeVisible();await expect(selector).toBeVisible();await expect(warning).toHaveCount(1);
   await page.screenshot({path:testInfo.outputPath('workspace-unhealthy-setup.png')});
   await page.evaluate(()=>Reflect.get(window,'restoreNavigationReader')());
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
-  await expect(setup).not.toHaveAttribute('open');
+  await expect(setup).toBeHidden();
   for(const [locale,hint] of [
     ['pt-BR','Use o gerenciador de sessões para descobrir e gerenciar sessões tmux, Herdr ou Zellij.'],
     ['es','Usa el gestor de sesiones para descubrir y gestionar sesiones tmux, Herdr o Zellij.'],

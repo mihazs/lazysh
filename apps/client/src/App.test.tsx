@@ -1896,6 +1896,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   await screen.findByText('Live SSH terminal');
   expect(mocks.invoke.mock.calls.filter(([command])=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command))).toEqual([]);
   await user.click(screen.getByRole('button',{name:'Agents'}));
+  await user.click(await screen.findByRole('button',{name:t('herdrAgentsServer')}));
   const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
   await waitFor(()=>expect(select).toHaveProperty('disabled',false));
   expect(select).toHaveProperty('value','named-work');
@@ -1903,6 +1904,7 @@ it('opens Agents on the attached default Herdr session among several running ser
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
   const live=screen.getByRole('region',{name:t('herdrNavigationTitle')});
+  await user.click(within(live).getByRole('button',{name:t('navigationBack')}));
   const summary=within(live).getByText('Reported session');
   await user.click(summary);
   expect(within(live).getByText('/project')).toBeTruthy();
@@ -1952,7 +1954,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
       hidden.mockReturnValue(true);act(()=>document.dispatchEvent(new Event('visibilitychange')));
       hidden.mockReturnValue(false);act(()=>document.dispatchEvent(new Event('visibilitychange')));hidden.mockRestore();
     }else if(outcome==='cancel-server'){
-      await user.click(browser.getByText(`${t('herdrAgentsServer')} · named-work`));
+      await user.click(screen.getByRole('button',{name:t('herdrAgentsServer')}));
       const server=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});await waitFor(()=>expect(server).toHaveProperty('disabled',false));await user.selectOptions(server,'');
     }else await user.click(screen.getByRole('button',{name:t('herdrNavigationBack')}));
     if(outcome==='cancel-pending-reply')await user.click(screen.getByRole('tab',{name:'Home'}));
@@ -2212,16 +2214,18 @@ it('uses the existing guarded dialog shell for long mobile tasks and keeps choic
   const dialog=screen.getByRole('dialog',{name:'Preferences'});
   expect(dialog.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
   expect(dialog.querySelector('.dialog-content')).not.toBeNull();
-  const connections=within(dialog).getByText('Connections',{exact:true});
-  expect(connections.closest('details')).toHaveProperty('open',false);
+  const connections=within(dialog).getByRole('button',{name:'Connections'});
+  expect(within(dialog).queryByRole('region',{name:'Default multiplexer'})).toBeNull();
   await user.click(connections);
   expect(within(dialog).getByRole('region',{name:'Default multiplexer'})).toBeTruthy();
-  const security=within(dialog).getByText('Security and app lock');
-  expect(security.closest('details')).toHaveProperty('open',false);
+  await user.click(within(dialog).getByRole('button',{name:'Back'}));
+  const security=within(dialog).getByRole('button',{name:'Security and app lock'});
+  expect(within(dialog).queryByRole('region',{name:'App lock settings'})).toBeNull();
   await user.click(security);
   expect(within(dialog).getByRole('region',{name:'App lock settings'})).toBeTruthy();
   expect(within(dialog).getByText(/Require device authentication when returning/)).toBeTruthy();
   within(dialog).getByRole('button',{name:'Close Preferences'}).focus();
+  await user.keyboard('{Escape}'); expect(screen.getByRole('dialog',{name:'Preferences'})).toBe(dialog);
   await user.keyboard('{Escape}'); expect(screen.queryByRole('dialog')).toBeNull();
   expect(document.activeElement).toBe(preferences);
   await user.click(screen.getByRole('button',{name:'Connect to Home'}));

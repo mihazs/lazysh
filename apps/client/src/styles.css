@@ -1523,7 +1523,7 @@ button svg {
 .preferences-panel { padding: 24px; max-width: 760px; overflow: auto; }
 .about-panel { overflow-wrap: anywhere; }
 .about-panel pre { overflow-x: auto; }
-.preferences-panel > label, .preferences-panel details label { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+.preferences-panel label { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
 .preferences-panel input:not([type="checkbox"]), .preferences-panel select, .preferences-panel textarea, .terminal-search input, .terminal-compose textarea { background: var(--theme-panel, #151c12); color: var(--theme-text, #e0e8da); border: 1px solid var(--theme-border, #46573c); padding: 9px; border-radius: 5px; max-width: 100%; }
 .preferences-panel textarea { width: 100%; min-height: 90px; }
 .preferences-panel p { color: var(--theme-text, #adb9a4); line-height: 1.5; }
@@ -1861,3 +1861,26 @@ button svg {
 .agent-section-jumps { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; padding: 0 0 8px; flex-shrink: 0; }
 .agent-section-jumps[hidden] { display: none; }
 .agent-section-jumps button { min-width: 0; min-height: 44px; }
+
+/* Distinguish the navigation/control layer while reading surfaces stay solid. */
+.workspace-navigation-modes { border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 12%, transparent); }
+@supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
+  [data-mobile-presentation="sheet"] > .dialog:has(> .workspace-tools-content) {
+    background: color-mix(in srgb, var(--theme-panel) 78%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 12%, transparent), 0 8px 24px rgb(0 0 0 / 16%);
+  }
+  .sidebar > .brand, .workspace-navigation-modes, .settings-detail-header {
+    background: color-mix(in srgb, var(--theme-panel) 82%, transparent);
+    backdrop-filter: blur(16px) saturate(115%);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 10%, transparent), 0 4px 14px rgb(0 0 0 / 10%);
+  }
+}
+.herdr-navigation > header, .settings-detail-header { border-radius: 10px; }
+.settings-detail-header { margin-bottom: 8px; }
+.workspace-navigation-modes button, .herdr-report-reference summary { transition: background-color 120ms ease, border-color 120ms ease; }
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .sidebar > .brand, .workspace-navigation-modes, .settings-detail-header, [data-mobile-presentation="sheet"] > .dialog:has(> .workspace-tools-content) { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-navigation-modes button, .herdr-report-reference summary { transition: none; }
+}
