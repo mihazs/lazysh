@@ -4217,6 +4217,87 @@ class NativeWorkspaceTest {
         raw.start()
         fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
+        var imeOrderInstalled = false
+        var imeOrderFinished = false
+        var imeOrderUnavailable = false
+        val imeOrderInstall = """
+            (()=>{const key='__lazyshOwnedImeOrder',owner=${JSONObject.quote(nonce)};if(Object.hasOwn(window,key))return false;
+              const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+              if(areas.length!==1)return false;const area=areas[0],surface=area.closest('.terminal-canvas');
+              if(!surface)return false;
+              let closed=false,overflow=false,unavailable=false,phase='beforeSelect';
+              const events=[],timers=new Set(),listeners=[];let owned;
+              const flag=value=>typeof value==='boolean'?value:null;
+              const initialReadOnly=flag(area.readOnly);
+              const sample=(event,edge,owner)=>{
+                if(closed)return;if(events.length>=24){overflow=true;return;}
+                try {const current=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                  events.push({event,edge,owner,phase,originalPresent:current.length===1&&current[0]===area,
+                    connected:flag(area.isConnected),focused:document.activeElement===area,
+                    documentFocus:flag(document.hasFocus()),visible:typeof document.hidden==='boolean'?!document.hidden:null,
+                    readOnly:flag(area.readOnly),enabled:typeof area.disabled==='boolean'?!area.disabled:null,
+                    reviewPresent:Boolean(surface.closest('.terminal-pane')?.querySelector('.terminal-edit-review'))});
+                }catch{unavailable=true;}
+              };
+              const cleanup=()=>{closed=true;
+                for(const timer of timers)try{clearTimeout(timer);}catch{unavailable=true;}
+                try{timers.clear();}catch{unavailable=true;}
+                for(const [target,name,callback]of listeners)try{target.removeEventListener(name,callback,true);}catch{unavailable=true;}
+                try{if(window[key]===owned)delete window[key];}catch{unavailable=true;}
+              };
+              const listen=(target,name,owner)=>{const callback=event=>{
+                if(owner==='window'&&event.target!==window)return;
+                sample(name,'capture',owner);if(closed)return;
+                if(events.length+timers.size>=24){overflow=true;return;}
+                try {const timer=setTimeout(()=>{timers.delete(timer);sample(name,'deferred',owner);},0);timers.add(timer);}
+                catch{unavailable=true;}
+              };target.addEventListener(name,callback,true);listeners.push([target,name,callback]);};
+              try {
+                for(const name of ['pointerdown','pointerup','pointercancel','click'])listen(surface,name,'surface');
+                for(const name of ['focus','blur']){listen(area,name,'editor');listen(window,name,'window');}
+                listen(document,'visibilitychange','document');
+                window[key]=owned={owner,mark(next){if(['beforeSelect','afterSelect','beforeTap','afterTap'].includes(next)){phase=next;sample('boundary','boundary','observer');}},
+                  stop(){cleanup();return {state:unavailable?'unavailable':'observed',initialReadOnly,overflow,events};}};
+                sample('installed','boundary','observer');return true;
+              }catch{cleanup();return false;}
+            })()
+        """.trimIndent()
+        fun imeOrderMark(phase: String) {
+            if(imeOrderInstalled)runCatching {
+                require(evaluate(scenario,"(()=>{const observer=window.__lazyshOwnedImeOrder;if(observer?.owner!==${JSONObject.quote(nonce)})return false;observer.mark(${JSONObject.quote(phase)});return true;})()",1_000)=="true")
+            }.onFailure {imeOrderUnavailable=true}
+        }
+        fun retainImeOrder(result: JSONObject?, failure: Throwable?) {
+            runCatching {
+                val observed=requireNotNull(result)
+                if(imeOrderUnavailable)observed.put("state","unavailable")
+                require(observed.keys().asSequence().toSet()==setOf("state","initialReadOnly","overflow","events"))
+                require(observed.getString("state") in listOf("observed","unavailable"))
+                require(observed.get("initialReadOnly") is Boolean || observed.isNull("initialReadOnly"))
+                require(observed.get("overflow") is Boolean)
+                val events=observed.getJSONArray("events");require(events.length()<=24)
+                val flags=setOf("originalPresent","connected","focused","documentFocus","visible","readOnly","enabled","reviewPresent")
+                for(index in 0 until events.length()) {
+                    val event=events.getJSONObject(index)
+                    require(event.keys().asSequence().toSet()==flags+setOf("event","edge","owner","phase"))
+                    require(event.getString("event") in listOf("installed","boundary","pointerdown","pointerup","pointercancel","click","focus","blur","visibilitychange"))
+                    require(event.getString("edge") in listOf("capture","deferred","boundary"))
+                    require(event.getString("owner") in listOf("observer","surface","editor","window","document"))
+                    require(event.getString("phase") in listOf("beforeSelect","afterSelect","beforeTap","afterTap"))
+                    for(name in flags)require(event.get(name) is Boolean || event.isNull(name))
+                }
+                if(failure!=null)failure.addSuppressed(AssertionError("IME passive order[$observed]"))
+            }.onFailure {if(failure!=null)runCatching {failure.addSuppressed(AssertionError("IME passive order[unavailable]"))}}
+        }
+        fun finishImeOrder(failure: Throwable? = null) {
+            if(imeOrderFinished)return
+            imeOrderFinished=true
+            val result=if(imeOrderInstalled)runCatching {
+                JSONObject(evaluate(scenario,"window.__lazyshOwnedImeOrder?.owner===${JSONObject.quote(nonce)} ? window.__lazyshOwnedImeOrder.stop() : {state:'unavailable'}",1_000))
+            }.getOrNull() else null
+            imeOrderInstalled=false
+            retainImeOrder(result,failure)
+        }
         fun terminalEditor() {
             try {
             awaitDocument(scenario, "packaged terminal current normal editable helper", """
@@ -4227,9 +4308,14 @@ class NativeWorkspaceTest {
                     Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
             """)
             } catch(primary:Throwable) {
-                // One failure-only callback; never change the original acceptance predicate or failure.
+                // One existing 1000ms callback timeout; diagnostic dispatch is not a new wall-clock bound.
+                val collectOrder=!imeOrderFinished
+                imeOrderFinished=true; imeOrderInstalled=false
+                var order:JSONObject?=null
                 runCatching {
-                    val state=JSONObject(evaluate(scenario,"""
+                    val envelope=JSONObject(evaluate(scenario,"""
+                        (()=>{let editor=null,order=null;
+                          try {editor=
                         (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
                           const area=areas.length===1?areas[0]:null,pane=area?.closest('.terminal-pane');
                           const rects=pane?.getClientRects?.(),visibility=pane?getComputedStyle(pane).visibility:null;
@@ -4242,8 +4328,16 @@ class NativeWorkspaceTest {
                             endedNoticePresent:pane?Boolean(pane.querySelector(':scope > .session-notice[role=status]')):null,
                             modalPresent:pane?Boolean(document.querySelector('[role=dialog][aria-modal=true]')):null,
                             paneDisplayed:rects&&Number.isInteger(rects.length)&&rects.length>=0&&['visible','hidden','collapse'].includes(visibility)?rects.length>0&&visibility==='visible':null,
-                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})()
+                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})();
+                          }catch{}finally{if($collectOrder)try{
+                            const observer=window.__lazyshOwnedImeOrder;
+                            if(observer?.owner===${JSONObject.quote(nonce)})order=observer.stop();
+                          }catch{}}
+                          return {editor,order};})()
                     """,1_000))
+                    order=envelope.optJSONObject("order")
+                    require(envelope.keys().asSequence().toSet()==setOf("editor","order"))
+                    val state=envelope.getJSONObject("editor")
                     val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent","unappliedReviewPresent","endedNoticePresent","modalPresent","paneDisplayed")
                     require(state.keys().asSequence().toSet()==fields.toSet()+"count")
                     val count=state.get("count");require(count in listOf("zero","one","many"))
@@ -4253,6 +4347,7 @@ class NativeWorkspaceTest {
                     }
                     primary.addSuppressed(AssertionError("IME editor state[count=$count $flags]"))
                 }.onFailure {runCatching {primary.addSuppressed(AssertionError("IME editor state[unavailable]"))}}
+                if(collectOrder)retainImeOrder(order,primary)
                 throw primary
             }
             raw.original()
@@ -4263,6 +4358,7 @@ class NativeWorkspaceTest {
                 (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
                   return [rect.left+rect.width/2,rect.top+Math.min(rect.height/2,40),innerWidth];})()
             """))
+            imeOrderMark("beforeTap")
             onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
                 val location = IntArray(2); view.getLocationOnScreen(location)
                 val scale = view.width / bounds.getDouble(2)
@@ -4270,11 +4366,14 @@ class NativeWorkspaceTest {
                 require(x>0 && x<view.width && y>0 && y<view.height) { "Owned terminal tap outside WebView" }
                 floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
             }, Press.FINGER))
+            imeOrderMark("afterTap")
             terminalEditor()
         }
         var primary: Throwable? = null
         try {
-            ime.arm(); ime.select(); tapTerminal()
+            imeOrderInstalled=runCatching {evaluate(scenario,imeOrderInstall,1_000)=="true"}.getOrDefault(false)
+            ime.arm(); imeOrderMark("beforeSelect"); ime.select(); imeOrderMark("afterSelect"); tapTerminal()
+            finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
             for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
@@ -4305,8 +4404,9 @@ class NativeWorkspaceTest {
             terminalEditor()
             awaitDocument(scenario, "actual receiver wrote the exact transaction stream before disconnect", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_DELIVERED')")
             android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
-        } catch (failure: Throwable) { primary=failure; throw failure }
+        } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
+            finishImeOrder(primary)
             try { ime.restore() } catch (cleanup: Throwable) {
                 if (primary != null) primary!!.addSuppressed(cleanup) else throw cleanup
             }
