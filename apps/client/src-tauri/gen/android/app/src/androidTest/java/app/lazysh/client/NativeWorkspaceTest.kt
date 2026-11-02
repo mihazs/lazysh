@@ -4253,11 +4253,16 @@ class NativeWorkspaceTest {
             ime.arm(); ime.select(); tapTerminal()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
-            for (operation in listOf("composeCorrection", "extendTail", "eraseTail", "repeatWord")) {
+            for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
                 terminalEditor()
                 val result = ime.call(operation)
                 assertTrue("Fixed native IME transaction accepted: $operation", result.getBoolean("accepted"))
                 assertTrue("Fixed native IME transaction readback: $operation", result.getBoolean("readMatched"))
+                if (operation == "extendTail") {
+                    assertTrue("Non-tail native editor retains the full correction", result.getBoolean("suffixMatched"))
+                    evaluate(scenario, "setTimeout(()=>{window.__lazyshNonTailImeSettled=true},0);true")
+                    awaitDocument(scenario, "settled native non-tail correction stays editable", "window.__lazyshNonTailImeSettled===true && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.selectionStart===0 && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===false")
+                }
             }
             clickIcon("Compose")
             awaitDocument(scenario, "composer revokes packaged terminal editor", "document.querySelector('.terminal-compose textarea')?.value==='' && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===true")
