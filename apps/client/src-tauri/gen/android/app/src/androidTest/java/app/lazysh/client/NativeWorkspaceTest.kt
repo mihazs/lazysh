@@ -3781,7 +3781,35 @@ class NativeWorkspaceTest {
         val confirmedDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
         while(phase(state())!="CONFIRMED" && System.nanoTime()<confirmedDeadline)Thread.sleep(20)
         val confirmed=state()
-        assertTrue("Real SDK challenge must confirm native state",phase(confirmed)=="CONFIRMED")
+        try {
+            assertTrue("Real SDK challenge must confirm native state",phase(confirmed)=="CONFIRMED")
+        } catch(primary:AssertionError) {
+            // Sample only after the original wait fails; never retain private state or error text.
+            fun observedPhase(allowed:Set<String>,read:()->Any?):String = try {
+                when(val value=read()) {
+                    null -> "absent"
+                    is Enum<*> -> value.name.let {if(it in allowed)it else "unknown"}
+                    else -> "unknown"
+                }
+            } catch(_:Exception) {"unavailable"}
+            val enrollment=observedPhase(setOf("BOOTSTRAP","REGISTER","SUBSCRIBE","VERIFY","CONFIRMED","REVOKE_PENDING","FAILED")) {
+                if(confirmed==null)null else stateType.getDeclaredMethod("getPhase").invoke(confirmed)
+            }
+            val registration=observedPhase(setOf("OFF","SELECTING","REQUESTED","READY","FAILED","UNAVAILABLE","REVOKE_PENDING")) {
+                val owner=native("PushRegistration").getDeclaredMethod("controller",Context::class.java).invoke(singleton("PushRegistration"),context)
+                val value=native("RegistrationController").getDeclaredMethod("getRegistration").invoke(owner)
+                native("Registration").getDeclaredMethod("getPhase").invoke(value)
+            }
+            val busy=try {
+                when(native("EnrollmentController").getDeclaredMethod("busy").invoke(controller)) {
+                    true -> "true"
+                    false -> "false"
+                    else -> "unavailable"
+                }
+            } catch(_:Exception) {"unavailable"}
+            primary.addSuppressed(AssertionError("Ntfy challenge state[enrollment=$enrollment registration=$registration busy=$busy]"))
+            throw primary
+        }
         assertTrue("Exact server device binding",stateType.getDeclaredMethod("getDeviceId").invoke(confirmed)==data.getString("deviceId"))
         assertTrue("Exact server generation binding",(stateType.getDeclaredMethod("getGeneration").invoke(confirmed) as Number).toLong()==data.getLong("generation"))
         assertTrue("Challenge arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
