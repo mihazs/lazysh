@@ -802,11 +802,7 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
           script: |
-            if [ '${{ matrix.push-variant }}' = 'google' ]; then
-              LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy
-            else
-              LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy
-            fi
+            if [ '${{ matrix.push-variant }}' = 'google' ]; then LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy; else LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy; fi
       - name: Retain finite ntfy acceptance receipts only
         uses: actions/upload-artifact@v4
         if: always()

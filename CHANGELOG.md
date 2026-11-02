@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Run each Google/FOSS ntfy acceptance branch as a complete emulator-runner shell command, preserving the existing native checks and deadlines.
+
 - Keep browser acceptance aligned with dedicated Preferences screens and compare attachment file-picker styling in a settled normal state; application behavior and defaults are unchanged.
 
 - Persist the selected Android push provider before explicit registration or cleanup so late previous-provider token callbacks cannot change it after restart. Status inspection remains read-only, and failed persistence prevents the control action.

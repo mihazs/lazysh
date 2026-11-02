@@ -10,10 +10,35 @@ const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/che
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
-const commands = decoded.trim().split(/\r\n|\n|\r/).map(line => line.trim()).filter(line => !line.startsWith('#') && line.length > 0);
+function emulatorCommands(script:string) {return script.trim().split(/\r\n|\n|\r/).map(line=>line.trim()).filter(line=>!line.startsWith('#') && line.length>0);}
+const commands=emulatorCommands(decoded);
 
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google',23],['fdroid',23]] as const)('ntfy %s dispatch executes complete runner lines and preserves enrollment argv/environment with exit %i',async (variant,exit)=>{
+  const job=workflow.jobs['native-android-ntfy'];
+  const step=job.steps.find(step=>step.name==='Real ntfy encrypted native enrollment')!;
+  expect(step.uses).toBe('mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b');
+  expect(job['timeout-minutes']).toBe(35);
+  expect(job.env).toEqual({ANDROID_SERIAL:'emulator-5580'});
+  const lines=emulatorCommands(step.with!.script!.replaceAll('${{ matrix.push-variant }}',variant));
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ntfy-dispatch-'));temporary.push(directory);
+  const bin=join(directory,'bin'),receipt=join(directory,'invocation');await mkdir(bin);
+  await writeFile(join(bin,'bun'),"#!/bin/sh\nprintf '%s\\n' \"$LAZYSH_ANDROID_QR_EMULATOR_PID_FILE\" \"$LAZYSH_NTFY_ANDROID_VARIANT\" \"$@\" >> \"$INVOCATION\"\nexit \"$NATIVE_EXIT\"\n",{mode:0o700});
+  const runnerTemp=join(directory,'owned temporary directory');
+  for(const line of lines){
+    const child=new OwnedProcess('/bin/sh',['-c',line],directory,{PATH:bin,RUNNER_TEMP:runnerTemp,INVOCATION:receipt,NATIVE_EXIT:String(exit)});
+    const result=child.finish('decoded ntfy enrollment dispatch',5000);
+    if(exit===0)await result;else await expect(result).rejects.toThrow('Owned fixture failed: decoded ntfy enrollment dispatch; exit=23');
+    expect(child.stdout).toBe('');expect(child.stderr).toBe('');
+  }
+  expect(lines).toHaveLength(1);
+  expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
+    join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
+    ...(variant==='google'?['run','--cwd','apps/client','test:android-ntfy']:['run','test:android-ntfy']),'',
+  ]);
 });
 
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
