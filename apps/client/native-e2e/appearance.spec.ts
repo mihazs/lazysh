@@ -12,8 +12,8 @@ async function captureAppearance(gui:NativeGui,state:'brand'|'paper'|'midnight')
   await copyFile(fileURLToPath(new URL('owned-synthetic-window.png',directory)),fileURLToPath(new URL(`appearance-${state}.png`,directory)));
 }
 
-it('changes native appearance through public settings and restores keyboard context without replacing its terminal',async()=>{
-  const gui=fixture.gui=await NativeGui.start(),browser=gui.browser!;
+async function enterAppearance(gui:NativeGui) {
+  const browser=gui.browser!;
   fixture.captureSafe=true;
   await (await browser.$('button[aria-label="Connect to Primary GUI host"]')).waitForDisplayed({timeout:30_000});
   const owner=await gui.appOwner();
@@ -43,6 +43,28 @@ it('changes native appearance through public settings and restores keyboard cont
   await browser.keys('\uE007');
   const page=await dialog.$('[data-settings-page="appearance"]'),heading=await page.$('h2');
   await page.waitForDisplayed();expect(await heading.isFocused()).toBe(true);
+  return {gui,browser,owner,terminal,terminalId,opener,dialog,appearance,page};
+}
+
+async function returnToOriginalTerminal(state:Awaited<ReturnType<typeof enterAppearance>>) {
+  const {gui,browser,owner,terminal,terminalId,opener,dialog,appearance,page}=state;
+  gui.stage='appearance contextual keyboard return';
+  await browser.keys('\uE00C');
+  await page.waitForDisplayed({reverse:true});expect(await appearance.isFocused()).toBe(true);
+  expect(await appearance.isDisplayed()).toBe(true);
+  await browser.keys('\uE00C');await dialog.waitForDisplayed({reverse:true});
+  expect(await opener.isFocused()).toBe(true);expect(await opener.isDisplayed()).toBe(true);
+  expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
+  expect(await gui.appOwner()).toEqual(owner);
+  await terminal.click();await typeText(browser,"printf '%s%s\\n' native-appearance- after\n");
+  await browser.waitUntil(async()=>{const text=await terminal.getText();return text.includes('native-appearance-before')&&text.includes('native-appearance-after');},{timeout:20_000,timeoutMsg:'Original local PTY and scrollback did not survive appearance navigation'});
+  expect(await gui.appOwner()).toEqual(owner);expect(await browser.getWindowHandles()).toHaveLength(1);
+  expect(gui.connections).toBe(0);
+}
+
+it('changes native appearance through public settings and restores keyboard context without replacing its terminal',async()=>{
+  const gui=fixture.gui=await NativeGui.start();
+  const state=await enterAppearance(gui),{browser,page}=state;
   const theme=await page.$('//label[normalize-space(text())="App theme"]/select');
   expect(await page.$('legend=App icon').isExisting()).toBe(false);
   expect(await page.$('button=Refresh app icon').isDisplayed()).toBe(true);
@@ -73,16 +95,22 @@ it('changes native appearance through public settings and restores keyboard cont
   expect(samples.paper.background).not.toBe(samples.midnight.background);
   expect(samples.paper.foreground).not.toBe(samples.midnight.foreground);
 
-  gui.stage='appearance contextual keyboard return';
-  await browser.keys('\uE00C');
-  await page.waitForDisplayed({reverse:true});expect(await appearance.isFocused()).toBe(true);
-  expect(await appearance.isDisplayed()).toBe(true);
-  await browser.keys('\uE00C');await dialog.waitForDisplayed({reverse:true});
-  expect(await opener.isFocused()).toBe(true);expect(await opener.isDisplayed()).toBe(true);
-  expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
-  expect(await gui.appOwner()).toEqual(owner);
-  await terminal.click();await typeText(browser,"printf '%s%s\\n' native-appearance- after\n");
-  await browser.waitUntil(async()=>{const text=await terminal.getText();return text.includes('native-appearance-before')&&text.includes('native-appearance-after');},{timeout:20_000,timeoutMsg:'Original local PTY and scrollback did not survive appearance navigation'});
-  expect(await gui.appOwner()).toEqual(owner);expect(await browser.getWindowHandles()).toHaveLength(1);
-  expect(gui.connections).toBe(0);
+  await returnToOriginalTerminal(state);
+});
+
+it('honors the private GTK reduced-motion setting while preserving native keyboard focus and its original terminal',async()=>{
+  const gui=fixture.gui=await NativeGui.startWithReducedMotion();
+  const state=await enterAppearance(gui),{browser,page}=state;
+  gui.stage='native OS reduced-motion appearance';
+  const media=await browser.execute(()=>({reduce:matchMedia('(prefers-reduced-motion: reduce)').matches,normal:matchMedia('(prefers-reduced-motion: no-preference)').matches}));
+  expect(media).toEqual({reduce:true,normal:false});
+  const chrome=await browser.execute(()=>Array.from(document.querySelectorAll('.sidebar, .sidebar button, .workspace-navigation-modes button, .settings-index button')).filter(node=>(node as HTMLElement).getClientRects().length>0).map(node=>{
+    const style=getComputedStyle(node);return {property:style.transitionProperty,durations:style.transitionDuration.split(',').map(value=>parseFloat(value)),active:node.getAnimations().filter(animation=>animation.playState==='running'||animation.pending).length};
+  }));
+  expect(chrome.length).toBeGreaterThan(0);
+  for(const control of chrome) {expect(control.durations.every(value=>value===0)).toBe(true);expect(control.active).toBe(0);}
+  const pageMotion=await browser.execute((node)=>({name:getComputedStyle(node as HTMLElement).animationName,active:(node as HTMLElement).getAnimations().filter(animation=>animation.playState==='running'||animation.pending).length}),page);
+  expect(pageMotion).toEqual({name:'none',active:0});
+  console.info('Native reduced-motion observation',JSON.stringify({media,chromeCount:chrome.length,pageAnimation:pageMotion.name,activePageAnimations:pageMotion.active}));
+  await returnToOriginalTerminal(state);
 });

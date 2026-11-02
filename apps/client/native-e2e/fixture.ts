@@ -79,22 +79,28 @@ export class NativeGui {
 
   static async start() {return this.startOwned(false);}
   static async startWithDisposableVault() {return this.startOwned(true);}
-  private static async startOwned(disposableVault:boolean) {
+  static async startWithReducedMotion() {return this.startOwned(false,true);}
+  private static async startOwned(disposableVault:boolean,reducedMotion=false) {
     if(process.platform!=='linux'||!process.getuid||process.getuid()===0)throw new Error('Native GUI acceptance requires an unprivileged Linux account');
     assertDirectDriverEnvironment(process.env);
     const binary=await executable(join(ROOT,'target/release/lazysh'),'fresh bundled application','lazysh');
     const testWorker=await identity(process.pid);if(!testWorker)throw new Error('Native GUI test worker identity unavailable');
     const directory=await mkdtemp('/tmp/lazysh-native-gui-');
     const fixture=new NativeGui(directory,binary,testWorker,disposableVault);
-    try {await fixture.setup();return fixture;}
+    try {await fixture.setup(reducedMotion);return fixture;}
     catch(error) {try{await fixture.stop();}catch(cleanup){throw new AggregateError([error,cleanup],'Native GUI startup and cleanup failed');}throw error;}
   }
   private async command(stage:string,program:string,args:string[]) {
     return new OwnedProcess(program,args,this.directory,this.env).finish(stage,5000);
   }
-  private async setup() {
+  private async setup(reducedMotion:boolean) {
     await chmod(this.directory,0o700);
     for(const name of ['home','config','data','cache','runtime','services'])await mkdir(join(this.directory,name),{mode:0o700});
+    if(reducedMotion) {
+      const gtk=join(this.directory,'config','gtk-3.0');await mkdir(gtk,{mode:0o700});
+      // GTK3 reads this private OS setting before the driver/app initializes GTK.
+      await writeFile(join(gtk,'settings.ini'),'[Settings]\ngtk-enable-animations=false\n',{mode:0o600,flag:'wx'});
+    }
     const tools=await Promise.all([
       executable(process.env.LAZYSH_NATIVE_GUI_DRIVER??'','tauri-driver2.1.0','tauri-driver'),
       executable(process.env.LAZYSH_NATIVE_GUI_WEBKIT_DRIVER??'/usr/bin/WebKitWebDriver','matching WebKitWebDriver','WebKitWebDriver'),
