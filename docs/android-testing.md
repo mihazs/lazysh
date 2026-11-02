@@ -341,3 +341,19 @@ The closed test-only receiver mode `DIRECTORY --dpad-pan NONCE` validates a 32-l
 The same raw-navigation case has a separately named `verifyPastBottomKeyboardDismiss` checkpoint after D-pad stop snapshots and before its unchanged drain marker. If an earlier D-pad assertion fails, this checkpoint is not reached and must not be counted as passed. It closes the pad normally and keeps the ordinary admitted AOSP LatinIME selected; the one-pixel owned test IME is never enabled or used for visibility. Real native IME insets, positive keyboard height and the resized WebView prove visibility before each attempt. The default-off upward stroke must leave that keyboard visible. After explicit normal-UI opt-in, Preferences is closed and the keyboard is freshly reopened/proved visible before another trusted physical finger-UP stroke (56 CSS pixels, positive wheel/toward bottom) must make the native IME hidden. Settings focus changes cannot satisfy that outcome.
 
 The controlled shell/raw receiver never enables alternate-screen or mouse reporting. Each stroke uses one native DOWN, two monotonic upward MOVE events and one UP, with the original focused/resumed Activity, WebView/document/session retained. A nonce-owned passive capture receipt on the original scroll owner is registered after the app listeners; only bounded counts/trust/contact/retention/focus/direction booleans are read. Within the same five-second stroke budget, each actual DOM MOVE must be received before the next injection, and actual END receipt precedes keyboard outcomes; Window dispatch alone cannot qualify a coalesced or unprocessed move. The default-off editor must remain focused and the enabled editor must actually blur. The passive observer is removed independently without replacing the original failure. Geometry must fit the visible terminal above the real keyboard; insufficient 48-CSS-pixel room refuses admission. Keyboard readiness and each stroke retain the existing five-second bounds. No DOM input setter, fake touch event, keyboard-hide call, IME selection/flags change, new receiver protocol or CI flag is added. The existing final host byte oracle still requires the pre-overscroll stopped counts plus the fixed marker, so delayed extra input also fails. Normal UI restores the opt-in preference and toolbar; CANCEL/window-observer and preference cleanup preserve the primary failure. Named `checkpoint=reached`, `defaultOffVisible=true` and `nativeVerified=true hostByteOracle=pending` observations distinguish the native substage from later host-byte acceptance. Local compilation and embedded-source models do not establish actual Android, physical-device/keyboard or performance acceptance.
+The two packaged raw-input cases explicitly request `ownedReceiverRoot` in the
+existing private-TTY SSH fixture. This reuses the protected owned root and private
+NSS-home mounts already used by the Herdr fixture; it does not weaken the receiver's
+ancestor ownership checks. Other SSH/Mosh/companion callers retain their prior
+namespace. The option rejects tool, companion, Mosh, shared-navigation or non-private
+TTY combinations before starting a process. The existing host owner includes an
+`owned namespaced SSH raw receiver root` negative/positive control selected by
+`LAZYSH_TEST_SSH_USER_NAMESPACE=1` and `LAZYSH_TEST_RECEIVER_BIN`: the old root must
+reject before receiver output creation, while the owned root must deliver the exact
+fixed IME wire through the same source-bound receiver. This host check is not an
+Android input or gesture acceptance result.
+
+The existing Linux namespaced-SSH CI selector includes this host control. Its source
+image may retain Cargo executable permissions: admission requires an owned regular
+non-link file (including Cargo hardlinks), owner execute and no group/other write. The actual
+private execution copy remains single-link mode0500 with byte equality and ancestry checks.

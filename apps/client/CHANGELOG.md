@@ -1,5 +1,46 @@
 # @lazysh/client
 
+## 1.8.3
+
+### Patch Changes
+
+- 408e4a8: Retain closed failure-local D-pad phase and last validated receiver counts in Android native acceptance without changing gestures, budgets or input behavior.
+- 2d4bab7: Use a minimum-sized standard Space for the house-owned Android test IME and cover its real framework measurement without changing packaged terminal input behavior.
+- 1eda85b: Calibrate the ntfy acceptance release-assembly build allowance from two to four minutes after a measured two-worker build exceeded two minutes, preserving APK/trust checks, native assertions and outer test limits.
+- 1e05652: Align the opt-in Android raw SSH receiver fixture with the existing bounded UI-host lifetime while preserving ordinary SSH and Mosh lifetimes and all input acceptance deadlines.
+- eb70476: Give each owned SSH/SFTP fixture launch a private host-trust file so concurrent clients cannot rewrite another client's pin, preserving strict verification and cleanup.
+- @lazysh/account-usage@1.8.3
+  - @lazysh/common@1.8.3
+  - @lazysh/display-idle@1.8.3
+  - @lazysh/et-transport@1.8.3
+  - @lazysh/mosh-transport@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- 17ce060: Remeasure the Android native D-pad target after its initial keyboard-opening tap, preserving owned-window injection and exact receiver-byte acceptance.
+- 1d4c8c5: Retain closed owned-tool failure observations and explicit validated native-receipt progress in ntfy acceptance failures, without changing process cleanup, deadlines or trust checks.
+- 99422b0: Use the visible workspace Preferences action in Android D-pad acceptance and retain closed failure-only IME editor-clause diagnostics without changing input or acceptance behavior.
+- @lazysh/account-usage@1.8.2
+  - @lazysh/common@1.8.2
+  - @lazysh/display-idle@1.8.2
+  - @lazysh/et-transport@1.8.2
+  - @lazysh/mosh-transport@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- d36533a: Retain fixed test-only startup stage breadcrumbs when owned Mosh multiplexer acceptance fails, without changing connection errors or runtime behavior.
+- f9150ac: Forward the pinned disposable Secret Service executable through the native GUI Turbo task and give Android raw-input acceptance fixtures an owned SSH root, preserving strict environment filtering and receiver ownership checks.
+- 14597f5: Retain one closed distributor UI snapshot only after the native ntfy trust-topic flow fails, preserving the original navigation timing, action, deadline and failure.
+- @lazysh/account-usage@1.8.1
+  - @lazysh/common@1.8.1
+  - @lazysh/display-idle@1.8.1
+  - @lazysh/et-transport@1.8.1
+  - @lazysh/mosh-transport@1.8.1
+
 ## 1.8.0
 
 ### Minor Changes

@@ -182,6 +182,34 @@ private class NtfySettingsScroll(started: Long) {
     }
 }
 
+private enum class NtfyReturnRole { settings, defaultDialog, add, certificate, allow, deny, ime }
+private data class NtfyReturnSnapshot(val foreground:String,val roles:Map<NtfyReturnRole,Boolean?>) {
+    init {require(foreground in listOf("ntfy","permission","lazysh","aospIme","other","unavailable"))}
+    fun closed()="foreground=$foreground "+NtfyReturnRole.entries.joinToString(" ") { "$it=${roles[it]?.toString() ?: "unavailable"}" }
+    companion object {
+        fun observe(foreground:()->String?,role:(NtfyReturnRole)->Boolean):NtfyReturnSnapshot {
+            val name=runCatching { foreground() }.getOrNull()
+            val closed=when(name) {
+                null -> "unavailable"
+                "io.heckel.ntfy" -> "ntfy"
+                "com.android.permissioncontroller" -> "permission"
+                "app.lazysh.client" -> "lazysh"
+                "com.android.inputmethod.latin" -> "aospIme"
+                else -> "other"
+            }
+            return NtfyReturnSnapshot(closed,NtfyReturnRole.entries.associateWith { runCatching { role(it) }.getOrNull() })
+        }
+    }
+}
+private fun ntfyReturnFailure(primary:Throwable,snapshot:()->NtfyReturnSnapshot) {
+    // Observation/report failures must never replace the original action failure.
+    runCatching {
+        val unavailable=NtfyReturnSnapshot("unavailable",emptyMap())
+        val state=runCatching(snapshot).getOrDefault(unavailable)
+        primary.addSuppressed(AssertionError("Ntfy return state[${state.closed()}]"))
+    }
+}
+
 @RunWith(AndroidJUnit4::class)
 class NativeWorkspaceTest {
     private fun webView(view: View): WebView? {
@@ -3369,6 +3397,38 @@ class NativeWorkspaceTest {
         println("lazysh bound event policy: closedParser=true undecryptedInert=true keystoreRoundtrip=true unreadableFailClosed=true privateContentsLogged=false")
     }
 
+    @Test fun ntfyReturnObservationIsClosedAndCannotReplaceThePrimaryFailure() {
+        val roles=NtfyReturnRole.entries
+        for((input,expected) in listOf(null to "unavailable","io.heckel.ntfy" to "ntfy",
+            "com.android.permissioncontroller" to "permission","app.lazysh.client" to "lazysh",
+            "com.android.inputmethod.latin" to "aospIme","private-origin/path" to "other")) {
+            var calls=0
+            val sample=NtfyReturnSnapshot.observe({input}) { calls++;it==NtfyReturnRole.ime }
+            assertEquals(expected,sample.foreground);assertEquals(roles.size,calls)
+            assertTrue("No raw foreground values retained",!sample.closed().contains("private-origin"))
+        }
+        for(failed in roles) {
+            val sample=NtfyReturnSnapshot.observe({throw IllegalStateException("private")}) {
+                if(it==failed)throw IllegalStateException("private") else true
+            }
+            assertEquals("unavailable",sample.foreground)
+            assertEquals(null,sample.roles[failed]);assertEquals(roles.size-1,sample.roles.values.count {it==true})
+            assertTrue(!sample.closed().contains("private"))
+        }
+        val sample=NtfyReturnSnapshot.observe({"io.heckel.ntfy"}) {false}
+        val primary=AssertionError("Owned TLS trust topic")
+        ntfyReturnFailure(primary) {sample}
+        assertEquals(1,primary.suppressed.size)
+        assertEquals("Ntfy return state[${sample.closed()}]",primary.suppressed.single().message)
+        val original=AssertionError("original")
+        var calls=0
+        ntfyReturnFailure(original) {calls++;error("private")}
+        assertEquals("original",original.message);assertEquals(1,original.suppressed.size)
+        assertEquals(1,calls)
+        assertTrue(original.suppressed.single().message.orEmpty().contains("foreground=unavailable"))
+        assertTrue(!original.suppressed.single().message.orEmpty().contains("private"))
+    }
+
     @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
         val arguments=InstrumentationRegistry.getArguments()
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",arguments.getString("lazyshNtfyAcceptance")=="true")
@@ -3473,9 +3533,26 @@ class NativeWorkspaceTest {
             settingsForeground && settingsToolbar && preferenceList && preference!=null && settings.active(System.nanoTime()))
         checkNotNull(preference).click()
         node(ntfyResource("default_server_dialog_url"),"Default server field").text=data.getString("ntfyOrigin")
-        node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
-        device.pressBack()
-        node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
+        fun returnSnapshot()=NtfyReturnSnapshot.observe({device.currentPackageName}) { role ->
+            device.hasObject(when(role) {
+                NtfyReturnRole.settings -> ntfyResource("toolbar").hasDescendant(By.text("Settings"))
+                NtfyReturnRole.defaultDialog -> ntfyResource("default_server_dialog_url")
+                NtfyReturnRole.add -> By.pkg("io.heckel.ntfy").desc("Add subscription")
+                NtfyReturnRole.certificate -> ntfyResource("trusted_certificate_fingerprint")
+                NtfyReturnRole.allow -> By.res("com.android.permissioncontroller","permission_allow_button")
+                NtfyReturnRole.deny -> By.res("com.android.permissioncontroller","permission_deny_button")
+                NtfyReturnRole.ime -> By.pkg("com.android.inputmethod.latin")
+            })
+        }
+        // Observe only after failure; preserve the original navigation timing.
+        try {
+            node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
+            device.pressBack()
+            node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
+        } catch(primary:Throwable) {
+            ntfyReturnFailure(primary) {returnSnapshot()}
+            throw primary
+        }
         node(ntfyResource("add_dialog_subscribe_topic_text"),"Owned trust topic field").text="lazysh-$nonce"
         node(ntfyResource("add_dialog_action_button").enabled(true),"Review owned TLS certificate").click()
         val fingerprint=node(ntfyResource("trusted_certificate_fingerprint"),"Certificate fingerprint review")
@@ -3819,7 +3896,10 @@ class NativeWorkspaceTest {
     }
 
     private fun openOwnedInputPreferences(scenario: ActivityScenario<MainActivity>, raw: OwnedRawSshInput, sections: List<String>) {
-        if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") raw.clickIcon("Preferences")
+        if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") {
+            if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
+            else workspaceMenuAction(scenario,"Preferences")
+        }
         for (title in sections) {
             if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
                 onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
@@ -4078,23 +4158,63 @@ class NativeWorkspaceTest {
             val origin = IntArray(2)
             var scale = 0.0
             instrumentation.runOnMainSync { web.getLocationOnScreen(origin); scale = web.width / bounds.getDouble(2) }
-            val start = floatArrayOf((origin[0]+bounds.getDouble(0)*scale).toFloat(), (origin[1]+bounds.getDouble(1)*scale).toFloat())
+            val tapStart = floatArrayOf((origin[0]+bounds.getDouble(0)*scale).toFloat(), (origin[1]+bounds.getDouble(1)*scale).toFloat())
             onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE,
-                { start }, Press.FINGER))
+                { tapStart }, Press.FINGER))
             awaitDocument(scenario, "one native D-pad tap delivered once", "JSON.stringify($countExpression)==='[1,0,0,0]'")
             raw.original()
             val epoch = android.os.SystemClock.uptimeMillis()
             val deadline = System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
             val pointer = android.view.MotionEvent.PointerProperties().apply { id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER }
-            var point = start
-            var held = false
-            var observer: OwnedFingerWindowObserver? = null
-            var fingerFailure: Throwable? = null
             fun remaining(): Long {
                 val value=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
                 assertTrue("Owned D-pad gesture exceeded original five-second budget", value>0)
                 return value.coerceAtMost(1000)
             }
+            // The tap can open the keyboard and move the pad. Never reuse its old screen point.
+            val heldBoundsExpression = """
+                (()=>{const buttons=document.querySelectorAll('.terminal-dpad button[aria-label="D-pad up"]');
+                  if(buttons.length!==1)return null;const button=buttons[0],r=button.getBoundingClientRect();
+                  const values=[r.left,r.top,r.right,r.bottom,innerWidth,innerHeight];
+                  if(!values.every(Number.isFinite)||!button.getClientRects().length||r.width<=0||r.height<=0||
+                    r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight)return null;
+                  const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
+                  return hit&&button.contains(hit)?values:null;})()
+            """.trimIndent()
+            val heldBounds = JSONArray(evaluate(scenario,heldBoundsExpression,remaining()))
+            val start = FloatArray(2)
+            scenario.onActivity { activity ->
+                assertSame("Current D-pad WebView must remain original",web,webView(activity.window.decorView))
+                assertTrue("Current D-pad WebView must be focused and laid out",web.isAttachedToWindow && web.isShown &&
+                    web.hasFocus() && web.hasWindowFocus() && !web.isLayoutRequested && web.width>0 && web.height>0)
+                web.getLocationOnScreen(origin);scale=web.width/heldBounds.getDouble(4)
+                assertTrue("Current D-pad scale must be finite and positive",scale.isFinite() && scale>0)
+                val target=android.graphics.RectF((origin[0]+heldBounds.getDouble(0)*scale).toFloat(),
+                    (origin[1]+heldBounds.getDouble(1)*scale).toFloat(),(origin[0]+heldBounds.getDouble(2)*scale).toFloat(),
+                    (origin[1]+heldBounds.getDouble(3)*scale).toFloat())
+                val visible=android.graphics.Rect();val window=android.graphics.Rect()
+                assertTrue("Current D-pad WebView must have visible app bounds",web.getLocalVisibleRect(visible))
+                visible.offset(origin[0],origin[1])
+                web.getWindowVisibleDisplayFrame(window)
+                assertTrue("Current D-pad target must remain inside visible app bounds",target.left>=visible.left && target.top>=visible.top &&
+                    target.right<=visible.right && target.bottom<=visible.bottom && target.left>=window.left && target.top>=window.top &&
+                    target.right<=window.right && target.bottom<=window.bottom)
+                // Target, local-visible translation, window frame and keyboard top all use device-screen coordinates.
+                val root=activity.window.decorView;assertSame("D-pad decor must be the measured WebView root",root,web.rootView)
+                val rootOrigin=IntArray(2);root.getLocationOnScreen(rootOrigin)
+                val insets=checkNotNull(ViewCompat.getRootWindowInsets(root))
+                val imeVisible=insets.isVisible(WindowInsetsCompat.Type.ime());val imeBottom=insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                assertTrue("Owned D-pad target must stay above the current keyboard",!imeVisible ||
+                    (imeBottom>0 && target.bottom<=rootOrigin[1]+root.height-imeBottom))
+                start[0]=target.centerX();start[1]=target.centerY()
+            }
+            remaining()
+            var point = start
+            var held = false
+            var observer: OwnedFingerWindowObserver? = null
+            var fingerFailure: Throwable? = null
+            var currentPhase = "up"
+            var lastCounts: IntArray? = null
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
@@ -4104,6 +4224,7 @@ class NativeWorkspaceTest {
                 val rows=JSONArray(evaluate(scenario,countExpression,remaining()))
                 require(rows.length()==4) { "Owned D-pad count observation invalid" }
                 return IntArray(4) { rows.getInt(it).also { value->require(value in 0..32) } }
+                    .also { lastCounts=it.copyOf() }
             }
             fun phase(index: Int) {
                 while (true) {
@@ -4123,16 +4244,21 @@ class NativeWorkspaceTest {
                 }
                 held=true;dispatch(android.view.MotionEvent.ACTION_DOWN);phase(0)
                 for ((index,offset) in listOf(-24 to 0,0 to 24,24 to 0).withIndex()) {
+                    currentPhase=listOf("left","down","right")[index]
                     dispatch(android.view.MotionEvent.ACTION_MOVE,offset.first,offset.second);phase(index+1)
                 }
+                currentPhase="neutral"
                 dispatch(android.view.MotionEvent.ACTION_MOVE)
                 while(evaluate(scenario,"(()=>{const buttons=document.querySelectorAll('.terminal-dpad button[data-dpad-direction]');return buttons.length===4&&Array.from(buttons).every(x=>!x.style.outline);})()",remaining())!="true")Thread.sleep(10)
                 pause();stopped=counts();pause();assertArrayEquals("Dead-zone output must stop",stopped,counts())
                 val before=JSONObject(checkNotNull(observer).snapshot()).getJSONArray("events")
                 assertEquals("Held D-pad has exactly DOWN plus four MOVE events",5,before.length())
                 assertTrue("No UP before all ordered receiver phases",(0 until before.length()).none {before.getJSONObject(it).getString("action")=="up"})
+                currentPhase="release"
                 dispatch(android.view.MotionEvent.ACTION_UP);held=false
+                currentPhase="post-release"
                 pause();assertArrayEquals("Final UP must not repeat or click the original arrow",stopped,counts())
+                currentPhase="trace"
                 val trace=JSONObject(checkNotNull(observer).snapshot())
                 assertFalse("Native pointer trace remains bounded",trace.getBoolean("overflow"))
                 val events=trace.getJSONArray("events")
@@ -4145,7 +4271,17 @@ class NativeWorkspaceTest {
                     assertEquals("Native D-pad dispatch handled","handled",row.getString("outcome"))
                     if(index in 1..4)assertEquals("Four MOVE phases before UP","move",row.getString("action"))
                 }
-            } catch(failure: Throwable) {fingerFailure=failure;throw failure}
+            } catch(failure: Throwable) {
+                fingerFailure=failure
+                // Local last-valid observation only; no new query, input or wait on failure.
+                runCatching {
+                    require(currentPhase in listOf("up","left","down","right","neutral","release","post-release","trace"))
+                    val counts=lastCounts
+                    require(counts==null || (counts.size==4 && counts.all { it in 0..32 }))
+                    failure.addSuppressed(AssertionError("D-pad gesture state[phase=$currentPhase lastCounts=${counts?.joinToString(",") ?: "unavailable"}]"))
+                }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad gesture state[unavailable]")) } }
+                throw failure
+            }
             finally {
                 var cleanup: Throwable?=null
                 try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
@@ -4232,6 +4368,7 @@ class NativeWorkspaceTest {
         fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
         fun terminalEditor() {
+            try {
             awaitDocument(scenario, "packaged terminal current normal editable helper", """
                 (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea'),area=areas[0];
                   return areas.length===1 && document.hasFocus() && !document.hidden && document.activeElement===area &&
@@ -4239,8 +4376,33 @@ class NativeWorkspaceTest {
                     area.getAttribute('autocorrect')==='off' && area.spellcheck===false &&
                     Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
             """)
+            } catch(primary:Throwable) {
+                // One failure-only callback; never change the original acceptance predicate or failure.
+                runCatching {
+                    val state=JSONObject(evaluate(scenario,"""
+                        (()=>{const areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                          const area=areas.length===1?areas[0]:null;
+                          return {count:areas.length===0?'zero':areas.length===1?'one':'many',
+                            focus:document.hasFocus(),visible:!document.hidden,active:area?document.activeElement===area:null,
+                            writable:area?!area.readOnly:null,enabled:area?!area.disabled:null,normalType:area?area.type!=='password':null,
+                            autocompleteOff:area?area.autocomplete==='off':null,autocorrectOff:area?area.getAttribute('autocorrect')==='off':null,
+                            spellcheckOff:area?area.spellcheck===false:null,
+                            sessionPresent:Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))};})()
+                    """,1_000))
+                    val fields=listOf("focus","visible","active","writable","enabled","normalType","autocompleteOff","autocorrectOff","spellcheckOff","sessionPresent")
+                    require(state.keys().asSequence().toSet()==fields.toSet()+"count")
+                    val count=state.get("count");require(count in listOf("zero","one","many"))
+                    val flags=fields.joinToString(" ") { name ->
+                        val value=state.get(name);require(value is Boolean || value===JSONObject.NULL)
+                        "$name=${if(value===JSONObject.NULL)"unavailable" else value}"
+                    }
+                    primary.addSuppressed(AssertionError("IME editor state[count=$count $flags]"))
+                }.onFailure {runCatching {primary.addSuppressed(AssertionError("IME editor state[unavailable]"))}}
+                throw primary
+            }
             raw.original()
         }
+
         fun tapTerminal() {
             val bounds = JSONArray(evaluate(scenario, """
                 (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
@@ -4346,6 +4508,24 @@ class NativeWorkspaceTest {
                 if (failure == null) failure = error else failure!!.addSuppressed(error)
             }
             if (failure != null) throw failure!!
+        }
+    }
+
+    @Test fun ownedImeInputViewHonorsBoundedFrameworkMeasurement() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val context=instrumentation.context
+            for ((legacy,available,expected) in listOf(Triple(true,800,800),Triple(false,800,1),Triple(false,0,0))) {
+                val frame=android.widget.FrameLayout(context)
+                val view=if(legacy) View(context).apply { minimumHeight=1 } else OwnedImeService.inputView(context)
+                // InputMethodService.setInputView replaces child parameters with this exact pair.
+                frame.addView(view,android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT))
+                frame.measure(View.MeasureSpec.makeMeasureSpec(320,View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(available,View.MeasureSpec.AT_MOST))
+                assertEquals("Fixture input child respects bounded height",expected,view.measuredHeight)
+                assertEquals("Fixture input frame respects bounded height",expected,frame.measuredHeight)
+                assertEquals("Fixture input child keeps full width",320,view.measuredWidth)
+            }
         }
     }
 

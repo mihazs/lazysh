@@ -11,6 +11,14 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use zeroize::{Zeroize, Zeroizing};
 
+// Fixed test-only breadcrumbs; never retain SSH bytes, keys, commands or paths.
+macro_rules! startup_stage {
+    ($stage:literal) => {
+        #[cfg(test)]
+        eprintln!(concat!("owned-mosh-startup stage=", $stage));
+    };
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
@@ -277,6 +285,7 @@ impl EntryStartup {
             Some(ChannelMsg::Data { data }) => {
                 self.received = self.received.saturating_add(data.len());
                 if self.received > 8192 {
+                    startup_stage!("bootstrap-byte-limit");
                     return Err(entry_failed());
                 }
                 self.bytes.extend_from_slice(&data);
@@ -284,16 +293,21 @@ impl EntryStartup {
             Some(ChannelMsg::ExtendedData { data, .. }) => {
                 self.received = self.received.saturating_add(data.len());
                 if self.received > 8192 {
+                    startup_stage!("bootstrap-byte-limit");
                     return Err(entry_failed());
                 }
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {
                 if exit_status != 0 || self.status.is_some() {
+                    startup_stage!("launcher-status-rejected");
                     return Err(entry_failed());
                 }
                 self.status = Some(exit_status);
             }
-            Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return Ok(false),
+            Some(ChannelMsg::Eof | ChannelMsg::Close) | None => {
+                startup_stage!("startup-stream-ended");
+                return Ok(false);
+            }
             _ => {}
         }
         Ok(true)
@@ -304,7 +318,9 @@ impl EntryStartup {
         child: &std::sync::Arc<Session>,
         lease: &crate::app_lock::AccessLease,
     ) -> Result<()> {
+        startup_stage!("binding-begin");
         let result = async {
+            startup_stage!("launcher-status-begin");
             // Mosh's launcher exits before its PTY child is released by UDP. Consume
             // that status separately so it cannot terminate the existing receipt parsers.
             while self.status.is_none() {
@@ -312,32 +328,40 @@ impl EntryStartup {
                     return Err(entry_failed());
                 }
             }
+            startup_stage!("launcher-status-ok");
             match &self.binding {
                 EntryBinding::Ordinary { marker } => {
                     // Actual child startup evidence only; this grants no tmux/Herdr input authority.
+                    startup_stage!("ordinary-receipt-begin");
                     crate::tmux_jump::handshake(&mut self.channel, &mut self.bytes, marker)
                         .await
                         .ok_or_else(entry_failed)?;
+                    startup_stage!("ordinary-receipt-ok");
                 }
                 EntryBinding::Tmux {
                     marker,
                     name,
                     server,
                 } => {
+                    startup_stage!("tmux-receipt-begin");
                     let identity =
                         crate::tmux_jump::handshake(&mut self.channel, &mut self.bytes, marker)
                             .await
                             .ok_or_else(entry_failed)?;
+                    startup_stage!("tmux-receipt-ok");
+                    startup_stage!("tmux-control-begin");
                     let control =
                         crate::tmux_jump::prepare(&parent.handle, identity, name, server, lease)
                             .await
                             .ok_or_else(entry_failed)?;
+                    startup_stage!("tmux-control-ok");
                     lease.check()?;
                     *child.tmux_server.lock().map_err(|_| entry_failed())? = Some(server.clone());
                     *child.tmux.lock().map_err(|_| entry_failed())? =
                         Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
                 }
                 EntryBinding::Herdr { name } => {
+                    startup_stage!("herdr-receipt-begin");
                     let initial = std::mem::take(&mut *self.bytes);
                     let (startup, rest) = crate::herdr_guard::acquire(
                         parent,
@@ -347,6 +371,7 @@ impl EntryStartup {
                         initial,
                     )
                     .await?;
+                    startup_stage!("herdr-receipt-ok");
                     self.bytes = Zeroizing::new(rest);
                     lease.check()?;
                     *child.herdr.lock().map_err(|_| entry_failed())? =
@@ -358,6 +383,7 @@ impl EntryStartup {
                 }
             }
             if !self.bytes.is_empty() {
+                startup_stage!("binding-extra-bytes");
                 return Err(entry_failed());
             }
             Ok(())
@@ -366,6 +392,12 @@ impl EntryStartup {
             .await
             .map_err(|_| entry_failed())?;
         let _ = timeout(Duration::from_secs(2), self.channel.close()).await;
+        #[cfg(test)]
+        if result.is_ok() {
+            startup_stage!("binding-ok");
+        } else {
+            startup_stage!("binding-failed");
+        }
         result
     }
 }
@@ -380,8 +412,10 @@ fn take_entry_header(
             continue;
         }
         if bytes[start..end].starts_with(b"MOSH CONNECT ") {
+            startup_stage!("bootstrap-header-begin");
             let bootstrap =
                 parse_bootstrap(&bytes[..=end], address, options).map_err(|_| entry_failed())?;
+            startup_stage!("bootstrap-header-ok");
             let rest = bytes.split_off(end + 1);
             bytes.zeroize();
             **bytes = rest;
@@ -397,6 +431,7 @@ pub(crate) async fn bootstrap_entry(
     options: Options,
     entry: crate::multiplexer::Entry,
 ) -> Result<(Bootstrap, EntryStartup)> {
+    startup_stage!("bootstrap-begin");
     let address = route(session, &options)?;
     entry.validate()?;
     let unix = crate::ssh::exec_bounded(
@@ -418,6 +453,7 @@ pub(crate) async fn bootstrap_entry(
             "Mosh multiplexer entry requires a positively identified Linux or macOS SSH host.",
         ));
     }
+    startup_stage!("host-admitted");
     // Only this read-only pre-dispatch absence permits Auto to retry SSH.
     let presence = crate::ssh::exec_bounded(
         session,
@@ -434,9 +470,12 @@ pub(crate) async fn bootstrap_entry(
         }
         _ => return Err(entry_failed()),
     }
+    startup_stage!("executable-admitted");
     let locales = bootstrap_exec(session, lease, "locale -a".into()).await?;
     let locale = utf8_locale(&locales)?;
+    startup_stage!("locale-admitted");
     entry.prepare(session, lease).await?;
+    startup_stage!("target-prepared");
     let (binding, command) = match entry.kind {
         crate::multiplexer::MultiplexerKind::Tmux => {
             let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
@@ -490,7 +529,9 @@ pub(crate) async fn bootstrap_entry(
     let mut cancelled = session.cancel.subscribe();
     let result = async {
         lease.check()?;
+        startup_stage!("launcher-exec-begin");
         startup.channel.exec(true, command).await?;
+        startup_stage!("launcher-exec-ok");
         loop {
             if let Some(bootstrap) = take_entry_header(&mut startup.bytes, address, &options)? {
                 return Ok(bootstrap);
@@ -505,6 +546,7 @@ pub(crate) async fn bootstrap_entry(
         _ = cancelled.changed() => return Err(entry_failed()),
         result = timeout(Duration::from_secs(15), result) => result.map_err(|_| entry_failed())?.map_err(|_| entry_failed())?,
     };
+    startup_stage!("bootstrap-ok");
     Ok((bootstrap, startup))
 }
 
@@ -528,6 +570,7 @@ pub(crate) fn run(
 ) -> Result<()> {
     let mut ready = Some(ready);
     let result = (|| -> Result<()> {
+        startup_stage!("native-client-begin");
         let mut client = lazysh_mosh_transport::Client::new(
             &bootstrap.key,
             bootstrap.remote,
@@ -535,7 +578,9 @@ pub(crate) fn run(
             rows as u16,
         )
         .map_err(|error| SshError::new("mosh", error))?;
+        startup_stage!("native-client-ok");
         drop(bootstrap);
+        startup_stage!("native-authentication-begin");
         let result = (|| -> Result<()> {
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             let mut pending: Option<(
@@ -557,6 +602,7 @@ pub(crate) fn run(
                     .poll()
                     .map_err(|error| SshError::new("mosh", error))?;
                 if update.finished && ready.is_some() {
+                    startup_stage!("native-finished-before-ready");
                     return Err(SshError::new(
                         "mosh_closed",
                         "Mosh server closed before the connection completed",
@@ -565,6 +611,7 @@ pub(crate) fn run(
                 if ready.is_some() {
                     if update.connected {
                         if let Some(sender) = ready.take() {
+                            startup_stage!("native-authentication-ok");
                             let _ = sender.send(Ok(()));
                         }
                     } else if std::time::Instant::now() >= deadline {
@@ -668,6 +715,7 @@ pub(crate) fn run(
         result
     })();
     if let Some(sender) = ready {
+        startup_stage!("native-ended-before-ready");
         let response = match &result {
             Err(error) => Err(error.clone()),
             Ok(()) => Err(SshError::new(

@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
@@ -255,6 +255,22 @@ test('settings observation admits only finite flags and the two-scroll limit',()
   expect(settingsObservation(diagnostic.replace('settingsToolbar=true','settingsToolbar=private-data'))).toBeUndefined();
 });
 
+test('return failure retains one closed snapshot and discards private failure context',()=>{
+  const state='foreground=ntfy settings=true defaultDialog=unavailable add=false certificate=false allow=false deny=unavailable ime=true';
+  const trace=`Ntfy return state[${state}]`;
+  expect(returnStateObservation(`private-prefix\n${trace}\nprivate-suffix`)).toEqual({
+    foreground:'ntfy',settings:true,defaultDialog:null,add:false,certificate:false,allow:false,deny:null,ime:true});
+  expect(JSON.stringify(returnStateObservation(trace))).not.toMatch(/private|origin|fingerprint|package|timestamp/);
+  for(const foreground of ['ntfy','permission','lazysh','aospIme','other','unavailable'])
+    expect(returnStateObservation(trace.replace('foreground=ntfy',`foreground=${foreground}`))?.foreground).toBe(foreground);
+  for(const bad of [trace+trace,trace.replace('settings=true','settings=private'),trace.replace('foreground=ntfy','foreground=io.heckel.ntfy'),
+    trace.replace('ime=true','ime=1'),trace.replace('state[','state[private='),trace.replace('ime=true]','ime=true private]'),
+    trace.replace('settings=true','settings=true\u0000'),trace.replace('settings=true','settings=true\n'),
+    trace.replace('certificate=false','certificate=false origin=secret'),trace.replace(' defaultDialog=unavailable',''),
+    trace.replace('foreground=ntfy','first{foreground=ntfy'),trace+'x'.repeat(256*1024)])
+    expect(returnStateObservation(bad)).toBeUndefined();
+});
+
 const eventDiagnostic='Actual bound-event notification required; eventObservation[entered=true readReturned=false initialReceipts=zero finalReceipts=one appNotifications=true postPermission=false channelEnabled=unavailable ownedNotification=false]';
 test('missing event retains only closed admission, receipt and OS observations',()=>{
   const parsed=eventObservation('<failure>private-key /private/path '+eventDiagnostic+'\nat NativeWorkspaceTest.kt:1740</failure>');
@@ -344,6 +360,64 @@ test('native receipt requires every exact owned case without substitution or ski
     report.replace('</testsuite>','<skipped /></testsuite>'),report+rows[0]]){
     expect(()=>validateNtfyReport(invalid)).toThrow('did not pass without skips');
   }
+});
+
+test('tool failure projection uses actual owned nonzero, deadline and spawn outcomes without private output',async()=>{
+  const stage='ordinary release resource assembly';
+  for(const [program,args,budget,outcome,exit]of [
+    ['sh',['-c','printf "private-origin\n"; printf "Connection reset by peer\nprivate-key" >&2; exit 7'],2000,'nonzero-exit',7],
+    ['sleep',['30'],20,'deadline',null],
+    ['/owned/not-present/private-launcher',[],2000,'spawn-failed',null],
+  ] as const) {
+    const child=new OwnedProcess(program,[...args]);let original:unknown;
+    try{await child.finish(stage,budget);}catch(error){original=error;}
+    expect(original).toBeInstanceOf(Error);
+    const observed=await ntfyToolFailure(stage,original,child,true);
+    expect(observed.operation).toBe('release-resources');expect(observed.outcome).toBe(outcome);expect(observed.exit).toBe(exit);
+    expect(observed.process.scope).toBe('after-finish-cleanup');
+    expect(JSON.stringify(observed)).not.toMatch(/private|origin|private-launcher|Connection reset/);
+    if(outcome==='nonzero-exit'){expect(observed.output.connectionReset).toBe(true);expect(observed.process.exitCode).toBe(7);}
+    else expect(observed.output.unclassified).toBe(true);
+    expect(child.stdout.length).toBeLessThanOrEqual(16*1024);expect(child.stderr.length).toBeLessThanOrEqual(16*1024);
+  }
+});
+
+test('ownership, unknown callers and failed observers cannot project private error data or invented causes',async()=>{
+  const original=new Error('private-path https://private-origin/token');
+  const unstarted=await ntfyToolFailure('ordinary release resource assembly',original,undefined,false);
+  expect(unstarted.outcome).toBe('ownership-check');expect(unstarted.ownershipCheckReturned).toBe(false);
+  expect(unstarted.process.state).toBe('unavailable');
+  const child=new OwnedProcess('sh',['-c','exit 0']);await child.finish('ordinary release resource assembly',2000);
+  const observe=spyOn(child,'startupDiagnostic').mockRejectedValue(new Error('private-observer'));
+  try {
+    for(const error of [original,new Error('Owned fixture failed: ordinary release resource assembly; exit=999'),
+      new Error('Owned fixture deadline: private-stage'),{message:'private-object'},
+      Object.defineProperty(new Error('unused'),'message',{get(){throw new Error('private-getter');}})]) {
+      const projected=await ntfyToolFailure('ordinary release resource assembly',error,child,true);
+      expect(projected.outcome).toBe('unknown');expect(projected.process.state).toBe('unavailable');
+      expect(projected.exit).toBeNull();expect(JSON.stringify(projected)).not.toMatch(/private|https|999|message/);
+    }
+    const unknown=await ntfyToolFailure('private-caller-path',new Error('Owned fixture deadline: private-caller-path'),child,true);
+    expect(unknown.operation).toBe('unclassified');expect(unknown.outcome).toBe('unknown');
+    expect(JSON.stringify(unknown)).not.toContain('private');
+    expect((await ntfyToolFailure('__proto__',original,undefined,true)).operation).toBe('unclassified');
+  }finally{observe.mockRestore();}
+});
+
+test('tool process metadata rejects malformed values and classifies only the retained output window',async()=>{
+  const child=new OwnedProcess('sh',['-c','printf "Connection reset by peer"; head -c 20000 /dev/zero | tr "\\0" x; exit 9']);
+  let failure:unknown;try{await child.finish('ordinary release resource assembly',2000);}catch(error){failure=error;}
+  const state=spyOn(child,'startupDiagnostic').mockResolvedValue({state:'private-state',exitCode:999} as never);
+  try {
+    const result=await ntfyToolFailure('ordinary release resource assembly',failure,child,true);
+    expect(result.outcome).toBe('nonzero-exit');expect(result.exit).toBe(9);
+    expect(result.process).toEqual({scope:'after-finish-cleanup',state:'unavailable',exitCode:null});
+    expect(result.output.connectionReset).toBe(false);expect(result.output.unclassified).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/private|Connection|xxx/);
+    const hostile=Object.defineProperty(child,'stdout',{configurable:true,get(){throw new Error('private-tail');}});
+    await expect(ntfyToolFailure('ordinary release resource assembly',failure,hostile,true)).rejects.toThrow('private-tail');
+    // The enclosing run helper treats a projection failure as optional and rethrows its original error.
+  }finally{state.mockRestore();}
 });
 
 test('private transfer creates an absent owned directory, rejects symlinks and cannot replace a receipt',async()=>{
