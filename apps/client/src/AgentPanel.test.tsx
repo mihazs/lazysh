@@ -452,22 +452,23 @@ describe('live Herdr discovery',()=>{
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
     expect(browser.getByRole('heading',{name:t('herdrNavigationSpaces')})).toBeTruthy();
     expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
-    const spacesSetup=browser.getByText(`${t('herdrAgentsServer')} · default`).closest('details')!;
-    expect(spacesSetup.open).toBe(false);
+    const spacesSetup=browser.getByRole('combobox',{name:t('herdrAgentsServer'),hidden:true}).closest('section')!;
+    expect(spacesSetup.hidden).toBe(true);
     expect(browser.getByText(t('herdrNavigationShared')).closest('details')).toBeNull();
-    fireEvent.click(spacesSetup.querySelector('summary')!);
+    fireEvent.click(browser.getByRole('button',{name:t('herdrAgentsServer')}));
     expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
     expect(browser.getAllByText(t('herdrNavigationShared'))).toHaveLength(1);
-    fireEvent.click(spacesSetup.querySelector('summary')!);
+    fireEvent.click(browser.getByRole('button',{name:t('navigationBack')}));
     const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
     expect(browser.getByText('builder')).toBeTruthy();
     view.rerender(<HerdrNavigation {...props} mode="agents"/>);
-    const chooser=browser.getByText(`${t('herdrAgentsServer')} · default`).closest('details')!;
-    expect(chooser.open).toBe(false);
-    fireEvent.click(chooser.querySelector('summary')!);
-    expect(chooser.open).toBe(true);
+    const chooser=browser.getByRole('combobox',{name:t('herdrAgentsServer'),hidden:true}).closest('section')!;
+    expect(chooser.hidden).toBe(true);
+    fireEvent.click(browser.getByRole('button',{name:t('herdrAgentsServer')}));
+    expect(chooser.hidden).toBe(false);
     expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
-    expect(browser.getByRole('heading',{name:t('herdrAgentsTitle')})).toBeTruthy();
+    expect(browser.getByRole('heading',{name:t('herdrAgentsServer')})).toBeTruthy();
+    fireEvent.click(browser.getByRole('button',{name:t('navigationBack')}));
     expect(browser.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','codex');
     expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_tree')).toHaveLength(1);
     fireEvent.click(browser.getByRole('button',{name:/^builder/}));
@@ -486,7 +487,7 @@ describe('live Herdr discovery',()=>{
     render(<HerdrNavigation sessionId="steady-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={close}/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
-    const row=browser.getByRole('button',{name:/^builder/}),select=browser.getByRole('combobox'),attach=browser.getByRole('button',{name:'Attach Herdr default'});
+    const row=browser.getByRole('button',{name:/^builder/}),select=browser.getByRole('combobox',{hidden:true}),attach=browser.getByRole('button',{name:'Attach Herdr default',hidden:true});
     await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
     expect(reads).toBe(2);expect(browser.getByRole('button',{name:/^builder/})).toBe(row);
     expect(row).toHaveProperty('disabled',false);expect(select).toHaveProperty('disabled',false);expect(attach).toHaveProperty('disabled',false);
@@ -859,10 +860,13 @@ it.each(['standalone','navigation'])('collapses the healthy single-server %s cho
   render(surface==='standalone'?<HerdrAgentsPanel sessionId="compact-server" visible/>:<HerdrNavigation sessionId="compact-server" hostLabel="Owned host" visible mode="agents" onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
   const live=screen.getByRole('region',{name:t(surface==='standalone'?'herdrAgentsTitle':'herdrNavigationTitle')});
   await within(live).findByText('builder',{exact:true});
-  const summary=within(live).getByText(`${t('herdrAgentsServer')} · owned`);
-  const details=summary.closest('details')!;
-  expect(details.open).toBe(false);
-  fireEvent.click(summary);
+  if(surface==='standalone'){
+    const summary=within(live).getByText(`${t('herdrAgentsServer')} · owned`);
+    expect(summary.closest('details')!.open).toBe(false);fireEvent.click(summary);
+  }else{
+    expect(within(live).queryByRole('combobox',{name:t('herdrAgentsServer')})).toBeNull();
+    fireEvent.click(within(live).getByRole('button',{name:t('herdrAgentsServer')}));
+  }
   expect(within(live).getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','owned');
   expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(1);
 });

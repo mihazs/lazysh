@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.8.4
+
+### Patch Changes
+
+- b6487ee: Add bounded passive pointer/capture and rendered-direction evidence to Android D-pad acceptance without changing production input or gesture budgets.
+- e882bae: Retain a closed failure-only summary of cached completed native Window dispatch events and relative timings without changing Android D-pad input or acceptance budgets.
+- 3ea1476: Navigate Preferences through focused category screens, simplify workspace and agent chrome, and refine accessible glass and motion treatments.
+- af07d0f: Identify failed Herdr host teardown stages using closed post-stop observations and preserve the original test failure when cleanup also fails.
+- f77f54f: Retain a bounded failure-only comparison of the owned Android IME receiver wire without exporting input or changing runtime assertions.
+- 05e9410: Keep owned Android autocomplete corrections editable when the keyboard leaves its caret inside the composing range.
+- 8ee297e: Preserve a previously admitted raw SSH fixture receiver's normal exit between process-identity observations while retaining replacement, live ownership and exact-byte checks.
+- cd99c29: Admit vertically dominant terminal finger drags and preserve coalesced native scroll distance before finger lift.
+- 1330e4c: Preserve physical and toolbar Shift+Enter as a modified Enter key so agent terminals can insert a newline without ordinary Enter submission.
+- @lazysh/account-usage@1.8.4
+  - @lazysh/common@1.8.4
+  - @lazysh/display-idle@1.8.4
+  - @lazysh/et-transport@1.8.4
+  - @lazysh/mosh-transport@1.8.4
+
 ## 1.8.3
 
 ### Patch Changes

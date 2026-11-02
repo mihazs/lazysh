@@ -913,7 +913,7 @@ class NativeWorkspaceTest {
         assertEquals("Discard must preserve the theme", "true", evaluate(scenario, appearance("forest")))
 
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
-        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Appearance and fonts']")).perform(webClick())
+        preferencesCategory(scenario, "appearance")
         onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Import and share theme']")).perform(webClick())
         val draftSelector = "textarea[aria-label='Theme JSON or share code']"
         val draft = "unfinished native theme draft"
@@ -943,7 +943,7 @@ class NativeWorkspaceTest {
         assertEquals("Replacement review/discard must preserve the manual draft", "true", evaluate(scenario, draftKept))
         // Only this isolated acceptance's own appearance state is changed. Reset
         // through the actual UI before the ordinary native workspace suite.
-        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Reset settings']")).perform(webClick())
+        preferencesCategory(scenario, "reset")
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
@@ -1234,7 +1234,7 @@ class NativeWorkspaceTest {
             var capture = observe()
             awaitDocument(scenario, "QR workspace ready", "Boolean(document.querySelector('button[aria-label=Preferences]'))")
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label=Preferences]")).perform(webClick())
-            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Appearance and fonts']")).perform(webClick())
+            preferencesCategory(scenario, "appearance")
             onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
             awaitDocument(scenario, "explicit QR controls", available)
             typeInto(scenario, draftSelector, draft)
@@ -3934,6 +3934,21 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String) {
+        val active = ".settings-navigation [data-settings-page='$id']:not([hidden])"
+        val target = ".settings-navigation button[data-settings-target='$id']"
+        repeat(3) {
+            if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(active)}))") == "true") return
+            if (evaluate(scenario, workspaceElementVisible(target)) == "true") {
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, target)).perform(webScrollIntoView()).perform(webClick())
+                awaitDocument(scenario, "selected preferences category", "Boolean(document.querySelector(${JSONObject.quote(active)}))")
+                return
+            }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".settings-detail-header button")).perform(webScrollIntoView()).perform(webClick())
+        }
+        throw AssertionError("Preferences category was not reachable through its visible navigation")
+    }
+
     private fun verifySshDpadPan(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val raw = OwnedRawSshInput(scenario, fixture, label, "dpad")
         val nonce = raw.nonce
@@ -3945,10 +3960,8 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
                 else workspaceMenuAction(scenario,"Preferences")
             }
-            for (title in listOf("Keyboard and gestures", "Toolbar keys and order")) {
-                if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
-                    onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
-            }
+            preferencesCategory(scenario, "input")
+            preferencesCategory(scenario, "preferencesToolbarKeysAndOrder")
             val selector = if (action == "Add") "//*[@role='dialog']//button[normalize-space(.)='Add dpad']" else "//*[@role='dialog']//button[@aria-label='Remove dpad']"
             if (action == "Add") {
                 awaitDocument(scenario,"known original toolbar has no D-pad","!document.querySelector('[role=dialog] button[aria-label=\"Remove dpad\"]')")
@@ -4040,6 +4053,7 @@ class NativeWorkspaceTest {
             var fingerFailure: Throwable? = null
             var currentPhase = "up"
             var lastCounts: IntArray? = null
+            val dom=OwnedDpadDomObservation(nonce) { expression,timeout -> evaluate(scenario,expression,timeout) }
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
@@ -4067,6 +4081,7 @@ class NativeWorkspaceTest {
             fun pause() { assertTrue("Owned D-pad pause requires original budget",remaining()>=240);Thread.sleep(240);remaining() }
             var stopped = IntArray(0)
             try {
+                dom.install(remaining())
                 scenario.onActivity { activity ->
                     assertSame("Original D-pad WebView before DOWN",web,webView(activity.window.decorView))
                     val target=activity.window
@@ -4115,12 +4130,15 @@ class NativeWorkspaceTest {
                     val summary=observer?.failureSummary() ?: "{\"state\":\"unavailable\"}"
                     failure.addSuppressed(AssertionError("D-pad completed Window dispatch[$summary]"))
                 }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad completed Window dispatch[unavailable]")) } }
+                runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[${dom.failureSummary()}]")) }
+                    .onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[unavailable]")) } }
                 throw failure
             }
             finally {
                 var cleanup: Throwable?=null
                 try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
                 try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
+                try {dom.close()}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
             }
             raw.send("owned-dpad-$nonce", false)
@@ -4254,11 +4272,16 @@ class NativeWorkspaceTest {
             ime.arm(); ime.select(); tapTerminal()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
-            for (operation in listOf("composeCorrection", "extendTail", "eraseTail", "repeatWord")) {
+            for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
                 terminalEditor()
                 val result = ime.call(operation)
                 assertTrue("Fixed native IME transaction accepted: $operation", result.getBoolean("accepted"))
                 assertTrue("Fixed native IME transaction readback: $operation", result.getBoolean("readMatched"))
+                if (operation == "extendTail") {
+                    assertTrue("Non-tail native editor retains the full correction", result.getBoolean("suffixMatched"))
+                    evaluate(scenario, "setTimeout(()=>{window.__lazyshNonTailImeSettled=true},0);true")
+                    awaitDocument(scenario, "settled native non-tail correction stays editable", "window.__lazyshNonTailImeSettled===true && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.selectionStart===0 && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===false")
+                }
             }
             clickIcon("Compose")
             awaitDocument(scenario, "composer revokes packaged terminal editor", "document.querySelector('.terminal-compose textarea')?.value==='' && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===true")

@@ -20,11 +20,15 @@ export async function workspaceControl(page:Page,name:string) {
   return revealed;
 }
 
-/** Open the visible category through its ordinary disclosure, in the current locale. */
+/** Reach the category through the real list/detail navigation, in the current locale. */
 export async function openPreferenceCategory(page: Page, category: 'Language'|'Appearance'|'Terminal'|'Input'|'Reset'|'Connections'|'Security'|'Notifications') {
   const label=await page.evaluate(async category=>{const {t}=await import('/src/i18n/core.ts');return t(`preferencesCategory${category}`);},category);
-  const summary=page.locator('.preferences-category > summary').filter({hasText:label});
-  if(!await summary.evaluate(node=>(node.parentElement as HTMLDetailsElement).open))await summary.click();
+  const navigation=page.locator('.settings-navigation');
+  const selected=navigation.locator('[data-settings-page]:visible');
+  if(await selected.count() && await selected.getAttribute('aria-label')===label)return;
+  const target=navigation.getByRole('button',{name:label,exact:true});
+  while(!await target.isVisible())await navigation.getByRole('button',{name:await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('navigationBack');}),exact:true}).click();
+  await target.click();
 }
 
 export async function openThemeImport(page: Page) {

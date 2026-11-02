@@ -708,7 +708,7 @@ describe("terminal interactions", () => {
     const {target,wheels,touch}=touchScrollFixture();
     const surface=document.createElement('div');surface.className='xterm-screen';
     surface.getBoundingClientRect=()=>({height:480} as DOMRect);target.append(surface);
-    for(const segments of [2,8]) {
+    for(const segments of [1,2,8,48]) {
       wheels.length=0;touch('touchstart',100,300);
       for(let step=1;step<=segments;step++)touch('touchmove',100,300-180*step/segments);
       expect(wheels.map(event=>[event.deltaY,event.deltaMode,event.clientX,event.clientY])).toEqual(Array.from({length:9},()=>[1,WheelEvent.DOM_DELTA_LINE,100,300]));
@@ -720,9 +720,13 @@ describe("terminal interactions", () => {
     expect(wheels.map(event=>event.deltaY)).toEqual([-1]);
     touch('touchcancel',100,310);touch('touchmove',100,100);
     expect(wheels).toHaveLength(1);
+    wheels.length=0;touch('touchstart',100,100);
+    for(let step=1;step<=20;step++)touch('touchmove',100+step*.8,100-step);
+    expect(wheels.map(event=>event.deltaY)).toEqual([1]);
+    touch('touchend',116,80);
     wheels.length=0;touch('touchstart',100,1500);touch('touchmove',100,300);
-    expect(wheels).toHaveLength(10);
-    touch('touchmove',100,299);expect(wheels).toHaveLength(20);
+    expect(wheels).toHaveLength(Math.ceil(innerHeight/20));
+    touch('touchmove',100,299);expect(wheels).toHaveLength(60);
     touch('touchend',100,299);wheels.length=0;
     touch('touchstart',100,300);touch('touchmove',100,290);expect(wheels).toHaveLength(0);
   });
