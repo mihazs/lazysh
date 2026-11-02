@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.8.2
+
+### Patch Changes
+
+- 17ce060: Remeasure the Android native D-pad target after its initial keyboard-opening tap, preserving owned-window injection and exact receiver-byte acceptance.
+- 1d4c8c5: Retain closed owned-tool failure observations and explicit validated native-receipt progress in ntfy acceptance failures, without changing process cleanup, deadlines or trust checks.
+- 99422b0: Use the visible workspace Preferences action in Android D-pad acceptance and retain closed failure-only IME editor-clause diagnostics without changing input or acceptance behavior.
+- @lazysh/account-usage@1.8.2
+  - @lazysh/common@1.8.2
+  - @lazysh/display-idle@1.8.2
+  - @lazysh/et-transport@1.8.2
+  - @lazysh/mosh-transport@1.8.2
+
 ## 1.8.1
 
 ### Patch Changes
