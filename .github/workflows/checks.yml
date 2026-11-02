@@ -822,7 +822,7 @@ jobs:
       - *source-bun
       - run: bun install --frozen-lockfile
       - name: Install owned Gotify fixture prerequisites
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap iproute2 openssl unzip
+        run: sudo apt-get update && sudo apt-get install -y iproute2 openssl unzip
       - *android-java
       - *android-sdk
       - *android-toolchains
@@ -830,10 +830,6 @@ jobs:
       - *android-owned-rust
       - *android-cache-identity
       - *android-owned-cache
-      - name: Verify owned Gotify namespace prerequisites
-        env:
-          LAZYSH_NATIVE_NAMESPACE_NETWORK: shared
-        run: *native-fixture-namespace
       - *android-owned-kvm
       - name: Official Gotify Android background delivery
         uses: mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b

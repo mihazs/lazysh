@@ -229,6 +229,7 @@ test('Gotify CI routes the current app build to one isolated owned API36 case an
   const prerequisite=job.steps.findIndex((step:any)=>step.name==='Install owned Gotify fixture prerequisites');
   expect(prerequisite).toBeGreaterThan(job.steps.findIndex((step:any)=>step.run==='bun install --frozen-lockfile'));
   expect(prerequisite).toBeLessThan(job.steps.findIndex((step:any)=>step.uses==='android-actions/setup-android@v4'));
+  expect(job.steps.some((step:any)=>step.env?.LAZYSH_NATIVE_NAMESPACE_NETWORK!==undefined||/\bbwrap\b/.test(step.run??''))).toBe(false);
   const runtime=job.steps.find((step:any)=>step.name==='Official Gotify Android background delivery');
   expect(runtime.uses).toBe('mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b');
   expect(runtime.with).toMatchObject({'api-level':36,target:'default',arch:'x86_64','avd-name':'lazysh-runtime-api36','emulator-port':5580,'unlock-screen':false,'disable-linux-hw-accel':false});
