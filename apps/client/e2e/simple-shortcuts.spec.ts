@@ -51,6 +51,30 @@ async function observeDpadPointers(page:Page) {
   await page.evaluate(()=>{const events:unknown[]=[];Reflect.set(window,'dpadEvents',events);for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture'])document.addEventListener(type,event=>{const pointer=event as PointerEvent;events.push({type,x:pointer.clientX,y:pointer.clientY,id:pointer.pointerId,primary:pointer.isPrimary,target:(event.target as HTMLElement).className});},true);});
 }
 
+test('D-pad context menus are cancelled without consuming unrelated menus or terminal input',async({page},testInfo)=>{
+  await openExpandedDpad(page,testInfo.project.name==='phone');
+  await page.evaluate(()=>{
+    const events:unknown[]=[];Reflect.set(window,'dpadMenus',events);
+    document.addEventListener('contextmenu',event=>events.push({
+      pad:event.target instanceof Element && Boolean(event.target.closest('.terminal-dpad')),
+      trusted:event.isTrusted,cancelable:event.cancelable,prevented:event.defaultPrevented,
+    }));
+  });
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});
+  await up.click({button:'right'});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadMenus'))).toEqual([
+    {pad:true,trusted:true,cancelable:true,prevented:true},
+  ]);
+  await page.getByRole('button',{name:'Compose',exact:true}).click({button:'right'});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadMenus'))).toEqual([
+    {pad:true,trusted:true,cancelable:true,prevented:true},
+    {pad:false,trusted:true,cancelable:true,prevented:false},
+  ]);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await up.click();
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+});
+
 test('physical and toolbar Shift+Enter preserve the agent newline key',async({page})=>{
   await openShortcutTerminal(page);
   await page.locator('.terminal-canvas').click();

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Expanded terminal D-pad controls now suppress their browser context menu by default.
+
 - Run each Google/FOSS ntfy acceptance branch as a complete emulator-runner shell command, preserving the existing native checks and deadlines.
 
 - Keep browser acceptance aligned with dedicated Preferences screens and compare attachment file-picker styling in a settled normal state; application behavior and defaults are unchanged.
