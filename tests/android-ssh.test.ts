@@ -1819,11 +1819,12 @@ test('native D-pad remeasures the actual visible target after its keyboard-openi
   expect(body).toContain('Owned D-pad target must stay above the current keyboard');
 });
 
-async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe') {
+async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe'|'timer'|'cleanup') {
   const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/OwnedDpadDomObservation.kt'),'utf8');
   const key='owned-observation-key',owner='owned-observation-token',window:Record<string,unknown>={};
   type Listener=(event:Record<string,unknown>)=>void;
   const listeners=new Map<string,Set<Listener>>(),windowListeners=new Map<string,Set<Listener>>(),viewportListeners=new Map<string,Set<Listener>>(),removed:string[]=[];
+  const timers=new Map<number,()=>void>();let timerId=0;
   let clock=100,captured=true,disconnected=false,padCount=1,mutated=()=>{},focused:unknown=true,touchAction:unknown='none';
   class FixtureNode {inside=false;}
   const arrows=['up','left','down','right'].map(direction=>Object.assign(new FixtureNode(),{inside:true,dataset:{dpadDirection:direction},style:{outline:''},closest:()=>({inside:true})}));
@@ -1837,7 +1838,7 @@ async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe') {
     addEventListener:(type:string,listener:Listener,options:{capture:boolean;passive:boolean})=>{
       expect(options).toEqual({capture:true,passive:true});if((failure==='listener'&&type==='pointerup')||(failure==='context'&&prefix==='window:'&&type==='blur'))throw new Error('private install failure');
       if(!map.has(type))map.set(type,new Set());map.get(type)!.add(listener);
-    },removeEventListener:(type:string,listener:Listener,capture:boolean)=>{expect(capture).toBe(true);removed.push(prefix+type);map.get(type)?.delete(listener);}});
+    },removeEventListener:(type:string,listener:Listener,capture:boolean)=>{expect(capture).toBe(true);removed.push(prefix+type);map.get(type)?.delete(listener);if(failure==='cleanup'&&type==='pointerdown')throw Error('private listener cleanup');}});
   const document=Object.assign(new FixtureNode(),eventTarget(listeners),{activeElement:null as unknown,visibilityState:'visible' as unknown,hasFocus:()=>focused,
     querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad');return Array.from({length:padCount},()=>pad);}});
   const viewport={width:411,height:733,offsetLeft:0,offsetTop:0,scale:1,...eventTarget(viewportListeners,'viewport:')};
@@ -1846,14 +1847,14 @@ async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe') {
   const run=(name:'INSTALL'|'READ'|'CLEANUP')=>{
     const expression=source.match(new RegExp(`private val ${name} = """([\\s\\S]+?)"""\\.trimIndent\\(\\)`))?.[1];expect(expression!==undefined).toBe(true);
     const bound=expression!.replaceAll('@@KEY@@',JSON.stringify(key)).replaceAll('@@OWNER@@',JSON.stringify(owner));
-    return Function('window','document','Node','MutationObserver','performance','getComputedStyle','setTimeout','setInterval',`return (${bound});`)(window,document,FixtureNode,Observer,{now:()=>clock},(target:unknown)=>{expect(target).toBe(pad);return {touchAction};},()=>{throw new Error('No timer');},()=>{throw new Error('No timer');});
+    return Function('window','document','Node','MutationObserver','performance','getComputedStyle','setTimeout','setInterval','clearTimeout',`return (${bound});`)(window,document,FixtureNode,Observer,{now:()=>clock},(target:unknown)=>{expect(target).toBe(pad);return {touchAction};},(task:()=>void,delay:number)=>{expect(delay).toBe(0);if(failure==='timer')throw Error('private timer unavailable');const id=++timerId;timers.set(id,task);return id;},()=>{throw new Error('No interval');},(id:number)=>{timers.delete(id);if(failure==='cleanup')throw Error('private timer cleanup');});
   };
   const emit=(type:string,change:Record<string,unknown>={},map=listeners)=>{
     const event={type,isTrusted:true,isPrimary:true,button:0,buttons:1,pointerId:777777,pointerType:'touch',clientX:100,clientY:100,target:arrows[0],
       preventDefault:()=>{throw new Error('Passive observation cannot prevent input');},stopPropagation:()=>{throw new Error('Passive observation cannot stop input');},...change};
-    for(const listener of map.get(type)??[])listener(event);
+    for(const listener of map.get(type)??[])listener(event);return event;
   };
-  return {run,emit,pad,arrows,outside,terminal,window,document,viewport,key,owner,listeners,windowListeners,viewportListeners,removed,
+  return {run,emit,timers,finishTasks:()=>{for(const [id,task] of [...timers]){timers.delete(id);task();}},pad,arrows,outside,terminal,window,document,viewport,key,owner,listeners,windowListeners,viewportListeners,removed,
     mutate:()=>mutated(),setClock:(value:number)=>{clock=value;},setCapture:(value:boolean)=>{captured=value;},setPadCount:(value:number)=>{padCount=value;},
     setFocus:(value:unknown)=>{focused=value;},setTouchAction:(value:unknown)=>{touchAction=value;},disconnected:()=>disconnected};
 }
@@ -1870,7 +1871,7 @@ test('passive owned D-pad DOM evidence observes retargeting and capture without 
     ['pointerdown','arrow','neutral','yes'],['gotpointercapture','arrow','neutral','yes'],['pointermove','other','left','yes'],['lostpointercapture','arrow','neutral','yes']]);
   expect(before.events[2]).toMatchObject({atMs:24,trusted:true,samePointer:true,primary:true,touch:true,pressed:true,connected:true});
   expect(Object.keys(before).sort()).toEqual(['admitted','connected','events','overflow','schemaVersion','state']);
-  expect(Object.keys(before.events[0]).sort()).toEqual(['activeElement','atMs','capture','connected','displacement','documentFocus','kind','outline','pressed','primary','samePointer','target','touch','touchAction','trusted','viewport','visibility']);
+  expect(Object.keys(before.events[0]).sort()).toEqual(['activeElement','atMs','capture','connected','displacement','documentFocus','kind','menuCancelable','menuDefaultPrevented','outline','pressed','primary','samePointer','target','touch','touchAction','trusted','viewport','visibility']);
   expect(JSON.stringify(before)).not.toMatch(/777777|clientX|clientY|pointerId|textContent|owned-observation|Private/);
   expect(f.run('CLEANUP')).toBe(true);expect([...f.listeners.values()].every(rows=>rows.size===0)).toBe(true);expect(f.disconnected()).toBe(true);
 });
@@ -2153,4 +2154,67 @@ test('native IME observer nonce literals encode quotes and backslashes without e
   const observation=kotlin.split('var imeOrderInstalled = false')[1].split('val first = ime.awaitIme')[0];
   expect(observation.match(/\$\{JSONObject\.quote\(nonce\)\}/g)).toHaveLength(4);
   expect(observation).not.toContain("'${nonce}'");
+});
+
+
+test('D-pad final menu observation waits for dispatch, bounds tasks and never changes event defaults',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);f.emit('pointerdown');
+  const event=f.emit('contextmenu',{cancelable:true,defaultPrevented:false});
+  expect(f.run('READ').events.at(-1)).toMatchObject({kind:'contextmenu',menuCancelable:'unavailable',menuDefaultPrevented:'unavailable'});
+  event.defaultPrevented=true;f.finishTasks();
+  expect(f.run('READ').events.at(-1)).toMatchObject({kind:'contextmenu-after',menuCancelable:'yes',menuDefaultPrevented:'yes'});
+  f.emit('contextmenu',{cancelable:false,defaultPrevented:false});f.finishTasks();expect(f.run('READ').events.at(-1)).toMatchObject({menuCancelable:'no',menuDefaultPrevented:'no'});
+  f.emit('contextmenu');f.finishTasks();expect(f.run('READ').events.at(-1)).toMatchObject({menuCancelable:'unavailable',menuDefaultPrevented:'unavailable'});
+  f.emit('contextmenu');f.emit('contextmenu');expect(f.timers.size).toBe(1);f.finishTasks();
+  f.emit('contextmenu');expect(f.timers.size).toBe(0);expect(f.run('CLEANUP')).toBe(true);
+  const pending=await ownedDpadDomFixture();pending.run('INSTALL');pending.emit('pointerdown');pending.emit('contextmenu');expect(pending.timers.size).toBe(1);
+  const read=pending.window[pending.key] as {read:()=>unknown};pending.run('CLEANUP');expect(pending.timers.size).toBe(0);const before=read.read();pending.finishTasks();expect(read.read()).toEqual(before);
+  const foreign=await ownedDpadDomFixture();foreign.run('INSTALL');foreign.emit('pointerdown');foreign.emit('contextmenu');
+  const original=foreign.window[foreign.key] as {read:()=>unknown};foreign.window[foreign.key]={owner:foreign.owner};const saved=original.read();foreign.finishTasks();expect(original.read()).toEqual(saved);
+});
+
+test('paired D-pad native observation preserves shared dispatch and original budgets while fencing queries and cleanup',async()=>{
+  const base=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client');
+  const source=await readFile(join(base,'NativeWorkspaceTest.kt'),'utf8'),helper=await readFile(join(base,'OwnedDpadViewportObservation.kt'),'utf8');
+  const body=source.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  expect(body).toContain('val deadline = System.nanoTime()+TimeUnit.SECONDS.toNanos(5)');
+  expect(body).toContain('OwnedDpadViewportObservation(target,web,epoch)');
+  expect(body.indexOf('viewportObserver?.close()')).toBeLessThan(body.indexOf('observer?.restore(activity.window)'));
+  expect(body).toContain('failure.addSuppressed(AssertionError("D-pad native viewport[${viewportObserver?.failureSummary() ?: "unavailable"}]"))');
+  expect(helper.match(/original\.dispatchTouchEvent\(event\)/g)).toHaveLength(1);
+  expect(helper).toContain('window.callback === this');expect(helper).toContain('event.downTime == epoch');
+  expect(helper).toContain('SystemClock.uptimeMillis() - epoch');expect(helper).toContain('rows.length() < 16');
+  expect(helper).toContain('web.isAttachedToWindow && root.isAttachedToWindow');
+  expect(helper).toContain('removeOnLayoutChangeListener(layout)');expect(helper).toContain('else { val error = IllegalStateException("Owned D-pad viewport callback changed")');
+  expect(helper).not.toMatch(/requestApplyInsets|setOnApplyWindowInsetsListener|showSoftInput|hideSoftInput|requestFocus|Thread\.sleep|postDelayed|sendPointerSync/);
+  expect(source).toContain('dpadViewportProjectionRejectsIncompleteOrInvalidGeometry');
+});
+
+
+test('D-pad final menu observation reports unavailable on read or task failure and attempts every owned teardown',async()=>{
+  const broken=await ownedDpadDomFixture('timer');broken.run('INSTALL');broken.emit('pointerdown');broken.emit('contextmenu');
+  expect(broken.run('READ').events.at(-1)).toMatchObject({kind:'contextmenu-after',menuCancelable:'unavailable',menuDefaultPrevented:'unavailable'});broken.run('CLEANUP');
+  const query=await ownedDpadDomFixture();query.run('INSTALL');query.emit('pointerdown');
+  const event=query.emit('contextmenu');Object.defineProperty(event,'cancelable',{get(){throw Error('private query denial');}});query.finishTasks();
+  expect(query.run('READ').events.at(-1)).toMatchObject({menuCancelable:'unavailable',menuDefaultPrevented:'unavailable'});query.run('CLEANUP');
+  const cleanup=await ownedDpadDomFixture('cleanup');cleanup.run('INSTALL');cleanup.emit('pointerdown');cleanup.emit('contextmenu');
+  expect(()=>cleanup.run('CLEANUP')).toThrow('Owned D-pad observation cleanup unavailable');
+  expect(cleanup.timers.size).toBe(0);expect([...cleanup.listeners.values(),...cleanup.windowListeners.values(),...cleanup.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);expect(cleanup.disconnected()).toBe(true);
+  const primary=Error('original native failure');try{try{throw primary;}finally{try{cleanup.run('CLEANUP');}catch{}}}catch(error){expect(error).toBe(primary);}
+});
+
+
+test('paired D-pad native source wiring rejects changed epochs, missing identity fences and foreign restoration',async()=>{
+  const root=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client');
+  const source=await readFile(join(root,'OwnedDpadViewportObservation.kt'),'utf8');
+  const wired=(value:string)=>{
+    const sample=value.slice(value.indexOf('private fun sample('),value.indexOf('override fun dispatchTouchEvent(')),dispatch=value.slice(value.indexOf('override fun dispatchTouchEvent('),value.indexOf('fun failureSummary('));
+    const identity='window.callback === this && web.rootView === root && window.decorView === root && web.isAttachedToWindow && root.isAttachedToWindow';
+    return sample.split(identity).length===3&&sample.includes('SystemClock.uptimeMillis() - epoch')&&sample.includes('attempts++ >= 32')&&
+      dispatch.includes('event.downTime == epoch')&&dispatch.match(/original\.dispatchTouchEvent\(event\)/g)?.length===1&&
+      dispatch.indexOf('sample("$action-before")')<dispatch.indexOf('original.dispatchTouchEvent(event)')&&dispatch.indexOf('original.dispatchTouchEvent(event)')<dispatch.indexOf('sample("$action-after")')&&
+      value.includes('if (window.callback === this) { window.callback = original; installed = false }');
+  };
+  expect(wired(source)).toBe(true);
+  for(const mutated of [source.replace('event.downTime == epoch','true'),source.replace('SystemClock.uptimeMillis() - epoch','0'),source.replace('window.decorView === root','true'),source.replace('attempts++ >= 32','false'),source.replace('return original.dispatchTouchEvent(event)','original.dispatchTouchEvent(event); return original.dispatchTouchEvent(event)'),source.replace('if (window.callback === this) { window.callback = original','if (true) { window.callback = original')])expect(wired(mutated)).toBe(false);
 });
