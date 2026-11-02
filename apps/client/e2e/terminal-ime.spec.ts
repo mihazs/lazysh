@@ -172,12 +172,17 @@ for(const inputType of ['insertReplacementText','insertCompositionText'])test(`u
   expect(await page.evaluate(()=>window.ownedIme.proposal)).toEqual({text:'èy',truncated:false});
 });
 
-test('unapplied non-tail correction sends no whole-context replay',async({page})=>{
-  const writes=await page.evaluate(async()=>{
-    await window.ownedIme.replace('teh tail');await window.ownedIme.replace('the tail','insertReplacementText',3);
-    return window.ownedIme.writes;
+test('owned non-tail ASCII correction preserves editable context',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const owner=window.ownedIme;
+    await owner.replace('teh tail');
+    for(const [text,cursor] of [['the tail',3],['there tail',5],['the tail',3],['the the tail',7]] as const)
+      await owner.replace(text,'insertReplacementText',cursor);
+    let remote='';
+    for(const character of owner.writes.join(''))remote=character==='\x7f'?remote.slice(0,-1):remote+character;
+    return {remote,proposal:owner.proposal,readOnly:owner.textarea.readOnly};
   });
-  expect(writes,JSON.stringify({writes})).toEqual(['teh tail']);
+  expect(result).toEqual({remote:'the the tail',proposal:null,readOnly:false});
 });
 
 test('unapplied native Unicode correction does not submit a deferred Enter',async({page,context})=>{

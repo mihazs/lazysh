@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
+
 - Preserve physical and toolbar Shift+Enter as a distinct modified Enter key for agent newline bindings, instead of submitting an ordinary Enter. Plain Enter and other modifier combinations retain their existing behavior.
 
 - Add held-pointer panning to the expanded terminal D-pad, with paced arrow repeats, a pause zone and cancellation when input ownership or session availability changes. Existing arrow taps, keyboard activation, corner shortcuts and toolbar defaults remain unchanged.
