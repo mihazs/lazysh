@@ -1,0 +1,25 @@
+.settings-navigation { display: grid; min-width: 0; }
+.settings-category-list { display: grid; gap: 2px; }
+.settings-category-list:empty { display: none; }
+.settings-navigation .settings-category-list > button { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 52px; width: 100%; padding: 12px 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; background: transparent; color: var(--theme-text); }
+.settings-navigation .settings-category-list > button[aria-current="page"] { color: var(--accent); background: var(--theme-panel); border-radius: 8px; }
+.settings-detail, .settings-navigation [data-settings-page] { min-width: 0; }
+.settings-navigation [data-settings-page] { animation: settings-arrive 150ms ease-out; }
+.settings-navigation [data-settings-page][hidden], .settings-navigation[data-selected="true"] > .settings-index { display: none; }
+.settings-navigation h2 { margin: 12px 0 20px; font-size: 20px; line-height: 1.3; outline: none; }
+.settings-detail-header { position: sticky; top: 0; z-index: 1; padding-block: 4px; background: var(--theme-panel); }
+.settings-detail-header button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.settings-navigation [data-settings-page] > .settings-category-list { margin-top: 16px; }
+@keyframes settings-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (min-width: 900px) {
+  .settings-navigation { grid-template-columns: minmax(180px, 0.75fr) minmax(0, 2fr); gap: 28px; }
+  .settings-navigation[data-selected="true"] > .settings-index { display: block; }
+  .settings-detail { border-left: 1px solid var(--border); padding-left: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-navigation [data-settings-page] { animation: none; } }
+@media (forced-colors: active) { .settings-navigation .settings-category-list > button[aria-current="page"] { outline: 2px solid Highlight; } }
+@media (min-width: 900px) { .settings-index { position: sticky; top: 8px; align-self: start; } }
+
+@media (min-width: 900px) { .dialog:has(.settings-navigation) { width: min(920px, calc(100vw - 48px)); max-width: none; } }
+
+.preferences-content > .preferences-panel { max-width: none; }

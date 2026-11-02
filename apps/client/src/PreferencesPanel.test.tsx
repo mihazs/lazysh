@@ -7,7 +7,7 @@ afterEach(() => cleanup());
 
 function mountPreferences(...summaries:string[]) {
   render(<PreferencesPanel/>);
-  for(const summary of summaries)fireEvent.click(screen.getByText(summary,{exact:true}));
+  for(const summary of summaries)fireEvent.click(screen.getByRole('button',{name:summary}));
 }
 
 describe("terminal settings", () => {
@@ -105,18 +105,27 @@ describe("terminal settings", () => {
   });
   it("persists theme and reordered toolbar, rejects invalid theme import, and resets", () => {
     savePreferences({...defaults});
-    mountPreferences('Appearance and fonts','Keyboard and gestures','Toolbar keys and order','Import and share theme','Reset settings');
+    mountPreferences('Appearance and fonts');
     expect(screen.getByLabelText<HTMLSelectElement>("Session switcher layout").value).toBe("list");
     fireEvent.change(screen.getByLabelText("Session switcher layout"), {target: {value: "cards"}});
     expect(getPreferences().sessionLayout).toBe("cards");
     fireEvent.change(screen.getByLabelText("Terminal theme"), {target: {value: "paper"}});
     expect(getPreferences().theme).toBe("paper");
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Keyboard and gestures"}));
+    fireEvent.click(screen.getByRole("button",{name:"Toolbar keys and order"}));
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
     expect(getPreferences().toolbar.slice(0, 2)).toEqual(["ctrl", "esc"]);
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Appearance and fonts"}));
+    fireEvent.click(screen.getByText("Import and share theme",{exact:true}));
     fireEvent.change(screen.getByLabelText("Theme JSON or share code"), {target: {value: '{"background":"url(https://bad)","foreground":"#ffffff"}'}});
     fireEvent.click(screen.getByRole("button", {name: "Preview theme"}));
     expect(screen.getByText(/Invalid theme color/).getAttribute('role')).toBe('status');
     expect(getPreferences().customTheme).toBeUndefined();
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Reset settings"}));
     fireEvent.click(screen.getByRole("button", {name: "Reset preferences"}));
     expect(getPreferences()).toEqual(defaults);
   });
@@ -133,18 +142,23 @@ function expectRejectedShortcutDrafts(values: string[]) {
 }
 
 
-it('starts with compact categories and preserves an unsaved snippet while switching disclosures',()=>{
+it('navigates category pages and preserves an unsaved snippet and restored list focus',()=>{
   savePreferences({...defaults});
   const {container}=render(<PreferencesPanel/>);
-  const categories=container.querySelectorAll<HTMLDetailsElement>('.preferences-category');
-  expect(categories).toHaveLength(5);expect([...categories].every(category=>!category.open)).toBe(true);
-  const input=screen.getByText('Keyboard and gestures');fireEvent.click(input);
-  fireEvent.click(screen.getByText('Text snippets',{exact:true}));
+  expect(container.querySelectorAll('[data-settings-page]:not([hidden])')).toHaveLength(0);
+  const input=screen.getByRole('button',{name:'Keyboard and gestures'});fireEvent.click(input);
+  fireEvent.click(screen.getByRole('button',{name:'Text snippets'}));
   const name=screen.getByLabelText('Snippet name'),text=screen.getByLabelText('Snippet text');
   fireEvent.change(name,{target:{value:'Unsent draft'}});fireEvent.change(text,{target:{value:' exact draft '}});
-  fireEvent.click(input);fireEvent.click(screen.getByText('Appearance and fonts'));
-  expect(input.closest('details')).toHaveProperty('open',false);
-  fireEvent.click(input);expect(screen.getByLabelText('Snippet text')).toBe(text);
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  expect(screen.getByRole('button',{name:'Text snippets'})).toBe(document.activeElement);
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  expect(input).toBe(document.activeElement);
+  fireEvent.click(screen.getByRole('button',{name:'Appearance and fonts'}));
+  expect(screen.getByRole('spinbutton',{name:'Font size'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  fireEvent.click(input);fireEvent.click(screen.getByRole('button',{name:'Text snippets'}));
+  expect(screen.getByLabelText('Snippet text')).toBe(text);
   expect(name).toHaveProperty('value','Unsent draft');expect(text).toHaveProperty('value',' exact draft ');
   expect(getPreferences().snippets).toEqual(defaults.snippets);
 });
