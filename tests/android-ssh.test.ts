@@ -1456,8 +1456,16 @@ test('native D-pad count and neutral observations execute the embedded source wi
   const buttons=()=>Array.from({length:buttonCount},()=>({style:{outline}}));
   const document={querySelectorAll:(selector:string)=>selector==='.terminal-dpad'?Array.from({length:padCount},()=>({querySelectorAll:buttons})):buttons(),querySelector:()=>({textContent:text})};
   const counts=new Function('document',`return (${source});`),quiet=new Function('document',`return (${neutral});`);
-  expect(counts(document)).toEqual([3,2,2,2]);expect(quiet(document)).toBe(true);
+  const first=counts(document);
+  expect(first).toEqual([3,2,2,2]);expect(quiet(document)).toBe(true);
   text+=` D_${nonce}_3_2_2_3`;expect(counts(document)).toEqual([3,2,2,3]);
+  expect(first).toEqual([3,2,2,2]);
+  expect(JSON.stringify(first)).not.toMatch(/PRIVATE_CONTEXT|D_|0123456789abcdef/);
+  for(const index of [0,1,2,3]) {
+    const invalid=[3,2,2,2];invalid[index]=33;text=`PRIVATE_CONTEXT D_${nonce}_${invalid.join('_')}`;
+    expect(counts(document)).toBeNull();
+  }
+  text=`PRIVATE_CONTEXT D_${nonce}_3_2_2_3`;
   outline='1px solid';expect(quiet(document)).toBe(false);outline='';
   for(const invalidPads of [0,2]){padCount=invalidPads;expect(counts(document)).toBeNull();}
   padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
