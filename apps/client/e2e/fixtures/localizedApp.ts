@@ -1,4 +1,4 @@
-import {workspaceControl,openPreferenceCategory} from './workspaceControl';
+import {workspaceControl,openPreferenceCategory,closePreferences} from './workspaceControl';
 import type {Page} from '@playwright/test';
 
 /** Select through real Preferences before mounting a feature acceptance fixture. */
@@ -9,7 +9,6 @@ export async function openLocalizedApp(page: Page, locale: string) {
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
   await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale);
-  const close=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('appCloseValue1',{value1:t('appPreferences')});});
-  await page.getByRole('dialog').getByRole('button',{name:close,exact:true}).click();
+  await closePreferences(page);
   return external;
 }

@@ -31,6 +31,14 @@ export async function openPreferenceCategory(page: Page, category: 'Language'|'A
   await target.click();
 }
 
+/** Exit the complete settings task, rather than navigating to its parent category. */
+export async function closePreferences(page:Page) {
+  const labels=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return {title:t('appPreferences'),close:t('appCloseValue1',{value1:t('appPreferences')})};});
+  const dialog=page.getByRole('dialog',{name:labels.title,exact:true});
+  await dialog.getByRole('button',{name:labels.close,exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 export async function openThemeImport(page: Page) {
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Appearance');

@@ -18,6 +18,12 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
     expect(bounds.x).toBeGreaterThanOrEqual(panelBounds.x+16);
     expect(bounds.x+bounds.width).toBeLessThanOrEqual(panelBounds.x+panelBounds.width-16);
   }
+  // The preceding Preferences close can leave the pointer over this localized button.
+  await page.mouse.move(0,0);
+  await root.locator('.button-row > button').first().evaluate(async button=>{
+    getComputedStyle(button).backgroundColor;
+    await Promise.all(button.getAnimations().map(animation=>animation.finished));
+  });
   expect(await fileControls.evaluateAll(inputs=>inputs.every(input=>{
     const picker=getComputedStyle(input,'::file-selector-button');
     const button=getComputedStyle(input.closest('.button-row')!.querySelector('button')!);

@@ -1,4 +1,4 @@
-import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {pseudoEnglish} from '../src/test/pseudoLocale';
@@ -148,12 +148,12 @@ for(const locale of [
   await openPreferenceCategory(page,'Language');
   await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale.code);
   await expect(page.locator('html')).toHaveAttribute('lang',locale.code);
-  await expect(page.getByRole('heading',{name:locale.heading,exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:locale.heading,exact:true})).toBeVisible();
   await expect(page.getByRole('combobox',{name:locale.language,exact:true})).toHaveValue(locale.code);
   await openPreferenceCategory(page,'Appearance');
   await expect(page.getByText(nativeReason,{exact:true})).toBeVisible();
   expect(await page.getByRole('dialog').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-  await page.keyboard.press('Escape');
+  await closePreferences(page);
   await expect(screen).toContainText('RAW C-b, {{text}} 世界');
   expect(await terminal!.evaluate(node=>node.isConnected)).toBe(true);
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Abrir servidores',exact:true}).click();

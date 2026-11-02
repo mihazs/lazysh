@@ -1,4 +1,4 @@
-import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -84,8 +84,9 @@ test('invalid persisted layout falls back to list and reset clears the cards cho
   await layout.selectOption('cards');
   await openPreferenceCategory(page,'Reset');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
+  await openPreferenceCategory(page,'Appearance');
   await expect(layout).toHaveValue('list');
-  await page.keyboard.press('Escape');
+  await closePreferences(page);
   await page.getByRole('button', {name: 'Switch terminal session', exact: true}).click();
   await expect(page.getByRole('dialog', {name: 'Switch terminal session'}).locator('.session-switcher')).toHaveAttribute('data-layout', 'list');
 });
