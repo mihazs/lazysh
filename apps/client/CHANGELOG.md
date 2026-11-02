@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.7
+
+### Patch Changes
+
+- 0c12b4c: Keep locale workflow acceptance aligned with compact native status recovery while preserving the visible case-sensitive untranslated reason.
+- @lazysh/account-usage@1.9.7
+  - @lazysh/common@1.9.7
+  - @lazysh/display-idle@1.9.7
+  - @lazysh/et-transport@1.9.7
+  - @lazysh/mosh-transport@1.9.7
+
 ## 1.9.6
 
 ### Patch Changes
