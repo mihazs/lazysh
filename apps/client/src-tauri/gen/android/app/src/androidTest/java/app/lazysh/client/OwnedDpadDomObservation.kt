@@ -24,7 +24,7 @@ internal class OwnedDpadDomObservation(nonce: String, private val evaluate: (Str
         for(index in 0 until rows.length()) {
             val sourceRow=rows.getJSONObject(index);val row=JSONObject()
             for((name,allowed) in listOf(
-                "kind" to listOf("pointerdown","pointermove","pointerup","pointercancel","gotpointercapture","lostpointercapture","outline","contextmenu","focus","blur","focusin","focusout","visibilitychange","viewport"),
+                "kind" to listOf("pointerdown","pointermove","pointerup","pointercancel","gotpointercapture","lostpointercapture","outline","contextmenu","contextmenu-after","focus","blur","focusin","focusout","visibilitychange","viewport"),
                 "target" to listOf("pad","arrow","other"),"capture" to listOf("yes","no","unavailable"),
                 "displacement" to listOf("up","left","down","right","neutral","other","unavailable"),
                 "outline" to listOf("up","left","down","right","none","multiple","unavailable"),
@@ -32,7 +32,9 @@ internal class OwnedDpadDomObservation(nonce: String, private val evaluate: (Str
                 "activeElement" to listOf("terminal","pad","other","none","unavailable"),
                 "documentFocus" to listOf("yes","no","unavailable"),
                 "visibility" to listOf("visible","hidden","other","unavailable"),
-                "viewport" to listOf("same","changed","unavailable"))) {
+                "viewport" to listOf("same","changed","unavailable"),
+                "menuCancelable" to listOf("yes","no","unavailable"),
+                "menuDefaultPrevented" to listOf("yes","no","unavailable"))) {
                 val value=sourceRow.get(name);require(value in allowed);row.put(name,value)
             }
             for(name in listOf("trusted","samePointer","primary","touch","pressed","connected")) {
@@ -54,7 +56,7 @@ internal class OwnedDpadDomObservation(nonce: String, private val evaluate: (Str
               if(Object.hasOwn(window,key))return false;
               const pads=document.querySelectorAll('.terminal-dpad');if(pads.length!==1)return false;
               const pad=pads[0],types=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture'];
-              const events=[],added=[];let observer=null,tracked=null,x=0,y=0,started=0,active=true,overflow=false,lastOutline=null,initialViewport=null,lastContext=null;
+              const events=[],added=[];let observer=null,tracked=null,x=0,y=0,started=0,active=true,overflow=false,lastOutline=null,initialViewport=null,lastContext=null,entry=null,menuTask=null,menuAttempts=0;
               const inside=target=>target instanceof Node&&pad.contains(target);
               const connected=()=>pad.isConnected===true;
               const viewport=()=>{try{const v=window.visualViewport,values=[window.innerWidth,window.innerHeight,v?.width,v?.height,v?.offsetLeft,v?.offsetTop,v?.scale];
@@ -72,14 +74,14 @@ internal class OwnedDpadDomObservation(nonce: String, private val evaluate: (Str
                 const selected=arrows.filter(a=>Boolean(a.style.outline));return selected.length===0?'none':selected.length===1?selected[0].dataset.dpadDirection:'multiple';};
               const capture=()=>{try{return tracked===null||typeof pad.hasPointerCapture!=='function'?'unavailable':pad.hasPointerCapture(tracked)?'yes':'no';}catch{return 'unavailable';}};
               const append=row=>{if(events.length<32)events.push(row);else overflow=true;};
-              const record=(kind,event,current=context())=>{const same=Boolean(event&&event.pointerId===tracked),target=event?.target;
+              const record=(kind,event,current=context(),menuCancelable='unavailable',menuDefaultPrevented='unavailable')=>{const same=Boolean(event&&event.pointerId===tracked),target=event?.target;
                 const dx=same?event.clientX-x:NaN,dy=same?event.clientY-y:NaN;
                 const displacement=!same?'other':!Number.isFinite(dx)||!Number.isFinite(dy)?'unavailable':Math.max(Math.abs(dx),Math.abs(dy))<12?'neutral':Math.abs(dx)>Math.abs(dy)?dx>0?'right':'left':dy>0?'down':'up';
                 lastContext=JSON.stringify(current);
                 append({kind,atMs:Math.max(0,Math.min(65535,Math.trunc(performance.now()-started))),
                   trusted:event?.isTrusted===true,samePointer:same,primary:event?.isPrimary===true,touch:event?.pointerType==='touch',pressed:Boolean(event&&(event.buttons&1)),
                   target:!event||target===pad?'pad':inside(target)&&target.closest?.('button[data-dpad-direction]')?'arrow':'other',
-                  capture:capture(),displacement,outline:outline(),connected:connected(),...current});};
+                  capture:capture(),displacement,outline:outline(),connected:connected(),menuCancelable,menuDefaultPrevented,...current});};
               const onPointer=event=>{if(!active)return;
                 if(tracked===null){if(event.type!=='pointerdown'||event.isTrusted!==true||event.isPrimary!==true||event.button!==0||
                   !inside(event.target)||!event.target.closest?.('button[data-dpad-direction]')||!Number.isInteger(event.pointerId)||
@@ -89,16 +91,26 @@ internal class OwnedDpadDomObservation(nonce: String, private val evaluate: (Str
                 record(event.type,event);};
               const onContext=event=>{if(!active||tracked===null)return;const current=context();
                 if(JSON.stringify(current)!==lastContext)record(['resize','scroll'].includes(event.type)?'viewport':event.type,event,current);};
-              const onMenu=event=>{if(active&&tracked!==null&&(inside(event.target)||event.pointerId===tracked))record('contextmenu',event);};
+              const onMenu=event=>{if(!active||tracked===null||!(inside(event.target)||event.pointerId===tracked))return;
+                record('contextmenu',event);
+                if(menuTask!==null||menuAttempts>=4)return;menuAttempts++;
+                try{menuTask=setTimeout(()=>{menuTask=null;if(!active||window[key]!==entry||!connected())return;
+                  let cancelable='unavailable',prevented='unavailable';
+                  try{if(typeof event.cancelable==='boolean')cancelable=event.cancelable?'yes':'no';if(typeof event.defaultPrevented==='boolean')prevented=event.defaultPrevented?'yes':'no';}catch{}
+                  record('contextmenu-after',event,context(),cancelable,prevented);
+                },0);}catch{menuTask=null;record('contextmenu-after',event);}};
               const listen=(target,type,callback)=>{target.addEventListener(type,callback,{capture:true,passive:true});added.push([target,type,callback]);};
-              const cleanup=()=>{active=false;for(const [target,type,callback] of added)target.removeEventListener(type,callback,true);observer?.disconnect();};
+              const cleanup=()=>{active=false;let failed=false;
+                if(menuTask!==null){try{clearTimeout(menuTask);}catch{failed=true;}menuTask=null;}
+                for(const [target,type,callback] of added)try{target.removeEventListener(type,callback,true);}catch{failed=true;}
+                try{observer?.disconnect();}catch{failed=true;}if(failed)throw Error('Owned D-pad observation cleanup unavailable');};
               try {for(const type of types)listen(document,type,onPointer);
                 listen(document,'contextmenu',onMenu);for(const type of ['focusin','focusout','visibilitychange'])listen(document,type,onContext);
                 for(const type of ['focus','blur','resize'])listen(window,type,onContext);
                 if(window.visualViewport?.addEventListener)for(const type of ['resize','scroll'])listen(window.visualViewport,type,onContext);
                 observer=new MutationObserver(()=>{if(!active||tracked===null)return;const current=outline();if(current!==lastOutline){lastOutline=current;record('outline',null);}});
                 observer.observe(pad,{attributes:true,attributeFilter:['style'],childList:true,subtree:true});
-                window[key]={owner,read:()=>({schemaVersion:1,state:'observed',overflow,admitted:tracked!==null,connected:connected(),events:events.map(row=>({...row}))}),cleanup};return true;
+                entry={owner,read:()=>({schemaVersion:1,state:'observed',overflow,admitted:tracked!==null,connected:connected(),events:events.map(row=>({...row}))}),cleanup};window[key]=entry;return true;
               }catch{cleanup();return false;}})()
         """.trimIndent()
         private val READ = """
