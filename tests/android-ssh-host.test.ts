@@ -22,7 +22,16 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
     const output=await client.finish('actual SSH shell',5000);
     expect(output).toContain(fixture.prompt);
     expect(output).toContain(fixture.expected);
+    const trustOption=client.child.spawnargs.find(value=>value.startsWith('UserKnownHostsFile='));
+    expect(trustOption).toBeDefined();
+    const trust=trustOption!.slice('UserKnownHostsFile='.length);
+    expect(trust.startsWith(`${fixture.directory}/`)).toBe(true);
+    expect((await stat(trust)).mode&0o777).toBe(0o600);
+    const pin=await readFile(trust);
+    await chmod(trust,0o400);
     const rejected=await fixture.client(false);
+    expect(await readFile(trust)).toEqual(pin);
+    expect((await stat(trust)).mode&0o777).toBe(0o400);
     await expect(rejected.finish('no ephemeral credential',5000)).rejects.toThrow('Owned fixture failed: no ephemeral credential');
   } finally {await fixture.stop();}
   expect(await listening(port)).toBe(false);

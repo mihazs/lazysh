@@ -190,8 +190,9 @@ export class SshFixture {
     }
   }
   private async keyOptions(identity=true,port=this.port) {
-    const known=join(this.directory,'known_hosts');
-    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
+    // A later launch must not truncate a trust file another client is reading.
+    const known=join(this.directory,`known_hosts-${randomUUID()}`);
+    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600,flag:'wx'});
     return ['-F','/dev/null','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
       ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none'])];
