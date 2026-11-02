@@ -3999,6 +3999,8 @@ class NativeWorkspaceTest {
             var held = false
             var observer: OwnedFingerWindowObserver? = null
             var fingerFailure: Throwable? = null
+            var currentPhase = "up"
+            var lastCounts: IntArray? = null
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
@@ -4014,6 +4016,7 @@ class NativeWorkspaceTest {
                 val rows=JSONArray(evaluate(scenario,countExpression,remaining()))
                 require(rows.length()==4) { "Owned D-pad count observation invalid" }
                 return IntArray(4) { rows.getInt(it).also { value->require(value in 0..32) } }
+                    .also { lastCounts=it.copyOf() }
             }
             fun phase(index: Int) {
                 while (true) {
@@ -4033,16 +4036,21 @@ class NativeWorkspaceTest {
                 }
                 held=true;dispatch(android.view.MotionEvent.ACTION_DOWN);phase(0)
                 for ((index,offset) in listOf(-24 to 0,0 to 24,24 to 0).withIndex()) {
+                    currentPhase=listOf("left","down","right")[index]
                     dispatch(android.view.MotionEvent.ACTION_MOVE,offset.first,offset.second);phase(index+1)
                 }
+                currentPhase="neutral"
                 dispatch(android.view.MotionEvent.ACTION_MOVE)
                 while(evaluate(scenario,"(()=>{const buttons=document.querySelectorAll('.terminal-dpad button[data-dpad-direction]');return buttons.length===4&&Array.from(buttons).every(x=>!x.style.outline);})()",remaining())!="true")Thread.sleep(10)
                 pause();stopped=counts();pause();assertArrayEquals("Dead-zone output must stop",stopped,counts())
                 val before=JSONObject(checkNotNull(observer).snapshot()).getJSONArray("events")
                 assertEquals("Held D-pad has exactly DOWN plus four MOVE events",5,before.length())
                 assertTrue("No UP before all ordered receiver phases",(0 until before.length()).none {before.getJSONObject(it).getString("action")=="up"})
+                currentPhase="release"
                 dispatch(android.view.MotionEvent.ACTION_UP);held=false
+                currentPhase="post-release"
                 pause();assertArrayEquals("Final UP must not repeat or click the original arrow",stopped,counts())
+                currentPhase="trace"
                 val trace=JSONObject(checkNotNull(observer).snapshot())
                 assertFalse("Native pointer trace remains bounded",trace.getBoolean("overflow"))
                 val events=trace.getJSONArray("events")
@@ -4055,7 +4063,17 @@ class NativeWorkspaceTest {
                     assertEquals("Native D-pad dispatch handled","handled",row.getString("outcome"))
                     if(index in 1..4)assertEquals("Four MOVE phases before UP","move",row.getString("action"))
                 }
-            } catch(failure: Throwable) {fingerFailure=failure;throw failure}
+            } catch(failure: Throwable) {
+                fingerFailure=failure
+                // Local last-valid observation only; no new query, input or wait on failure.
+                runCatching {
+                    require(currentPhase in listOf("up","left","down","right","neutral","release","post-release","trace"))
+                    val counts=lastCounts
+                    require(counts==null || (counts.size==4 && counts.all { it in 0..32 }))
+                    failure.addSuppressed(AssertionError("D-pad gesture state[phase=$currentPhase lastCounts=${counts?.joinToString(",") ?: "unavailable"}]"))
+                }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad gesture state[unavailable]")) } }
+                throw failure
+            }
             finally {
                 var cleanup: Throwable?=null
                 try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
