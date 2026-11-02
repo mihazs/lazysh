@@ -1,4 +1,5 @@
 import {insideStandardRoot,readStandardDiagnostic,publishStandardProgress,standardDiagnosticStage,standardDiagnosticIdentity} from './windows-standard-progress';
+import {standardObservationBroker,stageStandardObservation,readStandardObservation} from './windows-standard-observation';
 export {insideStandardRoot,readStandardDiagnostic,publishStandardProgress} from './windows-standard-progress';
 import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
@@ -201,7 +202,7 @@ export function standardOwnerRejection(wire:unknown,failure:unknown,progress:unk
   const detail=typeof failure==='string'&&windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+failure)===failure?' ('+failure+')':'';
   return 'Standard native owner rejected: '+code+primary+detail+' prepared='+(prepared==='PREPARED'?'PREPARED':'UNKNOWN')+' progress='+standardDiagnosticStage(progress)+' cleanup=UNKNOWN';
 }
-export const standardSourceFiles=['package.json','apps/client/package.json','apps/client/vitest.native-gui.config.ts','apps/client/native-e2e/policy.ts','apps/client/native-e2e/windows/installed.spec.ts','.changeset/bun-lock.ts','.changeset/release-artifacts.ts','.changeset/release-platform.ts','.changeset/windows-installed-gui.ts','.changeset/windows-standard-user.ts','.changeset/windows-standard-progress.ts'] as const;
+export const standardSourceFiles=['package.json','apps/client/package.json','apps/client/vitest.native-gui.config.ts','apps/client/native-e2e/policy.ts','apps/client/native-e2e/windows/installed.spec.ts','.changeset/bun-lock.ts','.changeset/release-artifacts.ts','.changeset/release-platform.ts','.changeset/windows-installed-gui.ts','.changeset/windows-standard-user.ts','.changeset/windows-standard-progress.ts','.changeset/windows-standard-observation.ts'] as const;
 function hostedStandardScope(env:NodeJS.ProcessEnv){
   if(process.platform!=='win32'||env.GITHUB_ACTIONS!=='true'||env.RUNNER_ENVIRONMENT!=='github-hosted'||env.GITHUB_REPOSITORY!=='mihazs/lazysh'||!/^\d{1,20}$/.test(env.GITHUB_RUN_ID??'')||!/^\d{1,20}$/.test(env.GITHUB_RUN_ATTEMPT??'')||!env.RUNNER_TEMP||!env.GITHUB_ENV||!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA??''))throw new Error('Standard owner requires verified disposable hosted Windows CI');
   return join(resolve(env.RUNNER_TEMP),`lazysh-standard-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`);
@@ -364,12 +365,15 @@ async function runStandardOwner(installer:string,binary:string,version:string,mo
     await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'UNKNOWN'}),{flag:'wx'}).catch(()=>{});
     await publishStandardProgress(root,process.env.GITHUB_SHA!,binaryHash,'PREPARED');
     const prepared=await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash);
+    const observed=await stageStandardObservation(root,process.env.GITHUB_SHA!,binaryHash);
     const remaining=deadline-Date.now()-1000;if(remaining<=15000)throw new Error('Standard owner setup exhausted its budget');
-    const script=standardOwnerBroker(selected);
+    const originalBroker=standardOwnerBroker(selected),script=observed?standardObservationBroker(originalBroker,selected):originalBroker;
     const imageHash=(await digestFile(join(root,'bin',selected==='node-bootstrap-exit'?'node.exe':'bun.exe'))).sha256;
     if(runtime&&runtime.runtimeSha256!==imageHash)throw new Error('Node control launch image identity changed');
     if(selected==='node-bootstrap-exit')console.info(JSON.stringify({kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED',...standardNodeRuntimeIdentity(runtime)}));
-    const wire=await native(pwsh,['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_WINDOWS_STANDARD_ROOT:root,LAZYSH_STANDARD_REMAINING:String(remaining),LAZYSH_STANDARD_IMAGE_HASH:imageHash},remaining,windowsStandardUserSource);
+    let wire:string;
+    try{wire=await native(pwsh,['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_WINDOWS_STANDARD_ROOT:root,LAZYSH_STANDARD_REMAINING:String(remaining),LAZYSH_STANDARD_IMAGE_HASH:imageHash},remaining,windowsStandardUserSource);}
+    finally{try{console.info(JSON.stringify(await readStandardObservation(root,process.env.GITHUB_SHA!,binaryHash)));}catch{}}
     let receipt:ReturnType<typeof parseStandardReceipt>|undefined;
     const resultFile=join(root,'work','result.json');
     const receiptPresent=selected==='gui'?await Bun.file(resultFile).exists():await lstat(resultFile).then(()=>true,error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw new Error('Bootstrap control receipt presence unverified');});

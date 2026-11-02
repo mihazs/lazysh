@@ -1,4 +1,5 @@
 import {windowsStandardInstallation,windowsStandardBootstrapExit,windowsStandardNodeBootstrapExit,standardOwnerCompletion,standardOwnerBroker,standardNodeToolcache,standardNodeRuntimeIdentity,stageStandardNodeEntry,verifyStandardNodeEntry,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript,readStandardDiagnostic,publishStandardProgress,standardOwnerRejection,standardWorker,standardSourceFiles} from '../.changeset/windows-standard-user';
+import {standardObservationSource,standardObservationHash,standardObservationBroker,standardObservationHeader,standardObservationProjection,stageStandardObservation,readStandardObservation,standardObservationName,standardObservationHelper} from '../.changeset/windows-standard-observation';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
 import { appendFile, link, mkdtemp, mkdir, readFile, readdir, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
@@ -1547,7 +1548,7 @@ test('Windows Node admitted-runtime receipt stays closed and follows every admis
   const line="if(selected==='node-bootstrap-exit')console.info(JSON.stringify({kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED',...standardNodeRuntimeIdentity(runtime)}));",admitted=owner.indexOf(line);
   expect(admitted).toBeGreaterThanOrEqual(0);expect(owner.match(/kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED'/g)).toHaveLength(1);
   for(const prerequisite of ['standardNodeToolcache(await realpath(node),await realpath(cache),expectedVersion)','standardNodeToolcache(node,cache,version)',"if(runtime&&(await digestFile(join(root,'bin','node.exe'))).sha256!==runtime.runtimeSha256)",'if(runtime&&runtime.runtimeSha256!==imageHash)']){const position=owner.indexOf(prerequisite);expect(position).toBeGreaterThanOrEqual(0);expect(position).toBeLessThan(admitted);}
-  for(const required of ['const wire=await native(pwsh,',"if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')",'standardOwnerCompletion(selected,receiptPresent,receipt,runtime)']){const position=owner.indexOf(required);expect(position).toBeGreaterThan(admitted);}
+  for(const required of ['try{wire=await native(pwsh,',"if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')",'standardOwnerCompletion(selected,receiptPresent,receipt,runtime)']){const position=owner.indexOf(required);expect(position).toBeGreaterThan(admitted);}
 
 });
 
@@ -1751,3 +1752,101 @@ for(const invalidSource of [false,true])test.skipIf(process.env.LAZYSH_TEST_WIND
     expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_STANDARD_CONTRACT_ROOT:root,LAZYSH_STANDARD_CONTRACT_SCRIPT:standardBrokerScript},30000,windowsStandardUserSource+windowsProvisioningContract+(invalidSource?'\n#error OWNED_STANDARD_COMPILE_REJECTION\n':''))).toBe(invalidSource?'STANDARD_CONTRACT_FAILED:COMPILE:UNVERIFIED':'STANDARD_PORTABLE_CONTRACT');
   });
 },35000);
+
+test('Windows standard child observation cannot publish raw or partially admitted process metadata',()=>{
+  const sample={identity:'VERIFIED',state:'LIVE',cpu:'UNCHANGED',threads:2},record={sequence:1,sample};
+  expect(standardObservationProjection([record]).status).toBe('UNVERIFIED');
+  expect(standardObservationProjection([1,2,3].map(sequence=>({...record,sequence}))).status).toBe('OBSERVED');
+  const unknown=standardObservationProjection(undefined);
+  expect(unknown.status).toBe('UNVERIFIED');
+  for(const value of [null,{},[record,record],Array(4).fill(record),[{...record,pid:42}],[{...record,sequence:2}],[{sequence:1,sample:{...sample,path:'private'}}],[{sequence:1,sample:{...sample,identity:'UNVERIFIED'}}],[{sequence:1,sample:{...sample,cpu:'private'}}],[{sequence:1,sample:{...sample,threads:4097}}],[{sequence:1,sample:{...sample,threads:1.5}}]])expect(standardObservationProjection(value)).toEqual(unknown);
+  expect(standardObservationProjection([{sequence:1,sample:{identity:'UNVERIFIED',state:'UNVERIFIED',cpu:'UNVERIFIED',threads:0}}]).status).toBe('UNVERIFIED');
+  expect(()=>parseStandardReceipt(standardObservationProjection([record]),'a'.repeat(40),'b'.repeat(64))).toThrow('Standard owner receipt rejected');
+  expect(standardOwnerRejection('LAZYSH_STANDARD_OWNER:STANDARD_OWNER_TIMEOUT',undefined,'PREPARED','PREPARED')).toBe('Standard native owner rejected: STANDARD_OWNER_TIMEOUT prepared=PREPARED progress=PREPARED cleanup=UNKNOWN');
+});
+
+test('Windows standard child observation rejects linked, stale and oversized diagnostic files',async()=>{
+  await fixture(async parent=>{
+    const root=join(parent,'lazysh-standard-123-1');await mkdir(root);
+    const path=join(root,standardObservationName),source='a'.repeat(40),binary='b'.repeat(64),row={sequence:1,sample:{identity:'VERIFIED',state:'LIVE',cpu:'UNVERIFIED',threads:1}};
+    const unknown=await readStandardObservation(root,source,binary);
+    const bytes=standardObservationHeader(root,source,binary)+JSON.stringify(row)+'\n';
+    await writeFile(path,bytes);expect((await readStandardObservation(root,source,binary)).samples).toHaveLength(1);
+    expect(await readStandardObservation(root,'invalid',binary)).toEqual(unknown);
+    await writeFile(path,standardObservationHeader(root,'c'.repeat(40),binary)+JSON.stringify(row)+'\n');expect(await readStandardObservation(root,source,binary)).toEqual(unknown);
+    const foreign=join(parent,'foreign');await writeFile(foreign,bytes);await unlink(path);await link(foreign,path);
+    expect(await readStandardObservation(root,source,binary)).toEqual(unknown);await unlink(path);await symlink(foreign,path);
+    expect(await readStandardObservation(root,source,binary)).toEqual(unknown);await unlink(path);await writeFile(path,' '.repeat(2049));
+    expect(await readStandardObservation(root,source,binary)).toEqual(unknown);await writeFile(path,'{"sequence":1');
+    expect(await readStandardObservation(root,source,binary)).toEqual(unknown);expect(await readFile(foreign,'utf8')).toBe(bytes);
+  });
+});
+
+test('Windows standard child observation preserves frozen owner bytes, original broker and finite read-only scope',async()=>{
+  expect(Buffer.byteLength(windowsStandardUserSource)).toBe(59795);
+  expect(new Bun.CryptoHasher('sha256').update(windowsStandardUserSource).digest('hex')).toBe('6b20fec9352e3f498076501cabe2ea1d1d791e33b5610ac7158702c26c2359c7');
+  expect(Buffer.byteLength(windowsStandardUserSource+windowsProvisioningContract+'\n#error OWNED_STANDARD_COMPILE_REJECTION\n')).toBe(65530);
+  expect(Buffer.byteLength(standardObservationSource)).toBeLessThanOrEqual(65536);
+  expect(standardSourceFiles).toContain('.changeset/windows-standard-observation.ts');
+  for(const mode of ['gui','bootstrap-exit','node-bootstrap-exit'] as const){
+    const original=standardOwnerBroker(mode),script=standardObservationBroker(original,mode);
+    expect(script.split(original)).toHaveLength(2);expect(script).toContain(standardObservationHash);expect(script).toContain(standardObservationHelper);
+    expect(script).toContain("catch{};& {");expect(script).toContain('finally{if($standardObserver){try{$standardObserver.Stop()}catch{}}}');
+    expect(script.length+128).toBeLessThan(32767);
+  }
+  for(const forbidden of ['TerminateProcess','ResumeThread','SuspendThread','AdjustTokenPrivileges','PROCESS_ALL_ACCESS','ReadProcessMemory','WriteProcessMemory','CreateProcess','GetThreadContext'])expect(standardObservationSource).not.toContain(forbidden);
+  expect(standardObservationSource).toContain('QueryProcess(0x101000,false,candidate)');expect(standardObservationSource).toContain('new[]{30000,120000,300000}');
+  expect(standardObservationSource).toContain('worker.IsBackground=true');expect(standardObservationSource).toContain('worker.Join(50)');
+  const source=await Bun.file(new URL('../.changeset/windows-standard-user.ts',import.meta.url)).text();
+  expect(source).toContain('finally{try{console.info(JSON.stringify(await readStandardObservation(');
+  expect(source).toContain('catch{}}\n    let receipt:');
+});
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard child observation compiles separately and refuses wrong birth parent image SID session and partial queries without native calls',async()=>{
+  const script=String.raw`$ErrorActionPreference='Stop';Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;if(![StandardChildObservation]::Layout()){throw 'ABI layout'};$good=@($true,[uint32]20,[uint32]10,[uint32]10,[long]200,[long]100,[long]300,'C:\owned\node.exe','C:\owned\node.exe','S-1-5-21-1-2-3-1001','S-1-5-21-1-2-3-1001',1,1);$method=[StandardChildObservation].GetMethod('Identity');if(!$method.Invoke($null,$good)){throw 'positive'};foreach($change in @(@(0,$false),@(1,[uint32]0),@(2,[uint32]9),@(4,[long]99),@(4,[long]301),@(7,'C:\foreign\node.exe'),@(9,'S-1-5-21-1-2-3-1002'),@(11,2),@(12,0))){$bad=$good.Clone();$bad[$change[0]]=$change[1];if($method.Invoke($null,$bad)){throw 'wrong identity admitted'}};if(![StandardChildObservation]::Pinned(20,200,0,0) -or ![StandardChildObservation]::Pinned(20,200,20,200) -or [StandardChildObservation]::Pinned(21,200,20,200) -or [StandardChildObservation]::Pinned(20,201,20,200)){throw 'recycled identity admitted'};[Console]::Out.Write('STANDARD_OBSERVATION_IDENTITY_CONTRACT')`;
+  expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],process.env,30000,standardObservationSource)).toBe('STANDARD_OBSERVATION_IDENTITY_CONTRACT');
+},35000);
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard child observation failure cannot replace a primary broker result',async()=>{
+  await fixture(async root=>{
+    const primary='LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_OWNER_TIMEOUT',script=standardObservationBroker(`[Console]::Out.Write('${primary}')`,'gui');
+    for(const helper of [undefined,'private invalid helper',standardObservationSource]){
+      if(helper!==undefined)await writeFile(join(root,standardObservationHelper),helper);
+      expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_WINDOWS_STANDARD_ROOT:root,LAZYSH_STANDARD_IMAGE_HASH:'b'.repeat(64),LAZYSH_STANDARD_REMAINING:'30000'},30000)).toBe(primary);
+      expect(await readStandardObservation(root,'a'.repeat(40),'b'.repeat(64))).toEqual(standardObservationProjection(undefined));
+    }
+  });
+},35000);
+
+test('Windows standard child observation staging is optional and preserves colliding foreign files',async()=>{
+  await fixture(async parent=>{
+    const root=join(parent,'lazysh-standard-99-1'),source='a'.repeat(40),binary='b'.repeat(64);await mkdir(root);
+    const helper=join(root,standardObservationHelper);await writeFile(helper,'foreign');
+    expect(await stageStandardObservation(root,source,binary)).toBe(false);expect(await readFile(helper,'utf8')).toBe('foreign');
+    expect(await Bun.file(join(root,standardObservationName)).exists()).toBe(false);await unlink(helper);
+    await writeFile(join(root,standardObservationName),'foreign diagnostic');expect(await stageStandardObservation(root,source,binary)).toBe(false);
+    expect(await readFile(join(root,standardObservationName),'utf8')).toBe('foreign diagnostic');
+    expect(await stageStandardObservation(join(parent,'missing'),source,binary)).toBe(false);
+    const sourceText=await Bun.file(new URL('../.changeset/windows-standard-user.ts',import.meta.url)).text();
+    expect(sourceText).toContain('script=observed?standardObservationBroker(originalBroker,selected):originalBroker');
+    expect(sourceText.indexOf('const observed=await stageStandardObservation(')).toBeLessThan(sourceText.indexOf('const remaining=deadline-Date.now()-1000'));
+  });
+});
+
+test('Windows standard child observation wires session to the pinned token and fences PID snapshots with fresh opens',()=>{
+  function wired(source:string){
+    const sample=source.slice(source.indexOf('string Sample(){'),source.indexOf('static string Unknown(){'));
+    const bound=source.slice(source.indexOf('static bool BoundParent('),source.indexOf('string Sample(){'));
+    const current=source.slice(source.indexOf('static bool CurrentBirth('),source.indexOf('static bool BoundParent('));
+    return !sample.includes('Process.GetProcessById')&&sample.includes('TokenSession(token,12,out session,4,out needed)')
+      &&sample.indexOf('TokenSession(token,12,')<sample.indexOf('if(!Close(token))')
+      &&sample.split('BoundParent(candidate,parent,before,out threads)').length===3
+      &&bound.includes('CurrentBirth(id,birth)&&ParentOf(id,parent,out threads)&&CurrentBirth(id,birth)')
+      &&current.includes('QueryProcess(0x1000,false,id)')&&current.includes('birth==expected');
+  }
+  expect(wired(standardObservationSource)).toBe(true);
+  // Either regression recreates the mixed-old-handle/new-PID counterexample:
+  // a retained old birth alone cannot bind a replacement PID's session/threads.
+  expect(wired(standardObservationSource.replace('TokenSession(token,12,out session,4,out needed)','Process.GetProcessById((int)candidate).SessionId'))).toBe(false);
+  expect(wired(standardObservationSource.replace('&&CurrentBirth(id,birth);',';'))).toBe(false);
+});
