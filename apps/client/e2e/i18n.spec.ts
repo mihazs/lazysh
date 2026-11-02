@@ -151,7 +151,9 @@ for(const locale of [
   await expect(page.getByRole('region',{name:locale.heading,exact:true})).toBeVisible();
   await expect(page.getByRole('combobox',{name:locale.language,exact:true})).toHaveValue(locale.code);
   await openPreferenceCategory(page,'Appearance');
-  await expect(page.getByText(nativeReason,{exact:true})).toBeVisible();
+  const nativeStatus=page.getByRole('status').filter({hasText:nativeReason});
+  await expect(nativeStatus).toBeVisible();
+  await expect(nativeStatus).toContainText(nativeReason);
   expect(await page.getByRole('dialog').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await closePreferences(page);
   await expect(screen).toContainText('RAW C-b, {{text}} 世界');
