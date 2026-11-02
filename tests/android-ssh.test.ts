@@ -1492,11 +1492,11 @@ test.skipIf(process.platform!=='linux')('protected raw reader rejects a FIFO wit
 
 for(const change of ['changed','short'] as const)test.skipIf(typeof process.getuid!=='function')(`protected raw reader closes its file after a ${change} read and exports no guessed bytes`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-race-')),path=join(directory,'received-bytes');
-  const original=fileSystem.open;let observed:Awaited<ReturnType<typeof original>>|undefined;
+  const original=fileSystem.open;let observed:Awaited<ReturnType<typeof original>>|undefined;const readSizes:number[]=[];
   const opening=spyOn(fileSystem,'open').mockImplementation(async(...args:Parameters<typeof original>)=>{
     const file=await original(...args);observed=file;const read=file.read.bind(file);
     Object.defineProperty(file,'read',{value:async(buffer:Buffer,offset:number,length:number,position:number)=>{
-      const result=await read(buffer,offset,length,position);
+      const result=await read(buffer,offset,length,position);readSizes.push(result.bytesRead);
       if(change==='changed')await writeFile(path,'different size');
       return change==='short'?{...result,bytesRead:result.bytesRead-1}:result;
     }});return file;
@@ -1505,7 +1505,9 @@ for(const change of ['changed','short'] as const)test.skipIf(typeof process.getu
     await writeFile(path,'fixed',{mode:0o600});
     await expect(readRawReceiverBytes(path)).rejects.toThrow('Owned IME receiver output changed');
     expect(observed!.fd).toBe(-1);
+    await writeFile(path,'fixed');
     expect(await observeImeReceiverWire(path,'0'.repeat(32))).toEqual({state:'unavailable'});expect(observed!.fd).toBe(-1);
+    expect(readSizes).toEqual([5,5]);
   } finally {opening.mockRestore();await rm(directory,{recursive:true,force:true});}
 });
 
