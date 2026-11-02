@@ -1614,11 +1614,11 @@ test('native D-pad routing preserves default isolation and the packaged/raw-SSH 
 
 test('native IME failed-editor observation exposes each unchanged predicate clause without reading private editor data',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('fun tapTerminal()')[0];
+  const body=kotlin.split('fun terminalEditor() {')[1].split('fun tapTerminal()')[0];
   const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
-  const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")));
+  const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")).replaceAll('$collectOrder','false').replaceAll('${JSONObject.quote(nonce)}',JSON.stringify('owned')));
   expect(expressions).toHaveLength(2);
-  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document','getComputedStyle',`return (${expressions[1]});`);
+  const predicate=new Function('document',`return (${expressions[0]});`),observe=new Function('document','getComputedStyle',`return (${expressions[1]}).editor;`);
   let count=1,focus=true,hidden=false,active=true,session=true,panePresent=true,review=false,ended=false,modal=false,visibility:unknown='visible',rects:unknown=[{}];
   const pane={getClientRects:()=>rects,querySelector:(selector:string)=>{expect(['.terminal-edit-review',':scope > .session-notice[role=status]']).toContain(selector);return (selector==='.terminal-edit-review'?review:ended)?{}:null;}};
   const computedStyle=(target:unknown)=>{expect(target).toBe(pane);return {display:'flex',visibility};};
@@ -1664,7 +1664,7 @@ test('native IME failed-editor observation exposes each unchanged predicate clau
   const geometry={};for(const key of ['x','y','width','height','left','top'])Object.defineProperty(geometry,key,{get(){privateReads++;throw new Error('Private rectangle read');}});
   rects=[geometry];expect(observe(document,computedStyle).paneDisplayed).toBe(true);
   expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
-  expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}},computedStyle)).toThrow('unavailable');
+  expect(observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}},computedStyle)).toBeNull();
   expect(JSON.stringify(observe(document,computedStyle))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
   const preferences=kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0];
   expect(preferences).toContain('workspaceElementVisible("button[aria-label=\'Preferences\']")');
@@ -2012,4 +2012,145 @@ test.skipIf(process.platform!=='linux')('SSH prompt observation distinguishes a 
     await reportOwnedSshPromptFailure({prompt:'owned-prompt',daemon:child},child,child,0);
     expect(JSON.parse(events[0])).toMatchObject({activeStreams:0,control:{startup:{state:'missing-launcher',exitCode:null},ownedLive:false,stdout:'empty',promptSeen:false}});
   } finally {emit.mockRestore();await child.stop().catch(()=>{});}
+});
+
+
+async function nativeImeOrderFixture(nonce='0123456789abcdef0123456789abcdef') {
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const source=kotlin.match(/val imeOrderInstall = """([\s\S]*?)"""\.trimIndent\(\)/)![1].replaceAll('${JSONObject.quote(nonce)}',JSON.stringify(nonce));
+  const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
+  const envelope=kotlin.match(/val envelope=JSONObject\(evaluate\(scenario,"""([\s\S]*?)""",1_000\)\)/)![1]
+    .replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")).replaceAll('$collectOrder','true').replaceAll('${JSONObject.quote(nonce)}',JSON.stringify(nonce));
+  type Listener=(event:{target:unknown})=>void;
+  const targets:ReturnType<typeof target>[]=[],timers=new Map<number,()=>void>();let nextTimer=0,scheduled=0,privateReads=0,unavailable=false,failFirstClear=false;const clearAttempts:number[]=[];
+  function target() {
+    const listeners=new Map<string,Set<Listener>>();
+    const item={listeners,addEventListener(name:string,callback:Listener){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(callback);},
+      removeEventListener(name:string,callback:Listener){listeners.get(name)?.delete(callback);},
+      fire(name:string,eventTarget:unknown=item){for(const callback of listeners.get(name)??[])callback({target:eventTarget});}};
+    targets.push(item);return item;
+  }
+  const pane={querySelector:(selector:string)=>{expect(selector).toBe('.terminal-edit-review');return null;}};
+  const surface=Object.assign(target(),{closest:(selector:string)=>{expect(selector).toBe('.terminal-pane');return pane;}});
+  const area=Object.assign(target(),{readOnly:false,disabled:false,isConnected:true,closest:(selector:string)=>{expect(selector).toBe('.terminal-canvas');return surface;}});
+  for(const key of ['value','textContent','selectionStart','selectionEnd','id','type','autocomplete'])Object.defineProperty(area,key,{get(){privateReads++;throw new Error('private data');}});
+  let current:unknown=area;
+  const document=Object.assign(target(),{hidden:false,activeElement:area as unknown,hasFocus:()=>true,
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');if(unavailable)throw new Error('private unavailable');return current?[current]:[];}});
+  type RecordRow={event:string;edge:string;owner:string;phase:string;originalPresent:boolean;connected:boolean;focused:boolean;documentFocus:boolean;visible:boolean;readOnly:boolean;enabled:boolean;reviewPresent:boolean};
+  type Observer={mark(phase:string):void;stop():{state:string;initialReadOnly:boolean;overflow:boolean;events:RecordRow[]}};
+  const window=Object.assign(target(),{}) as ReturnType<typeof target>&{__lazyshOwnedImeOrder?:Observer};
+  const install=()=>new Function('window','document','setTimeout','clearTimeout',`return (${source});`)(window,document,(callback:()=>void)=>{scheduled++;timers.set(++nextTimer,callback);return nextTimer;},(id:number)=>{clearAttempts.push(id);if(failFirstClear&&clearAttempts.length===1)throw new Error('private timer cleanup');timers.delete(id);});
+  const flush=()=>{for(const [id,callback]of [...timers]){timers.delete(id);callback();}};
+  return {source,install,window,document,area,surface,timers,flush,failureEnvelope(documentInput:unknown=document){return new Function('window','document','getComputedStyle',`return (${envelope});`)(window,documentInput,()=>({visibility:'visible'}));},setCurrent(value:unknown){current=value;},setUnavailable(){unavailable=true;},
+    failFirstClear(){failFirstClear=true;},clearAttempts,get scheduled(){return scheduled;},get privateReads(){return privateReads;},get listenerCount(){return targets.reduce((sum,item)=>sum+[...item.listeners.values()].reduce((n,set)=>n+set.size,0),0);}};
+}
+
+test('native IME order samples defer past dispatch and keep the original editor identity without private reads',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.install()).toBe(true);
+  const observer=fixture.window.__lazyshOwnedImeOrder!;observer.mark('beforeSelect');observer.mark('afterSelect');observer.mark('beforeTap');
+  fixture.surface.fire('pointerdown');expect(fixture.timers.size).toBe(1);
+  fixture.area.readOnly=true;fixture.flush();observer.mark('afterTap');
+  fixture.setCurrent({readOnly:false});fixture.area.fire('blur');fixture.flush();
+  const result=observer.stop();expect(result.initialReadOnly).toBe(false);expect(result.state).toBe('observed');
+  expect(result.events.find(row=>row.event==='pointerdown'&&row.edge==='capture')?.readOnly).toBe(false);
+  expect(result.events.find(row=>row.event==='pointerdown'&&row.edge==='deferred')?.readOnly).toBe(true);
+  expect(result.events.filter(row=>row.event==='blur').every(row=>!row.originalPresent&&row.readOnly)).toBe(true);
+  expect(result.events.map(row=>row.phase)).toContain('beforeTap');expect(fixture.privateReads).toBe(0);
+  expect(JSON.stringify(result)).not.toMatch(/private|textContent|selection|autocomplete/);
+  expect(fixture.listenerCount).toBe(0);expect(fixture.timers.size).toBe(0);expect(fixture.window.__lazyshOwnedImeOrder).toBeUndefined();
+});
+
+test('native IME order caps records and pending macrotasks and cancels every deferred sample on cleanup',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.install()).toBe(true);const observer=fixture.window.__lazyshOwnedImeOrder!;
+  for(let index=0;index<100;index++)fixture.surface.fire('pointerdown');
+  expect(fixture.timers.size).toBeLessThanOrEqual(24);const scheduled=fixture.scheduled;
+  fixture.surface.fire('click');expect(fixture.scheduled).toBe(scheduled);
+  const result=observer.stop(),before=JSON.stringify(result);expect(result.events).toHaveLength(24);expect(result.overflow).toBe(true);
+  fixture.flush();fixture.surface.fire('pointerup');observer.mark('afterTap');expect(JSON.stringify(result)).toBe(before);
+  expect(fixture.listenerCount).toBe(0);expect(fixture.timers.size).toBe(0);
+});
+
+test('native IME order unavailable reads do not throw and never replace an existing observer or retarget an editor',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.install()).toBe(true);const observer=fixture.window.__lazyshOwnedImeOrder!;
+  expect(fixture.install()).toBe(false);expect(fixture.window.__lazyshOwnedImeOrder).toBe(observer);
+  fixture.setUnavailable();expect(()=>fixture.area.fire('focus')).not.toThrow();fixture.flush();
+  const result=observer.stop();expect(result.state).toBe('unavailable');expect(result.events).toHaveLength(1);
+  expect(fixture.privateReads).toBe(0);expect(fixture.listenerCount).toBe(0);expect(fixture.timers.size).toBe(0);
+  const missing=await nativeImeOrderFixture();missing.setCurrent(null);expect(missing.install()).toBe(false);expect(missing.listenerCount).toBe(0);
+});
+
+test('native IME order keeps acceptance and cleanup guards and uses macrotasks rather than capture microtasks',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.source).toContain('setTimeout(');expect(fixture.source).not.toContain('queueMicrotask');
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
+  expect(body).toContain('ime.arm(); imeOrderMark("beforeSelect"); ime.select(); imeOrderMark("afterSelect"); tapTerminal()');
+  expect(body).toContain('primary=failure; finishImeOrder(failure); throw failure');expect(body).toContain('finishImeOrder(primary)');expect(body).toContain('ime.restore()');
+  expect(body).toContain('failure.addSuppressed(AssertionError("IME passive order[unavailable]"))');
+  expect(body).toContain('document.activeElement===area &&');expect(body).toContain('!area.readOnly && !area.disabled');expect(body).toContain('raw.original()');
+  expect(fixture.source).not.toMatch(/\.readOnly\s*=/);expect(fixture.source).not.toContain('.focus(');expect(fixture.source).not.toContain('.blur(');
+});
+
+
+test('native IME order retains unavailable booleans and continues cleanup when one listener removal fails',async()=>{
+  const fixture=await nativeImeOrderFixture();
+  Object.assign(fixture.area,{readOnly:'private unexpected',disabled:'private unexpected'});
+  Object.assign(fixture.document,{hidden:'private unexpected'});
+  expect(fixture.install()).toBe(true);const observer=fixture.window.__lazyshOwnedImeOrder!;
+  fixture.area.removeEventListener=()=>{throw new Error('private cleanup failure');};
+  const result=observer.stop();expect(result.state).toBe('unavailable');expect(result.initialReadOnly).toBeNull();
+  expect(result.events[0].readOnly).toBeNull();expect(result.events[0].enabled).toBeNull();expect(result.events[0].visible).toBeNull();
+  expect([...fixture.surface.listeners.values()].every(set=>set.size===0)).toBe(true);
+  expect([...fixture.window.listeners.values()].every(set=>set.size===0)).toBe(true);
+  expect([...fixture.document.listeners.values()].every(set=>set.size===0)).toBe(true);
+  const before=JSON.stringify(result);fixture.area.fire('focus');fixture.flush();expect(JSON.stringify(result)).toBe(before);
+  expect(JSON.stringify(result)).not.toContain('private');expect(fixture.timers.size).toBe(0);
+});
+
+
+test('native IME order attempts every timer and listener cleanup after a timer cancellation failure',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.install()).toBe(true);const observer=fixture.window.__lazyshOwnedImeOrder!;
+  fixture.surface.fire('pointerdown');fixture.surface.fire('pointerup');expect(fixture.timers.size).toBe(2);
+  fixture.failFirstClear();const result=observer.stop();expect(result.state).toBe('unavailable');
+  expect(fixture.clearAttempts).toHaveLength(2);expect(fixture.listenerCount).toBe(0);expect(fixture.window.__lazyshOwnedImeOrder).toBeUndefined();
+  const before=JSON.stringify(result);fixture.flush();expect(JSON.stringify(result)).toBe(before);
+  expect(JSON.stringify(result)).not.toContain('private');
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const mark=kotlin.split('fun imeOrderMark(phase: String)')[1].split('fun finishImeOrder')[0];
+  expect(mark).toContain('.onFailure {imeOrderUnavailable=true}');expect(mark).toContain(')=="true")');
+  const finish=kotlin.split('fun finishImeOrder(')[1].split('fun terminalEditor()')[0];
+  expect(kotlin).toContain('if(imeOrderUnavailable)observed.put("state","unavailable")');
+});
+
+
+test('native IME single failure envelope stops owned observation despite editor getter failure and preserves independent results',async()=>{
+  const fixture=await nativeImeOrderFixture();expect(fixture.install()).toBe(true);
+  fixture.surface.fire('pointerdown');const failedEditor=fixture.failureEnvelope();
+  expect(failedEditor.editor).toBeNull();expect(failedEditor.order.state).toBe('observed');
+  expect(fixture.listenerCount).toBe(0);expect(fixture.timers.size).toBe(0);expect(fixture.window.__lazyshOwnedImeOrder).toBeUndefined();
+  expect(JSON.stringify(failedEditor)).not.toContain('0123456789abcdef');
+  const foreign=await nativeImeOrderFixture();expect(foreign.install()).toBe(true);const original=foreign.window.__lazyshOwnedImeOrder!;let calls=0;
+  Object.assign(foreign.window,{__lazyshOwnedImeOrder:{owner:'foreign-private',stop(){calls++;throw new Error('private foreign');}}});
+  const editor={readOnly:false,disabled:false,type:'textarea',autocomplete:'off',spellcheck:false,getAttribute:()=> 'off',closest:()=>null};
+  const document={activeElement:editor,hidden:false,hasFocus:()=>true,querySelectorAll:()=>[editor],querySelector:()=>({})};
+  const missingOrder=foreign.failureEnvelope(document);expect(missingOrder.editor.writable).toBe(true);expect(missingOrder.order).toBeNull();expect(calls).toBe(0);
+  original.stop();expect(foreign.listenerCount).toBe(0);
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const failure=kotlin.split('fun terminalEditor()')[1].split('fun tapTerminal()')[0];
+  expect(failure.match(/evaluate\(scenario/g)).toHaveLength(1);
+  expect(failure.indexOf('imeOrderFinished=true')).toBeLessThan(failure.indexOf('evaluate(scenario'));
+  expect(failure).toContain('if(collectOrder)retainImeOrder(order,primary)');expect(failure).toContain('throw primary');
+});
+
+
+test('native IME observer nonce literals encode quotes and backslashes without evaluating injected code',async()=>{
+  const nonce="owned'\\literal;globalThis.privateInjected=true;//";
+  const fixture=await nativeImeOrderFixture(nonce);expect(fixture.install()).toBe(true);
+  const result=fixture.failureEnvelope();expect(result.order.state).toBe('observed');
+  expect(JSON.stringify(result)).not.toContain(nonce);expect(Object.hasOwn(globalThis,'privateInjected')).toBe(false);
+  expect(fixture.listenerCount).toBe(0);expect(fixture.window.__lazyshOwnedImeOrder).toBeUndefined();
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const observation=kotlin.split('var imeOrderInstalled = false')[1].split('val first = ime.awaitIme')[0];
+  expect(observation.match(/\$\{JSONObject\.quote\(nonce\)\}/g)).toHaveLength(4);
+  expect(observation).not.toContain("'${nonce}'");
 });
