@@ -1,5 +1,13 @@
 # @lazysh/notification-service
 
+## 1.9.2
+
+### Patch Changes
+
+- 3fd9542: Qualify finite relay events against an owned real Gotify server over verified TLS.
+- @lazysh/common@1.9.2
+  - @lazysh/notification-client@1.9.2
+
 ## 1.9.1
 
 ### Patch Changes
