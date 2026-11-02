@@ -18,13 +18,14 @@ use std::{
 mod storage_trace;
 
 fn run(directory: &Path, args: &[&str], payload: &[u8]) -> Output {
-    run_traced(directory, args, payload, None)
+    run_traced(directory, args, payload, None, false)
 }
 fn run_traced(
     directory: &Path,
     args: &[&str],
     payload: &[u8],
     trace: Option<(&storage_trace::StorageTrace, usize)>,
+    diagnostics: bool,
 ) -> Output {
     let program = binary::path();
     let mut command = trace.map_or_else(
@@ -33,7 +34,9 @@ fn run_traced(
     );
     // The full native test process may opt into phase records; ordinary CLI
     // children retain their normal stderr contract. Explicit traces opt in above.
-    if trace.is_none() {
+    if diagnostics {
+        command.env("LAZYSH_STORAGE_DIAGNOSTICS", "1");
+    } else if trace.is_none() {
         command.env_remove("LAZYSH_STORAGE_DIAGNOSTICS");
     }
     process::run(
@@ -670,6 +673,8 @@ fn concurrent_hooks_preserve_every_event() {
                         &["ingest", "--agent", "generic"],
                         &serde_json::to_vec(&event("same", "working")).unwrap(),
                         trace.map(|trace| (trace, worker)),
+                        std::env::var_os("LAZYSH_STORAGE_DIAGNOSTICS")
+                            .is_some_and(|value| value == "1"),
                     );
                     (output, (started.duration_since(epoch), started.elapsed()))
                 })

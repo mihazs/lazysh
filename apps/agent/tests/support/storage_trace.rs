@@ -172,6 +172,8 @@ struct InitializationWorker {
     result: WorkerResult,
     sqlite_code: Option<i32>,
     exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sql_phase: Option<failure_record::Phase>,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum InitializationRecord {
@@ -208,16 +210,45 @@ pub(super) fn assert_child_storage_error(output: &Output, code: i32) {
     assert_eq!(record.open_elapsed_us, None);
 }
 
-// Only the CLI's complete sanitized terminal error is source-bound here.
-// It identifies a cause class, never the SQL boundary or time spent waiting.
-fn child_error(output: &Output) -> Option<(WorkerResult, Option<i32>)> {
+// Only a complete sanitized child error and its optional same-child finite phase
+// may be correlated. Never infer a worker phase from the parent's global output.
+fn child_error(
+    output: &Output,
+) -> Option<(WorkerResult, Option<i32>, Option<failure_record::Phase>)> {
     if output.status.code() != Some(1) || !output.stdout.is_empty() || output.stderr.len() > 4096 {
         return None;
     }
-    let line = std::str::from_utf8(&output.stderr)
+    let text = std::str::from_utf8(&output.stderr)
         .ok()?
         .strip_suffix('\n')?;
-    let line = line.strip_suffix('\r').unwrap_or(line);
+    let mut lines = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line));
+    let first = lines.next()?;
+    let (diagnostic, terminal) = match lines.next() {
+        None => (None, first),
+        Some(terminal) => (Some(failure_record::Failure::parse(first)?), terminal),
+    };
+    if lines.next().is_some() {
+        return None;
+    }
+    let (result, code) = terminal_error(terminal)?;
+    if let Some(record) = &diagnostic {
+        let matches = match result {
+            WorkerResult::StorageError => {
+                record.result == failure_record::ResultClass::StorageError
+            }
+            WorkerResult::IoError => record.result == failure_record::ResultClass::IoError,
+            _ => false,
+        };
+        if !matches || record.sqlite_code != code {
+            return None;
+        }
+    }
+    Some((result, code, diagnostic.map(|record| record.phase)))
+}
+
+fn terminal_error(line: &str) -> Option<(WorkerResult, Option<i32>)> {
     match line {
         "lazysh-agent: IoError: operation failed" => Some((WorkerResult::IoError, None)),
         "lazysh-agent: StorageError: operation failed" => Some((WorkerResult::StorageError, None)),
@@ -237,13 +268,14 @@ impl InitializationWorker {
         output: &Output,
         (start, elapsed): &(std::time::Duration, std::time::Duration),
     ) -> Option<Self> {
-        let (result, sqlite_code) = child_error(output).unwrap_or_else(|| {
+        let (result, sqlite_code, sql_phase) = child_error(output).unwrap_or_else(|| {
             (
                 if output.status.success() {
                     WorkerResult::Success
                 } else {
                     WorkerResult::OtherError
                 },
+                None,
                 None,
             )
         });
@@ -255,16 +287,23 @@ impl InitializationWorker {
             open_elapsed_us: None,
             total_elapsed_us: u64::try_from(elapsed.as_micros()).ok()?,
             actual_hold_us: None,
-            // The ordinary child strips diagnostics. Its SQL boundary is not observed.
+            // Phase opt-in does not expose open/ingest durations; keep timing stage unknown.
             stage: WorkerStage::Unknown,
             result,
             sqlite_code,
             exit_code: output.status.code(),
+            sql_phase,
         })
     }
 
     fn valid(&self) -> bool {
-        if self.worker >= 16
+        if (self.sql_phase.is_some()
+            && (self.origin != WorkerOrigin::ConcurrentHooks
+                || !matches!(
+                    self.result,
+                    WorkerResult::StorageError | WorkerResult::IoError
+                )))
+            || self.worker >= 16
             || self.round
                 >= if self.origin == WorkerOrigin::Initialization {
                     4
@@ -331,6 +370,7 @@ impl InitializationWorker {
             result,
             sqlite_code,
             exit_code: None,
+            sql_phase: None,
         })
     }
 }
@@ -878,11 +918,6 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
         [canonical.as_slice(), canonical.as_slice()].concat(),
         [canonical.as_slice(), b"private payload"].concat(),
         [
-            journal_mode_busy_record().line().as_bytes(),
-            canonical.as_slice(),
-        ]
-        .concat(),
-        [
             b"lazysh-storage-diagnostic {invalid}\n",
             canonical.as_slice(),
         ]
@@ -895,9 +930,113 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
         error.stderr = rejected;
         assert!(child_error(&error).is_none());
     }
+    let diagnostic = journal_mode_busy_record().line();
+    for invalid in [
+        diagnostic.repeat(2),
+        diagnostic.replace("journal_mode", "private"),
+        diagnostic.replace("StorageError", "IoError"),
+        diagnostic.replace("\"sqliteCode\":5", "\"sqliteCode\":6"),
+        diagnostic.replace("\"sqliteCode\":5", "\"sqliteCode\":null"),
+        diagnostic.replace(
+            "\"sqliteCode\":5",
+            "\"sqliteCode\":5,\"private\":\"secret\"",
+        ),
+        format!("{diagnostic}private payload\n"),
+    ] {
+        error.stderr = [invalid.as_bytes(), canonical].concat();
+        assert!(child_error(&error).is_none());
+        let observed = InitializationWorker::child(
+            7,
+            &error,
+            &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+        )
+        .unwrap();
+        assert_eq!(observed.sql_phase, None);
+        assert_eq!(observed.result, WorkerResult::OtherError);
+        assert!(!InitializationRecord::Worker(observed)
+            .line()
+            .contains("private"));
+    }
+    for phase in [
+        failure_record::Phase::BootstrapLock,
+        failure_record::Phase::IngestBegin,
+    ] {
+        let record = failure_record::Failure {
+            phase,
+            ..journal_mode_busy_record()
+        };
+        for ending in ["\n", "\r\n"] {
+            error.stderr = [
+                record.line().replace('\n', ending).as_bytes(),
+                std::str::from_utf8(canonical)
+                    .unwrap()
+                    .replace('\n', ending)
+                    .as_bytes(),
+            ]
+            .concat();
+            let observed = InitializationWorker::child(
+                7,
+                &error,
+                &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+            )
+            .unwrap();
+            assert!(observed.valid());
+            assert_eq!(observed.sql_phase, Some(phase));
+            assert_eq!(observed.result, WorkerResult::StorageError);
+            assert_eq!(observed.sqlite_code, Some(5));
+            assert_eq!(observed.stage, WorkerStage::Unknown);
+            assert_eq!(observed.open_elapsed_us, None);
+            let value = serde_json::to_value(&observed).unwrap();
+            rejects_worker_fields(
+                &value,
+                &[
+                    ("sqlPhase", serde_json::json!("private")),
+                    ("result", serde_json::json!("Success")),
+                    ("origin", serde_json::json!("initialization")),
+                ],
+            );
+            let line = InitializationRecord::Worker(observed).line();
+            assert_eq!(
+                initialization_projection(line.as_bytes()).unwrap()[0].line(),
+                line
+            );
+        }
+    }
     error.stderr = canonical.to_vec();
     error.stdout = b"private output".to_vec();
     assert!(child_error(&error).is_none());
+
+    drop(super::Store::open(directory.path()).unwrap());
+    let blocker = rusqlite::Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = std::time::Instant::now();
+    let output = super::run_traced(
+        directory.path(),
+        &["ingest", "--agent", "generic"],
+        &serde_json::to_vec(&super::event("observed", "working")).unwrap(),
+        None,
+        true,
+    );
+    blocker.execute_batch("ROLLBACK").unwrap();
+    let observed =
+        InitializationWorker::child(3, &output, &(std::time::Duration::ZERO, started.elapsed()))
+            .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(observed.valid());
+    assert_eq!(observed.sql_phase, Some(failure_record::Phase::IngestBegin));
+    assert_eq!(observed.sqlite_code, Some(5));
+    assert_eq!(observed.open_elapsed_us, None);
+    let line = InitializationRecord::Worker(observed).line();
+    assert!(!line.contains(directory.path().to_str().unwrap()));
+    assert!(!line.contains("observed"));
+    assert_eq!(
+        initialization_projection(line.as_bytes()).unwrap()[0].line(),
+        line
+    );
+    assert!(super::snapshot(directory.path(), "50")["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     for (worker, args) in [
         (0, &["--help"][..]),
