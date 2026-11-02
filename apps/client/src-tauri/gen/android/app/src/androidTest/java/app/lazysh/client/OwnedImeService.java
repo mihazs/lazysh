@@ -2,6 +2,7 @@ package app.lazysh.client;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Context;
 import android.database.Cursor;
 import android.inputmethodservice.InputMethodService;
 import android.net.Uri;
@@ -10,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
+import android.widget.Space;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import java.util.Objects;
@@ -39,11 +41,12 @@ public final class OwnedImeService extends InputMethodService {
     }
 
     @Override public void onCreate() { super.onCreate(); service = this; }
-    @Override public View onCreateInputView() {
-        View view = new View(this);
+    static View inputView(Context context) {
+        View view = new Space(context);
         view.setMinimumHeight(1);
         return view;
     }
+    @Override public View onCreateInputView() { return inputView(this); }
     @Override public void onStartInput(EditorInfo info, boolean restarting) {
         super.onStartInput(info, restarting);
         InputConnection connection = getCurrentInputConnection();
