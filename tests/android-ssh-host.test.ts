@@ -266,6 +266,78 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
 },15_000);
 }
 
+// A real outer mouse packet must reach the independently observed raw history pane.
+// These coordinates compare the phone's candidate row with a central pane-body row;
+// neither the synthetic agent report nor a local wheel counter proves this route.
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)
+  .each([{cols:50,row:6},{cols:50,row:12},{cols:80,row:6},{cols:80,row:12}])('owned guarded Herdr mouse route at %j',async({cols,row})=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  let client:OwnedProcess|undefined,primary:unknown;
+  // Begin closed capture recognizer: never retain PTY text or guard-frame bytes.
+  const capture=(()=>{
+    const sequences=['\x1b[?1000h','\x1b[?1000l','\x1b[?1002h','\x1b[?1002l','\x1b[?1003h','\x1b[?1003l'];
+    const modes:(boolean|null)[]=[null,null,null];
+    let prefix='',available=true;
+    const write=(chunk:Buffer)=>{
+      try {
+        if(!Buffer.isBuffer(chunk)){available=false;prefix='';return;}
+        for(const byte of chunk){
+          const next=prefix+String.fromCharCode(byte),matched=sequences.indexOf(next);
+          if(matched>=0){modes[Math.floor(matched/2)]=matched%2===0;prefix='';}
+          else prefix=sequences.some(sequence=>sequence.startsWith(next))?next:byte===27?'\x1b':'';
+        }
+      } catch {available=false;prefix='';}
+    };
+    return {write,enabled:()=>available && modes.some(mode=>mode===true),
+      sample:()=>({state:!available?'unavailable':modes.some(mode=>mode!==null)?'observed':'unknown',
+        normal:modes[0],drag:modes[1],motion:modes[2]})};
+  })();
+  // End closed capture recognizer.
+  try {
+    const {history}=owned.metadata();
+    await owned.run(['tab','focus',history!.tabId]);
+    client=new OwnedProcess('/usr/bin/script',['-q','-e','-f','-c',
+      `stty rows 24 cols ${cols}; exec '${owned.ssh.directory}/bin/herdr' --session '${owned.name}' --guarded-attach`,'/dev/null'],
+      owned.ssh.directory,owned.ssh.environment,false);
+    client.child.stdout!.on('data',capture.write);
+    const deadline=performance.now()+3000;
+    while(true){
+      if(!await client.liveIdentity())throw new Error('Owned mouse client retired before admission');
+      const sample=await owned.history();
+      // No raw PTY output is retained. Measured history capacity admits row 12
+      // inside any contiguous body interval within the actual 24-row terminal.
+      if(capture.enabled() && sample.rows>0 && sample.rows<24 && 12>24-sample.rows && 12<=sample.rows)break;
+      if(performance.now()>=deadline)throw new Error('Owned mouse capture or history geometry unavailable');
+      await Bun.sleep(10);
+    }
+    expect(await owned.history()).toMatchObject({offset:0,newTail:true});
+    client.child.stdin!.write(`\x1b[<64;${Math.ceil(cols/2)};${row}M`);
+    while(true){
+      const sample=await owned.history();
+      if(sample.offset>0 && !sample.newTail && sample.oldRows>0)break;
+      if(performance.now()>=deadline){
+        if(row===6)break; // Candidate chrome/header hit is an observation, never a required pane scroll.
+        throw new Error('Owned body mouse packet did not advance remote history');
+      }
+      if(!await client.liveIdentity())throw new Error('Owned mouse client retired during observation');
+      await Bun.sleep(10);
+    }
+    // history() additionally verifies the unchanged receiver birth and zero bytes.
+    console.error('Owned mouse observation '+JSON.stringify({cols,row,capture:capture.sample(),history:await owned.historyDiagnostic()}));
+    await owned.expectBytes(Buffer.alloc(0));
+  } catch(error){primary=error;
+    try{console.error('Owned mouse failure '+JSON.stringify({cols,row,capture:capture.sample(),history:await owned.historyDiagnostic()}));}catch{/* Keep original verdict. */}
+  } finally {
+    try{client?.child.stdout?.off('data',capture.write);}catch{primary??=new Error('Owned capture observer cleanup unavailable');}
+    const failures=await Promise.allSettled([client?.stop()]);
+    try{await owned.stop();}catch(error){primary??=error;}
+    for(const result of failures)if(result.status==='rejected')primary??=result.reason;
+  }
+  if(primary)throw primary;
+  expect(await listening(owned.ssh.port)).toBe(false);
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},15_000);
+
 test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as const)('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver over %s',async transport=>{
   const moshBinary=transport==='mosh'?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined;
   if(transport==='mosh' && !moshBinary)throw new Error('Explicit pinned Mosh server required for Android Herdr entry');
