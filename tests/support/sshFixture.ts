@@ -1,4 +1,4 @@
-import {OwnedProcess, identity, descendants, type OwnedPid} from './ownedProcess';
+import {reportOwnedTeardownFailure,OwnedProcess, identity, descendants, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
 import {isAbsolute, join, normalize} from 'node:path';
@@ -47,7 +47,7 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
-  if(primary)throw primary;
+  if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':'ssh-stop');throw primary;}
 }
 export type HerdrTools={herdrBinary:string;agentBinary:string;receiverBinary:string};
 // Two actual native installation budgets, plus explicit SSH/UI setup and teardown.

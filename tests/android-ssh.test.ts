@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
+import {reportOwnedTeardownFailure} from './support/ownedProcess';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
@@ -37,8 +38,10 @@ test.skipIf(process.platform!=='linux')('owned startup separates live process me
   try {
     expect(await child.liveIdentity()).toBeDefined();
     expect(await child.startupDiagnostic()).toEqual({state:'running',exitCode:null});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',originalAvailable:true,currentIdentity:'matching-live',leaderExitObserved:false,closeObserved:false});
     await child.stop();
     expect(await child.startupDiagnostic()).toEqual({state:'signaled',exitCode:null});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',leaderExitObserved:true,closeObserved:true,streams:{stdin:{destroyed:true},stdout:{destroyed:true},stderr:{destroyed:true}}});
   } finally {await child.stop();}
 });
 
@@ -78,6 +81,8 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     }
     originalStart=await start();
     expect(originalStart.length).toBeGreaterThan(0);
+    if(child.child.exitCode===null)await new Promise<void>(resolve=>{child.child.once('exit',()=>resolve());});
+    expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',leaderExitObserved:true,closeObserved:false,streams:{stdout:{closed:false,destroyed:false}}});
     expect((await pending as Error).message).toBe('Owned fixture deadline: unsupported background escape');
     expect(warning).toHaveBeenCalledWith('Owned fixture cleanup failed after original failure');
     // This negative fixture, not the foreground helper, owns the still-live child.
@@ -94,6 +99,54 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     warning.mockRestore();await child.stop();
   }
 },5000);
+
+test('teardown reporter whitelists closed fields and cannot throw over a primary failure',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
+  await child.finish('owned observation fixture',1000);
+  const secret='private-pid-path-argv-output-error';
+  const lines:string[]=[];
+  const warning=spyOn(console,'error').mockImplementation(value=>{lines.push(String(value));});
+  const diagnostic=spyOn(child,'teardownDiagnostic');
+  try {
+    diagnostic.mockResolvedValue({scope:secret,originalAvailable:secret,currentIdentity:secret,leaderExitObserved:secret,closeObserved:secret,
+      streams:{stdin:{closed:secret,destroyed:secret,private:secret},stdout:{},stderr:null},private:secret} as unknown as Awaited<ReturnType<OwnedProcess['teardownDiagnostic']>>);
+    for(const stage of ['attach-stop','herdr-stop','ssh-stop'] as const)await reportOwnedTeardownFailure(child,stage);
+    expect(lines).toHaveLength(3);
+    for(const [index,line] of lines.entries()) {
+      expect(line).not.toContain(secret);
+      expect(JSON.parse(line.slice('Owned teardown observation '.length))).toEqual({stage:['attach-stop','herdr-stop','ssh-stop'][index],observation:{scope:'post-stop-sample',originalAvailable:null,currentIdentity:'unavailable',leaderExitObserved:null,closeObserved:null,
+        streams:{stdin:{closed:null,destroyed:null},stdout:{closed:null,destroyed:null},stderr:{closed:null,destroyed:null}}}});
+    }
+    await reportOwnedTeardownFailure(child,secret as 'attach-stop');
+    expect(lines).toHaveLength(3);
+    diagnostic.mockRejectedValue(new Error(secret));
+    await reportOwnedTeardownFailure(child,'attach-stop');
+    expect(lines.at(-1)).toBe('Owned teardown observation '+JSON.stringify({stage:'attach-stop',observation:{scope:'post-stop-sample',state:'unavailable'}}));
+    warning.mockImplementation(()=>{throw new Error(secret);});
+    await expect(reportOwnedTeardownFailure(child,'attach-stop')).resolves.toBeUndefined();
+  } finally {diagnostic.mockRestore();warning.mockRestore();await child.stop();}
+});
+
+test.each(['attach','fixture'] as const)('actual Herdr host %s cleanup block preserves body and cleanup error identities',async(stage)=>{
+  const source=await readFile(join(import.meta.dir,'android-ssh-host.test.ts'),'utf8');
+  const host=source.slice(source.indexOf('  const owned=await HerdrFixture.start(herdrTools(),mosh?'));
+  const start=host.indexOf(stage==='attach'?'    } catch(error){attachPrimary=true;throw error;}':'  } catch(error){primary=true;throw error;}');
+  const end=host.indexOf(stage==='attach'?"    expect(await owned.history()).toMatchObject({offset:8":'  expect(await listening(owned.ssh.port))',start);
+  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+  const block=host.slice(start,end),flag=stage==='attach'?'attachPrimary':'primary';
+  const execute=new Function('body','client','owned','reportOwnedTeardownFailure',`return (async()=>{let ${flag}=false;try{await body();\n${block}})()`);
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    for(const bodyFails of [false,true])for(const cleanupFails of [false,true]) {
+      const original=new Error('private-body-failure'),cleanup=new Error('private-cleanup-failure'),calls:string[]=[];
+      const owner={stop:async()=>{calls.push('stop');if(cleanupFails)throw cleanup;}};
+      const result=await execute(async()=>{calls.push('body');if(bodyFails)throw original;},owner,owner,reportOwnedTeardownFailure).catch((error:unknown)=>error);
+      expect(result).toBe(bodyFails?original:cleanupFails?cleanup:undefined);
+      expect(calls).toEqual(['body','stop']);
+    }
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('private-');
+  } finally {warning.mockRestore();}
+});
 
 const exitFixture=`ApplicationExitInfo #0:
   timestamp=2026-10-27 22:19:33.701 pid=3389 realUid=10155 packageUid=10155 definingUid=10155 user=0
