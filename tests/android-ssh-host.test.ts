@@ -315,6 +315,9 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
     const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,ownedReceiverRoot});
     let client:OwnedProcess|undefined,primary:unknown;
     try {
+      const config=await readFile(join(fixture.directory,'sshd_config'),'utf8');
+      expect(config).toContain(`timeout --kill-after=1s ${ownedReceiverRoot?600:90}s`);
+      expect(config).not.toContain(`timeout --kill-after=1s ${ownedReceiverRoot?90:600}s`);
       const binary=join(fixture.directory,'receiver'),output=join(fixture.directory,'raw');
       await writeFile(binary,bytes,{mode:0o500,flag:'wx'});await mkdir(output,{mode:0o700});
       const copy=await lstat(binary);
