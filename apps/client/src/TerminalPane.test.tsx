@@ -308,9 +308,10 @@ it.each(['inactive','disconnect','replacement','dispose'] as const)('captures di
     expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
   } finally {warn.mockRestore();}
 });
-function touchScrollFixture() {
+function touchScrollFixture(height?:number) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
+  if(height) {const surface=document.createElement('div');surface.className='xterm-screen';surface.getBoundingClientRect=()=>({height} as DOMRect);target.append(surface);}
   const wheels: WheelEvent[] = [];
   target.addEventListener('wheel', event => wheels.push(event));
   const view = mount();
@@ -703,11 +704,30 @@ describe("terminal interactions", () => {
     expect(wheels).toHaveLength(3);
     expect(mocks.write).not.toHaveBeenCalled();
   });
+  it.each(['none','x10'])('retains sub-row scroll travel in %s mode without leaking it across reversal or lift',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {wheels,touch}=touchScrollFixture(486);
+    const row=20.25;
+    for(const segments of [1,360]) {
+      wheels.length=0;touch('touchstart',100,300);
+      for(let step=1;step<=segments;step++)touch('touchmove',100,300-row*9*step/segments);
+      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(row*9);
+      expect(wheels.every(event=>event.deltaMode===WheelEvent.DOM_DELTA_PIXEL)).toBe(true);
+      touch('touchend',100,120);
+    }
+    wheels.length=0;touch('touchstart',100,300);touch('touchmove',100,291);
+    expect(wheels).toHaveLength(0);
+    touch('touchmove',100,270);touch('touchmove',100,285);touch('touchmove',100,290);touch('touchmove',100,291);
+    expect(wheels.map(event=>event.deltaY)).toEqual([row,-row]);
+    touch('touchend',100,290);wheels.length=0;
+    touch('touchstart',100,300);touch('touchmove',100,289);touch('touchend',100,289);
+    touch('touchstart',100,300);touch('touchmove',100,289);
+    expect(wheels).toHaveLength(0);
+    touch('touchcancel',100,289);touch('touchmove',100,200);expect(wheels).toHaveLength(0);
+  });
   it('uses touch distance rather than move frequency for mouse wheel notches, preserving direction and gesture ownership',()=>{
     terminal.modes.mouseTrackingMode='vt200';
-    const {target,wheels,touch}=touchScrollFixture();
-    const surface=document.createElement('div');surface.className='xterm-screen';
-    surface.getBoundingClientRect=()=>({height:480} as DOMRect);target.append(surface);
+    const {wheels,touch}=touchScrollFixture(480);
     for(const segments of [1,2,8,48]) {
       wheels.length=0;touch('touchstart',100,300);
       for(let step=1;step<=segments;step++)touch('touchmove',100,300-180*step/segments);

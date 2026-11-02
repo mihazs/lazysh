@@ -481,6 +481,43 @@ test('terminal canvas stays anchored when keyboard-sized resizes reveal its inpu
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });
 
+for(const fontSize of [14,17])test(`slow fractional finger motion preserves normal-buffer scroll distance at font ${fontSize}`,async({page},testInfo)=>{
+  await openShortcutTerminal(page);
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  if(fontSize!==14) {
+    await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Appearance');
+    await page.getByLabel('Font size',{exact:true}).fill(String(fontSize));
+    await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  }
+  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:300},(_,i)=>`fractional history ${i}\r\n`).join('')));
+  const viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(1000);
+  const box=(await page.locator('.terminal-canvas:visible .xterm-screen').boundingBox())!;
+  const input=await page.context().newCDPSession(page);
+  const distance=await page.locator('.terminal-canvas:visible .xterm-screen').evaluate(node=>node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length*3);
+  const results:unknown[]=[];
+  await viewport.evaluate(node=>{const samples:number[]=[];Reflect.set(window,'fractionalWheels',samples);node.closest('.xterm')!.addEventListener('wheel',event=>samples.push((event as WheelEvent).deltaY));});
+  for(const segments of [1,120]) {
+    await viewport.evaluate(node=>{node.scrollTop=node.scrollHeight;});
+    await expect(page.locator('.terminal-canvas:visible .xterm-rows')).toContainText('fractional history 299');
+    const before=await viewport.evaluate(node=>node.scrollTop);
+    await page.evaluate(()=>{(Reflect.get(window,'fractionalWheels') as number[]).length=0;});
+    const bounds=(await page.locator('.terminal-canvas:visible').boundingBox())!;
+    const origin={x:testInfo.project.name==='phone'?box.x+60:bounds.x+bounds.width-1,y:box.y+60};
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    for(let step=1;step<=segments;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+distance*step/segments}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(async()=>before-await viewport.evaluate(node=>node.scrollTop)).toBeGreaterThanOrEqual(distance-1);
+    const travel=before-await viewport.evaluate(node=>node.scrollTop);
+    results.push({segments,travel,wheels:await page.evaluate(()=>Reflect.get(window,'fractionalWheels'))});
+    await testInfo.attach(`normal-fractional-${segments}`,{body:JSON.stringify(results),contentType:'application/json'});
+    expect(travel).toBeGreaterThanOrEqual(distance-1);
+    expect(travel).toBeLessThanOrEqual(distance+1);
+  }
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+});
+
 test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page},testInfo)=>{
   await openShortcutTerminal(page);
   const screen=page.locator('.terminal-canvas:visible .xterm-screen');
