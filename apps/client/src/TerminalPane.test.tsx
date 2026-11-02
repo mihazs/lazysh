@@ -293,6 +293,16 @@ function touchScrollFixture() {
   }));
   return {view, canvas, wheels, touch, target};
 }
+function overscrollFixture(enabled=true,supported=true) {
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  savePreferences({...defaults,dismissKeyboardOnOverscroll:enabled,bodyGestures:{...defaults.bodyGestures,tap:'interrupt'}});
+  Object.assign(terminal.buffer.active,{type:'normal',baseY:2,viewportY:2});
+  if(supported)Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+  const area=document.createElement('textarea');Object.assign(terminal,{textarea:area});
+  const fixture=touchScrollFixture();fixture.target.append(area);fixture.canvas.append(fixture.target);area.focus();
+  terminal.blur.mockImplementation(()=>area.blur());
+  return {...fixture,area,focused};
+}
 describe("terminal interactions", () => {
   it.each(['hidden','inactive','disconnect','lock','dispose'] as const)('clears unapplied local context at the %s boundary',boundary=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
@@ -650,6 +660,81 @@ describe("terminal interactions", () => {
     expect(input.value).toBe("x".repeat(65530));
     expect(terminal.paste).not.toHaveBeenCalled();
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
+  });
+  it('optionally dismisses at the local bottom after deliberate bottomward travel without terminal input',()=>{
+    const {focused,touch,wheels,area}=overscrollFixture();
+    try {
+      touch('touchstart',100,200);touch('touchmove',100,170);
+      expect(terminal.blur).not.toHaveBeenCalled();expect(wheels.map(event=>event.deltaY)).toEqual([30]);
+      touch('touchmove',100,152);touch('touchmove',100,130);touch('touchend',100,130);
+      expect(terminal.blur).toHaveBeenCalledOnce();expect(mocks.write).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
+      expect(terminal.paste).not.toHaveBeenCalled();expect(document.activeElement).not.toBe(area);
+    } finally {focused.mockRestore();}
+  });
+  it.each(['off','historyward','short','horizontal','not-bottom','alternate','tracking','unknown-buffer','nonempty','readonly','composition','selection','multitouch','cancel','hidden','access','blur','input','inactive','disconnected','session','terminal'] as const)('preserves scroll without dismissing for %s',boundary=>{
+    const fixture=overscrollFixture(boundary!=='off');const {focused,touch,canvas,area,view}=fixture;
+    let hidden:ReturnType<typeof vi.spyOn>|undefined;
+    try {
+      touch('touchstart',100,200);touch('touchmove',100,180);
+      if(boundary==='not-bottom')Object.assign(terminal.buffer.active,{viewportY:1});
+      if(boundary==='alternate'||boundary==='unknown-buffer')Object.assign(terminal.buffer.active,{type:boundary==='alternate'?'alternate':undefined});
+      if(boundary==='tracking')terminal.modes.mouseTrackingMode='vt200';
+      if(boundary==='nonempty')area.value='owned preedit';
+      if(boundary==='readonly')area.readOnly=true;
+      if(boundary==='composition')fireEvent.compositionStart(canvas);
+      if(boundary==='selection')terminal.hasSelection.mockReturnValue(true);
+      if(boundary==='multitouch')canvas.dispatchEvent(new TouchEvent('touchstart',{bubbles:true,touches:[{clientX:100,clientY:180},{clientX:140,clientY:180}] as Touch[]}));
+      if(boundary==='cancel')touch('touchcancel',100,180);
+      if(boundary==='hidden'){hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));hidden.mockReturnValue(false);}
+      if(boundary==='access')act(()=>{access(true);access();});
+      if(boundary==='blur'){fireEvent(window,new Event('blur'));area.focus();}
+      if(boundary==='input')fireEvent.input(area,{inputType:'insertText',data:''});
+      if(['inactive','disconnected','session','terminal'].includes(boundary))view.rerender(<TerminalPane session={{id:boundary==='session'?'new':'ssh',name:'Host',connected:boundary!=='disconnected',terminal:boundary==='terminal'?createMockTerminal():terminal} as unknown as LiveSession} active={boundary!=='inactive'} reportError={vi.fn()} />);
+      touch('touchmove',boundary==='horizontal'?180:100,boundary==='historyward'?260:boundary==='short'?160:140);
+      expect(terminal.blur, boundary).not.toHaveBeenCalled();expect(mocks.write).not.toHaveBeenCalled();
+      expect(terminal.paste).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
+      if(boundary==='nonempty')expect(area.value).toBe('owned preedit');
+      if(['off','historyward','alternate','tracking','unknown-buffer'].includes(boundary))expect(fixture.wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[20,100,200],[boundary==='historyward'?-80:40,100,200]]);
+    } finally {hidden?.mockRestore();focused.mockRestore();}
+  });
+  it.each(['unknown','composing','sending'] as const)('requires explicit idle authority when the IME adapter is %s',state=>{
+    const {focused,touch}=overscrollFixture(true,state!=='unknown');
+    try {
+      if(state!=='unknown')Object.assign((terminal._core as unknown as {_compositionHelper:object})._compositionHelper,{[state==='composing'?'_isComposing':'_isSendingComposition']:true});
+      touch('touchstart',100,200);touch('touchmove',100,130);expect(terminal.blur).not.toHaveBeenCalled();expect(mocks.write).not.toHaveBeenCalled();
+    } finally {focused.mockRestore();}
+  });
+  it.each(['buffer','selection','composition','input','focus'] as const)('retires a candidate across transient %s changes even after idle returns',boundary=>{
+    vi.useFakeTimers();let changed=()=>{};
+    Object.assign(terminal.buffer,{onBufferChange:(listener:()=>void)=>{changed=listener;return{dispose(){}};}});
+    const {focused,touch,canvas,area}=overscrollFixture();
+    try {
+      touch('touchstart',100,200);touch('touchmove',100,180);
+      if(boundary==='buffer')changed();
+      if(boundary==='selection'){terminal.hasSelection.mockReturnValue(true);fireEvent(document,new Event('selectionchange'));terminal.hasSelection.mockReturnValue(false);}
+      if(boundary==='composition'){fireEvent.compositionStart(area);fireEvent.compositionEnd(area);}
+      if(boundary==='input')fireEvent.input(area,{inputType:'insertText',data:''});
+      if(boundary==='focus'){area.blur();area.focus();}
+      act(()=>vi.advanceTimersByTime(100));touch('touchmove',100,140);
+      expect(terminal.blur).not.toHaveBeenCalled();expect(mocks.write).not.toHaveBeenCalled();
+      expect(canvas.isConnected).toBe(true);
+    } finally {focused.mockRestore();}
+  });
+  it('keeps the optional gesture available with configurable touch bindings and pinch disabled',()=>{
+    const {focused,touch}=overscrollFixture();
+    try {
+      act(()=>savePreferences({...getPreferences(),pinchZoom:false,bodyGestures:{...defaults.bodyGestures}}));
+      touch('touchstart',100,200);touch('touchmove',100,152);expect(terminal.blur).toHaveBeenCalledOnce();
+      expect(mocks.write).not.toHaveBeenCalled();
+    } finally {focused.mockRestore();}
+  });
+  it('requires a fresh bottom-started gesture after scrolling from history to bottom',()=>{
+    const {focused,touch,area}=overscrollFixture();
+    try {
+      Object.assign(terminal.buffer.active,{viewportY:1});touch('touchstart',100,200);touch('touchmove',100,180);
+      Object.assign(terminal.buffer.active,{viewportY:2});touch('touchmove',100,130);expect(terminal.blur).not.toHaveBeenCalled();
+      touch('touchend',100,130);area.focus();touch('touchstart',100,200);touch('touchmove',100,152);expect(terminal.blur).toHaveBeenCalledOnce();
+    } finally {focused.mockRestore();}
   });
   it("routes vertical touch through xterm wheel handling even with configurable gestures disabled", () => {
     savePreferences({...defaults, pinchZoom: false, gestures: {left:'none',right:'none',up:'none',down:'none'}, bodyGestures: {...defaults.bodyGestures,tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none'}});

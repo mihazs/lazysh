@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import PreferencesPanel from "./PreferencesPanel";
+import {uiI18n,t} from "./i18n/core";
 import { defaults, getPreferences, savePreferences, parseChord } from "./preferences";
 afterEach(() => cleanup());
 
@@ -11,6 +12,16 @@ function mountPreferences(...summaries:string[]) {
 }
 
 describe("terminal settings", () => {
+  it.each([['en','Hide keyboard when scrolling past local history bottom'],['pt-BR','Ocultar teclado ao rolar além do fim do histórico local'],['es','Ocultar teclado al desplazarse más allá del final del historial local']])('persists optional past-bottom dismissal and gesture reset in %s',async(language,label)=>{
+    await act(async()=>{await uiI18n.changeLanguage(language);});
+    try {
+    savePreferences({...defaults});mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));
+    const toggle=screen.getByRole('checkbox',{name:label});
+    expect(toggle).toHaveProperty('checked',false);fireEvent.click(toggle);expect(getPreferences().dismissKeyboardOnOverscroll).toBe(true);
+    cleanup();mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));expect(screen.getByRole('checkbox',{name:label})).toHaveProperty('checked',true);
+    fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));expect(getPreferences().dismissKeyboardOnOverscroll).toBe(false);
+    } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
+  });
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});
     mountPreferences('Keyboard and gestures','Terminal touch gestures');

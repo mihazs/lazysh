@@ -1882,18 +1882,7 @@ class NativeWorkspaceTest {
         val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
         val dispatches = JSONArray()
         fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fingerStarted).coerceIn(0, 65_535)
-        fun sendFinger(action: Int, point: FloatArray) {
-            val coordinate = android.view.MotionEvent.PointerCoords().apply {
-                x = point[0]; y = point[1]; pressure = 1f; size = 1f
-            }
-            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
-                1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
-            try {
-                assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
-                assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
-                instrumentation.sendPointerSync(event)
-            } finally {event.recycle()}
-        }
+        fun sendFinger(action: Int, point: FloatArray) = sendOwnedFinger(pointer, downTime, action, point)
         fun injectFinger(action: Int, fraction: Double) {
             val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
             if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
@@ -3895,6 +3884,238 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    private fun sendOwnedFinger(pointer: android.view.MotionEvent.PointerProperties, epoch: Long, action: Int, point: FloatArray) {
+        val coordinate = android.view.MotionEvent.PointerCoords().apply { x=point[0];y=point[1];pressure=1f;size=1f }
+        val event = android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,1,
+            arrayOf(pointer),arrayOf(coordinate),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
+        try {
+            assertEquals("One owned native pointer identity",0,event.getPointerId(0))
+            assertEquals("One owned native DOWN epoch",epoch,event.downTime)
+            InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
+        } finally {event.recycle()}
+    }
+
+    private fun openOwnedInputPreferences(scenario: ActivityScenario<MainActivity>, raw: OwnedRawSshInput, sections: List<String>) {
+        if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") {
+            if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
+            else workspaceMenuAction(scenario,"Preferences")
+        }
+        for (title in sections) {
+            if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
+                onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
+        }
+    }
+
+    private fun verifyPastBottomKeyboardDismiss(scenario: ActivityScenario<MainActivity>, raw: OwnedRawSshInput) {
+        println("lazysh overscroll keyboard: checkpoint=reached")
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val context=instrumentation.targetContext
+        val ime=android.provider.Settings.Secure.getString(context.contentResolver,android.provider.Settings.Secure.DEFAULT_INPUT_METHOD)
+        require(ime!=null && ime.startsWith("com.android.inputmethod.latin/")) { "Ordinary admitted AOSP keyboard required" }
+        val web=raw.originalWeb.get()
+        val option="Hide keyboard when scrolling past local history bottom"
+        val checkboxState = """
+            (()=>{const inputs=Array.from(document.querySelectorAll('[role=dialog] label'))
+              .filter(x=>x.textContent.trim()==='Hide keyboard when scrolling past local history bottom')
+              .flatMap(x=>Array.from(x.querySelectorAll('input[type=checkbox]')));
+              return inputs.length===1&&typeof inputs[0].checked==='boolean'?inputs[0].checked:null;})()
+        """.trimIndent()
+        val receiptSource = """
+            function ownedPastBottomTouchReceipt(owner) {
+              const root=owner.ownerDocument,area=owner.querySelector('.xterm-helper-textarea');
+              let starts=0,moves=0,ends=0,cancels=0,unavailable=!area,overflow=false;
+              let trusted=true,sameContact=true,insideOwner=true,monotonicUp=true,distance48=false,id=null,startY=0,lastY=0;
+              const record=(kind,event)=>{try{
+                trusted=trusted&&event.isTrusted===true;
+                insideOwner=insideOwner&&event.currentTarget===owner&&event.composedPath().includes(owner);
+                if(kind==='touchcancel'){cancels++;overflow=overflow||cancels>8;return;}
+                const touches=Array.from(kind==='touchend'?event.changedTouches:event.touches),touch=touches[0];
+                sameContact=sameContact&&touches.length===1&&(kind!=='touchend'||event.touches.length===0);
+                if(!touch||!Number.isInteger(touch.identifier)||!Number.isFinite(touch.clientY)){unavailable=true;return;}
+                if(kind==='touchstart'){starts++;id=touch.identifier;startY=touch.clientY;lastY=startY;}
+                else {
+                  sameContact=sameContact&&touch.identifier===id&&starts===1;
+                  monotonicUp=monotonicUp&&touch.clientY<=lastY;lastY=touch.clientY;
+                  if(kind==='touchmove'){moves++;distance48=distance48||startY-touch.clientY>=48;}else ends++;
+                }
+                overflow=overflow||starts>8||moves>8||ends>8||cancels>8;
+              }catch(_){unavailable=true;}};
+              const hooks=['touchstart','touchmove','touchend','touchcancel'].map(kind=>[kind,event=>record(kind,event)]);
+              for(const [kind,handler] of hooks)owner.addEventListener(kind,handler,{capture:true,passive:true});
+              return {read:()=>({available:!unavailable,retained:owner.isConnected&&owner.ownerDocument===root&&root===document&&document.querySelector('.terminal-canvas')===owner,
+                starts:Math.min(starts,8),moves:Math.min(moves,8),ends:Math.min(ends,8),cancels:Math.min(cancels,8),overflow,trusted,sameContact,insideOwner,monotonicUp,distance48,
+                focused:!!area&&document.activeElement===area&&!area.readOnly}),
+                dispose:()=>{for(const [kind,handler] of hooks)owner.removeEventListener(kind,handler,true);}};
+            }
+        """.trimIndent()
+        val geometryExpression = """
+            (()=>{const screen=document.querySelector('.terminal-canvas .xterm-screen');if(!screen)return null;
+              const r=screen.getBoundingClientRect(),v=window.visualViewport||{offsetLeft:0,offsetTop:0,width:window.innerWidth,height:window.innerHeight,scale:1};
+              const values=[r.left,r.top,r.right,r.bottom,v.offsetLeft,v.offsetTop,v.width,v.height,v.scale,window.innerWidth,window.innerHeight];
+              if(!values.every(Number.isFinite)||v.scale!==1||v.width<=0||v.height<=0||window.innerWidth<=0||window.innerHeight<=0)return null;
+              const left=Math.max(0,r.left,v.offsetLeft),right=Math.min(window.innerWidth,r.right,v.offsetLeft+v.width);
+              const top=Math.max(0,r.top,v.offsetTop),bottom=Math.min(window.innerHeight,r.bottom,v.offsetTop+v.height);
+              const start=bottom-12,end=start-56;
+              return right-left>=24&&end>=top+12?[(left+right)/2,start,end,window.innerWidth]:null;})()
+        """.trimIndent()
+        fun finishCleanup(primary: Throwable?, actions: List<()->Unit>) {
+            var cleanup: Throwable?=null
+            for(action in actions)try{action()}catch(error:Throwable){if(cleanup==null)cleanup=error else if(cleanup!==error)cleanup!!.addSuppressed(error)}
+            if(cleanup!=null){if(primary==null)throw cleanup!! else if(primary!==cleanup)primary.addSuppressed(cleanup!!)}
+        }
+        var changed=false
+        fun preference(value: Boolean?) {
+            openOwnedInputPreferences(scenario,raw,listOf("Keyboard and gestures","Terminal touch gestures"))
+            val before=evaluate(scenario,checkboxState)
+            require(before=="true"||before=="false") { "Owned overscroll preference must be a single boolean" }
+            if(value==null)assertEquals("Overscroll dismissal must start disabled","false",before)
+            else if(before!=value.toString()) {
+                changed=true
+                onWebView().withElement(findElement(Locator.XPATH,"//*[@role='dialog']//label[normalize-space(.)='$option']/input[@type='checkbox']"))
+                    .perform(webScrollIntoView()).perform(webClick())
+                awaitDocument(scenario,"explicit overscroll preference updated","($checkboxState)===${value}")
+            }
+            raw.clickIcon("Close Preferences")
+            awaitDocument(scenario,"overscroll preference dialog closed","!document.querySelector('[role=dialog][aria-label=Preferences]')")
+        }
+        fun keyboard(visible: Boolean) {
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+            while(true) {
+                assertEquals("Original Activity remains resumed",androidx.lifecycle.Lifecycle.State.RESUMED,scenario.state)
+                raw.original()
+                var matched=false
+                scenario.onActivity {activity->
+                    val decor=activity.window.decorView
+                    val insets=ViewCompat.getRootWindowInsets(decor)
+                    val shown=insets?.isVisible(WindowInsetsCompat.Type.ime())
+                    val bottom=insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom
+                    val position=IntArray(2);web.getLocationInWindow(position)
+                    matched=if(visible)shown==true&&bottom!=null&&bottom>0&&position[1]+web.height<=decor.height-bottom
+                        else shown==false&&bottom==0
+                }
+                if(matched)return
+                assertTrue("Ordinary AOSP keyboard visible=$visible must reach real native insets within original five seconds",System.nanoTime()<deadline)
+                Thread.sleep(50)
+            }
+        }
+        fun showKeyboard() {
+            val initial=JSONArray(evaluate(scenario,geometryExpression))
+            val position=IntArray(2);var scale=0.0
+            instrumentation.runOnMainSync {web.getLocationOnScreen(position);scale=web.width/initial.getDouble(3)}
+            val point=floatArrayOf((position[0]+initial.getDouble(0)*scale).toFloat(),(position[1]+initial.getDouble(1)*scale).toFloat())
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE,{point},Press.FINGER))
+            awaitDocument(scenario,"real terminal editor owns normal empty focus before ordinary keyboard","""
+                (()=>{const fields=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea'),area=fields[0];
+                  return fields.length===1&&document.activeElement===area&&!area.readOnly&&!area.disabled&&area.value==='';})()
+            """)
+            scenario.onActivity {activity->activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                .showSoftInput(web,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)}
+            keyboard(true)
+        }
+        fun stroke(focusedAfter: Boolean) {
+            keyboard(true)
+            val geometry=JSONArray(evaluate(scenario,geometryExpression))
+            require(geometry.length()==4 && geometry.getDouble(1)-geometry.getDouble(2)>=48) { "Owned past-bottom stroke requires visible 48 CSS pixels" }
+            val position=IntArray(2);var scale=0.0
+            instrumentation.runOnMainSync {web.getLocationOnScreen(position);scale=web.width/geometry.getDouble(3)}
+            val x=(position[0]+geometry.getDouble(0)*scale).toFloat()
+            val start=(position[1]+geometry.getDouble(1)*scale).toFloat()
+            val end=(position[1]+geometry.getDouble(2)*scale).toFloat()
+            val epoch=android.os.SystemClock.uptimeMillis()
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+            val pointer=android.view.MotionEvent.PointerProperties().apply {id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER}
+            var observer:OwnedFingerWindowObserver?=null
+            var held=false
+            var point=floatArrayOf(x,start)
+            var primary:Throwable?=null
+            val key=JSONObject.quote("__ownedPastBottom_${raw.nonce}_${UUID.randomUUID().toString().replace("-", "")}")
+            val token=JSONObject.quote(UUID.randomUUID().toString())
+            var receiptAttempted=false
+            fun remaining(): Long {
+                val value=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
+                assertTrue("Actual touch receipt requires original five-second stroke budget",value>0)
+                return value.coerceAtMost(1000)
+            }
+            fun received(expectedMoves: Int, ended: Boolean) {
+                while(true) {
+                    val sample=JSONObject(evaluate(scenario,"(()=>{const owned=window[$key];return owned?.token===$token?owned.read():null;})()",remaining()))
+                    assertTrue("Original trusted contact must reach the actual scroll owner",sample.getBoolean("available")&&sample.getBoolean("retained")&&sample.getBoolean("trusted")&&sample.getBoolean("sameContact")&&sample.getBoolean("insideOwner")&&sample.getBoolean("monotonicUp")&&!sample.getBoolean("overflow"))
+                    assertEquals("No cancel may qualify an upward stroke",0,sample.getInt("cancels"))
+                    assertTrue("Touch counts remain one start/two moves/one end",sample.getInt("starts")<=1&&sample.getInt("moves")<=2&&sample.getInt("ends")<=1)
+                    if(sample.getInt("starts")==1&&sample.getInt("moves")==expectedMoves&&sample.getInt("ends")== (if(ended)1 else 0)) {
+                        if(ended) {
+                            assertTrue("Actual DOM stroke reaches at least 48 CSS pixels upward",sample.getBoolean("distance48"))
+                            assertEquals("Keyboard outcome belongs to the actual editor focus transition",focusedAfter,sample.getBoolean("focused"))
+                        }
+                        return
+                    }
+                    Thread.sleep(10)
+                }
+            }
+            try {
+                receiptAttempted=true
+                assertEquals("Passive original-scroll-owner touch receipt installed","true",evaluate(scenario,"""
+                    (()=>{$receiptSource
+                      if(Object.prototype.hasOwnProperty.call(window,$key))return false;
+                      const owners=document.querySelectorAll('.terminal-canvas');if(owners.length!==1)return false;
+                      const owner=owners[0],receipt=ownedPastBottomTouchReceipt(owner);
+                      Object.defineProperty(window,$key,{value:{token:$token,read:receipt.read,dispose:receipt.dispose},configurable:true});return true;})()
+                """,remaining()))
+                scenario.onActivity {activity->
+                    assertSame("Original keyboard-checkpoint WebView",web,webView(activity.window.decorView))
+                    val target=activity.window
+                    val own=OwnedFingerWindowObserver(checkNotNull(target.callback),epoch)
+                    target.callback=own;observer=own
+                }
+                fun dispatch(action:Int,y:Float) {
+                    assertTrue("Past-bottom pointer stays within original five-second gesture budget",System.nanoTime()<deadline)
+                    point=floatArrayOf(x,y);sendOwnedFinger(pointer,epoch,action,point)
+                }
+                held=true;dispatch(android.view.MotionEvent.ACTION_DOWN,start);received(0,false)
+                dispatch(android.view.MotionEvent.ACTION_MOVE,start+(end-start)/2);received(1,false)
+                dispatch(android.view.MotionEvent.ACTION_MOVE,end);received(2,false)
+                dispatch(android.view.MotionEvent.ACTION_UP,end);held=false;received(2,true)
+                val sample=JSONObject(checkNotNull(observer).snapshot())
+                assertFalse("Past-bottom native trace remains bounded",sample.getBoolean("overflow"))
+                val events=sample.getJSONArray("events")
+                assertEquals("One real upward stroke has four native events",4,events.length())
+                val actions=listOf("down","move","move","up")
+                for(index in 0..3) {
+                    val row=events.getJSONObject(index)
+                    assertEquals("One DOWN/two monotonic MOVE/one UP",actions[index],row.getString("action"))
+                    assertTrue("Original trusted touch pointer/source",row.getBoolean("pointerMatches")&&row.getBoolean("finger")&&row.getBoolean("touchscreen"))
+                    assertEquals("Actual WebView handled native touch","handled",row.getString("outcome"))
+                }
+            }catch(failure:Throwable){primary=failure;throw failure}
+            finally {
+                finishCleanup(primary,listOf<()->Unit>(
+                    {if(held)sendOwnedFinger(pointer,epoch,android.view.MotionEvent.ACTION_CANCEL,point)},
+                    {scenario.onActivity {activity->observer?.restore(activity.window)}},
+                    {if(receiptAttempted)assertEquals("Passive touch receipt removed only by its owner","true",evaluate(scenario,
+                        "(()=>{const own=window[$key];if(own?.token!==$token)return false;own.dispose();delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()",1000))}
+                ))
+            }
+        }
+        var primary:Throwable?=null
+        try {
+            preference(null)
+            showKeyboard();stroke(true);keyboard(true)
+            println("lazysh overscroll keyboard: defaultOffVisible=true")
+            preference(true)
+            // Preferences itself changes focus: reopen and positively read fresh ordinary IME visibility.
+            showKeyboard();stroke(false);keyboard(false)
+            raw.original()
+            assertEquals("Ordinary keyboard selection unchanged",ime,android.provider.Settings.Secure.getString(context.contentResolver,android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))
+            println("lazysh overscroll keyboard: nativeVerified=true hostByteOracle=pending")
+        }catch(failure:Throwable){primary=failure;throw failure}
+        finally {
+            finishCleanup(primary,listOf<()->Unit>(
+                {if(changed)preference(false)},
+                {if(evaluate(scenario,"Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))")=="true")raw.clickIcon("Close Preferences")}
+            ))
+        }
+    }
+
     private fun verifySshDpadPan(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val raw = OwnedRawSshInput(scenario, fixture, label, "dpad")
         val nonce = raw.nonce
@@ -3902,14 +4123,7 @@ class NativeWorkspaceTest {
         raw.start()
         var added = false
         fun preferences(action: String) {
-            if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") {
-                if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
-                else workspaceMenuAction(scenario,"Preferences")
-            }
-            for (title in listOf("Keyboard and gestures", "Toolbar keys and order")) {
-                if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
-                    onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
-            }
+            openOwnedInputPreferences(scenario, raw, listOf("Keyboard and gestures", "Toolbar keys and order"))
             val selector = if (action == "Add") "//*[@role='dialog']//button[normalize-space(.)='Add dpad']" else "//*[@role='dialog']//button[@aria-label='Remove dpad']"
             if (action == "Add") {
                 awaitDocument(scenario,"known original toolbar has no D-pad","!document.querySelector('[role=dialog] button[aria-label=\"Remove dpad\"]')")
@@ -4004,13 +4218,7 @@ class NativeWorkspaceTest {
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
-                val coordinate=android.view.MotionEvent.PointerCoords().apply {x=point[0];y=point[1];pressure=1f;size=1f}
-                val event=android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,1,
-                    arrayOf(pointer),arrayOf(coordinate),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
-                try {
-                    assertEquals("One owned D-pad pointer",0,event.getPointerId(0));assertEquals("One owned D-pad DOWN epoch",epoch,event.downTime)
-                    instrumentation.sendPointerSync(event)
-                } finally {event.recycle()}
+                sendOwnedFinger(pointer, epoch, action, point)
             }
             fun counts(): IntArray {
                 val rows=JSONArray(evaluate(scenario,countExpression,remaining()))
@@ -4080,6 +4288,9 @@ class NativeWorkspaceTest {
                 try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
             }
+            onWebView().withElement(findElement(Locator.XPATH, "//div[contains(@class,'terminal-keys')]//button[normalize-space(.)='dpad']")).perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario,"D-pad closed before independent keyboard checkpoint","!document.querySelector('.terminal-dpad')")
+            verifyPastBottomKeyboardDismiss(scenario, raw)
             raw.send("owned-dpad-$nonce", false)
             awaitDocument(scenario,"actual D-pad receiver delivered ordered stopped runs and final marker",raw.proof("DPAD_${nonce}_DELIVERED"))
             raw.original()

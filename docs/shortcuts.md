@@ -6,6 +6,17 @@ or the application's mouse/alternate-screen behavior for Herdr and similar tools
 It does not require enabling a custom gesture. Screen-reader gestures and text
 selection retain their existing handling.
 
+To hide the keyboard past the bottom of local history, open Preferences → Keyboard
+and gestures → Terminal touch gestures and enable **Hide keyboard when scrolling
+past local history bottom**. It defaults off. At the bottom, swipe upward toward
+newer output. The option applies only with an idle, empty terminal editor; it never
+flushes or clears a pending edit. Remote mouse-reporting and
+alternate-screen applications keep their normal scrolling. **Reset gestures**
+turns the option off again. Physical Android keyboard dismissal remains tracked
+in [#767](https://github.com/mihazs/lazysh/issues/767).
+Update receiving clients before syncing this preference; older clients reject
+unknown preference fields. Updated clients still accept older settings snapshots.
+
 An active phone terminal uses a compact header. Open **More** (Workspace tools)
 for session views, connection actions, Preferences and workspace restoration.
 The session switcher stays in the header; multiple connections retain their tabs.

@@ -46,13 +46,14 @@ export type Preferences = {
   gestureChords: Partial<Record<GestureSlot, string>>;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
+  dismissKeyboardOnOverscroll: boolean;
 };
 export const defaults: Preferences = {
   version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
-  optionAsMeta: false, screenReader: false,
+  optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
   toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
@@ -99,6 +100,7 @@ export function parsePreferences(value: unknown): Preferences {
     optionAsMeta: p.optionAsMeta === true,
     screenReader: p.screenReader === true,
     autoHideToolbar: p.autoHideToolbar === true,
+    dismissKeyboardOnOverscroll: p.dismissKeyboardOnOverscroll === true,
     pinchZoom: p.pinchZoom !== false,
     bodyGestures: Object.fromEntries(bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])])) as Preferences["bodyGestures"],
     gestureChords,

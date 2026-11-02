@@ -15,6 +15,37 @@ test.beforeEach(async({page})=>{
   await page.evaluate(async()=>{const fixture=await import('/e2e/fixtures/TerminalImeHarness.ts');window.ownedIme=fixture.mountTerminalImeHarness();});
 });
 
+test('read-only IME idle admission rejects empty composing and deferred completion without flushing',async({page})=>{
+  expect(await page.evaluate(()=>{
+    const {textarea:area,observation,writes}=window.ownedIme;
+    const initial=observation.idle;
+    area.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
+    const composing=observation.idle;
+    area.dispatchEvent(new CompositionEvent('compositionend',{data:'',bubbles:true}));
+    const ending=observation.idle;
+    return {initial,composing,ending,again:observation.idle,value:area.value,writes:[...writes]};
+  })).toEqual({initial:true,composing:false,ending:false,again:false,value:'',writes:[]});
+  await expect.poll(()=>page.evaluate(()=>window.ownedIme.observation.idle)).toBe(true);
+  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual([]);
+});
+
+test('read-only IME idle admission rejects pending empty fallback and unsupported adapters',async({page})=>{
+  expect(await page.evaluate(()=>{
+    const {textarea:area,observation,writes}=window.ownedIme;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true}));
+    const keyPending=observation.idle;
+    area.dispatchEvent(new InputEvent('input',{data:'',inputType:'insertCompositionText',bubbles:true}));
+    return {keyPending,fallback:observation.idle,again:observation.idle,value:area.value,writes:[...writes]};
+  })).toEqual({keyPending:false,fallback:false,again:false,value:'',writes:[]});
+  await expect.poll(()=>page.evaluate(()=>window.ownedIme.observation.idle)).toBe(true);
+  expect(await page.evaluate(async()=>{
+    window.ownedIme.dispose();
+    const {mountTerminalImeHarness}=await import('/e2e/fixtures/TerminalImeHarness.ts');
+    window.ownedIme=mountTerminalImeHarness(true);
+    return {idle:window.ownedIme.observation.idle,writes:window.ownedIme.writes};
+  })).toEqual({idle:false,writes:[]});
+});
+
 for(const text of ['你好','👩🏽‍💻'])test(`ordinary IME completion preserves repeated ${text} transactions`,async({page})=>{
   const writes=await page.evaluate(async text=>{
     const area=window.ownedIme.textarea;

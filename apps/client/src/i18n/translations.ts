@@ -811,6 +811,7 @@ const translations = {
   preferencesReducingHistoryRemovesOlderLocalLines: ['Reduzir o histórico remove as linhas locais mais antigas.', 'Reducir el historial elimina las líneas locales más antiguas.'],
   preferencesUseOptionAsMetaOnMacOS: ['Usar Option como Meta no macOS', 'Usar Option como Meta en macOS'],
   preferencesScreenReaderAnnouncements: ['Anúncios do leitor de tela', 'Anuncios del lector de pantalla'],
+  preferencesDismissKeyboardOnOverscroll: ['Ocultar teclado ao rolar além do fim do histórico local', 'Ocultar teclado al desplazarse más allá del final del historial local'],
   preferencesPinchWithTwoFingersToResizeTerminalText: ['Use dois dedos em pinça para redimensionar o texto do terminal', 'Pellizca con dos dedos para cambiar el tamaño del texto del terminal'],
   preferencesAutoHideToolbarInDesktopPointerLayouts: ['Ocultar automaticamente a barra de ferramentas em layouts desktop com ponteiro', 'Ocultar automáticamente la barra de herramientas en diseños de escritorio con puntero'],
   preferencesTerminalTouchGestures: ['Gestos de toque do terminal', 'Gestos táctiles del terminal'],

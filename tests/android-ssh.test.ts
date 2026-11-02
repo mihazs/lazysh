@@ -1442,7 +1442,9 @@ test('native IME failed-editor observation exposes each unchanged predicate clau
   count=1;expect(privateReads).toBe(0);expect(predicate(document)).toBe(true);
   expect(()=>observe({...document,querySelectorAll:()=>{throw new Error('unavailable');}})).toThrow('unavailable');
   expect(JSON.stringify(observe(document))).not.toMatch(/private|URL|selection|owned|password|textarea|off/);
-  const preferences=kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0];
+  const preferences=kotlin.split('private fun openOwnedInputPreferences(')[1].split('private fun verifyPastBottomKeyboardDismiss(')[0];
+  expect(kotlin.split('private fun verifySshDpadPan(')[1].split('val countExpression')[0]).toContain('openOwnedInputPreferences(scenario, raw, listOf("Keyboard and gestures", "Toolbar keys and order"))');
+  expect(kotlin.split('private fun verifyPastBottomKeyboardDismiss(')[1].split('private fun verifySshDpadPan(')[0]).toContain('openOwnedInputPreferences(scenario,raw,listOf("Keyboard and gestures","Terminal touch gestures"))');
   expect(preferences).toContain('workspaceElementVisible("button[aria-label=\'Preferences\']")');
   expect(preferences).toContain('else workspaceMenuAction(scenario,"Preferences")');
 });
@@ -1471,6 +1473,78 @@ test('native D-pad count and neutral observations execute the embedded source wi
   padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
   buttonCount=3;expect(counts(document)).toBeNull();buttonCount=4;text=`PRIVATE_CONTEXT D_${nonce}_99_2_2_2`;expect(counts(document)).toBeNull();
   text='PRIVATE_CONTEXT_WITHOUT_A_RECEIVER_STATE';expect(counts(document)).toBeNull();
+});
+
+test('past-bottom native checkpoint executes closed checkbox and visible upward-stroke geometry source',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifyPastBottomKeyboardDismiss(')[1].split('private fun verifySshDpadPan(')[0];
+  const geometry=body.match(/val geometryExpression = """([\s\S]*?)"""\.trimIndent\(\)/)![1];
+  const checkbox=body.match(/val checkboxState = """([\s\S]*?)"""\.trimIndent\(\)/)![1];
+  let rect={left:10,top:20,right:310,bottom:220},present=true;
+  const window={innerWidth:320,innerHeight:240,visualViewport:{offsetLeft:0,offsetTop:0,width:320,height:240,scale:1}};
+  const document={querySelector:()=>present?{getBoundingClientRect:()=>rect}:null};
+  const read=new Function('document','window',`return (${geometry});`);
+  expect(read(document,window)).toEqual([160,208,152,320]);
+  const point=read(document,window);expect(point[2]-point[1]).toBe(-56);expect(point[1]-point[2]).toBeGreaterThanOrEqual(48);
+  window.visualViewport.height=120;expect(read(document,window)).toEqual([160,108,52,320]);
+  rect={...rect,bottom:90};expect(read(document,window)).toBeNull();rect={...rect,bottom:220};
+  window.visualViewport.scale=2;expect(read(document,window)).toBeNull();window.visualViewport.scale=1;
+  rect={...rect,left:NaN};expect(read(document,window)).toBeNull();rect={...rect,left:10};present=false;expect(read(document,window)).toBeNull();
+  const option='Hide keyboard when scrolling past local history bottom';let checked:unknown=false,count=1;
+  const inputs=()=>Array.from({length:count},()=>({checked,value:'PRIVATE_INPUT_MUST_NOT_ESCAPE'}));
+  const labels={querySelectorAll:()=>[{textContent:'PRIVATE_OTHER_LABEL',querySelectorAll:inputs},{textContent:option,querySelectorAll:inputs}]};
+  const state=new Function('document',`return (${checkbox});`);
+  expect(state(labels)).toBe(false);checked=true;expect(state(labels)).toBe(true);
+  checked='PRIVATE_INVALID_CHECKED';expect(state(labels)).toBeNull();checked=false;
+  for(const size of [0,2]){count=size;expect(state(labels)).toBeNull();}
+});
+
+test('past-bottom ordinary-keyboard checkpoint precedes the unchanged SSH drain and never substitutes test IME or hide calls',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifyPastBottomKeyboardDismiss(')[1].split('private fun verifySshDpadPan(')[0];
+  for(const forbidden of ['closeSoftKeyboard(', 'hideSoftInput', 'OwnedImeControl(', 'ime set ', 'dispatchEvent(', 'loadUrl(', 'loadData'])expect(body).not.toContain(forbidden);
+  expect(body).toContain('preference(null)');expect(body).toContain('showKeyboard();stroke(true);keyboard(true)');
+  expect(body).toContain('preference(true)');expect(body).toContain('showKeyboard();stroke(false);keyboard(false)');
+  expect(body).toContain('checkpoint=reached');expect(body).toContain('hostByteOracle=pending');expect(body).toContain('if(changed)preference(false)');
+  expect(body).toContain('com.android.inputmethod.latin/');expect(body).toContain('WindowInsetsCompat.Type.ime()');
+  const dpad=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0];
+  expect(dpad.indexOf('verifyPastBottomKeyboardDismiss(scenario, raw)')).toBeLessThan(dpad.indexOf('raw.send("owned-dpad-$nonce", false)'));
+});
+
+
+test('past-bottom passive actual-owner receipt waits for trusted same-contact DOM moves and end without exporting context',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifyPastBottomKeyboardDismiss(')[1].split('private fun verifySshDpadPan(')[0];
+  const source=body.match(/val receiptSource = """([\s\S]*?)"""\.trimIndent\(\)/)![1];
+  const create=()=>{
+    const hooks=new Map<string,(event:unknown)=>void>(),area={readOnly:false};
+    const document={activeElement:area as unknown,querySelector:(_selector:string)=>owner};
+    const owner={ownerDocument:document,isConnected:true,querySelector:()=>area,
+      addEventListener:(kind:string,handler:(event:unknown)=>void,options:unknown)=>{expect(options).toEqual({capture:true,passive:true});hooks.set(kind,handler);},
+      removeEventListener:(kind:string,handler:unknown,capture:unknown)=>{expect(capture).toBe(true);expect(hooks.get(kind)).toBe(handler);hooks.delete(kind);}};
+    const receipt=new Function('owner','document',`${source};return ownedPastBottomTouchReceipt(owner);`)(owner,document);
+    const fire=(kind:string,y:number,extra:Record<string,unknown>={})=>{
+      const touch={identifier:7,clientY:y};
+      hooks.get(kind)!({isTrusted:true,currentTarget:owner,composedPath:()=>[owner],touches:kind==='touchend'?[]:[touch],changedTouches:[touch],
+        privatePrompt:'PRIVATE_CONTEXT',preventDefault(){throw Error('Must remain passive');},stopPropagation(){throw Error('Must remain passive');},...extra});
+    };
+    return {receipt,fire,hooks,owner,document};
+  };
+  const good=create();expect(good.receipt.read().moves).toBe(0);
+  good.fire('touchstart',100);expect(good.receipt.read()).toMatchObject({starts:1,moves:0,ends:0,trusted:true,sameContact:true});
+  good.fire('touchmove',72);expect(good.receipt.read()).toMatchObject({moves:1,ends:0,distance48:false});
+  good.fire('touchmove',44);expect(good.receipt.read()).toMatchObject({moves:2,ends:0,distance48:true,monotonicUp:true});
+  good.document.activeElement=null;good.fire('touchend',44);
+  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,focused:false});
+  good.receipt.dispose();expect(good.hooks.size).toBe(0);
+  for(const [extra,field] of [[{isTrusted:false},'trusted'],[{currentTarget:null},'insideOwner'],[{composedPath:()=>[]},'insideOwner']] as const){
+    const sample=create();sample.fire('touchstart',100,extra);expect(sample.receipt.read()[field]).toBe(false);sample.receipt.dispose();
+  }
+  const wrong=create();wrong.fire('touchstart',100);wrong.fire('touchmove',110);expect(wrong.receipt.read().monotonicUp).toBe(false);
+  wrong.fire('touchmove',40,{touches:[{identifier:8,clientY:40}]});expect(wrong.receipt.read().sameContact).toBe(false);
+  wrong.owner.isConnected=false;expect(wrong.receipt.read().retained).toBe(false);wrong.receipt.dispose();
+  expect(body).toContain('received(1,false)');expect(body).toContain('received(2,false)');expect(body).toContain('held=false;received(2,true)');
+  expect(body).toContain('own.dispose();delete window[$key]');
 });
 
 test.each([
