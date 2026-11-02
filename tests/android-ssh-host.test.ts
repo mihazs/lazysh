@@ -7,7 +7,7 @@ import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {sshCommand} from './support/sshFixture';
-import {identity} from './support/ownedProcess';
+import {identity,reportOwnedTeardownFailure} from './support/ownedProcess';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -180,6 +180,7 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
 for(const mosh of [false,true]) {
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN || (mosh && !process.env.LAZYSH_NATIVE_MOSH_SERVER))(`owned Herdr ${mosh?'Mosh':'SSH'} exec reads its real companion transcript in the private namespace`,async()=>{
   const owned=await HerdrFixture.start(herdrTools(),mosh?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined);
+  let primary=false;
   try {
     if(mosh) {
       const server=await owned.ssh.client(true,'mosh-server --version');
@@ -226,6 +227,7 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     const client=new OwnedProcess('/usr/bin/script',['-q','-e','-f','-c',
       `stty rows 24 cols 80; exec '${owned.ssh.directory}/bin/herdr' --session '${owned.name}'`,'/dev/null'],
       owned.ssh.directory,owned.ssh.environment,false);
+    let attachPrimary=false;
     try {
       const deadline=performance.now()+3000;
       while((await owned.history()).rows!==23) {
@@ -238,12 +240,27 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
       await owned.run(['tab','focus',history!.tabId]);
       await expect(owned.expectHistoryScrolled()).rejects.toThrow('Owned remote history did not scroll and restore');
       expect(await owned.history()).toMatchObject({offset:8,newTail:false});
-    } finally {await client.stop();}
+    } catch(error){attachPrimary=true;throw error;}
+    finally {
+      try{await client.stop();}
+      catch(error){
+        await reportOwnedTeardownFailure(client,'attach-stop');
+        if(!attachPrimary)throw error;
+        try{console.error('Owned attach cleanup failed after primary failure');}catch{/* Preserve primary. */}
+      }
+    }
     expect(await owned.history()).toMatchObject({offset:8,newTail:false});
     await owned.run(['tab','focus',agent.tabId]);await owned.expectHistoryScrolled();
     await expect(owned.history(513)).rejects.toThrow('Owned history request invalid');
     await owned.expectBytes(Buffer.alloc(0));
-  } finally {await owned.stop();}
+  } catch(error){primary=true;throw error;}
+  finally {
+    try{await owned.stop();}
+    catch(error){
+      if(!primary)throw error;
+      try{console.error('Owned Herdr fixture cleanup failed after primary failure');}catch{/* Preserve primary. */}
+    }
+  }
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
