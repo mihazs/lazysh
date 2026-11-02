@@ -1802,34 +1802,43 @@ test('native D-pad remeasures the actual visible target after its keyboard-openi
   expect(body).toContain('Owned D-pad target must stay above the current keyboard');
 });
 
-async function ownedDpadDomFixture(failure?:'listener'|'observe') {
+async function ownedDpadDomFixture(failure?:'listener'|'context'|'observe') {
   const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/OwnedDpadDomObservation.kt'),'utf8');
   const key='owned-observation-key',owner='owned-observation-token',window:Record<string,unknown>={};
-  const listeners=new Map<string,Set<(event:Record<string,unknown>)=>void>>(),removed:string[]=[];
-  let clock=100,captured=true,disconnected=false,padCount=1,mutated=()=>{};
-  const arrows=['up','left','down','right'].map(direction=>({inside:true,dataset:{dpadDirection:direction},style:{outline:''},closest:()=>({inside:true})}));
-  const pad={isConnected:true,contains:(target:unknown)=>Boolean(target&&(target as {inside?:boolean}).inside),
+  type Listener=(event:Record<string,unknown>)=>void;
+  const listeners=new Map<string,Set<Listener>>(),windowListeners=new Map<string,Set<Listener>>(),viewportListeners=new Map<string,Set<Listener>>(),removed:string[]=[];
+  let clock=100,captured=true,disconnected=false,padCount=1,mutated=()=>{},focused:unknown=true,touchAction:unknown='none';
+  class FixtureNode {inside=false;}
+  const arrows=['up','left','down','right'].map(direction=>Object.assign(new FixtureNode(),{inside:true,dataset:{dpadDirection:direction},style:{outline:''},closest:()=>({inside:true})}));
+  const pad=Object.assign(new FixtureNode(),{isConnected:true,contains:(target:unknown)=>{expect(target instanceof FixtureNode).toBe(true);return target===pad||(target as FixtureNode).inside;},
     querySelectorAll:()=>arrows,hasPointerCapture:()=>captured,
-    setPointerCapture:()=>{throw new Error('Passive observation cannot capture');},releasePointerCapture:()=>{throw new Error('Passive observation cannot release');}};
-  const outside={inside:false,closest:()=>null};
-  for(const target of [...arrows,outside])for(const field of ['id','textContent','value'])Object.defineProperty(target,field,{get(){throw new Error('Private DOM field read');}});
-  const document={querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad');return Array.from({length:padCount},()=>pad);},
-    addEventListener:(type:string,listener:(event:Record<string,unknown>)=>void,options:{capture:boolean;passive:boolean})=>{
-      expect(options).toEqual({capture:true,passive:true});if(failure==='listener'&&type==='pointerup')throw new Error('private install failure');
-      if(!listeners.has(type))listeners.set(type,new Set());listeners.get(type)!.add(listener);
-    },removeEventListener:(type:string,listener:(event:Record<string,unknown>)=>void,capture:boolean)=>{expect(capture).toBe(true);removed.push(type);listeners.get(type)?.delete(listener);}};
+    setPointerCapture:()=>{throw new Error('Passive observation cannot capture');},releasePointerCapture:()=>{throw new Error('Passive observation cannot release');}});
+  const outside=Object.assign(new FixtureNode(),{closest:()=>null});
+  const terminal=Object.assign(new FixtureNode(),{matches:(selector:string)=>selector==='.terminal-canvas .xterm-helper-textarea'});
+  for(const target of [...arrows,outside,terminal])for(const field of ['id','textContent','value'])Object.defineProperty(target,field,{get(){throw new Error('Private DOM field read');}});
+  const eventTarget=(map:Map<string,Set<Listener>>,prefix='')=>({
+    addEventListener:(type:string,listener:Listener,options:{capture:boolean;passive:boolean})=>{
+      expect(options).toEqual({capture:true,passive:true});if((failure==='listener'&&type==='pointerup')||(failure==='context'&&prefix==='window:'&&type==='blur'))throw new Error('private install failure');
+      if(!map.has(type))map.set(type,new Set());map.get(type)!.add(listener);
+    },removeEventListener:(type:string,listener:Listener,capture:boolean)=>{expect(capture).toBe(true);removed.push(prefix+type);map.get(type)?.delete(listener);}});
+  const document=Object.assign(new FixtureNode(),eventTarget(listeners),{activeElement:null as unknown,visibilityState:'visible' as unknown,hasFocus:()=>focused,
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.terminal-dpad');return Array.from({length:padCount},()=>pad);}});
+  const viewport={width:411,height:733,offsetLeft:0,offsetTop:0,scale:1,...eventTarget(viewportListeners,'viewport:')};
+  Object.assign(window,eventTarget(windowListeners,'window:'),{innerWidth:411,innerHeight:733,visualViewport:viewport});
   class Observer { constructor(callback:()=>void){mutated=callback;}observe(target:unknown,options:unknown){expect(target).toBe(pad);expect(options).toEqual({attributes:true,attributeFilter:['style'],childList:true,subtree:true});if(failure==='observe')throw new Error('private observe failure');}disconnect(){disconnected=true;} }
   const run=(name:'INSTALL'|'READ'|'CLEANUP')=>{
     const expression=source.match(new RegExp(`private val ${name} = """([\\s\\S]+?)"""\\.trimIndent\\(\\)`))?.[1];expect(expression!==undefined).toBe(true);
     const bound=expression!.replaceAll('@@KEY@@',JSON.stringify(key)).replaceAll('@@OWNER@@',JSON.stringify(owner));
-    return Function('window','document','MutationObserver','performance','setTimeout','setInterval',`return (${bound});`)(window,document,Observer,{now:()=>clock},()=>{throw new Error('No timer');},()=>{throw new Error('No timer');});
+    return Function('window','document','Node','MutationObserver','performance','getComputedStyle','setTimeout','setInterval',`return (${bound});`)(window,document,FixtureNode,Observer,{now:()=>clock},(target:unknown)=>{expect(target).toBe(pad);return {touchAction};},()=>{throw new Error('No timer');},()=>{throw new Error('No timer');});
   };
-  const emit=(type:string,change:Record<string,unknown>={})=>{
+  const emit=(type:string,change:Record<string,unknown>={},map=listeners)=>{
     const event={type,isTrusted:true,isPrimary:true,button:0,buttons:1,pointerId:777777,pointerType:'touch',clientX:100,clientY:100,target:arrows[0],
       preventDefault:()=>{throw new Error('Passive observation cannot prevent input');},stopPropagation:()=>{throw new Error('Passive observation cannot stop input');},...change};
-    for(const listener of listeners.get(type)??[])listener(event);
+    for(const listener of map.get(type)??[])listener(event);
   };
-  return {run,emit,pad,arrows,outside,window,key,owner,listeners,removed,mutate:()=>mutated(),setClock:(value:number)=>{clock=value;},setCapture:(value:boolean)=>{captured=value;},setPadCount:(value:number)=>{padCount=value;},disconnected:()=>disconnected};
+  return {run,emit,pad,arrows,outside,terminal,window,document,viewport,key,owner,listeners,windowListeners,viewportListeners,removed,
+    mutate:()=>mutated(),setClock:(value:number)=>{clock=value;},setCapture:(value:boolean)=>{captured=value;},setPadCount:(value:number)=>{padCount=value;},
+    setFocus:(value:unknown)=>{focused=value;},setTouchAction:(value:unknown)=>{touchAction=value;},disconnected:()=>disconnected};
 }
 
 test('passive owned D-pad DOM evidence observes retargeting and capture without private fields or input changes',async()=>{
@@ -1844,7 +1853,7 @@ test('passive owned D-pad DOM evidence observes retargeting and capture without 
     ['pointerdown','arrow','neutral','yes'],['gotpointercapture','arrow','neutral','yes'],['pointermove','other','left','yes'],['lostpointercapture','arrow','neutral','yes']]);
   expect(before.events[2]).toMatchObject({atMs:24,trusted:true,samePointer:true,primary:true,touch:true,pressed:true,connected:true});
   expect(Object.keys(before).sort()).toEqual(['admitted','connected','events','overflow','schemaVersion','state']);
-  expect(Object.keys(before.events[0]).sort()).toEqual(['atMs','capture','connected','displacement','kind','outline','pressed','primary','samePointer','target','touch','trusted']);
+  expect(Object.keys(before.events[0]).sort()).toEqual(['activeElement','atMs','capture','connected','displacement','documentFocus','kind','outline','pressed','primary','samePointer','target','touch','touchAction','trusted','viewport','visibility']);
   expect(JSON.stringify(before)).not.toMatch(/777777|clientX|clientY|pointerId|textContent|owned-observation|Private/);
   expect(f.run('CLEANUP')).toBe(true);expect([...f.listeners.values()].every(rows=>rows.size===0)).toBe(true);expect(f.disconnected()).toBe(true);
 });
@@ -1859,15 +1868,59 @@ test('passive D-pad outline observations use only original-pad state and stop ex
   const foreign=()=>{};f.listeners.get('pointermove')!.add(foreign);
   expect(f.run('CLEANUP')).toBe(true);expect(f.listeners.get('pointermove')).toEqual(new Set([foreign]));
   expect(f.run('READ')).toEqual({state:'unavailable'});f.mutate();expect(f.run('READ')).toEqual({state:'unavailable'});
-  expect(f.removed).toEqual(['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture']);
+  expect(f.removed).toEqual(['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture','contextmenu','focusin','focusout','visibilitychange','window:focus','window:blur','window:resize','viewport:resize','viewport:scroll']);
+  expect([...f.windowListeners.values(),...f.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);
 });
 
 test('passive D-pad evidence caps rows and relative time and retires partial installation without adopting foreign state',async()=>{
   const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);f.emit('pointerdown');f.setClock(0);f.emit('pointermove');f.setClock(999999);f.emit('pointermove');
   for(let index=0;index<40;index++)f.emit('pointermove');
   const result=f.run('READ');expect(result.events).toHaveLength(32);expect(result.overflow).toBe(true);expect(result.events[1].atMs).toBe(0);expect(result.events[2].atMs).toBe(65535);expect(f.run('CLEANUP')).toBe(true);
-  for(const failure of ['listener','observe'] as const){const partial=await ownedDpadDomFixture(failure);expect(partial.run('INSTALL')).toBe(false);expect([...partial.listeners.values()].every(rows=>rows.size===0)).toBe(true);expect(partial.run('READ')).toEqual({state:'unavailable'});}
+  for(const failure of ['listener','context','observe'] as const){const partial=await ownedDpadDomFixture(failure);expect(partial.run('INSTALL')).toBe(false);expect([...partial.listeners.values(),...partial.windowListeners.values(),...partial.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);expect(partial.run('READ')).toEqual({state:'unavailable'});}
   const foreign=await ownedDpadDomFixture();foreign.window[foreign.key]={owner:'foreign',cleanup:()=>{throw new Error('Foreign cleanup must not run');}};
   expect(foreign.run('INSTALL')).toBe(false);expect(foreign.run('CLEANUP')).toBe(false);expect(foreign.listeners.size).toBe(0);
   for(const count of [0,2]){const unavailable=await ownedDpadDomFixture();unavailable.setPadCount(count);expect(unavailable.run('INSTALL')).toBe(false);expect(unavailable.listeners.size).toBe(0);}
+});
+
+
+test('passive D-pad cancellation context distinguishes focus viewport and unavailable without private values',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);
+  f.emit('visibilitychange',{target:f.document});f.emit('resize',{target:f.window},f.windowListeners);
+  expect(f.run('READ').events).toEqual([]);
+  f.emit('pointerdown');
+  expect(f.run('READ').events[0]).toMatchObject({touchAction:'none',activeElement:'none',documentFocus:'yes',visibility:'visible',viewport:'same'});
+  f.document.activeElement=f.terminal;f.emit('focusin',{target:f.terminal,pointerId:undefined});
+  f.setFocus(false);f.emit('blur',{target:f.window,pointerId:undefined},f.windowListeners);
+  f.document.visibilityState='hidden';f.emit('visibilitychange',{target:f.document,pointerId:undefined});
+  f.viewport.height=399;f.emit('resize',{target:f.viewport,pointerId:undefined},f.viewportListeners);
+  const changed=f.run('READ');f.emit('resize',{target:f.window},f.windowListeners);f.emit('scroll',{target:f.viewport},f.viewportListeners);
+  expect(f.run('READ')).toEqual(changed);
+  expect(changed.events.map((row:Record<string,unknown>)=>[row.kind,row.activeElement,row.documentFocus,row.visibility,row.viewport])).toEqual([
+    ['pointerdown','none','yes','visible','same'],['focusin','terminal','yes','visible','same'],['blur','terminal','no','visible','same'],
+    ['visibilitychange','terminal','no','hidden','same'],['viewport','terminal','no','hidden','changed']]);
+  f.viewport.height=733;f.emit('resize',{target:f.window,pointerId:undefined},f.windowListeners);expect(f.run('READ').events.at(-1).viewport).toBe('same');
+  f.document.activeElement=f.pad;f.setTouchAction('pan-y');f.emit('focusout',{target:f.document,pointerId:undefined});
+  expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'other',activeElement:'pad'});
+  f.document.activeElement=f.outside;f.emit('focusin',{target:f.outside,pointerId:undefined});expect(f.run('READ').events.at(-1).activeElement).toBe('other');
+  f.document.activeElement=f.window;f.setTouchAction(undefined);f.setFocus(undefined);f.document.visibilityState=undefined;f.window.visualViewport=undefined;
+  f.emit('resize',{target:f.window,pointerId:undefined},f.windowListeners);
+  expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'unavailable',activeElement:'unavailable',documentFocus:'unavailable',visibility:'unavailable',viewport:'unavailable'});
+  f.document.activeElement=null;f.setFocus(true);f.setTouchAction('private-fixture');f.document.visibilityState='private-fixture';f.window.visualViewport=f.viewport;
+  f.emit('focus',{target:f.window,pointerId:undefined},f.windowListeners);expect(f.run('READ').events.at(-1)).toMatchObject({touchAction:'other',activeElement:'none',documentFocus:'yes',visibility:'other',viewport:'same'});
+  const output=JSON.stringify(f.run('READ'));expect(output).not.toMatch(/clientX|clientY|pointerId|innerWidth|height|offset|scale|777777|399|733|textContent|value|owned-observation|private-fixture/);
+  expect(f.run('CLEANUP')).toBe(true);
+});
+
+test('passive D-pad contextmenu admission and transition dedup retain cap and exact document window viewport cleanup',async()=>{
+  const f=await ownedDpadDomFixture();expect(f.run('INSTALL')).toBe(true);
+  f.emit('contextmenu');f.emit('pointerdown',{target:f.window});f.emit('pointerdown',{target:f.document});expect(f.run('READ').admitted).toBe(false);
+  f.emit('pointerdown');f.emit('contextmenu',{target:f.arrows[0],pointerId:undefined});
+  expect(f.run('READ').events.at(-1)).toMatchObject({kind:'contextmenu',target:'arrow',trusted:true,samePointer:false});
+  const before=f.run('READ');f.emit('contextmenu',{target:f.window,pointerId:undefined});f.emit('contextmenu',{target:f.outside,pointerId:55});expect(f.run('READ')).toEqual(before);
+  f.emit('pointermove',{target:f.window});expect(f.run('READ').events.at(-1).target).toBe('other');
+  for(let index=0;index<60;index++){f.setFocus(index%2===0);f.emit('blur',{target:f.window,pointerId:undefined},f.windowListeners);f.emit('focus',{target:f.window,pointerId:undefined},f.windowListeners);}
+  const result=f.run('READ');expect(result.events).toHaveLength(32);expect(result.overflow).toBe(true);
+  const foreign=()=>{};f.windowListeners.get('focus')!.add(foreign);expect(f.run('CLEANUP')).toBe(true);
+  expect(f.windowListeners.get('focus')).toEqual(new Set([foreign]));expect([...f.listeners.values(),...f.viewportListeners.values()].every(rows=>rows.size===0)).toBe(true);
+  f.emit('contextmenu');f.mutate();f.emit('resize',{target:f.viewport},f.viewportListeners);expect(f.run('READ')).toEqual({state:'unavailable'});
 });
