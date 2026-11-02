@@ -4052,6 +4052,7 @@ class NativeWorkspaceTest {
             var fingerFailure: Throwable? = null
             var currentPhase = "up"
             var lastCounts: IntArray? = null
+            val dom=OwnedDpadDomObservation(nonce) { expression,timeout -> evaluate(scenario,expression,timeout) }
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
@@ -4079,6 +4080,7 @@ class NativeWorkspaceTest {
             fun pause() { assertTrue("Owned D-pad pause requires original budget",remaining()>=240);Thread.sleep(240);remaining() }
             var stopped = IntArray(0)
             try {
+                dom.install(remaining())
                 scenario.onActivity { activity ->
                     assertSame("Original D-pad WebView before DOWN",web,webView(activity.window.decorView))
                     val target=activity.window
@@ -4127,12 +4129,15 @@ class NativeWorkspaceTest {
                     val summary=observer?.failureSummary() ?: "{\"state\":\"unavailable\"}"
                     failure.addSuppressed(AssertionError("D-pad completed Window dispatch[$summary]"))
                 }.onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad completed Window dispatch[unavailable]")) } }
+                runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[${dom.failureSummary()}]")) }
+                    .onFailure { runCatching { failure.addSuppressed(AssertionError("D-pad passive DOM[unavailable]")) } }
                 throw failure
             }
             finally {
                 var cleanup: Throwable?=null
                 try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
                 try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
+                try {dom.close()}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
             }
             raw.send("owned-dpad-$nonce", false)
