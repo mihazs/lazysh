@@ -39,6 +39,7 @@ async function fixture(page:Page) {
 
 async function openExpandedDpad(page:Page,phone:boolean) {
   await fixture(page);
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Toolbar keys and order',{exact:true}).click();
   await page.getByRole('button',{name:'Add dpad',exact:true}).click();
   await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
@@ -301,6 +302,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
   await page.getByLabel('Two-finger swipe right Option / Alt',{exact:true}).check();
   await page.getByRole('textbox',{name:'Two-finger swipe right custom shortcut text',exact:true}).fill('b1');
   await page.getByRole('button',{name:'Save Two-finger swipe right chord',exact:true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Toolbar keys and order',{exact:true}).click();
   await page.getByRole('button',{name:'Add dpad',exact:true}).click();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
@@ -440,9 +442,7 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
 
 
 test('terminal canvas stays anchored when keyboard-sized resizes reveal its input',async({page})=>{
-  await fixture(page); await page.keyboard.press('Escape');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await openShortcutTerminal(page);
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
   const width=(page.viewportSize()?.width??1280)<=600?412:1280;
@@ -458,10 +458,7 @@ test('terminal canvas stays anchored when keyboard-sized resizes reveal its inpu
 });
 
 test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page},testInfo)=>{
-  await fixture(page);
-  await page.keyboard.press('Escape');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await openShortcutTerminal(page);
   const screen=page.locator('.terminal-canvas:visible .xterm-screen');
   await expect(screen).toBeVisible();
   await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
