@@ -6,7 +6,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Keyboard, KeyboardOff, Paperclip, ClipboardPaste, SquarePen, X } from "lucide-react";
+import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
+import TerminalComposer from './TerminalComposer';
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type {UnappliedTerminalEdit} from "./terminalIme";
@@ -126,6 +127,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  // Expanded input tools share the keyboard-sized workspace.
+  useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
   useEffect(()=>{
     const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen);
     onBackChange?.(session.id,available?()=>{
@@ -694,6 +697,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const label={left:'terminalDpadLeft',up:'terminalDpadUp',down:'terminalDpadDown',right:'terminalDpadRight'} as const;
     return <button key={direction} disabled={!session.connected} data-dpad-direction={direction} aria-label={t(label[direction])} style={dpadDirection===direction?{outline:'1px solid var(--theme-accent)'}:undefined} onClick={()=>{if(inputOwner.current)sendNamed(direction[0].toUpperCase()+direction.slice(1),undefined,inputOwner.current);}}>{labels[direction]}</button>;
   }
+  const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
@@ -727,9 +731,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
     <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
-    {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <div className="terminal-compose-actions"><button type="button" className="icon-button" title={t('terminalPasteDraft')} aria-label={t('terminalPasteDraft')} disabled={!session.connected || !draft || !!unappliedEdit} onClick={() => {if (pasteLiteral(draft)) {setDraft(""); focusTerminal();}}}><ClipboardPaste size={18} aria-hidden="true" /></button><button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={() => setComposing(false)}><X size={18} aria-hidden="true" /></button></div>
-    </div>}
+    {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput}
+      disabled={!session.connected || !draft || !!unappliedEdit}
+      onPaste={() => {if (pasteLiteral(draft)) {setDraft(""); focusTerminal();}}}
+      onClose={() => setComposing(false)}
+      onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.();} : undefined} />}
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
     {dpadEnabled && <div ref={dpadElement} className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
@@ -742,7 +748,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
-      {preferences.toolbar.map(key => {
+      {preferences.toolbar.filter(key => key !== "attach" || !attachFromComposer).map(key => {
         const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
         const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
         const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
@@ -759,7 +765,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
           else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
           else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
-          else if (key === "dpad") setDpadOpen(!dpadOpen);
+          else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
           else sendKey(sequences[key] ?? key);
           if (modifier) focusTerminal();
         };

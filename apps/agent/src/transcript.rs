@@ -10,6 +10,8 @@ use std::{
 mod amp_json;
 mod antigravity;
 mod atif;
+mod codex_conversation;
+mod codex_lineage;
 mod conversation;
 mod cursor;
 mod database;
@@ -324,6 +326,13 @@ pub(crate) fn open_transcript(path: &Path) -> Result<File> {
     if !metadata.is_file() {
         return Err(Error::InvalidArgument);
     }
+    check_owner(&metadata)?;
+    Ok(file)
+}
+
+fn check_owner(metadata: &std::fs::Metadata) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = metadata;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -331,7 +340,7 @@ pub(crate) fn open_transcript(path: &Path) -> Result<File> {
             return Err(Error::InvalidArgument);
         }
     }
-    Ok(file)
+    Ok(())
 }
 
 fn copy_usage(output: &mut Value, input: &Value, fields: &[(&str, &str)]) {

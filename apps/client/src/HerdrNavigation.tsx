@@ -7,6 +7,7 @@ import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
 import './HerdrNavigation.css';
+import './HerdrNavigationPresentation.css';
 
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
@@ -97,7 +98,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
-      {data.server && mode==='spaces' && <p className="herdr-shared-focus-note muted">{t('herdrNavigationShared')}</p>}
+      {data.server && mode==='spaces' && <details className="herdr-shared-focus-note muted"><summary>{t('herdrSharedFocusShort')}</summary><p>{t('herdrNavigationShared')}</p></details>}
       <section className="herdr-server-setup" hidden={!setupOpen} aria-label={t('herdrAgentsServer')}>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>
@@ -107,7 +108,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       </section>
       <div hidden={setupOpen}>
       {data.server && <>
-        <label><span className="sr-only">{t('herdrNavigationSearch')}</span><input type="search" placeholder={t('herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
+        <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);

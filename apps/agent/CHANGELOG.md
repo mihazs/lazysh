@@ -1,5 +1,25 @@
 # @lazysh/agent
 
+## 1.10.0
+
+### Minor Changes
+
+- f1d7feb: Add a recorded Codex Conversation reader with mode-aware turn replay, bounded protected fork/revert prefixes, explicit refresh and opt-in Follow. Records remains the default; recorded history does not establish a live agent or authorize requests.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.10.0
+  - @lazysh/common@1.10.0
+  - @lazysh/notification-client@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- @lazysh/account-usage@1.9.11
+  - @lazysh/common@1.9.11
+  - @lazysh/notification-client@1.9.11
+
 ## 1.9.10
 
 ### Patch Changes

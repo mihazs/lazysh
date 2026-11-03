@@ -135,7 +135,7 @@ fn parallel_tool_calls_and_results_are_recovered_without_answering_a_different_r
 }
 
 #[test]
-fn cycles_oversize_files_and_unsupported_conversation_agents_fail_closed() {
+fn cycles_oversize_files_and_wrong_provider_input_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("session.jsonl");
     write(
@@ -244,4 +244,503 @@ fn discovery_ignores_symbolic_links_and_caps_results() {
         50
     )
     .is_err());
+}
+
+fn codex_file(records: &[Value]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    write(&path, records);
+    (directory, path)
+}
+// Independently authored records matching the official 0.166.0 persistence envelope.
+fn codex_record(kind: &str, payload: Value) -> Value {
+    json!({"timestamp":"2026-01-02T03:04:05Z","type":kind,"payload":payload})
+}
+fn codex_meta(id: &str, mode: &str) -> Value {
+    codex_record("session_meta", json!({"id":id,"history_mode":mode}))
+}
+fn codex_event(kind: &str, mut payload: Value) -> Value {
+    payload["type"] = json!(kind);
+    if matches!(kind, "item_started" | "item_completed") && payload.get("thread_id").is_none() {
+        payload["thread_id"] = json!("11111111-1111-4111-8111-111111111111");
+    }
+    codex_record("event_msg", payload)
+}
+fn codex_turn(id: &str) -> Value {
+    codex_event("task_started", json!({"turn_id":id}))
+}
+fn codex_item(turn: &str, kind: &str, id: &str, text: &str) -> Value {
+    let item = match kind {
+        "UserMessage" => json!({"type":kind,"id":id,"content":[{"type":"text","text":text}]}),
+        _ => json!({"type":kind,"id":id,"content":[{"type":"Text","text":text}]}),
+    };
+    codex_event(
+        "item_completed",
+        json!({"thread_id":"11111111-1111-4111-8111-111111111111","turn_id":turn,"item":item,"completed_at_ms":1}),
+    )
+}
+fn codex_text(page: &lazysh_agent::transcript::TranscriptPage) -> String {
+    page.messages
+        .iter()
+        .flat_map(|m| m["blocks"].as_array().unwrap())
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("|")
+}
+#[test]
+fn codex_legacy_rollbacks_remove_turns_without_replaying_model_context_or_private_reasoning() {
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("user_message", json!({"message":"question"})),
+        codex_event("agent_message", json!({"message":"answer"})),
+        codex_record(
+            "response_item",
+            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"duplicate-model-context"}]}),
+        ),
+        codex_record(
+            "compacted",
+            json!({"message":"PRIVATE SUMMARY","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE CONTEXT"}]}]}),
+        ),
+        codex_turn("removed"),
+        codex_event("user_message", json!({"message":"abandoned"})),
+        codex_event("thread_rolled_back", json!({"num_turns":1})),
+        codex_turn("replacement"),
+        codex_event("user_message", json!({"message":"replacement"})),
+        codex_event("agent_reasoning", json!({"text":"public summary"})),
+        codex_event(
+            "agent_reasoning_raw_content",
+            json!({"text":"PRIVATE REASONING"}),
+        ),
+        codex_event(
+            "turn_aborted",
+            json!({"turn_id":"replacement","reason":"interrupted"}),
+        ),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(page.view, "active_branch");
+    assert!(!page.has_more);
+    assert_eq!(
+        codex_text(&page),
+        "question|answer|replacement|public summary"
+    );
+    assert!(!serde_json::to_string(&page).unwrap().contains("PRIVATE"));
+}
+#[test]
+fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    let mut records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+        codex_turn("one"),
+        codex_item("one", "UserMessage", "user-1", "question"),
+        codex_event("user_message", json!({"message":"duplicate user"})),
+        codex_item("one", "AgentMessage", "assistant-1", "initial"),
+        codex_item("one", "AgentMessage", "assistant-1", "corrected"),
+        codex_event("agent_message", json!({"message":"duplicate answer"})),
+    ];
+    for (ordinal, record) in records.iter_mut().enumerate() {
+        record["ordinal"] = json!(ordinal);
+    }
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(codex_text(&page), "question|corrected");
+    assert_eq!(ids(&page), ["3:oneuser-1", "3:oneassistant-1"]);
+}
+
+fn paginated(mut records: Vec<Value>, start: u64) -> Vec<Value> {
+    for (offset, record) in records.iter_mut().enumerate() {
+        record["ordinal"] = json!(start + offset as u64);
+    }
+    records
+}
+fn codex_fork(directory: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, Vec<Value>) {
+    let root = directory.join("sessions/2026/01/02");
+    fs::create_dir_all(&root).unwrap();
+    let parent =
+        root.join("rollout-2026-01-02T03-04-05-11111111-1111-4111-8111-111111111111.jsonl");
+    let child = root.join("rollout-2026-01-02T03-04-06-22222222-2222-4222-8222-222222222222.jsonl");
+    let prefix = paginated(
+        vec![
+            codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+            codex_turn("parent"),
+            codex_item("parent", "UserMessage", "parent-user", "inherited"),
+            codex_item("parent", "AgentMessage", "parent-answer", "retained answer"),
+        ],
+        0,
+    );
+    write(&parent, &prefix);
+    let cutoff = fs::metadata(&parent).unwrap().len();
+    let mut all = prefix;
+    all.extend(paginated(
+        vec![
+            codex_turn("abandoned"),
+            codex_item(
+                "abandoned",
+                "UserMessage",
+                "abandoned-user",
+                "abandoned suffix",
+            ),
+        ],
+        4,
+    ));
+    write(&parent, &all);
+    let mut meta = codex_meta("33333333-3333-4333-8333-333333333333", "paginated");
+    meta["payload"]["history_base"] = json!({"thread_id":"11111111-1111-4111-8111-111111111111","end_ordinal_exclusive":4,"end_byte_offset":cutoff});
+    let mut child_item = codex_item("child", "UserMessage", "child-user", "fork question");
+    child_item["payload"]["thread_id"] = json!("33333333-3333-4333-8333-333333333333");
+    let records = paginated(vec![meta, codex_turn("child"), child_item], 4);
+    write(&child, &records);
+    (parent, child, records)
+}
+#[test]
+fn codex_fork_and_revert_project_only_the_exact_inherited_prefix_and_stable_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, child, _) = codex_fork(dir.path());
+    let page = conversation(&child, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(codex_text(&page), "inherited|retained answer|fork question");
+    assert_eq!(
+        page.branch_id.as_deref(),
+        Some("33333333-3333-4333-8333-333333333333")
+    );
+    assert_eq!(page.next_offset, fs::metadata(&child).unwrap().len());
+}
+#[test]
+fn codex_subagent_context_is_not_child_conversation_and_attached_projection_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, child, mut records) = codex_fork(dir.path());
+    records[0]["payload"]["subagent_history_start_ordinal"] = json!(5);
+    write(&child, &records);
+    assert_eq!(
+        codex_text(&conversation(&child, TranscriptAgent::Codex, 100).unwrap()),
+        "fork question"
+    );
+    records[0]["payload"]["attached_thread"] = json!(true);
+    write(&child, &records);
+    assert!(conversation(&child, TranscriptAgent::Codex, 100).is_err());
+}
+#[test]
+fn codex_lineage_rejects_missing_ambiguous_cutoff_unknown_mode_and_ordinal_gaps() {
+    for case in [
+        "missing",
+        "ambiguous",
+        "byte-cutoff",
+        "ordinal-cutoff",
+        "unknown-mode",
+        "ordinal-gap",
+        "missing-ordinal",
+        "wrong-thread",
+        "missing-turn",
+        "invalid-tool-body",
+        "missing-tool-name",
+        "missing-plan-text",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (parent, child, mut records) = codex_fork(dir.path());
+        match case {
+            "missing" => fs::remove_file(&parent).unwrap(),
+            "ambiguous" => {
+                fs::copy(
+                    &parent,
+                    parent
+                        .with_file_name("rollout-other-11111111-1111-4111-8111-111111111111.jsonl"),
+                )
+                .unwrap();
+            }
+            "byte-cutoff" => {
+                records[0]["payload"]["history_base"]["end_byte_offset"] = json!(1);
+            }
+            "ordinal-cutoff" => {
+                records[0]["payload"]["history_base"]["end_ordinal_exclusive"] = json!(3);
+            }
+            "unknown-mode" => {
+                records[0]["payload"]["history_mode"] = json!("future");
+            }
+            "invalid-tool-body" | "missing-tool-name" => {
+                records[2]["payload"]["item"]["type"] = json!("FunctionCallOutput");
+                records[2]["payload"]["item"]["output"] = if case == "invalid-tool-body" {
+                    json!({"unknown":"unsupported"})
+                } else {
+                    json!("done")
+                };
+                if case == "invalid-tool-body" {
+                    records[2]["payload"]["item"]["name"] = json!("inspect");
+                }
+            }
+            "missing-plan-text" => {
+                records[2]["payload"]["item"]["type"] = json!("Plan");
+            }
+            "wrong-thread" => {
+                records[2]["payload"]["thread_id"] = json!("99999999-9999-4999-8999-999999999999");
+            }
+            "missing-turn" => {
+                records[2]["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("turn_id");
+            }
+            "ordinal-gap" => {
+                records[1]["ordinal"] = json!(999);
+            }
+            _ => {
+                records[1].as_object_mut().unwrap().remove("ordinal");
+            }
+        }
+        write(&child, &records);
+        assert!(
+            conversation(&child, TranscriptAgent::Codex, 100).is_err(),
+            "accepted {case}"
+        );
+    }
+}
+#[test]
+fn codex_rollback_counts_empty_and_compaction_only_turns_and_recent_limit_is_explicit() {
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("user_message", json!({"message":"keep"})),
+        codex_turn("empty"),
+        codex_turn("compaction"),
+        codex_record("compacted", json!({"message":"PRIVATE"})),
+        codex_event("thread_rolled_back", json!({"num_turns":2})),
+        codex_turn("last"),
+        codex_event("user_message", json!({"message":"last"})),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 1).unwrap();
+    assert_eq!(codex_text(&page), "last");
+    assert!(page.truncated);
+    assert!(!page.has_more);
+    assert_eq!(
+        codex_text(&conversation(&path, TranscriptAgent::Codex, 100).unwrap()),
+        "keep|last"
+    );
+}
+#[test]
+fn codex_complete_lines_are_followable_without_admitting_a_partial_tail() {
+    use std::io::Write;
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("user_message", json!({"message":"complete"})),
+    ]);
+    let complete = fs::metadata(&path).unwrap().len();
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let tail =
+        serde_json::to_vec(&codex_event("agent_message", json!({"message":"answer é"}))).unwrap();
+    file.write_all(&tail).unwrap();
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(codex_text(&page), "complete");
+    assert_eq!(page.next_offset, complete);
+    file.write_all(b"\n").unwrap();
+    assert_eq!(
+        codex_text(&conversation(&path, TranscriptAgent::Codex, 100).unwrap()),
+        "complete|answer é"
+    );
+}
+
+#[test]
+fn codex_cli_uses_the_same_recorded_projection_and_rejects_other_reader_options() {
+    let (directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        codex_event("agent_message", json!({"message":"recorded answer"})),
+    ]);
+    for option in [
+        None,
+        Some("--inline-images"),
+        Some("--checkpoint=invalid"),
+        Some("--offset=1"),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+        command
+            .env("LAZYSH_STATE_DIR", directory.path().join("state"))
+            .args([
+                "transcript",
+                "--agent",
+                "codex",
+                "--view",
+                "conversation",
+                "--path",
+            ])
+            .arg(&path);
+        if let Some(option) = option {
+            command.arg(option);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.success(), option.is_none(), "{option:?}");
+        if option.is_none() {
+            let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(page["view"], "active_branch");
+            assert_eq!(page["agent"], "codex");
+            assert_eq!(page["messages"][0]["blocks"][0]["text"], "recorded answer");
+        }
+    }
+}
+#[test]
+fn codex_recorded_commands_and_public_summaries_do_not_publish_raw_reasoning_or_media_urls() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    let records = paginated(
+        vec![
+            codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+            codex_turn("one"),
+            codex_event(
+                "item_completed",
+                json!({"turn_id":"one","item":{"type":"CommandExecution","id":"call-1","command":["false"],"status":"failed","aggregated_output":"original output","exit_code":1}}),
+            ),
+            codex_event(
+                "item_completed",
+                json!({"turn_id":"one","item":{"type":"Reasoning","id":"summary","summary_text":["public summary"],"raw_content":["PRIVATE REASONING"]}}),
+            ),
+            codex_event(
+                "item_completed",
+                json!({"turn_id":"one","item":{"type":"FunctionCallOutput","id":"call-2","name":"inspect","output":[{"type":"input_text","text":"public result"},{"type":"input_image","image_url":"https://example.invalid/PRIVATE"},{"type":"thinking","thinking":"PRIVATE UNSUPPORTED BLOCK"}]}}),
+            ),
+            codex_event(
+                "item_completed",
+                json!({"turn_id":"one","item":{"type":"DynamicToolCall","id":"call-3","tool":"fixture","arguments":{},"content_items":[{"type":"inputText","text":"dynamic result"},{"type":"inputImage","imageUrl":"PRIVATE MEDIA"}],"success":true}}),
+            ),
+        ],
+        0,
+    );
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(page.messages[0]["blocks"][1]["isError"], true);
+    let serialized = serde_json::to_string(&page).unwrap();
+    assert!(
+        serialized.contains("public summary")
+            && serialized.contains("public result")
+            && serialized.contains("dynamic result")
+    );
+    assert!(!serialized.contains("PRIVATE") && !serialized.contains("https://"));
+}
+#[test]
+fn codex_reference_never_follows_symlinks_or_unbounded_export_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let (parent, child, records) = codex_fork(dir.path());
+    let outside = dir.path().join("export.jsonl");
+    write(&outside, &records);
+    assert!(conversation(&outside, TranscriptAgent::Codex, 100).is_err());
+    let traversal = child.parent().unwrap().join("../../../../export.jsonl");
+    assert!(
+        conversation(&traversal, TranscriptAgent::Codex, 100).is_err(),
+        "a lexical sessions ancestor must not expand an outside export's scope"
+    );
+    #[cfg(unix)]
+    {
+        let moved = parent.with_extension("retained");
+        fs::rename(&parent, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &parent).unwrap();
+        assert!(conversation(&child, TranscriptAgent::Codex, 100).is_err());
+        assert!(conversation(&parent, TranscriptAgent::Codex, 100).is_err());
+    }
+}
+
+#[test]
+fn codex_late_tool_completion_stays_in_its_original_turn_when_a_newer_turn_is_rolled_back() {
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("first"),
+        codex_event("user_message", json!({"message":"keep question"})),
+        codex_turn("second"),
+        codex_event("user_message", json!({"message":"discarded question"})),
+        codex_event(
+            "exec_command_end",
+            json!({"turn_id":"first","call_id":"command-1","command":["printf","done"],"aggregated_output":"command preserved","exit_code":0}),
+        ),
+        codex_event(
+            "mcp_tool_call_end",
+            json!({"turn_id":"first","call_id":"mcp-1","invocation":{"tool":"inspect","arguments":{}},"result":{"Ok":{"content":[{"type":"text","text":"mcp preserved"},{"type":"image","data":"PRIVATE MEDIA"}]}}}),
+        ),
+        codex_event(
+            "dynamic_tool_call_response",
+            json!({"turn_id":"second","call_id":"dynamic-1","tool":"inspect","arguments":{},"content_items":[{"type":"inputText","text":"discarded result"}],"success":true}),
+        ),
+        codex_event("thread_rolled_back", json!({"num_turns":1})),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let text = codex_text(&page);
+    assert!(
+        text.contains("keep question")
+            && text.contains("command preserved")
+            && text.contains("mcp preserved")
+    );
+    assert!(!text.contains("discarded") && !text.contains("PRIVATE"));
+}
+
+#[test]
+fn codex_prefix_chains_have_a_bounded_source_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions/2026/01/02");
+    fs::create_dir_all(&root).unwrap();
+    let mut previous: Option<(String, u64, u64)> = None;
+    for index in 1..=17 {
+        let physical = format!("{index:08x}-1111-4111-8111-111111111111");
+        let path = root.join(format!("rollout-2026-01-02T03-04-05-{physical}.jsonl"));
+        let mut meta = codex_meta("11111111-1111-4111-8111-111111111111", "paginated");
+        let start = if let Some((id, end, bytes)) = &previous {
+            meta["payload"]["history_base"] =
+                json!({"thread_id":id,"end_ordinal_exclusive":end,"end_byte_offset":bytes});
+            *end
+        } else {
+            0
+        };
+        let turn = format!("turn-{index}");
+        let records = paginated(
+            vec![
+                meta,
+                codex_turn(&turn),
+                codex_item(
+                    &turn,
+                    "UserMessage",
+                    &format!("user-{index}"),
+                    "recorded question",
+                ),
+            ],
+            start,
+        );
+        write(&path, &records);
+        if index == 16 {
+            assert_eq!(
+                conversation(&path, TranscriptAgent::Codex, 100)
+                    .unwrap()
+                    .messages
+                    .len(),
+                16
+            );
+        }
+        if index == 17 {
+            assert!(conversation(&path, TranscriptAgent::Codex, 100).is_err());
+        }
+        previous = Some((physical, start + 3, fs::metadata(&path).unwrap().len()));
+    }
+}
+
+#[test]
+fn codex_item_ids_are_scoped_to_their_turn_for_client_row_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    write(
+        &path,
+        &paginated(
+            vec![
+                codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+                codex_turn("one"),
+                codex_item("one", "UserMessage", "reused", "first question"),
+                codex_event("task_complete", json!({"turn_id":"one"})),
+                codex_turn("two"),
+                codex_item("two", "UserMessage", "reused", "second question"),
+            ],
+            0,
+        ),
+    );
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    assert_eq!(codex_text(&page), "first question|second question");
+    assert_eq!(
+        ids(&page)
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        2
+    );
 }

@@ -1,3 +1,4 @@
+import './WorkspaceHierarchy.css';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
@@ -1194,7 +1195,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [sidebar, setSidebar] = useState(false);
   const [wideSidebar,setWideSidebar]=useState(()=>typeof window.matchMedia==='function'?!window.matchMedia('(max-width: 600px)').matches:true);
   const [navigation,setNavigation]=useState<Record<string,{mode:NavigationMode;agents:boolean}>>({});
-  const navigationOwner=useRef({sessionId:null as string|null,agents:false});
+  const navigationOwner=useRef({sessionId:null as string|null,agents:false,activity:false});
+  const historyNavigationIntent=useRef(0);
+  const historyNavigationGeneration=historyNavigationIntent.current;
   const agentDrawerReceipt=useRef<HerdrContentReceipt|undefined>(undefined);
   const agentDrawerOffset=useRef<Readonly<{source:LiveSession;mode:NavigationMode;entry:object;context:typeof trail.current[number];returning:boolean;server:string;receipt:object;top:number}>|undefined>(undefined);
   const herdrNavigationIntent=useRef<{source:string;destination?:string;navigation:{mode:NavigationMode;agents:boolean}|undefined}|null>(null);
@@ -1204,6 +1207,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
   const agentScroll=useRef<HTMLDivElement>(null),liveAgentContent=useRef<HTMLDivElement>(null),reportedAgentContent=useRef<HTMLDivElement>(null);
   const agentContentId=useId();
+  const [agentSections,setAgentSections]=useState<Record<string,'live'|'activity'>>({});
+  const agentSectionPositions=useRef(new WeakMap<LiveSession,{entry:object;receipt:object|undefined;live:number;activity:number}>());
+  const agentSectionFocus=useRef<{source:LiveSession;entry:object;section:'live'|'activity'}|undefined>(undefined);
   useEffect(()=>{
     if(typeof window.matchMedia!=='function')return;
     const media=window.matchMedia('(max-width: 600px)');
@@ -1235,8 +1241,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
-  function openReportedHistory(source:ReportedHistorySource) {
-    if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.agents
+  function openReportedHistory(source:ReportedHistorySource,expectedNavigation:number) {
+    if(!mounted.current || expectedNavigation!==historyNavigationIntent.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.activity
       || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
     setReportedHistory(source);visitView('chat');
   }
@@ -1295,6 +1301,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
+  const agentSection=agentSections[activeId??'']??'live';
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
   const savedAgentOffset=agentDrawerOffset.current;
@@ -1322,7 +1329,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
-  navigationOwner.current={sessionId:activeId,agents:agentsVisible};
+  navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
@@ -1337,13 +1344,34 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
   }
+  function showAgentSetup(source:LiveSession) {
+    if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
+      || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
+    setAgentSections(previous=>({...previous,[source.id]:'activity'}));
+    showNavigation('agents');
+  }
   function jumpAgentContent(section:'live'|'activity') {
     const scroller=agentScroll.current,target=section==='live'?liveAgentContent.current:reportedAgentContent.current;
-    if(!agentsVisible || !lease.current() || !scroller || !target)return;
+    if(!active || !agentsVisible || !lease.current() || !scroller || !target)return;
     agentDrawerOffset.current=undefined;
-    scroller.scrollTop=Math.max(0,scroller.scrollTop+target.getBoundingClientRect().top-scroller.getBoundingClientRect().top-scroller.clientTop);
-    target.focus({preventScroll:true});
+    const receipt=agentDrawerReceipt.current?.identity;
+    const previous=agentSectionPositions.current.get(active);
+    const positions=previous?.entry===navigationEntry && previous.receipt===receipt ? previous : {entry:navigationEntry,receipt,live:0,activity:0};
+    positions[agentSection]=scroller.scrollTop;
+    agentSectionPositions.current.set(active,positions);
+    if(section===agentSection){target.focus({preventScroll:true});return;}
+    historyNavigationIntent.current++;navigationOwner.current.activity=false;
+    agentSectionFocus.current={source:active,entry:navigationEntry,section};
+    setAgentSections(previous=>({...previous,[active.id]:section}));
   }
+  useLayoutEffect(()=>{
+    const intent=agentSectionFocus.current;agentSectionFocus.current=undefined;
+    if(!intent || intent.source!==active || intent.entry!==navigationEntry || intent.section!==agentSection || !agentsVisible || !lease.current())return;
+    const saved=agentSectionPositions.current.get(active),scroller=agentScroll.current;
+    if(scroller)scroller.scrollTop=saved?.entry===navigationEntry && saved.receipt===agentDrawerReceipt.current?.identity ? saved[agentSection] : 0;
+    (agentSection==='live'?liveAgentContent.current:reportedAgentContent.current)?.focus({preventScroll:true});
+  },[agentSection,active,agentsVisible,navigationEntry,lease]);
+
   function rememberContext(){
     if(!active)return;
     trail.current=[...trail.current,{sessionId:active.id,view,sidebar,mode:navigationEntry.mode}].slice(-32);
@@ -1977,12 +2005,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
         <nav className="agent-section-jumps" hidden={!agentsVisible} aria-label={t('agentsSections')}>
-          <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
-          <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
+          <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} aria-pressed={agentSection==='live'} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
+          <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
         <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>
-        {remoteActive && active && <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+        {remoteActive && active && <AgentPanel key={active.id} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
@@ -2210,7 +2238,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showNavigation("agents"):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}

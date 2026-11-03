@@ -2,6 +2,13 @@ import {workspaceControl,openPreferenceCategory,closePreferences} from './fixtur
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
+function expectInViewport(bounds:{x:number;y:number;width:number;height:number},width:number,height:number) {
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x+bounds.width).toBeLessThanOrEqual(width);
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y+bounds.height).toBeLessThanOrEqual(height);
+}
+
 async function openSessions(page: Page) {
   for (let index = 0; index < 2; index++) {
     if ((page.viewportSize()?.width ?? 1280) <= 600)
@@ -129,6 +136,9 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
     await expect(page.getByRole('button', {name: 'Compose', exact: true})).toHaveCount(1);
     await page.getByRole('button', {name: 'Compose', exact: true}).click();
     const composer = page.locator('.terminal-compose:visible');
+    const editor=composer.getByRole('textbox',{name:'Compose text',exact:true});
+    const draft='Owned composer draft';
+    await editor.fill(draft);
     const naturalHeight = (await composer.boundingBox())!.height;
     for (const height of [420, 844]) {
       await page.setViewportSize({width, height});
@@ -138,12 +148,30 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         return screen.clientHeight > 0 && screen.clientHeight <= element.clientHeight;
       })).toBe(true);
       await expectFittedRows();
+      const initialHeight=(await editor.boundingBox())!.height;
+      const longDraft=Array.from({length:40},(_,index)=>`Draft line ${index} wraps with enough words to fill the compact editor`).join('\n');
+      expect(await editor.evaluate(()=>CSS.supports('field-sizing','content'))).toBe(true);
+      await editor.fill(longDraft);
+      await expect(page.getByLabel('Compose text',{exact:true})).toHaveValue(longDraft);
+      if(height===844)await expect.poll(async()=>(await editor.boundingBox())!.height).toBeGreaterThan(initialHeight);
+      expect((await editor.boundingBox())!.height).toBeLessThanOrEqual(height*.25+1);
+      const readable=await editor.evaluate(node=>({height:node.clientHeight,lineHeight:parseFloat(getComputedStyle(node).lineHeight)}));
+      expect(Number.isFinite(readable.lineHeight)).toBe(true);expect(readable.lineHeight).toBeGreaterThan(0);expect(readable.height).toBeGreaterThanOrEqual(readable.lineHeight);
+      expect(await editor.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+      const rowFloor=await canvas.evaluate(node=>parseFloat(node.style.minHeight));
+      expect(rowFloor).toBeGreaterThan(0);expect((await canvas.boundingBox())!.height).toBeGreaterThanOrEqual(rowFloor);
+      expect((await editor.boundingBox())!.y+(await editor.boundingBox())!.height).toBeLessThanOrEqual((await composer.locator('.terminal-compose-actions').boundingBox())!.y);
+      for(const name of ['Paste draft','Close composer'])await expect(composer.getByRole('button',{name,exact:true})).toBeInViewport({ratio:0.9});
+      await page.screenshot({path:test.info().outputPath(`composer-${width}-${fontSize}-${height}.png`)});
+      await editor.evaluate(node=>node.style.setProperty('field-sizing','fixed'));
+      await expect(editor).toHaveValue(longDraft);
+      expect(await editor.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+      await editor.evaluate(node=>node.style.removeProperty('field-sizing'));
+      await editor.fill(draft);
+      await expectFittedRows();
       for (const element of [canvas, page.locator('.terminal-keys:visible'), page.getByRole('button', {name: 'esc', exact: true}), page.getByRole('button', {name: 'tab', exact: true})]) {
         const bounds = (await element.boundingBox())!;
-        expect(bounds.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
-        expect(bounds.y).toBeGreaterThanOrEqual(0);
-        expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+        expectInViewport(bounds,width,height);
       }
       const field = (await composer.getByRole('textbox', {name: 'Compose text', exact: true}).boundingBox())!;
       const actionBounds = [];
@@ -155,13 +183,13 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         const bounds = (await action.boundingBox())!;
         expect(bounds.width).toBeGreaterThanOrEqual(44);
         expect(bounds.height).toBeGreaterThanOrEqual(44);
-        expect(bounds.x).toBeGreaterThanOrEqual(field.x + field.width);
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
-        expect(bounds.y).toBeGreaterThanOrEqual(0);
-        expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+        expect(bounds.y).toBeGreaterThanOrEqual(field.y + field.height);
+        expectInViewport(bounds,width,height);
         actionBounds.push(bounds);
       }
+      actionBounds.sort((left,right)=>left.x-right.x);
       expect(actionBounds[0].x + actionBounds[0].width).toBeLessThanOrEqual(actionBounds[1].x);
+      await expect(editor).toHaveValue(draft);
       if (height === 420) {
         await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
         await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();

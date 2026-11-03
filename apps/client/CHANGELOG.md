@@ -1,5 +1,30 @@
 # @lazysh/client
 
+## 1.10.0
+
+### Minor Changes
+
+- f1d7feb: Add a recorded Codex Conversation reader with mode-aware turn replay, bounded protected fork/revert prefixes, explicit refresh and opt-in Follow. Records remains the default; recorded history does not establish a live agent or authorize requests.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.10.0
+  - @lazysh/common@1.10.0
+  - @lazysh/display-idle@1.10.0
+  - @lazysh/et-transport@1.10.0
+  - @lazysh/mosh-transport@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- f164bfc: Retain one closed, passive native finger-landing observation to distinguish terminal geometry and hit-target failures without changing gesture admission, deadlines or scrolling behavior.
+- @lazysh/account-usage@1.9.11
+  - @lazysh/common@1.9.11
+  - @lazysh/display-idle@1.9.11
+  - @lazysh/et-transport@1.9.11
+  - @lazysh/mosh-transport@1.9.11
+
 ## 1.9.10
 
 ### Patch Changes

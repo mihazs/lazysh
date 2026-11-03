@@ -6,9 +6,11 @@ describe("whole-app appearance", () => {
   it("sets custom tokens and removes every override when returning to a bundled theme", () => {
     applyAppTheme("custom", {v:1,name:"Custom",mode:"light",colors:{background:"#ffffff",foreground:"#111111"}});
     expect(document.documentElement.style.getPropertyValue("--theme-bg")).toBe("#ffffff");
+    expect(document.documentElement.style.getPropertyValue("--theme-glass-opacity-floor")).toMatch(/%$/);
     expect(document.documentElement.style.colorScheme).toBe("light");
     applyAppTheme("forest");
     expect(document.documentElement.style.getPropertyValue("--theme-bg")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--theme-glass-opacity-floor")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--theme-on-accent")).toBe("");
   });
   it("applies light and dark color schemes and resets the default theme", () => {
