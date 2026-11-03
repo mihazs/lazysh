@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.10.1
+
+### Patch Changes
+
+- e05e4a2: Make terminal composition compact, put uploaded attachment paths before secondary tools, guide notification setup, and separate live agents from reported activity while keeping pending approvals reachable.
+- 3207d0c: Keep custom theme text readable on translucent navigation and short sheets by increasing backing opacity only when the palette needs it. Preserve bundled glass and solid reduced-transparency/forced-colors rendering.
+- @lazysh/account-usage@1.10.1
+  - @lazysh/common@1.10.1
+  - @lazysh/display-idle@1.10.1
+  - @lazysh/et-transport@1.10.1
+  - @lazysh/mosh-transport@1.10.1
+
 ## 1.10.0
 
 ### Minor Changes
