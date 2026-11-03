@@ -39,6 +39,13 @@ class GotifyAndroidTest {
     private val gotify = "com.github.gotify"
     private var deadline = 0L
     private var phase = "admission"
+        set(value) {
+            field = value
+            if (::nonce.isInitialized) {
+                try { publish(".phase-$value", JSONObject().put("phase", value)) }
+                catch (_: Exception) { /* Optional evidence cannot replace the acceptance result. */ }
+            }
+        }
     private lateinit var nonce: String
     private lateinit var input: Map<String, Any>
     private val states = listOf("working", "needs_attention", "done")
@@ -349,9 +356,13 @@ class GotifyAndroidTest {
 
     private fun stage(step: Int, details: JSONObject) {
         check(SystemClock.elapsedRealtime() < deadline)
-        val file = File(context.filesDir, ".lazysh-gotify-$nonce.stage-$step.json")
-        val proof = details.put("schemaVersion", 1).put("nonce", nonce).put("step", step).toString().toByteArray(Charsets.UTF_8)
-        val temporary = File(context.filesDir, ".lazysh-gotify-$nonce.stage-$step.tmp")
+        publish(".stage-$step", details.put("step", step))
+    }
+
+    private fun publish(suffix: String, details: JSONObject) {
+        val file = File(context.filesDir, ".lazysh-gotify-$nonce$suffix.json")
+        val proof = details.put("schemaVersion", 1).put("nonce", nonce).toString().toByteArray(Charsets.UTF_8)
+        val temporary = File(context.filesDir, ".lazysh-gotify-$nonce$suffix.tmp")
         val fd = Os.open(temporary.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
         val identity = Os.fstat(fd)
         FileOutputStream(fd).use { stream -> stream.write(proof); stream.fd.sync() }

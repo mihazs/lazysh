@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation,gotifyNativePhase,observeGotifyNativePhase} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -302,7 +302,7 @@ test('proxy admission failure retains only a finite failure artifact without tar
     const path=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/gotify');
     const {readdir}=await import('node:fs/promises');expect(await readdir(path)).toEqual(['failure.json']);
     const receipt=JSON.parse(await readFile(join(path,'failure.json'),'utf8'));
-    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',hostDiagnostic:{operation:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null},runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
+    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',hostDiagnostic:{operation:'unavailable',nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null},runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
     expect(JSON.stringify(receipt)).not.toMatch(/127\.0\.0\.1|http:|FAKE_ROOT|token|password|stack/);
   }finally{await child.stop();await rm(root,{recursive:true,force:true});}
 });
@@ -316,13 +316,13 @@ test.skipIf(process.env.LAZYSH_ANDROID_GOTIFY!=='1')('official Gotify displays a
 
 test('Gotify host failure evidence projects only closed operations and native process metadata',()=>{
   for(const operation of ['continuity','ownership','command','stage-record','native-state','stage-wait'])
-    expect(gotifyHostDiagnostic(operation,{state:'early-exit',exitCode:1},false)).toEqual({operation,nativeState:'early-exit',exitCode:1,signaled:false});
-  expect(gotifyHostDiagnostic('stage-record',{state:'running',exitCode:null},false)).toEqual({operation:'stage-record',nativeState:'running',exitCode:null,signaled:false});
-  expect(gotifyHostDiagnostic('native-state',{state:'signaled',exitCode:null},true)).toEqual({operation:'native-state',nativeState:'signaled',exitCode:null,signaled:true});
+    expect(gotifyHostDiagnostic(operation,{state:'early-exit',exitCode:1},false)).toEqual({operation,nativePhase:'unavailable',nativeState:'early-exit',exitCode:1,signaled:false});
+  expect(gotifyHostDiagnostic('stage-record',{state:'running',exitCode:null},false)).toEqual({operation:'stage-record',nativePhase:'unavailable',nativeState:'running',exitCode:null,signaled:false});
+  expect(gotifyHostDiagnostic('native-state',{state:'signaled',exitCode:null},true)).toEqual({operation:'native-state',nativePhase:'unavailable',nativeState:'signaled',exitCode:null,signaled:true});
   const hostile=Object.defineProperty({},'state',{get(){throw new Error('private-token');}});
   for(const state of ['missing-launcher','launch-denied','launch-failed','signaled','running','launch-unavailable'])
     expect(gotifyHostDiagnostic('command',{state,exitCode:null},false).nativeState).toBe(state);
-  const unknown={operation:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null};
+  const unknown={operation:'unavailable',nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null};
   for(const candidate of [null,hostile,{state:'private-token',exitCode:0},{state:'early-exit',exitCode:256},
     {state:'early-exit',exitCode:-1},{state:'early-exit',exitCode:NaN},{state:'running',exitCode:0},
     {state:'running',exitCode:null,stdout:'private-token'},{state:'x'.repeat(20000),exitCode:null}]) {
@@ -383,4 +383,41 @@ test('Gotify stage deadline reports only bounded known Gradle markers, never cap
   expect(operation('private-token Connection reset')).toBe(prefix+'connectionReset');
   expect(operation('private-token INSTRUMENTATION_FAILED')).toBe(prefix+'incompleteRun');
   expect(gotifyHostDiagnostic(prefix+'private-token',undefined,undefined).operation).toBe('unavailable');
+});
+
+test('native phase evidence requires a complete nonce/UID-bound immutable frame and grants no success',async()=>{
+  const frame=(body:string,uid=10235,links=1)=>{
+    const metadata=`${uid} 600 ${links} ${Buffer.byteLength(body)} 8 1234 8180`;
+    return `${metadata}\n${body}\n${metadata}\n`;
+  };
+  const phase=(value='login-ca-select',token=nonce)=>JSON.stringify({schemaVersion:1,nonce:token,phase:value});
+  const raw=frame(phase());
+  expect(gotifyNativePhase(raw,nonce,10235)).toBe('login-ca-select');
+  expect(await observeGotifyNativePhase(async()=>{},async()=>raw,nonce,10235)).toBe('login-ca-select');
+  expect(await observeGotifyNativePhase(async()=>{},async()=>raw,nonce,10236)).toBe('unavailable');
+  expect(gotifyNativePhase('pending\n',nonce,10235)).toBe('not-observed');
+  expect(gotifyNativePhase(frame(phase(),10235,2),nonce,10235)).toBe('not-observed');
+  expect(gotifyHostDiagnostic('stage-wait',{state:'running',exitCode:null},false,gotifyNativePhase(raw,nonce,10235)))
+    .toEqual({operation:'stage-wait',nativePhase:'login-ca-select',nativeState:'running',exitCode:null,signaled:false});
+  for(const bad of [frame(phase('private-token')),frame(phase('login','f'.repeat(32))),frame(phase(),10236),
+    frame('{'),frame('{}'),frame(phase().replace('"phase":','"extra":true,"phase":')),
+    frame(phase().replace('"phase":','"phase":"login","phase":')),raw.replace('1234','1235'),
+    raw.replaceAll('600 1','644 1'),raw.replaceAll('8180','a180'),raw.replaceAll('600 1','600 3'),
+    frame(phase()+'x'.repeat(2048)),raw+'x'.repeat(8192)])
+    expect(()=>gotifyNativePhase(bad,nonce,10235)).toThrow();
+  const unavailable=gotifyHostDiagnostic('stage-wait',undefined,undefined,'private-token');
+  expect(unavailable.nativePhase).toBe('unavailable');expect(JSON.stringify(unavailable)).not.toContain('private-token');
+  expect(()=>gotifyStage(JSON.stringify({schemaVersion:1,nonce,phase:'background'}),nonce,0)).toThrow();
+});
+
+test('native phase observation checks ownership once and makes failed secondary evidence unavailable without retry',async()=>{
+  let checks=0,reads=0;
+  const check=async()=>{checks++;},read=async()=>{reads++;throw Error('private-token');};
+  expect(await observeGotifyNativePhase(check,read,nonce,10235)).toBe('unavailable');
+  expect({checks,reads}).toEqual({checks:1,reads:1});
+  expect(await observeGotifyNativePhase(async()=>{checks++;throw Error('private-owner');},read,nonce,10235)).toBe('unavailable');
+  expect({checks,reads}).toEqual({checks:2,reads:1});
+  expect(await observeGotifyNativePhase(check,async()=>{reads++;return 'malformed-private-token';},nonce,10235)).toBe('unavailable');
+  expect(await observeGotifyNativePhase(check,async()=>{reads++;return 'pending\n';},nonce,10235)).toBe('not-observed');
+  expect({checks,reads}).toEqual({checks:4,reads:3});
 });

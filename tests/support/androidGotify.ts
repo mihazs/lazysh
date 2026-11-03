@@ -63,8 +63,9 @@ export function gotifyStageWaitOperation(stdout:unknown,stderr:unknown) {
   return `stage-wait-gradle-${progress}`;
 }
 /** Failure-only metadata: never serialize child output or exception properties. */
-export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown) {
+export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown,nativePhase:unknown=undefined) {
   const result={operation:['continuity','continuity-ownership','continuity-server-probe','continuity-guest-probe',...gotifyContinuityOperations,...[...gotifyGradleFailures,...gotifyGradleProgress].map(kind=>`stage-wait-gradle-${kind}`),'ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
+    nativePhase:['not-observed',...gotifyNativeFailures].includes(nativePhase as string)?nativePhase as string:'unavailable',
     nativeState:'unavailable',exitCode:null as number|null,signaled:typeof signaled==='boolean'?signaled:null};
   try {
     if(native===null||typeof native!=='object'||Array.isArray(native)||Object.keys(native).length!==2)return result;
@@ -79,7 +80,7 @@ function gotifyErrorDiagnostic(error:unknown) {
   try {
     if(error instanceof Error) {
       const metadata=(error as Error & {gotifyDiagnostic?:ReturnType<typeof gotifyHostDiagnostic>}).gotifyDiagnostic;
-      if(metadata)return gotifyHostDiagnostic(metadata.operation,{state:metadata.nativeState,exitCode:metadata.exitCode},metadata.signaled);
+      if(metadata)return gotifyHostDiagnostic(metadata.operation,{state:metadata.nativeState,exitCode:metadata.exitCode},metadata.signaled,metadata.nativePhase);
     }
   }catch{/* Failure evidence cannot replace the primary error. */}
   return gotifyHostDiagnostic(undefined,undefined,undefined);
@@ -151,7 +152,8 @@ export function gotifyOfficialArtifact(bytes:Buffer,pin:{size:number;sha256:stri
   }
 }
 /** The cooperating native publisher hardlinks a closed file, then removes its temp link. */
-export function gotifyPrivateStage(raw:string,nonce:string,step:number,uid:number,messageId?:number) {
+function gotifyPrivateBody(raw:string,uid:number) {
+  if(Buffer.byteLength(raw)>8192)throw rejection();
   if(raw==='pending\n')return;
   const lines=raw.trimEnd().split('\n'),metadata=lines[0]?.split(' ');
   if(metadata?.length!==7||metadata[0]!==String(uid)||metadata[1]!=='600'||!['1','2'].includes(metadata[2])||
@@ -159,7 +161,24 @@ export function gotifyPrivateStage(raw:string,nonce:string,step:number,uid:numbe
     !/^[a-f0-9]+$/.test(metadata[6])||(Number.parseInt(metadata[6],16)&0xf000)!==0x8000)throw rejection();
   if(metadata[2]==='2')return;
   if(lines.length!==3||lines[0]!==lines[2]||Buffer.byteLength(lines[1])!==Number(metadata[3]))throw rejection();
-  return gotifyStage(lines[1],nonce,step,messageId);
+  return lines[1];
+}
+export function gotifyPrivateStage(raw:string,nonce:string,step:number,uid:number,messageId?:number) {
+  const body=gotifyPrivateBody(raw,uid);return body===undefined?undefined:gotifyStage(body,nonce,step,messageId);
+}
+export function gotifyNativePhase(raw:string,nonce:string,uid:number) {
+  nonceCheck(nonce);
+  const body=gotifyPrivateBody(raw,uid);if(body===undefined)return 'not-observed';
+  let value:Record<string,unknown>;try{value=JSON.parse(body);}catch{throw rejection();}
+  if(value===null||Array.isArray(value)||Object.keys(value).length!==3||value.schemaVersion!==1||value.nonce!==nonce||
+    !gotifyNativeFailures.includes(value.phase as typeof gotifyNativeFailures[number]))throw rejection();
+  const keys=[...body.matchAll(/"([^"\\]*)"\s*:/g)].map(match=>match[1]);
+  if(keys.length!==3||new Set(keys).size!==3)throw rejection();
+  return value.phase as typeof gotifyNativeFailures[number];
+}
+export async function observeGotifyNativePhase(check:()=>Promise<void>,read:()=>Promise<string>,nonce:string,uid:number) {
+  try{return gotifyNativePhase(await gotifyDeviceAction(check,read),nonce,uid);}
+  catch{return 'unavailable';}
 }
 export function gotifyProxyAdmission(env=process.env) {
   if(['HTTP_PROXY','http_proxy','HTTPS_PROXY','https_proxy','ALL_PROXY','all_proxy'].some(name=>!!env[name]))
@@ -316,6 +335,7 @@ async function runGotifyAndroid(root:string) {
   const adb=join(sdk,'platform-tools/adb'),android=join(root,'apps/client/src-tauri/gen/android');
   const reports=join(android,'app/build/outputs/androidTest-results/connected');
   let native:OwnedProcess|undefined;
+  let targetUid=0;
   const directory=await mkdtemp(join(tmpdir(),'.lazysh-gotify-'));await chmod(directory,0o700);
   const nonce=randomUUID().replaceAll('-',''),alias=`owned-gotify-${nonce.slice(0,12)}`,caName=`lazysh-gotify-${nonce}.crt`;
   const processes:OwnedProcess[]=[];
@@ -413,7 +433,7 @@ async function runGotifyAndroid(root:string) {
     phase='android-client-install';await installed.install('app.lazysh.client',nativeApk,nativeHash);
     phase='android-package-identity';
     const uid=gotifyUid(await shell(['shell','cmd','package','list','packages','-U','com.github.gotify']));
-    const targetUid=Number((await shell(['shell','run-as','app.lazysh.client','id','-u'])).trim());
+    targetUid=Number((await shell(['shell','run-as','app.lazysh.client','id','-u'])).trim());
     if(!Number.isSafeInteger(targetUid)||targetUid<10000)throw rejection();
     phase='android-certificate-transfer';await shell(['shell','sh','-c',`'[ ! -e /sdcard/Download/${caName} ] && [ ! -L /sdcard/Download/${caName} ]'`]);
     caPushed=true;await shell(['push',join(directory,'ca.pem'),`/sdcard/Download/${caName}`]);
@@ -481,8 +501,16 @@ async function runGotifyAndroid(root:string) {
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
     if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);
-    let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined);
-    try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined);}
+    const failedPhase=phase,failedOperation=hostOperation;
+    let nativePhase='unavailable';
+    if(native&&targetUid>=10000&&phase.startsWith('android-native-stage'))try {
+      const entries=[...gotifyNativeFailures].reverse().join(' ');
+      const command=`'for entry in ${entries}; do path=files/.lazysh-gotify-${nonce}.phase-$entry.json; if [ -e "$path" ] || [ -L "$path" ]; then [ ! -L "$path" ] && stat -c "%u %a %h %s %d %i %f" "$path" && cat "$path" && echo && stat -c "%u %a %h %s %d %i %f" "$path"; exit; fi; done; echo pending'`;
+      nativePhase=await observeGotifyNativePhase(continuous,()=>run(failedPhase,adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',command],1000),nonce,targetUid);
+    }catch{/* Missing, foreign or changing evidence never replaces the primary failure. */}
+    finally{phase=failedPhase;hostOperation=failedOperation;}
+    let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined,nativePhase);
+    try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined,nativePhase);}
     catch{/* Keep the original failure when process metadata is unavailable. */}
     throw Object.assign(new Error(`Owned Gotify acceptance failed: ${phase}`),{gotifyDiagnostic:diagnostic});
   }
