@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.9
+
+### Patch Changes
+
+- 657ee0b: Qualify standalone Android Mosh interoperability independently from guarded client UI acceptance while preserving their existing deadlines and assertions.
+- @lazysh/account-usage@1.9.9
+  - @lazysh/common@1.9.9
+  - @lazysh/display-idle@1.9.9
+  - @lazysh/et-transport@1.9.9
+  - @lazysh/mosh-transport@1.9.9
+
 ## 1.9.8
 
 ### Patch Changes
