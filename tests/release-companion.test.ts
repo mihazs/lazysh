@@ -54,6 +54,15 @@ test('native matrix is complete and candidates cannot upload publication receipt
   const harness = steps.find((step: any) => step.name?.startsWith('Native host harness'));
   expect(harness.run).toContain('--test installation');
   expect(harness.env.LAZYSH_TEST_COMPANION_BINARY).toBe('${{ steps.prepare.outputs.binary }}');
+  const windowsOwner = steps.find((step: any) => step.id === 'windows_storage_owner');
+  expect(windowsOwner?.if).toBe("runner.os == 'Windows'");
+  expect(windowsOwner?.run).toContain('--test cli --test settings --test storage_wal --test installation');
+  expect(windowsOwner?.run).toContain('if [ "$original" -ne 0 ]; then exit "$original"; fi');
+  const profile = steps.find((step: any) => step.name === 'Measure Windows storage writer phases');
+  expect(profile?.if).toBe("${{ !cancelled() && runner.os == 'Windows' && (steps.windows_storage_owner.outcome == 'success' || steps.windows_storage_owner.outcome == 'failure') }}");
+  expect(profile?.run).toBe('cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture');
+  for (const step of [windowsOwner, profile]) expect(step?.['continue-on-error']).toBeUndefined();
+  expect(steps.indexOf(profile)).toBe(steps.indexOf(windowsOwner) + 1);
   const verify = steps.find((step: any) => step.name?.startsWith('Revalidate exact'));
   expect(verify.env.EXPECTED_COMPANION_SHA).toBe('${{ steps.prepare.outputs.sha256 }}');
   expect(verify.env.EXPECTED_COMPANION_BYTES).toBe('${{ steps.prepare.outputs.bytes }}');
