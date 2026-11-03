@@ -114,14 +114,19 @@ class GotifyAndroidTest {
     }
 
     private fun login(origin: String) {
+        phase = "login-launch"
         context.startActivity(Intent().setComponent(ComponentName(gotify, "$gotify.init.InitializationActivity"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        phase = "login-url"
         node(By.res(gotify, "gotify_url_editext")).text = origin
+        phase = "login-advanced"
         node(By.res(gotify, "advanced_settings")).click()
         check(!node(By.res(gotify, "disableSSL")).isChecked)
+        phase = "login-ca-picker"
         node(By.res(gotify, "toggle_ca_cert")).click()
         val documents = Pattern.compile("com\\.(android|google\\.android)\\.documentsui")
         awaitCondition { device.hasObject(By.pkg(documents)) }
+        phase = "login-ca-import"
         val filename = input["caName"] as String
         if (!device.hasObject(By.pkg(documents).text(filename))) {
             node(By.pkg(documents).desc("Show roots")).click()
@@ -131,10 +136,13 @@ class GotifyAndroidTest {
         awaitCondition { device.hasObject(By.res(gotify, "toggle_ca_cert").text("Remove CA Certificate")) }
         check(!node(By.res(gotify, "disableSSL")).isChecked)
         node(By.res("android", "button1").pkg(gotify)).click()
+        phase = "login-url-submit"
         node(By.res(gotify, "checkurl")).click()
+        phase = "login-auth-form"
         node(By.res(gotify, "username_editext")).text = input["username"] as String
         node(By.res(gotify, "password_editext")).text = input["password"] as String
         node(By.res(gotify, "login")).click()
+        phase = "login-client-name"
         node(By.res(gotify, "client_name_editext")).text = "lazysh-gotify-$nonce"
         node(By.res("android", "button1").pkg(gotify)).click()
         phase = "notification-permission"

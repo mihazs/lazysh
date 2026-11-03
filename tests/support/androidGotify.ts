@@ -12,7 +12,9 @@ const rejection=()=>new Error('Owned Gotify acceptance rejected');
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
 export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
-const gotifyNativeFailures=['admission','parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login','notification-permission','alarm-permission','background','message-0','message-1','message-2','history'] as const;
+const gotifyNativeFailures=['admission','parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login',
+  'login-launch','login-url','login-advanced','login-ca-picker','login-ca-import','login-url-submit','login-auth-form','login-client-name',
+  'notification-permission','alarm-permission','background','message-0','message-1','message-2','history'] as const;
 const gotifyNativePhases=['android-native-stage-0','android-native-stage-1','android-native-stage-2','android-native-stage-3','android-native-stage-4'] as const;
 const gotifyFixturePhases=['admission','clean source checkout','tracked fixture source','official Gotify artifact',
   'official Gotify APK signature','official Gotify package','official Gotify server extraction','current test-support relay build','source checkout',
