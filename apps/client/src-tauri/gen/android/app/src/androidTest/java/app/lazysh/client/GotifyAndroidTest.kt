@@ -43,6 +43,12 @@ class GotifyAndroidTest {
     private lateinit var input: Map<String, Any>
     private val states = listOf("working", "needs_attention", "done")
 
+    @Test fun notificationRecordCalibrationRejectsForeignAndStaleEntries() {
+        nonce = "0".repeat(32)
+        input = mapOf("applicationId" to 1)
+        recordChecks(10001, System.currentTimeMillis())
+    }
+
     @Test fun ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("Owned official Gotify acceptance only", args.getString("lazyshGotifyAcceptance") == "true")
@@ -238,7 +244,7 @@ class GotifyAndroidTest {
             } &&
             unique("        android.title=String (lazysh)") && unique("        android.text=String (${body(state)})") &&
             created in started..System.currentTimeMillis() && channelMatch.size == 1 &&
-            Regex("(?:^|, )mImportance=$importance(?:,|})").containsMatchIn(effective.substringAfter('{')) &&
+            Regex("(?:^|, )mImportance=$importance(?:,|\\})").containsMatchIn(effective.substringAfter('{')) &&
             unique("  mHidden==false") && unique("  mIntercept=false")
     }
 
