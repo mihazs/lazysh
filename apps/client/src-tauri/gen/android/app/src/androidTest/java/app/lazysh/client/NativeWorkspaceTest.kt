@@ -1436,6 +1436,9 @@ class NativeWorkspaceTest {
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR,
+                ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"))
+                .perform(webScrollIntoView()).perform(webClick())
             val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
             val expanded = evaluate(scenario, """
                 (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
