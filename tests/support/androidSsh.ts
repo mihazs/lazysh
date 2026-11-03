@@ -140,22 +140,22 @@ export function compareHostAdbServer(before:HostAdbServerSample|undefined,after:
 
 export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
   const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null;adbd:string;adbdHash:string|null}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null,adbd:'unavailable',adbdHash:null};
+  const daemonRead=String.raw`'p=$(pidof adbd) || exit 1; case "$p" in ""|*[!0-9]*) exit 1 ;; esac; printf "%s\n" "$p"; cat "/proc/$p/stat"'`;
   await Promise.all((['connection','process','reverse','transport','boot','adbd'] as const).map(async kind=>{
     if(kind==='reverse' && !reverse)return;
     const deadline=performance.now()+1000;
-    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:kind==='adbd'?['shell','pidof','adbd']:['reverse','--list'];
+    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:kind==='adbd'?['shell','sh','-c',daemonRead]:['reverse','--list'];
     const result=await continuityOutput(adb,serial,args,deadline);
     if(result.state!=='available'){summary[kind]=result.state;return;}
     const output=result.output;
     if(kind==='adbd') {
-      // One exact PID, then the same process's start tick within the original 1s budget.
-      if(!/^[1-9][0-9]{0,9}$/.test(output)||Number(output)>2147483647){summary.adbd='unrecognized';return;}
-      const stat=await continuityOutput(adb,serial,['shell','cat',`/proc/${output}/stat`],deadline);
-      if(stat.state!=='available'){summary.adbd=stat.state;return;}
-      const match=/^([1-9][0-9]{0,9}) \(adbd\) ([A-Za-z] .+)$/.exec(stat.output);
+      // One shell transaction avoids a second ADB launch within the same 1s budget.
+      const lines=output.split(/\r?\n/),pid=lines[0];
+      if(lines.length!==2||!/^[1-9][0-9]{0,9}$/.test(pid)||Number(pid)>2147483647){summary.adbd='unrecognized';return;}
+      const match=/^([1-9][0-9]{0,9}) \(adbd\) ([A-Za-z] .+)$/.exec(lines[1]);
       const start=match?.[2].split(/\s+/)[19];
-      if(match?.[1]!==output || !start || !/^[1-9][0-9]{0,19}$/.test(start)||BigInt(start)>18446744073709551615n){summary.adbd='unrecognized';return;}
-      summary.adbd='available';summary.adbdHash=createHash('sha256').update(`${output}:${start}`).digest('hex');
+      if(match?.[1]!==pid || !start || !/^[1-9][0-9]{0,19}$/.test(start)||BigInt(start)>18446744073709551615n){summary.adbd='unrecognized';return;}
+      summary.adbd='available';summary.adbdHash=createHash('sha256').update(`${pid}:${start}`).digest('hex');
     }
     if(kind==='transport' || kind==='boot') {
       const valid=kind==='transport'?/^[1-9][0-9]{0,19}$/.test(output) && BigInt(output)<=18446744073709551615n:/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(output);

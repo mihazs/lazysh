@@ -174,6 +174,7 @@ case "$3 $4" in
   'shell pidof') if [ "$5" = adbd ]; then sed -n '6p' "$EXIT_INFO_FIXTURE"; else sed -n '2p' "$EXIT_INFO_FIXTURE"; fi ;;
   'reverse --list') sed -n '3p' "$EXIT_INFO_FIXTURE" ;;
   'transport-id ') sed -n '4p' "$EXIT_INFO_FIXTURE" ;;
+  'shell sh') sed -n '6,7p' "$EXIT_INFO_FIXTURE" ;;
   'shell cat') if [ "$5" = /proc/sys/kernel/random/boot_id ]; then sed -n '5p' "$EXIT_INFO_FIXTURE"; else sed -n '7p' "$EXIT_INFO_FIXTURE"; fi ;;
   *) cat "$EXIT_INFO_FIXTURE" ;;
 esac
@@ -260,7 +261,7 @@ test.each([
     expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null});
     expect((await readFile(args,'utf8')).trim().split('\n').sort()).toEqual([
       '-s emulator-5580 get-state','-s emulator-5580 shell pidof app.lazysh.client','-s emulator-5580 reverse --list',
-      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id','-s emulator-5580 shell pidof adbd',
+      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id','-s emulator-5580 shell sh -c '+String.raw`'p=$(pidof adbd) || exit 1; case "$p" in ""|*[!0-9]*) exit 1 ;; esac; printf "%s\n" "$p"; cat "/proc/$p/stat"'`,
     ].sort());
     expect(JSON.stringify(summary)).not.toContain('private-');
   });
@@ -607,6 +608,10 @@ const daemonStat=(pid:string,start:string)=>`${pid} (adbd) S ${Array.from({lengt
 
 test.each([
   {pid:'123',stat:daemonStat('123','456'),state:'available'},
+  {pid:'',stat:daemonStat('123','456'),state:'unrecognized'},
+  {pid:'123',stat:'',state:'unrecognized'},
+  {pid:'0123',stat:daemonStat('0123','456'),state:'unrecognized'},
+  {pid:'123\n124',stat:daemonStat('123','456'),state:'unrecognized'},
   {pid:'123 124',stat:daemonStat('123','456'),state:'unrecognized'},
   {pid:'2147483648',stat:daemonStat('2147483648','456'),state:'unrecognized'},
   {pid:'123',stat:daemonStat('124','456'),state:'unrecognized'},
@@ -620,7 +625,25 @@ test.each([
     expect(result.adbd).toBe(state);
     expect(result.adbdHash).toBe(state==='available'?createHash('sha256').update('123:456').digest('hex'):null);
     expect(JSON.stringify(result)).not.toContain('private-secret');
-    if(state==='available')expect((await readFile(args,'utf8')).split('\n')).toContain('-s emulator-5580 shell cat /proc/123/stat');
+    if(state==='available')expect((await readFile(args,'utf8')).split('\n').filter(line=>line.startsWith('-s emulator-5580 shell sh -c '))).toHaveLength(1);
+  });
+});
+
+test('daemon identity fits one remote-shell launch without relaxing its sample',async()=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${daemonStat('123','456')}\n`,0,async(adb,args)=>{
+    const script=await readFile(adb,'utf8');
+    await writeFile(adb,script.replace('case "$3 $4" in',`case "$3 $4 $5" in
+  'shell pidof adbd'|'shell cat /proc/123/stat'|'shell sh -c')
+    [ ! -e "$EXIT_INFO_ARGS.daemon" ] || exit 31
+    : > "$EXIT_INFO_ARGS.daemon" ;;
+esac
+case "$3 $4" in`));
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe('available');
+    expect(result.adbdHash).toBe(createHash('sha256').update('123:456').digest('hex'));
+    const calls=(await readFile(args,'utf8')).trim().split('\n');
+    expect(calls.filter(line=>line.includes('shell sh -c'))).toHaveLength(1);
+    expect(calls.some(line=>line.includes('shell pidof adbd')||line.includes('shell cat /proc/123/stat'))).toBe(false);
   });
 });
 
