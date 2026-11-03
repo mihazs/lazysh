@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -155,6 +155,25 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
 },610_000);
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_AGENT_BIN)('owned namespaced SSH preflights synthetic recorded Codex and OpenCode conversations',async()=>{
+  const root=join(import.meta.dir,'..'),source=process.env.LAZYSH_TEST_AGENT_BIN;
+  const bytes=await recordedCompanionBytes(source),fixture=await SshFixture.start(undefined,{companion:true});
+  let recorded:Awaited<ReturnType<typeof prepareRecordedConversation>>|undefined,primary=false;
+  try {
+    recorded=await prepareRecordedConversation(fixture,root,bytes);
+    const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
+    expect(recorded.metadata.provenance).toBe('synthetic');
+    expect(recorded.metadata.sources.map(item=>item.agent).join(',')).toBe('codex,opencode,opencode');
+    expect(JSON.stringify(recorded.metadata.sources.map(item=>item.sessionId))===JSON.stringify([specification.codexThreadId,specification.opencodeSessions.v1,specification.opencodeSessions.v2])).toBe(true);
+    expect((await recordedCompanionBytes(source)).equals(bytes)).toBe(true);
+  } catch(error){primary=true;throw error;}
+  finally {
+    await androidSshCleanup(primary,[['fixture-file',async()=>{await recorded?.verify();}],['SSH',()=>fixture.stop()]]);
+  }
+  expect(await listening(fixture.port)).toBe(false);
+  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+},65_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_RECORDED!=='1')('actual Android recorded Codex and OpenCode conversations preserve their original SSH terminal',async()=>{
   await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,true);

@@ -2307,6 +2307,28 @@ test('native toolbar paint observation distinguishes latched Shift from released
   document.querySelectorAll=()=>[];expect(()=>observe('enter')).toThrow('unique');
 });
 
+test('recorded companion preflight compares full protocol values independently of JSON object key order',async()=>{
+  const owner=await readFile(join(import.meta.dir,'support/androidSsh.ts'),'utf8');
+  const expression=owner.split("const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));")[1].split('\n  }')[0];
+  const {isDeepStrictEqual}=await import('node:util');
+  const source={agent:'codex',sessionId:'owned-session',messages:[{role:'user',text:'Original question\nwith interior whitespace'},{role:'assistant',text:'Original complete answer'}]};
+  const wire=(reverse=false)=>({schemaVersion:1,agent:source.agent,view:'active_branch',branchId:source.sessionId,messages:source.messages.map(message=>({role:message.role,blocks:[reverse?{text:message.text,type:'text'}:{type:'text',text:message.text}]}))});
+  const check=(page:unknown)=>Function('page','source','isDeepStrictEqual',new Bun.Transpiler({loader:'ts'}).transformSync(expression))(page,source,isDeepStrictEqual);
+  expect(()=>check(wire())).not.toThrow();expect(()=>check(wire(true))).not.toThrow();
+  for(const field of ['schemaVersion','agent','view','branchId'] as const){const page=wire();Object.assign(page,{[field]:'foreign'});expect(()=>check(page)).toThrow('Synthetic recorded preflight mismatch');}
+  for(const mutate of [
+    (page:ReturnType<typeof wire>)=>{page.messages.reverse();},
+    (page:ReturnType<typeof wire>)=>{page.messages.pop();},
+    (page:ReturnType<typeof wire>)=>{page.messages[0].role='assistant';},
+    (page:ReturnType<typeof wire>)=>{page.messages[0].blocks[0].text+=' changed';},
+    (page:ReturnType<typeof wire>)=>{page.messages[0].blocks[0].type='reasoning';},
+    (page:ReturnType<typeof wire>)=>{page.messages[0].blocks=[];},
+    (page:ReturnType<typeof wire>)=>{Reflect.deleteProperty(page.messages[0].blocks[0],'text');},
+    (page:ReturnType<typeof wire>)=>{page.messages[0].blocks.push({...page.messages[0].blocks[0]});},
+    (page:ReturnType<typeof wire>)=>{Object.assign(page.messages[0].blocks[0],{foreign:'must not be ignored'});},
+  ]){const page=wire(true);mutate(page);expect(()=>check(page)).toThrow('Synthetic recorded preflight mismatch');}
+});
+
 test('recorded Android routing preserves the ordinary owner and uses its own report and default exclusion',async()=>{
   const root=join(import.meta.dir,'..'),script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
   expect(script['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_RECORDED=1');

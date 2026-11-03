@@ -6,6 +6,7 @@ import {chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpa
 import {constants} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
@@ -457,7 +458,7 @@ export async function recordedCompanionBytes(path:string|undefined) {
   if(bytes.length!==before.size || before.dev!==after.dev || before.ino!==after.ino || before.mtimeMs!==after.mtimeMs || before.size!==after.size)throw new Error('Recorded companion source changed');
   return bytes;
 }
-async function prepareRecordedConversation(fixture:SshFixture,root:string,companion:Buffer) {
+export async function prepareRecordedConversation(fixture:SshFixture,root:string,companion:Buffer) {
   const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
   const messages=(kind:'codex'|'v1'|'v2')=>specification.messages.map((message:{id:string;role:string;text:string})=>({...message,text:`${specification.labels[kind]}: ${message.text}`}));
   const directory=join(fixture.directory,'recorded-conversations'),image=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
@@ -490,7 +491,7 @@ c.commit();c.close()`,input,path]);
     const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));
     const actual=page.messages?.map((message:{role:string;blocks:{type:string;text:string}[]})=>({role:message.role,blocks:message.blocks}));
     const expected=source.messages.map((message:{role:string;text:string})=>({role:message.role,blocks:[{type:'text',text:message.text}]}));
-    if(page.schemaVersion!==1 || page.agent!==source.agent || page.view!=='active_branch' || page.branchId!==source.sessionId || JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Synthetic recorded preflight mismatch');
+    if(page.schemaVersion!==1 || page.agent!==source.agent || page.view!=='active_branch' || page.branchId!==source.sessionId || !isDeepStrictEqual(actual,expected))throw new Error('Synthetic recorded preflight mismatch');
   }
   return {metadata:{provenance:'synthetic',sources:sources.map(source=>({...source,messages:source.messages.map(({role,text}:{role:string;text:string})=>({role,text}))}))},verify:async()=>{
     for(const item of before) {const after=await stat(item.path);if(await hash(item.path)!==item.sha256 || after.dev!==item.info.dev || after.ino!==item.info.ino || after.size!==item.info.size || after.mtimeMs!==item.info.mtimeMs || after.mode!==item.info.mode || after.nlink!==1)throw new Error('Synthetic recorded corpus changed');}
