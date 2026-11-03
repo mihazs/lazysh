@@ -964,3 +964,43 @@ for(const route of ['normal','mouse','alternate'] as const)for(const direction o
   expect(moves).toHaveLength(5);expect(moves.every(event=>event.trusted&&event.target==='DIV')).toBe(true);
   await input.detach();
 });
+
+
+for(const android of [false,true])test.describe(`owned D-pad touchstart ${android?'Android UA':'ordinary UA'}`,()=>{
+  if(android)test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/133.0.0.0 Mobile Safari/537.36'});
+  test('consumes the admitted start after pointer capture and preserves a real held pan',async({page},testInfo)=>{
+    test.skip(testInfo.project.name!=='phone','Requires trusted touchscreen input.');
+    await openExpandedDpad(page,true);
+    const up=page.getByRole('button',{name:'D-pad up',exact:true});await up.scrollIntoViewIfNeeded();
+    await page.evaluate(()=>{
+      const events:unknown[]=[];Reflect.set(window,'ownedDpadStarts',events);
+      for(const kind of ['pointerdown','touchstart','pointermove','pointerup','pointercancel'])document.addEventListener(kind,event=>{
+        const pad=event.target instanceof Element&&Boolean(event.target.closest('.terminal-dpad'));
+        if(kind==='touchstart')setTimeout(()=>events.push({kind,pad,trusted:event.isTrusted,prevented:event.defaultPrevented}),0);
+        else events.push({kind,pad,trusted:event.isTrusted,prevented:event.defaultPrevented});
+      },true);
+    });
+    await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+    const box=(await up.boundingBox())!,origin={x:box.x+box.width/2,y:box.y+box.height/2};
+    const input=await page.context().newCDPSession(page);
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    // Keep real Chromium gesture time separate from deterministic component repeats.
+    await new Promise(resolve=>setTimeout(resolve,1000));
+    await page.clock.runFor(1000);
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x+40,y:origin.y}]});
+    await page.clock.runFor(160);
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    const writes=await page.evaluate(()=>window.simpleShortcutWrites);
+    expect(writes).toEqual([...Array(8).fill('\x1b[A'),...Array(2).fill('\x1b[C')]);
+    await page.clock.runFor(160);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(writes);
+    const events=await page.evaluate(()=>Reflect.get(window,'ownedDpadStarts')) as Array<{kind:string;pad:boolean;trusted:boolean;prevented:boolean}>;
+    expect(events.map(event=>event.kind)).toEqual(['pointerdown','touchstart','pointermove','pointerup']);
+    expect(events.every(event=>event.trusted&&event.pad)).toBe(true);
+    expect(events[1].prevented).toBe(true);
+    await testInfo.attach('owned-dpad-touchstart.json',{body:JSON.stringify({events,writes}),contentType:'application/json'});
+    await input.detach();
+    await up.focus();await page.keyboard.press('Enter');
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([...writes,'\x1b[A']);
+  });
+});

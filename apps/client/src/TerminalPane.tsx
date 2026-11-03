@@ -74,6 +74,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const repeat = useRef<{delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
   const dpad = useRef<{pointers:Map<number,string>;pointerType:string;gesture:DpadGesture|null;blocked:boolean;suppressClick:boolean}>({pointers:new Map(),pointerType:"",gesture:null,blocked:false,suppressClick:false});
   const dpadView = useRef({session,enabled:false});
+  const dpadElement = useRef<HTMLDivElement>(null);
   const [dpadDirection,setDpadDirection] = useState<DpadDirection|null>(null);
   function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {};}
   function startRepeat(action:()=>void,delay=400) {
@@ -220,6 +221,21 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     return()=>{cancelDpad();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointerup',end,true);document.removeEventListener('pointercancel',end,true);document.removeEventListener('focusin',focus,true);window.removeEventListener('blur',blur);};
   },[]);
   useEffect(()=>{if(!active||!session.connected||!dpadEnabled)cancelDpad();return cancelDpad;},[active,session.id,session.terminal,session.connected,dpadEnabled]);
+  useEffect(()=>{
+    const element=dpadElement.current;
+    if(!element||!dpadEnabled||preferences.screenReader)return;
+    const start=(event:TouchEvent)=>{
+      const state=dpad.current,gesture=state.gesture;
+      const button=event.target instanceof Element?event.target.closest<HTMLButtonElement>('button[data-dpad-direction]'):null;
+      // Pointer admission precedes touchstart. Consume only that owned direction
+      // so Chromium cannot begin its separate long-press gesture on this control.
+      if(!gesture||state.blocked||state.pointers.size!==1||state.pointers.get(gesture.pointer)!=='touch'
+        ||event.touches.length!==1||!button||!element.contains(button)||button.disabled||!ownsDpad(gesture))return;
+      if(event.cancelable)event.preventDefault();
+    };
+    element.addEventListener('touchstart',start,{passive:false});
+    return()=>element.removeEventListener('touchstart',start);
+  },[active,session.id,session.terminal,session.connected,dpadEnabled,preferences.screenReader]);
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || Object.values(preferences.bodyGestures).some(action => action !== "none"));
 
   useEffect(() => {
@@ -703,7 +719,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </div>}
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
-    {dpadEnabled && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
+    {dpadEnabled && <div ref={dpadElement} className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
       if(document.querySelector('[role="dialog"][aria-modal="true"]')||(event.detail>0&&dpad.current.suppressClick)){cancelDpad();event.preventDefault();event.stopPropagation();return;}
       if(event.detail===0)cancelDpad();
     }}>

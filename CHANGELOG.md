@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prevent the browser touch default on owned expanded D-pad direction gestures; ordinary clicks, corner shortcuts and accessibility controls remain available.
+
 - Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.
 
 
