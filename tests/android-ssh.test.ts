@@ -1675,10 +1675,12 @@ test('native D-pad count and neutral observations execute the embedded source wi
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshDpadPan(')[1].split('private inner class OwnedRawSshInput(')[0],nonce='0123456789abcdef'.repeat(2);
   const source=body.match(/val countExpression = """([\s\S]*?)"""\.trimIndent\(\)/)![1].replaceAll('${nonce}',nonce);
-  const neutral=body.match(/while\(evaluate\(scenario,"([^"\n]+)",remaining\(\)\)!="true"\)/)![1];
+  const neutral=body.match(/while\(heldRead\("([^"\n]+)"\)!="true"\)/)![1];
   let padCount=1,buttonCount=4,outline='',text=`PRIVATE_CONTEXT D_${nonce}_3_2_2_2`;
   const buttons=()=>Array.from({length:buttonCount},()=>({style:{outline}}));
-  const document={querySelectorAll:(selector:string)=>selector==='.terminal-dpad'?Array.from({length:padCount},()=>({querySelectorAll:buttons})):buttons(),querySelector:()=>({textContent:text})};
+  const pad={querySelectorAll:buttons,isConnected:true},surface={get textContent(){return text;},isConnected:true};
+  let currentPad=pad,currentSurface=surface;
+  const document={querySelectorAll:(selector:string)=>selector==='.terminal-dpad'?Array.from({length:padCount},()=>currentPad):buttons(),querySelector:()=>currentSurface};
   const counts=new Function('document',`return (${source});`),quiet=new Function('document',`return (${neutral});`);
   const first=counts(document);
   expect(first).toEqual([3,2,2,2]);expect(quiet(document)).toBe(true);
@@ -1695,6 +1697,20 @@ test('native D-pad count and neutral observations execute the embedded source wi
   padCount=1;buttonCount=0;expect(counts(document)).toBeNull();expect(quiet(document)).toBe(false);
   buttonCount=3;expect(counts(document)).toBeNull();buttonCount=4;text=`PRIVATE_CONTEXT D_${nonce}_99_2_2_2`;expect(counts(document)).toBeNull();
   text='PRIVATE_CONTEXT_WITHOUT_A_RECEIVER_STATE';expect(counts(document)).toBeNull();
+  const owner='owned-read',key=`__lazyshDpadRead_${nonce}`,window:Record<string,any>={};
+  const expression=(name:string)=>body.match(new RegExp(`val ${name} = \"\"\"([\\s\\S]*?)\"\"\"\\.trimIndent\\(\\)`))![1]
+    .replaceAll('${nonce}',nonce).replaceAll('${readOwner}',owner);
+  const bind=new Function('window','document',`return (${expression('bindingExpression')});`);
+  const valid=new Function('window','document',`return (${expression('guardExpression')});`);
+  expect(bind(window,document)).toBe(true);expect(valid(window,document)).toBe(true);
+  expect(bind(window,document)).toBe(false);
+  expect(valid(window,{...document})).toBe(false);
+  currentPad={...pad};expect(valid(window,document)).toBe(false);currentPad=pad;
+  currentSurface={...surface};expect(valid(window,document)).toBe(false);currentSurface=surface;
+  pad.isConnected=false;expect(valid(window,document)).toBe(false);pad.isConnected=true;
+  surface.isConnected=false;expect(valid(window,document)).toBe(false);surface.isConnected=true;
+  padCount=2;expect(valid(window,document)).toBe(false);padCount=1;
+  window[key].owner='other';expect(valid(window,document)).toBe(false);
 });
 
 test.each([

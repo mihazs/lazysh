@@ -4019,6 +4019,51 @@ class NativeWorkspaceTest {
         for(at in listOf(-1L,65536L)) assertTrue(runCatching { OwnedDpadViewportObservation.project("layout",at,true,0,web,root,frame) }.isFailure)
     }
 
+    private class DpadRead(private val until: Long, private val post: (Runnable) -> Boolean,
+        private val now: () -> Long = System::nanoTime) {
+        fun value(dispatch: ((Result<String>) -> Unit) -> Unit): String {
+            val active = java.util.concurrent.atomic.AtomicBoolean(true)
+            val result = AtomicReference<Result<String>?>(null)
+            val completed = CountDownLatch(1)
+            fun receive(value: Result<String>) {
+                if (active.get() && now() < until && result.compareAndSet(null, value)) completed.countDown()
+            }
+            try {
+                check(now() < until) { "Owned D-pad read has no remaining budget" }
+                check(post(Runnable {
+                    if (!active.get() || now() >= until) return@Runnable
+                    try { dispatch(::receive) } catch (error: Throwable) { receive(Result.failure(error)) }
+                })) { "Owned D-pad read dispatch rejected" }
+                check(completed.await((until-now()).coerceAtLeast(0), TimeUnit.NANOSECONDS) && now() < until) {
+                    "Owned D-pad queue/callback exceeded its original read budget"
+                }
+                return checkNotNull(result.get()).getOrThrow()
+            } finally { active.set(false) }
+        }
+    }
+
+    @Test fun dpadReadBoundsQueuedMissingLateAndStaleCallbacks() {
+        var clock = 0L
+        fun immediate() = DpadRead(100, { it.run(); true }, { clock })
+        assertEquals("owned", immediate().value { it(Result.success("owned")) })
+        assertTrue(runCatching { immediate().value { clock=100;it(Result.success("late")) } }.isFailure)
+        clock=0
+        assertEquals("stale owner", runCatching { immediate().value { error("stale owner") } }.exceptionOrNull()?.message)
+        assertTrue(runCatching { DpadRead(100, { false }, { clock }).value { error("must not run") } }.isFailure)
+        var queued: Runnable? = null; var dispatched = false
+        assertTrue(runCatching {
+            DpadRead(System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(100), { queued=it;true })
+                .value { dispatched=true }
+        }.isFailure)
+        checkNotNull(queued).run();assertFalse("Expired queued work must not run", dispatched)
+        var callback: ((Result<String>) -> Unit)? = null
+        assertTrue(runCatching {
+            DpadRead(System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(100), { it.run();true })
+                .value { callback=it }
+        }.isFailure)
+        checkNotNull(callback)(Result.success("late"))
+    }
+
     private fun verifySshDpadPan(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
         val raw = OwnedRawSshInput(scenario, fixture, label, "dpad")
         val nonce = raw.nonce
@@ -4091,6 +4136,9 @@ class NativeWorkspaceTest {
             """.trimIndent()
             val heldBounds = JSONArray(evaluate(scenario,heldBoundsExpression,remaining()))
             val start = FloatArray(2)
+            val readActivity = AtomicReference<MainActivity>()
+            val readWindow = AtomicReference<android.view.Window>()
+            val readUrl = AtomicReference<String>()
             scenario.onActivity { activity ->
                 assertSame("Current D-pad WebView must remain original",web,webView(activity.window.decorView))
                 assertTrue("Current D-pad WebView must be focused and laid out",web.isAttachedToWindow && web.isShown &&
@@ -4115,6 +4163,7 @@ class NativeWorkspaceTest {
                 assertTrue("Owned D-pad target must stay above the current keyboard",!imeVisible ||
                     (imeBottom>0 && target.bottom<=rootOrigin[1]+root.height-imeBottom))
                 start[0]=target.centerX();start[1]=target.centerY()
+                readActivity.set(activity);readWindow.set(activity.window);readUrl.set(raw.originalDocumentUrl())
             }
             remaining()
             var point = start
@@ -4125,6 +4174,34 @@ class NativeWorkspaceTest {
             var currentPhase = "up"
             var lastCounts: IntArray? = null
             val dom=OwnedDpadDomObservation(nonce) { expression,timeout -> evaluate(scenario,expression,timeout) }
+            val readOwner = UUID.randomUUID().toString()
+            val bindingExpression = """
+                (()=>{const key='__lazyshDpadRead_${nonce}';if(Object.hasOwn(window,key))return false;
+                  const pads=document.querySelectorAll('.terminal-dpad'),screen=document.querySelector('.terminal-canvas .xterm-screen');
+                  if(pads.length!==1||pads[0].querySelectorAll('button[data-dpad-direction]').length!==4||!screen)return false;
+                  window[key]={owner:'${readOwner}',document,pad:pads[0],screen};return true;})()
+            """.trimIndent()
+            val guardExpression = """
+                (()=>{const owned=window['__lazyshDpadRead_${nonce}'],pads=document.querySelectorAll('.terminal-dpad');
+                  return owned?.owner==='${readOwner}'&&owned.document===document&&pads.length===1&&owned.pad===pads[0]&&
+                    owned.pad.isConnected&&owned.screen===document.querySelector('.terminal-canvas .xterm-screen')&&owned.screen.isConnected;})()
+            """.trimIndent()
+            fun heldRead(expression: String, until: Long = minOf(deadline,System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(remaining())), bound: Boolean = true): String {
+                fun owner() {
+                    val activity=readActivity.get()
+                    check(!activity.isFinishing&&!activity.isDestroyed&&activity.window===readWindow.get()&&
+                        webView(activity.window.decorView)===web&&web.rootView===activity.window.decorView&&
+                        web.isAttachedToWindow&&web.isShown&&web.hasFocus()&&web.hasWindowFocus()&&web.url==readUrl.get()) {
+                        "Owned D-pad read lost its original native owner"
+                    }
+                }
+                return DpadRead(until,{ web.post(it) }).value { receive ->
+                    owner()
+                    val source=if(bound) "(()=>{if(!($guardExpression))return null;return ($expression);})()" else expression
+                    web.evaluateJavascript(source) { value -> receive(runCatching { owner();value }) }
+                }
+            }
+            var bindingAttempted = false
             fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
                 if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
                 point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
@@ -4137,7 +4214,7 @@ class NativeWorkspaceTest {
                 } finally {event.recycle()}
             }
             fun counts(): IntArray {
-                val rows=JSONArray(evaluate(scenario,countExpression,remaining()))
+                val rows=JSONArray(heldRead(countExpression))
                 require(rows.length()==4) { "Owned D-pad count observation invalid" }
                 return IntArray(4) { rows.getInt(it).also { value->require(value in 0..32) } }
                     .also { lastCounts=it.copyOf() }
@@ -4152,6 +4229,8 @@ class NativeWorkspaceTest {
             fun pause() { assertTrue("Owned D-pad pause requires original budget",remaining()>=240);Thread.sleep(240);remaining() }
             var stopped = IntArray(0)
             try {
+                bindingAttempted=true
+                assertEquals("Original D-pad read binding required","true",heldRead(bindingExpression,bound=false))
                 dom.install(remaining())
                 scenario.onActivity { activity ->
                     assertSame("Original D-pad WebView before DOWN",web,webView(activity.window.decorView))
@@ -4168,7 +4247,7 @@ class NativeWorkspaceTest {
                 }
                 currentPhase="neutral"
                 dispatch(android.view.MotionEvent.ACTION_MOVE)
-                while(evaluate(scenario,"(()=>{const buttons=document.querySelectorAll('.terminal-dpad button[data-dpad-direction]');return buttons.length===4&&Array.from(buttons).every(x=>!x.style.outline);})()",remaining())!="true")Thread.sleep(10)
+                while(heldRead("(()=>{const buttons=document.querySelectorAll('.terminal-dpad button[data-dpad-direction]');return buttons.length===4&&Array.from(buttons).every(x=>!x.style.outline);})()")!="true")Thread.sleep(10)
                 pause();stopped=counts();pause();assertArrayEquals("Dead-zone output must stop",stopped,counts())
                 val before=JSONObject(checkNotNull(observer).snapshot()).getJSONArray("events")
                 assertEquals("Held D-pad has exactly DOWN plus four MOVE events",5,before.length())
@@ -4215,6 +4294,10 @@ class NativeWorkspaceTest {
                 try {scenario.onActivity {viewportObserver?.close()}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 try {dom.close()}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
+                try {if(bindingAttempted)assertEquals("Owned D-pad read binding must retire","true",heldRead(
+                    "(()=>{const key='__lazyshDpadRead_${nonce}',owned=window[key];if(owned===undefined)return true;if(owned.owner!=='${readOwner}')return false;delete window[key];return !Object.hasOwn(window,key);})()",
+                    System.nanoTime()+TimeUnit.SECONDS.toNanos(1),false))
+                }catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
                 if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
             }
             raw.send("owned-dpad-$nonce", false)
@@ -4250,6 +4333,7 @@ class NativeWorkspaceTest {
             }
             require(packagedUrl.get() == "http://tauri.localhost/" || packagedUrl.get() == "https://tauri.localhost/")
         }
+        fun originalDocumentUrl(): String = packagedUrl.get()
         fun clickIcon(name: String) = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
             "button[aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
         fun proof(marker: String) = "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes(${JSONObject.quote(marker)})"
