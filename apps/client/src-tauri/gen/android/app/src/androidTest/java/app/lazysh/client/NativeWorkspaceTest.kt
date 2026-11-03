@@ -619,6 +619,14 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun replaceNativeText(scenario: ActivityScenario<MainActivity>, selector: String, value: String) {
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        onView(isAssignableFrom(WebView::class.java)).perform(
+            pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
+            pressKey(KeyEvent.KEYCODE_DEL))
+        typeInto(scenario, selector, value)
+    }
+
     private fun typeInto(scenario: ActivityScenario<MainActivity>, selector: String, text: String) {
         // Grant native View focus before selecting the DOM input: requesting
         // native focus afterward can restore or blur a different DOM focus target.
@@ -1921,11 +1929,7 @@ class NativeWorkspaceTest {
         val region = "section[aria-label='Terminal input']"
         val path = "input[placeholder='Absolute host path to session.jsonl']"
         fun replace(selector: String, value: String) {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
-            onView(isAssignableFrom(WebView::class.java)).perform(
-                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
-                pressKey(KeyEvent.KEYCODE_DEL))
-            typeInto(scenario, selector, value)
+            replaceNativeText(scenario, selector, value)
             closeSoftKeyboard()
         }
         if (!alreadyAttached) {
@@ -3083,8 +3087,9 @@ class NativeWorkspaceTest {
                     require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/recorded-conversations/(recorded[.]jsonl|opencode-v[12][.]db)").matches(source.getString("path")))
                     selectOwnedOption(".chat-panel select:has(option[value='codex'])", source.getString("agent"))
                     selectOwnedOption(".chat-panel select:has(option[value='conversation'])", "conversation")
-                    typeInto(scenario, path, source.getString("path"))
-                    if (index > 0) typeInto(scenario, ".chat-panel input[required]:not([placeholder])", source.getString("sessionId"))
+                    val fields = listOfNotNull(path to source.getString("path"),
+                        if (index > 0) ".chat-panel input[required]:not([placeholder])" to source.getString("sessionId") else null)
+                    for ((selector, value) in fields) replaceNativeText(scenario, selector, value)
                     closeSoftKeyboard();clickButton("Open transcript")
                     awaitDocument(scenario, "exact synthetic recorded source $index", exactMessages())
                     owner()
