@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -302,7 +302,7 @@ test('proxy admission failure retains only a finite failure artifact without tar
     const path=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/gotify');
     const {readdir}=await import('node:fs/promises');expect(await readdir(path)).toEqual(['failure.json']);
     const receipt=JSON.parse(await readFile(join(path,'failure.json'),'utf8'));
-    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
+    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',hostDiagnostic:{operation:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null},runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
     expect(JSON.stringify(receipt)).not.toMatch(/127\.0\.0\.1|http:|FAKE_ROOT|token|password|stack/);
   }finally{await child.stop();await rm(root,{recursive:true,force:true});}
 });
@@ -312,3 +312,23 @@ test.skipIf(process.env.LAZYSH_ANDROID_GOTIFY!=='1')('official Gotify displays a
   expect(receipt).toMatchObject({relayAccepted:3,serverMessages:3,osRecords:3,visibleCards:3,history:true,cleanup:true,native:{passed:1,failed:0,skipped:0}});
   console.log('Owned Gotify Android receipt '+JSON.stringify(receipt));
 },480000);
+
+
+test('Gotify host failure evidence projects only closed operations and native process metadata',()=>{
+  for(const operation of ['continuity','ownership','command','stage-record','native-state','stage-wait'])
+    expect(gotifyHostDiagnostic(operation,{state:'early-exit',exitCode:1},false)).toEqual({operation,nativeState:'early-exit',exitCode:1,signaled:false});
+  expect(gotifyHostDiagnostic('stage-record',{state:'running',exitCode:null},false)).toEqual({operation:'stage-record',nativeState:'running',exitCode:null,signaled:false});
+  expect(gotifyHostDiagnostic('native-state',{state:'signaled',exitCode:null},true)).toEqual({operation:'native-state',nativeState:'signaled',exitCode:null,signaled:true});
+  const hostile=Object.defineProperty({},'state',{get(){throw new Error('private-token');}});
+  for(const state of ['missing-launcher','launch-denied','launch-failed','signaled','running','launch-unavailable'])
+    expect(gotifyHostDiagnostic('command',{state,exitCode:null},false).nativeState).toBe(state);
+  const unknown={operation:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null};
+  for(const candidate of [null,hostile,{state:'private-token',exitCode:0},{state:'early-exit',exitCode:256},
+    {state:'early-exit',exitCode:-1},{state:'early-exit',exitCode:NaN},{state:'running',exitCode:0},
+    {state:'running',exitCode:null,stdout:'private-token'},{state:'x'.repeat(20000),exitCode:null}]) {
+    const value=gotifyHostDiagnostic('private-token',candidate,'private-token');
+    expect(value).toEqual(unknown);expect(JSON.stringify(value)).not.toContain('private-token');
+  }
+  const unexpected=Object.defineProperty({},'exitCode',{get(){throw new Error('private-token');}});
+  expect(gotifyHostDiagnostic('command',unexpected,false)).toEqual({...unknown,operation:'command',signaled:false});
+});

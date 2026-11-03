@@ -33,6 +33,28 @@ export function gotifyFailurePhase(error:unknown):GotifyFixturePhase|'fixture' {
   }catch{/* Unknown exceptions never become public diagnostics. */}
   return 'fixture';
 }
+/** Failure-only metadata: never serialize child output or exception properties. */
+export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown) {
+  const result={operation:['continuity','ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
+    nativeState:'unavailable',exitCode:null as number|null,signaled:typeof signaled==='boolean'?signaled:null};
+  try {
+    if(native===null||typeof native!=='object'||Array.isArray(native)||Object.keys(native).length!==2)return result;
+    const {state,exitCode}=native as {state:unknown,exitCode:unknown};
+    if(!['missing-launcher','launch-denied','launch-failed','early-exit','signaled','running','launch-unavailable'].includes(state as string))return result;
+    if(state==='early-exit'?!Number.isInteger(exitCode)||Number(exitCode)<0||Number(exitCode)>255:exitCode!==null)return result;
+    result.nativeState=state as string;result.exitCode=exitCode as number|null;
+  }catch{/* Hostile or unsupported metadata remains unavailable, never an exception cause. */}
+  return result;
+}
+function gotifyErrorDiagnostic(error:unknown) {
+  try {
+    if(error instanceof Error) {
+      const metadata=(error as Error & {gotifyDiagnostic?:ReturnType<typeof gotifyHostDiagnostic>}).gotifyDiagnostic;
+      if(metadata)return gotifyHostDiagnostic(metadata.operation,{state:metadata.nativeState,exitCode:metadata.exitCode},metadata.signaled);
+    }
+  }catch{/* Failure evidence cannot replace the primary error. */}
+  return gotifyHostDiagnostic(undefined,undefined,undefined);
+}
 const nonceCheck=(nonce:string)=>{if(!/^[a-f0-9]{32}$/.test(nonce))throw rejection();};
 export function gotifyPrivateCommand(nonce:string,suffix='.json') {
   nonceCheck(nonce);
@@ -271,17 +293,18 @@ async function runGotifyAndroid(root:string) {
   let reverse:GotifyReverse|undefined;
   let primary=false,cleanupFailed=false,caPushed=false;
   let phase:GotifyFixturePhase='admission';
+  let hostOperation='unavailable';
   let receipt:Record<string,unknown>|undefined;
   const run=async(label:GotifyFixturePhase,program:string,args:string[],milliseconds=10000,env=process.env)=>{
-    phase=label;await ownership.check();const child=new OwnedProcess(program,args,root,env);processes.push(child);return child.finish(label,milliseconds);
+    phase=label;hostOperation='ownership';await ownership.check();hostOperation='command';const child=new OwnedProcess(program,args,root,env);processes.push(child);return child.finish(label,milliseconds);
   };
   const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args]));
   const guest=()=>emulatorContinuity(adb,serial,undefined,0);
   let original:{server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof guest>>}|undefined;
-  const continuous=async()=>{await ownership.check();if(!original||!sameNtfyClockOwner(original,{server:await hostAdbServerIdentity(adb),guest:await guest()}))throw rejection();};
+  const continuous=async()=>{hostOperation='continuity';await ownership.check();if(!original||!sameNtfyClockOwner(original,{server:await hostAdbServerIdentity(adb),guest:await guest()}))throw rejection();};
   const installed=new OwnedGotifyPackages(shell);
   const wait=async<T>(until:number,read:()=>Promise<T|undefined>)=>{
-    while(performance.now()<until){await continuous();const result=await read();if(result!==undefined)return result;await Bun.sleep(100);}throw rejection();
+    while(performance.now()<until){await continuous();const result=await read();if(result!==undefined)return result;await Bun.sleep(100);}hostOperation='stage-wait';throw rejection();
   };
   const input=async(suffix:string,value:object)=>{
     await continuous();const child=new OwnedProcess(adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',`'${gotifyPrivateCommand(nonce,suffix)}'`],root);
@@ -373,8 +396,9 @@ async function runGotifyAndroid(root:string) {
       return wait(until,async()=>{
       const path=`files/.lazysh-gotify-${nonce}.stage-${step}.json`;
       const raw=await shell(['shell','run-as','app.lazysh.client','sh','-c',`'if [ ! -e ${path} ] && [ ! -L ${path} ]; then echo pending; else [ ! -L ${path} ] && stat -c "%u %a %h %s %d %i %f" ${path} && cat ${path} && echo && stat -c "%u %a %h %s %d %i %f" ${path}; fi'`]);
+      hostOperation='native-state';
       if(raw==='pending\n'&&(native!.child.exitCode!==null||native!.child.signalCode!==null))throw rejection();
-      return gotifyPrivateStage(raw,nonce,step,targetUid,id);
+      hostOperation='stage-record';return gotifyPrivateStage(raw,nonce,step,targetUid,id);
       });
     };
     await stage(0);
@@ -420,7 +444,10 @@ async function runGotifyAndroid(root:string) {
         if(files.length===1)phase=gotifyNativeFailure((await readQrMetadata(join(reports,files[0]),262144)).toString())??phase;
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
-    throw new Error(`Owned Gotify acceptance failed: ${phase}`);
+    let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined);
+    try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined);}
+    catch{/* Keep the original failure when process metadata is unavailable. */}
+    throw Object.assign(new Error(`Owned Gotify acceptance failed: ${phase}`),{gotifyDiagnostic:diagnostic});
   }
   finally {
     for(const process of processes.reverse())try{await process.stop();}catch{cleanupFailed=true;}
@@ -448,7 +475,7 @@ export async function ownedGotifyAndroid(root:string) {
     const receipt=await runGotifyAndroid(root);
     await retain('receipt',receipt);return receipt;
   }catch(error) {
-    try{await retain('failure',{schemaVersion:1,scope:'official-gotify-awake-background',phase:gotifyFailurePhase(error),runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});}
+    try{await retain('failure',{schemaVersion:1,scope:'official-gotify-awake-background',phase:gotifyFailurePhase(error),hostDiagnostic:gotifyErrorDiagnostic(error),runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});}
     catch{console.error('Finite Gotify failure receipt could not be retained');}
     throw error;
   }
