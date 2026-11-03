@@ -6,7 +6,7 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; if?: string; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string } }[] }>;
+  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; if?: string; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string; 'disk-size'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -21,6 +21,7 @@ test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google
   const job=workflow.jobs['native-android-ntfy'];
   const step=job.steps.find(step=>step.name==='Real ntfy encrypted native enrollment')!;
   expect(step.uses).toBe('mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b');
+  expect(step.with?.['disk-size']).toBe('4G');
   expect(job['timeout-minutes']).toBe(35);
   expect(job.env).toEqual({ANDROID_SERIAL:'emulator-5580'});
   const lines=emulatorCommands(step.with!.script!.replaceAll('${{ matrix.push-variant }}',variant));

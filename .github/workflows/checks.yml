@@ -812,6 +812,8 @@ jobs:
           avd-name: lazysh-runtime-api36
           emulator-port: 5580
           ram-size: 3072M
+          # The default userdata partition can exceed hosted runner free space.
+          disk-size: 4G
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
           script: |
