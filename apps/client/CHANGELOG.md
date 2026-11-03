@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.8
+
+### Patch Changes
+
+- 38bba29: Make toolbar Shift one-shot after the next key while retaining Shift throughout an already-held arrow or D-pad gesture. Allow turning Shift off without committing pending IME text; preserve explicit Control and Alt locks.
+- @lazysh/account-usage@1.9.8
+  - @lazysh/common@1.9.8
+  - @lazysh/display-idle@1.9.8
+  - @lazysh/et-transport@1.9.8
+  - @lazysh/mosh-transport@1.9.8
+
 ## 1.9.7
 
 ### Patch Changes
