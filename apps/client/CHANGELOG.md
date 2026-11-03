@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.9.11
+
+### Patch Changes
+
+- f164bfc: Retain one closed, passive native finger-landing observation to distinguish terminal geometry and hit-target failures without changing gesture admission, deadlines or scrolling behavior.
+- @lazysh/account-usage@1.9.11
+  - @lazysh/common@1.9.11
+  - @lazysh/display-idle@1.9.11
+  - @lazysh/et-transport@1.9.11
+  - @lazysh/mosh-transport@1.9.11
+
 ## 1.9.10
 
 ### Patch Changes
