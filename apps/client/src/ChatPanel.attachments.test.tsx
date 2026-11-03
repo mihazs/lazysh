@@ -8,7 +8,7 @@ import {chatFollowAccess} from './test/chatFollowAccess';
 import {attachmentFile,attachmentSession,attachmentUploadedPath} from './test/attachmentData';
 import {selectChatAttachment,attachmentReply} from './test/chatAttachment';
 import {shellPath} from './attachment';
-import {t} from './i18n/core';
+import {formatNumber,t} from './i18n/core';
 
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 beforeEach(()=>{
@@ -92,6 +92,7 @@ it.each(['pending','failed'] as const)('retires the prior path handoff when a re
   await selectChatAttachment();await screen.findByRole('button',{name:t('attachmentAddToChat')});
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   vi.mocked(invoke).mockImplementation(async command=>command==='upload_file'?new Promise((resolve,reject)=>{finish=resolve;fail=reject;}):command==='upload_reserve'?{uploadId:'dd378c73-93a9-49eb-969e-27de325b0b03'}:attachmentReply(command));
+  fireEvent.click(screen.getByText(t('attachmentMetadata',{name:attachmentFile().name,bytes:formatNumber(attachmentFile().size)})));
   fireEvent.click(screen.getByRole('button',{name:t('attachmentUpload')}));
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
   if(phase==='failed'){

@@ -112,7 +112,7 @@ it('rejects malformed or mismatched lookup metadata and paths instead of guessin
     {...reported,path:'/'+ '😀'.repeat(1024)},{...reported,reportedAt:'yesterday'},{...reported,paneId:undefined},
     {...reported,status:'missing'},{...reported,status:'ambiguous'},{...reported,status:'unknown'}])expect(()=>parseReportedHistory(value,'a')).toThrow();
 });
-it.each((['source','access','unmount'] as const).flatMap(transition=>(['success','failure'] as const).map(outcome=>({transition,outcome}))))('drops same-mounted late lookup $outcome after $transition ownership ends',async({transition,outcome})=>{
+it.each((['source','access','unmount','activity'] as const).flatMap(transition=>(['success','failure'] as const).map(outcome=>({transition,outcome}))))('drops same-mounted late lookup $outcome after $transition ownership ends',async({transition,outcome})=>{
     let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
     const invoke=await historyFixture(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));const route=vi.fn();
     const view=render(<AgentPanel sessionId="ssh-old" onUseReportedHistory={route}/>);
@@ -120,23 +120,25 @@ it.each((['source','access','unmount'] as const).flatMap(transition=>(['success'
     await waitFor(()=>expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1));
     if(transition==='access')await act(async()=>{access(true);access();});
     else if(transition==='source')view.rerender(<AgentPanel sessionId="ssh-new" onUseReportedHistory={route}/>);
+    else if(transition==='activity'){view.rerender(<AgentPanel sessionId="ssh-old" activityVisible={false} onUseReportedHistory={route}/>);view.rerender(<AgentPanel sessionId="ssh-old" activityVisible onUseReportedHistory={route}/>);}
     else view.unmount();
     await act(async()=>{if(outcome==='success')finish(reported);else fail('obsolete lookup error');});
     expect(route).not.toHaveBeenCalled();expect(screen.queryByRole('alert')).toBeNull();
     expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
     view.unmount();
 });
-it('does not let an old lookup settle a newer explicit source lookup',async()=>{
+it.each(['source','activity'] as const)('does not let an old lookup settle a newer explicit lookup after $transition',async transition=>{
   const pending:((value:unknown)=>void)[]=[];
   const invoke=await historyFixture(()=>new Promise(yes=>pending.push(yes)));const route=vi.fn();
   const view=render(<AgentPanel sessionId="ssh-old" onUseReportedHistory={route}/>);
   fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));await waitFor(()=>expect(pending).toHaveLength(1));
-  view.rerender(<AgentPanel sessionId="ssh-new" onUseReportedHistory={route}/>);
+  if(transition==='source')view.rerender(<AgentPanel sessionId="ssh-new" onUseReportedHistory={route}/>);
+  else{view.rerender(<AgentPanel sessionId="ssh-old" activityVisible={false} onUseReportedHistory={route}/>);view.rerender(<AgentPanel sessionId="ssh-old" activityVisible onUseReportedHistory={route}/>);}
   fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));await waitFor(()=>expect(pending).toHaveLength(2));
   await act(async()=>{pending[0](reported);});expect(route).not.toHaveBeenCalled();
   expect(screen.getByRole('button',{name:'Use reported history'})).toHaveProperty('disabled',true);
   await act(async()=>{pending[1](reported);});await waitFor(()=>expect(route).toHaveBeenCalledTimes(1));
-  expect(route.mock.calls[0][0]).toMatchObject({sessionId:'ssh-new',agentSessionId:'a'});
+  expect(route.mock.calls[0][0]).toMatchObject({sessionId:transition==='source'?'ssh-new':'ssh-old',agentSessionId:'a'});
   expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(2);
 });
 it.each(['en','pt-BR','es'])('keeps reported-history action and fallback localized in %s',async locale=>{
@@ -454,7 +456,11 @@ describe('live Herdr discovery',()=>{
     expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
     const spacesSetup=browser.getByRole('combobox',{name:t('herdrAgentsServer'),hidden:true}).closest('section')!;
     expect(spacesSetup.hidden).toBe(true);
-    expect(browser.getByText(t('herdrNavigationShared')).closest('details')).toBeNull();
+    const focusConsequence=browser.getByText(t('herdrSharedFocusShort'));
+    expect(focusConsequence.closest('summary')).not.toBeNull();
+    expect(focusConsequence.closest('details')).toHaveProperty('open',false);
+    fireEvent.click(focusConsequence);
+    expect(browser.getByText(t('herdrNavigationShared')).closest('details')).toHaveProperty('open',true);
     fireEvent.click(browser.getByRole('button',{name:t('herdrAgentsServer')}));
     expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
     expect(browser.getAllByText(t('herdrNavigationShared'))).toHaveLength(1);

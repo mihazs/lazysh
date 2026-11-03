@@ -1,0 +1,19 @@
+.push-settings-panel { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.tool-panel.push-settings-panel > :is(h3,p) { margin: 0; }
+.push-settings-panel .push-provider { display: grid; gap: 6px; }
+.push-provider > span { font-weight: 600; }
+.push-settings-panel .push-consent { display: flex; gap: 10px; align-items: start; line-height: 1.5; }
+.push-consent input { flex: 0 0 auto; margin-top: 5px; }
+.push-settings-panel .tool-actions { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+.push-step { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.push-step > span { font-weight: 600; }
+.push-step > p { margin: 0; }
+.push-step button { min-height: 44px; }
+.push-settings-panel .push-help summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
+.push-settings-panel .push-help p { margin-block: 8px; }
+.push-settings-panel > header { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.push-settings-panel > header h3 { margin: 0; font-size: 16px; }
+.push-settings-panel > header .icon-button { min-width: 44px; min-height: 44px; }
+.push-settings-panel details.push-step { display: block; padding-top: 0; }
+.push-settings-panel .push-step summary { min-height: 44px; padding-block: 12px; cursor: pointer; font-weight: 600; }
+.push-settings-panel details.push-step > button { width: 100%; margin-top: 8px; }

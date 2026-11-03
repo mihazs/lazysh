@@ -25,13 +25,13 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
     await Promise.all(button.getAnimations().map(animation=>animation.finished));
   });
   expect(await fileControls.evaluateAll(inputs=>inputs.every(input=>{
-    const picker=getComputedStyle(input,'::file-selector-button');
+    const picker=getComputedStyle(input.parentElement!);
     const button=getComputedStyle(input.closest('.button-row')!.querySelector('button')!);
     return picker.backgroundColor===button.backgroundColor&&picker.color===button.color&&parseFloat(picker.minHeight)>=44;
   }))).toBe(true);
   await page.screenshot({path:test.info().outputPath('file-controls.png')});
   const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=100;canvas.height=80;const context=canvas.getContext('2d')!;context.fillStyle='#fff';context.fillRect(0,0,100,80);return canvas.toDataURL('image/png').split(',')[1];});
-  await root.locator('input[type=file]').first().setInputFiles({name:'literal {{name}}.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await root.getByRole('checkbox').check();
+  await root.locator('input[type=file]').first().setInputFiles({name:'literal {{name}}.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await root.getByText(await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('attachmentOptions');}),{exact:true}).click();await root.getByRole('checkbox').check();
   const canvas=root.locator('canvas');await expect(canvas).toBeVisible();
   // Wait for the actual bounded image decode before drawing.
   await expect.poll(()=>canvas.evaluate(node=>node.getContext('2d')!.getImageData(5,5,1,1).data[3])).toBe(255);
@@ -49,7 +49,7 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
   await expect.poll(()=>page.evaluate(()=>window.attachment.calls.length)).toBe(2);const upload=await page.evaluate(()=>window.attachment.calls);expect(upload).toHaveLength(2);expect(upload[1].command).toBe('upload_file');expect(upload[1].args).toMatchObject({sessionId:attachmentSession,path:attachmentPath});
   const uploaded=upload[1].args as {data:number[]};expect(uploaded.data.slice(0,8)).toEqual([137,80,78,71,13,10,26,10]);expect(new DataView(Uint8Array.from(uploaded.data).buffer).getUint32(16)).toBe(50);
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'pt-BR'});});await expect(root.getByRole('button',{name:'Enviando…',exact:true})).toBeDisabled();expect(await page.evaluate(()=>window.attachment.calls)).toEqual(upload);
-  await page.evaluate(()=>window.attachment.complete());const prompt=root.getByRole('textbox',{name:'Prompt editável',exact:true});await expect(prompt).toHaveValue(`Revise o arquivo anexado ${shellPath(attachmentUploadedPath)}.`);await prompt.fill(attachmentDraft);await prompt.focus();const draftNode=await prompt.elementHandle();
+  await page.evaluate(()=>window.attachment.complete());await root.getByText('Mais ações do anexo',{exact:true}).click();const prompt=root.getByRole('textbox',{name:'Prompt editável',exact:true});await expect(prompt).toHaveValue(`Revise o arquivo anexado ${shellPath(attachmentUploadedPath)}.`);await prompt.fill(attachmentDraft);await prompt.focus();const draftNode=await prompt.elementHandle();
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'es'});});expect(await draftNode!.evaluate(node=>node===document.activeElement)).toBe(true);await expect(root.getByRole('textbox',{name:'Prompt editable',exact:true})).toHaveValue(attachmentDraft);
   expect(await page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='host_clipboard_copy'))).toEqual([]);
   await root.getByRole('button',{name:'Copiar ruta sin formato en el Mac remoto',exact:true}).click();

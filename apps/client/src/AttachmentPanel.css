@@ -1,0 +1,18 @@
+.attachment-panel { display: flex; flex-direction: column; gap: 12px; }
+.attachment-panel > h3, .attachment-panel > p { margin: 0; }
+.attachment-panel details { min-width: 0; }
+.attachment-panel summary { min-height: 44px; cursor: pointer; padding-block: 12px; font-weight: 600; }
+.attachment-sources > .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.attachment-sources label { display: grid; gap: 6px; min-width: 0; }
+.attachment-sources input[type=file] { width: 100%; min-width: 0; padding: 8px; font-size: 12px; }
+.attachment-sources button { grid-column: 1 / -1; }
+.attachment-options > label, .attachment-completed details > label { display: grid; gap: 6px; margin-block: 8px; }
+.attachment-panel .form-stack { gap: 10px; }
+.attachment-panel .attachment-completed { padding: 12px; background: var(--theme-control); border: 1px solid var(--border); border-radius: 12px; }
+.attachment-completed > .primary-button { width: 100%; min-height: 44px; }
+.attachment-completed details button { margin-block: 4px; }
+
+.attachment-sources > .button-row > label { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 72px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--theme-control); cursor: pointer; }
+.attachment-sources > .button-row > label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.attachment-sources input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.attachment-panel [hidden] { display: none; }

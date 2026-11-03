@@ -43,6 +43,7 @@ for(const scenario of [
   await (await workspaceControl(page,'Attach')).click();
   await page.getByLabel('Choose attachment',{exact:true}).setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('literal upload bytes')});
   await page.getByRole('button',{name:'Upload attachment',exact:true}).click();
+  await page.getByText('More attachment actions',{exact:true}).click();
   const prompt=page.getByRole('textbox',{name:'Editable prompt',exact:true});
   await prompt.fill('  keep this editable prompt unchanged  ');
   expect(await page.evaluate(()=>window.attachmentPasteApp.writes)).toEqual([]);

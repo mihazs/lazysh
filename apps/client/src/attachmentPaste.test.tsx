@@ -6,6 +6,7 @@ import {api} from './bridge';
 import {attachmentFile,attachmentReceipt,attachmentUploadedPath} from './test/attachmentData';
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import {accessSnapshot,applyAccessStatus} from './access';
+import {formatNumber,t} from './i18n/core';
 
 vi.mock('./bridge',()=>({api:{reserveUpload:vi.fn(),cancelUpload:vi.fn(),uploadFile:vi.fn()}}));
 beforeEach(()=>{
@@ -87,6 +88,7 @@ it.each(['edit','cancel','failure','chat'] as const)('does not expose terminal p
     await waitFor(()=>expect(screen.getByRole('alert').textContent).toBe('RAW upload failure'));
   }else{
     await upload();
+    if(boundary==='edit'||boundary==='cancel')fireEvent.click(screen.getByText(t('attachmentMetadata',{name:attachmentFile().name,bytes:formatNumber(attachmentFile().size)})));
     if(boundary==='edit')fireEvent.change(screen.getByLabelText('Destination path'),{target:{value:'/different/file.txt'}});
     if(boundary==='cancel')fireEvent.click(screen.getByRole('button',{name:'Cancel attachment'}));
   }
