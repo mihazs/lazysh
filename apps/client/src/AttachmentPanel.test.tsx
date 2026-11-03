@@ -141,3 +141,28 @@ it('keeps edited attachment and destination through explicit upload recovery wit
   await waitFor(()=>expect(api.uploadFile).toHaveBeenCalledTimes(2));
   expect(api.uploadFile).toHaveBeenLastCalledWith('ssh-one','./original-edited.png',[7,8,9],attachmentReceipt);
 });
+
+it('puts the explicit uploaded-path action before optional tools without sending automatically',async()=>{
+  const onPastePath=vi.fn().mockResolvedValue(undefined);
+  vi.mocked(api.uploadFile).mockResolvedValue({path:'/work/report.txt'});
+  render(<AttachmentPanel sessionId="ssh-one" onPastePath={onPastePath}/>);
+  fireEvent.change(screen.getByLabelText('Choose attachment'),{target:{files:[file()]}});
+  await screen.findByText(/report.txt · 5 bytes/);
+  expect(screen.getByText('Upload options').closest('details')?.open).toBe(false);
+  const selected=screen.getByText(/report.txt · 5 bytes/).closest('details')!;
+  expect(selected.open).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  const paste=await screen.findByRole('button',{name:'Paste uploaded path'});
+  const options=screen.getByText('More attachment actions').closest('details')!;
+  expect(options.open).toBe(false);
+  expect(selected.open).toBe(false);
+  expect(screen.getByRole('button',{name:'Upload attachment'}).closest('details')).toBe(selected);
+  expect(paste.compareDocumentPosition(options)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(onPastePath).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText(/report.txt · 5 bytes/));
+  expect(screen.getByRole('button',{name:'Upload attachment'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Cancel attachment'})).toBeTruthy();
+  expect(api.uploadFile).toHaveBeenCalledTimes(1);
+  fireEvent.click(paste);
+  await waitFor(()=>expect(onPastePath).toHaveBeenCalledTimes(1));
+});

@@ -1,5 +1,18 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  herdrSharedFocusShort: 'Changes focus for other connections.',
+  herdrLiveSearch: 'Search live agents',
+  pushUnifiedPrerequisite: "Install and open a UnifiedPush distributor, such as ntfy. Configure its server, enable notifications from lazysh’s inbox, then refresh.",
+  pushUnifiedEnrollment: "Open and configure ntfy or your UnifiedPush distributor. Enable notifications from lazysh’s inbox. Your operator’s HTTPS relay address and one-time code connect delivery and register this device. Review display separately.",
+  pushRegistrationOnly: "Registration only (optional)",
+  pushUnifiedPauseBeforeConnect: "Pause registration and finish cleanup before starting a new relay connection.",
+  pushSetupService: 'Choose a service',
+  pushSetupDevice: 'Register this device',
+  pushSetupDelivery: 'Connect delivery',
+  pushSetupDisplay: 'Review notification display',
+  pushSetupHelp: 'Setup and privacy details',
+  attachmentOptions: 'Upload options',
+  attachmentOtherActions: 'More attachment actions',
   agentsSections: "Agent sections",
   agentsJumpLive: "Live agents",
   agentsJumpActivity: "Activity",

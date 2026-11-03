@@ -4,6 +4,10 @@
 
 - Increase custom-theme glass opacity only when its selected chrome colors need more backing for readable text; bundled theme glass and solid accessibility fallbacks remain unchanged.
 
+- Keep Compose and the expanded D-pad mutually exclusive so the draft stays editable above a mobile keyboard; switching tools preserves the unsent draft.
+
+- Compact the terminal draft editor, prioritize uploaded attachment paths and explicit use, and guide push setup through relay enrollment. Agents opens Live by default; recorded Activity and setup stay available separately, with pending approvals reachable in both views. Connected sessions, drafts, upload protections and notification consent remain intact.
+
 - Keep recorded Conversation messages readable in constrained workspaces instead of letting the reading region collapse behind its controls.
 
 - Add an explicit recorded Codex Conversation view with turn rollback, canonical item updates and protected fork/revert prefixes; Records remains the default and recorded history does not grant live-agent or approval authority.
