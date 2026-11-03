@@ -127,6 +127,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  // Expanded input tools share the keyboard-sized workspace.
+  useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
   useEffect(()=>{
     const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen);
     onBackChange?.(session.id,available?()=>{
@@ -750,7 +752,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
           else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
           else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
-          else if (key === "dpad") setDpadOpen(!dpadOpen);
+          else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
           else sendKey(sequences[key] ?? key);
           if (modifier) focusTerminal();
         };
