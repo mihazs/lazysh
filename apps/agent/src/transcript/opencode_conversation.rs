@@ -344,14 +344,12 @@ pub(super) fn normalize(
         }
     }
     if role == "assistant" && data.get("error").is_some_and(|error| !error.is_null()) {
-        let mut failure = block(
-            "tool_result",
+        blocks.push(block(
+            "text",
             "Agent response failed; inspect the host agent terminal".into(),
             None,
             None,
-        );
-        failure["isError"] = json!(true);
-        blocks.push(failure);
+        ));
     }
     if blocks.is_empty() {
         return Ok(None);
@@ -541,7 +539,7 @@ mod tests {
     #[test]
     fn restoring_the_retained_path_cannot_publish_a_different_sqlite_file() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("opencode.db");
+        let path = directory.path().canonicalize().unwrap().join("opencode.db");
         let original = Connection::open(&path).unwrap();
         original
             .execute_batch("CREATE TABLE original(id TEXT)")

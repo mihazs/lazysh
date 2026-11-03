@@ -12,7 +12,7 @@ struct Fixture {
 impl Fixture {
     fn new(v2: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
+        let path = dir.path().canonicalize().unwrap().join("opencode.db");
         let db = Connection::open(&path).unwrap();
         db.execute_batch(if v2 {
             "CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,revert TEXT,time_updated INTEGER);
@@ -295,17 +295,28 @@ fn tool_failures_with_only_files_keep_error_on_a_result_and_private_error_opaque
 fn empty_failed_responses_remain_visible_and_recorded_usage_is_preserved() {
     for v2 in [false, true] {
         let f = Fixture::new(v2);
+        let error = if v2 {
+            json!({"type":"api","message":"failure","response":{"body":"private"}})
+        } else {
+            json!({"name":"APIError","data":{"responseHeaders":{"authorization":"private"}}})
+        };
         f.message(
             "msg_a",
             1,
             "assistant",
             json!({"content":[],
-                "error":{"name":"APIError","data":{"responseHeaders":{"authorization":"private"}}},
+                "error":error,
                 "tokens":{"input":15,"output":3,"cache":{"read":9,"write":2}}
             }),
         );
         let page = f.page(50);
-        assert_eq!(page["messages"][0]["blocks"][0]["isError"], true);
+        let failure = &page["messages"][0]["blocks"][0];
+        assert_eq!(failure["type"], "text");
+        assert!(failure["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Agent response failed"));
+        assert!(failure.get("isError").is_none());
         assert_eq!(
             page["messages"][0]["usage"],
             json!({"inputTokens":15,"outputTokens":3,"cacheReadTokens":9,"cacheWriteTokens":2})
