@@ -23,6 +23,9 @@ fn conversation_options(
     limit: u8,
     inline_images: bool,
 ) -> Result<TranscriptPage> {
+    if matches!(agent, TranscriptAgent::Codex) {
+        return super::codex_conversation::conversation(path, limit);
+    }
     if matches!(agent, TranscriptAgent::GrokAcp) {
         return super::grok_conversation::conversation(path, limit);
     }
@@ -112,7 +115,7 @@ fn conversation_options(
 
 // Observe one initial prefix, allowing append-only growth without pausing Follow.
 // Changed metadata requires one exact prefix comparison, never a capture retry.
-fn capture(path: &Path) -> Result<Vec<u8>> {
+pub(super) fn capture(path: &Path) -> Result<Vec<u8>> {
     let mut file = open_transcript(path)?;
     let before = super::SourceSnapshot::capture(&file)?;
     drop(selected_source(path, &file, &before)?);
@@ -132,30 +135,52 @@ fn capture(path: &Path) -> Result<Vec<u8>> {
         || after.modified()? != before.modified()?
         || selected_metadata.modified()? != before.modified()?
     {
-        let mut chunk = [0; 8192];
-        for expected in bytes.chunks(chunk.len()) {
-            selected
-                .read_exact(&mut chunk[..expected.len()])
-                .map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                        Error::InvalidEvent
-                    } else {
-                        error.into()
-                    }
-                })?;
-            #[cfg(test)]
-            snapshot_audit::verify_observer();
-            if chunk[..expected.len()] != *expected {
-                return Err(Error::InvalidEvent);
-            }
-        }
+        compare_prefix(&mut selected, &bytes)?;
         selected_source(path, &selected, &before)?;
         selected_source(path, &file, &before)?;
     }
     Ok(bytes)
 }
 
-fn selected_source(path: &Path, file: &File, before: &super::SourceSnapshot) -> Result<File> {
+fn compare_prefix(selected: &mut File, bytes: &[u8]) -> Result<()> {
+    let mut chunk = [0; 8192];
+    for expected in bytes.chunks(chunk.len()) {
+        selected
+            .read_exact(&mut chunk[..expected.len()])
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                    Error::InvalidEvent
+                } else {
+                    error.into()
+                }
+            })?;
+        #[cfg(test)]
+        snapshot_audit::verify_observer();
+        if chunk[..expected.len()] != *expected {
+            return Err(Error::InvalidEvent);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn verify_captured(
+    path: &Path,
+    before: &super::SourceSnapshot,
+    bytes: &[u8],
+) -> Result<()> {
+    let source = open_transcript(path)?;
+    let mut selected = selected_source(path, &source, before)?;
+    compare_prefix(&mut selected, bytes)?;
+    selected_source(path, &selected, before)?;
+    selected_source(path, &source, before)?;
+    Ok(())
+}
+
+pub(super) fn selected_source(
+    path: &Path,
+    file: &File,
+    before: &super::SourceSnapshot,
+) -> Result<File> {
     let selected = open_transcript(path)?;
     for source in [file, &selected] {
         before.same_file(source)?;
