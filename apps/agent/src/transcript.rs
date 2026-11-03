@@ -22,6 +22,8 @@ mod grok_conversation;
 mod inline_image;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
+mod opencode_conversation;
+pub use opencode_conversation::conversation as opencode_conversation;
 #[cfg(test)]
 mod mutation_observer;
 mod snapshot;

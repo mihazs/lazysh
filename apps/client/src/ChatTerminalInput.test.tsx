@@ -139,7 +139,7 @@ it.each(Object.keys(transcriptAgents))('admits explicit Records context for the 
 it.each(Object.keys(transcriptAgents) as TranscriptAgentId[])('enforces the native-reader option matrix for %s',agent=>{
   for(const view of ['records','conversation'])for(const inlineImages of [false,true]){
     const context={...tmuxChatReaderSource(agent),view,inlineImages};
-    const expected=(view==='records'||['claude','grok-acp'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
+    const expected=(view==='records'||['claude','grok-acp','opencode'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
     expect(validTerminalSource(context)).toBe(expected);
   }
 });

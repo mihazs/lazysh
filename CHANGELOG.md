@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicitly selected OpenCode recorded Conversation views for V1 and V2 databases, with current tool updates, revert handling and recorded token counters. Records remains the default; recorded history does not establish live agent identity or enable unconfirmed input.
+
 - Change toolbar Shift to one-shot: it clears after the next completed key, while a held arrow or D-pad gesture keeps its initial Shift for that hold. Tapping Shift again turns it off without sending pending IME text. Explicit Control and Alt locks are unchanged.
 
 - Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.

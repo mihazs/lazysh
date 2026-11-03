@@ -425,7 +425,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                         if offset != 0 || checkpoint.is_some() {
                             return Err(Error::InvalidArgument);
                         }
-                        if inline_images {
+                        if matches!(agent, lazysh_agent::transcript::TranscriptAgent::Opencode) {
+                            lazysh_agent::transcript::opencode_conversation(
+                                &path,
+                                session_id.as_deref().ok_or(Error::InvalidArgument)?,
+                                limit,
+                            )?
+                        } else if inline_images {
                             lazysh_agent::transcript::claude_conversation_images(&path, limit)?
                         } else {
                             lazysh_agent::transcript::conversation(&path, agent, limit)?

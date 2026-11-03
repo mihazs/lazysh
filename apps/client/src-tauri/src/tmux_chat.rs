@@ -67,7 +67,10 @@ impl Source {
                 id.is_empty() || id.len() > 256 || id.chars().any(char::is_control)
             })
             || (self.view == View::Conversation
-                && !matches!(&self.agent, Agent::Claude | Agent::GrokAcp))
+                && !matches!(
+                    &self.agent,
+                    Agent::Claude | Agent::GrokAcp | Agent::Opencode
+                ))
             || (self.inline_images
                 && !(matches!(&self.agent, Agent::Claude)
                     || (self.view == View::Records
@@ -794,7 +797,8 @@ mod tests {
                         value["transcriptSessionId"] = "literal-session".into();
                     }
                     let source: Source = serde_json::from_value(value.clone()).unwrap();
-                    let expected = (view == "records" || matches!(agent, "claude" | "grok-acp"))
+                    let expected = (view == "records"
+                        || matches!(agent, "claude" | "grok-acp" | "opencode"))
                         && (!images
                             || agent == "claude"
                             || (view == "records" && matches!(agent, "codex" | "grok-acp")));

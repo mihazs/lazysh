@@ -32,8 +32,7 @@ The closed reader IDs are `claude`, `codex`, `pi`, `omp`, `hermes`, `opencode`,
 record/export formats; it does not make them verified live-process integrations.
 Gemini/Qwen's hook-only tier and unknown IDs retain the TUI fallback.
 
-Records are supported for every reader. Conversation is supported for Claude and
-Grok; recorded images retain the existing Claude Records/conversation and
+Records are supported for every reader. Conversation is supported for Claude, Grok and OpenCode; recorded images retain the existing Claude Records/conversation and
 Grok/Codex Records limits. Other option combinations fail closed. Hermes and
 OpenCode additionally require their exact database `transcriptSessionId`, bounded
 to 256 UTF-8 bytes without control characters. Other readers must omit that field;
@@ -103,6 +102,35 @@ raw syntax. Command acknowledgement means tmux completed the input command; it
 does not prove process receipt, provider acceptance, or that an agent stopped. A process can exit or change
 after confirmation; this terminal contract cannot guarantee atomic consumption by
 a particular process.
+
+## OpenCode recorded conversations
+
+Select an exact session from the host's `opencode.db`, then choose Conversation.
+Records remains the default. Conversation reads the current selected projection
+from OpenCode 1.19.5 or 2.2.5 schemas; it does not establish a live agent identity.
+When migrated tables coexist, a selected V2 session takes precedence over its
+legacy copy. Child sessions use their own projected history, without replaying
+parent messages.
+
+V2 assistant parts replace older inline content. Queued user messages and the
+staged revert tail are hidden as in the host UI. V1 staged reverts hide the target
+and tail; a committed partial revert displays its retained prefix. Refresh replaces
+the projection so rewinds and tool updates do not append obsolete messages.
+
+The companion opens the selected database read-only and keeps one bounded SQLite
+snapshot. Reads stop at 10,000 messages or parts, 16 MiB of serialized source data,
+and the existing query budget. Output retains at most 100 messages within the
+512 KiB page limit and marks a trimmed page. Unsupported schemas and malformed
+records report an error; they do not fall back to another session. Attachments
+remain inert host-terminal labels. Provider state, response headers, blob data
+and media URLs are not exported or fetched. Recorded token counters are retained
+when present; no quota is inferred.
+
+Owned Linux qualification also read actual databases written by the official
+1.19.5 and 2.2.5 executables against a local synthetic provider. This does not
+establish commercial-provider, native WebView or physical-device acceptance.
+Confirmed input keeps the original explicit terminal destination and exact
+database-session selector checks.
 
 ## Native acceptance
 
