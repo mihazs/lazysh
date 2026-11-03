@@ -32,7 +32,7 @@ async function fixture(page:Page) {
     }}});
   });
   await page.goto('/');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords',{exact:true}).click();
 }

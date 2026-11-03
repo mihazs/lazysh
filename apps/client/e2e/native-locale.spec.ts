@@ -1,6 +1,6 @@
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 
 test('native choice wins on cold load; explicit changes, reload and reset use native persistence',async({page})=>{
   let choice='pt-BR',revision='0';const calls:string[]=[];
@@ -25,12 +25,13 @@ test('native choice wins on cold load; explicit changes, reload and reset use na
   });
   await page.goto('/');await expect(page.locator('html')).toHaveAttribute('lang','pt-BR');
   expect(calls).toEqual(['ui_locale_status']);
-  await page.locator('.preferences-button').click();
+  const preferences=async()=>workspaceControl(page,await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('appPreferences');}));
+  await (await preferences()).click();
   await openPreferenceCategory(page,'Language');
   await page.getByRole('combobox',{name:'Idioma do aplicativo',exact:true}).selectOption('es');
   await expect(page.locator('html')).toHaveAttribute('lang','es');
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang','es');
-  await page.locator('.preferences-button').click();
+  await (await preferences()).click();
   await openPreferenceCategory(page,'Language');
   await expect(page.getByRole('combobox',{name:'Idioma de la aplicación',exact:true})).toHaveValue('es');
   await openPreferenceCategory(page,'Reset');

@@ -1,5 +1,5 @@
 import {installThemeLocaleBridge} from './fixtures/themeLocaleBridge';
-import {openPreferenceCategory,openThemeImport} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory,openThemeImport} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {expect,test} from '@playwright/test';
 for (const value of [
@@ -24,7 +24,7 @@ for (const value of [
   expect(ratios.filter(item=>item.ratio<4.5)).toEqual([]);
   await page.getByRole('button',{name:'Export theme share code',exact:true}).click();
   const code=await page.getByLabel('Exported theme',{exact:true}).inputValue();expect(code).toMatch(/^lazysh-theme:/);
-  await page.reload();await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await page.reload();await (await workspaceControl(page,'Preferences')).click();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme','custom');
   await openPreferenceCategory(page,'Appearance');
   await page.getByText('Import and share theme',{exact:true}).click();
@@ -70,6 +70,6 @@ for(const palette of [null,'#767676','#757575','#ffffff','#000000'])test(`glass 
     }
     await page.emulateMedia({forcedColors:'active'});expect(await dialog.evaluate(e=>getComputedStyle(e).backdropFilter)).toBe('none');expect(await dialog.evaluate(e=>getComputedStyle(e).backgroundColor)).not.toContain('/');await page.emulateMedia({forcedColors:'none'});
     await media.send('Emulation.setEmulatedMedia',{features:[]});if(phone)await dialog.getByRole('button',{name:'Close Workspace tools',exact:true}).click();
-    if(terminal==='midnight'){if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();await page.locator('details.workspace-application-options>summary').click();}await page.getByRole('button',{name:'Preferences',exact:true}).click();await openPreferenceCategory(page,'Appearance');}
+    if(terminal==='midnight'){if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();await page.locator('details.workspace-application-options>summary').click();}await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Appearance');}
   }
 });

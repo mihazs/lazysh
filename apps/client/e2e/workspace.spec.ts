@@ -1186,6 +1186,10 @@ test('focused work destinations retain the terminal and expose every contextual 
   await expect(page.getByRole('navigation',{name:'Session views',exact:true})).toHaveCount(0);
   const tools=page.getByRole('button',{name:'Workspace tools',exact:true});await tools.click();
   const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  await expect(dialog.locator('details.workspace-application-options')).toHaveJSProperty('open',false);
+  await (await workspaceControl(page,'Preferences')).click();
+  await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();
+  await page.keyboard.press('Escape');await expect(tools).toBeFocused();await tools.click();
   await dialog.locator('details.workspace-more-tools > summary').click();
   for(const name of ['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices']) {
     const action=dialog.getByRole('button',{name,exact:true});await action.scrollIntoViewIfNeeded();await expect(action).toBeInViewport();

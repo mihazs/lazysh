@@ -1,4 +1,4 @@
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import { expect, test } from '@playwright/test';
@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 const fontFile = new URL('./fixtures/LiberationMono-Regular.ttf', import.meta.url).pathname;
 
 async function preferences(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts', { exact: true }).click();
 }
@@ -57,7 +57,7 @@ test('font count is bounded and missing selections report fallback explicitly', 
 
 test('brand, light and dark themes keep controls readable and reset', async ({ page }, testInfo) => {
   await page.goto('/');
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Appearance');
   const appTheme = page.getByRole('combobox', {name: 'App theme', exact: true});
   await expect(appTheme.locator('option[value="forest"]')).toHaveText('lazysh');
@@ -152,7 +152,7 @@ test('long settings use a mobile page with a persistent close action and short c
 
 test('Preferences starts with compact categories at the top and keeps drafts while switching them',async({page},testInfo)=>{
   await page.goto('/');if(testInfo.project.name==='phone')await page.setViewportSize({width:393,height:852});
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
   await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
   expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
