@@ -233,3 +233,26 @@ it('retains partial UnifiedPush recovery and cleanup without inferring an empty 
   expect(document.body.textContent).not.toContain('PRIVATE_NATIVE_REJECTION');
   expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_enroll','push_registration_status']);
 });
+
+
+it.each(['fcm','unifiedpush','apns'])('keeps %s privacy before consent, then available in healthy setup details without native calls',async provider=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...off,provider}).mockResolvedValue({...off,provider,enabled:true,tokenPresent:true});
+  render(<PushSettingsPanel/>);
+  const consent=await screen.findByRole('checkbox');
+  const notice=screen.getByText(/This control does not upload SSH credentials/);
+  const original=notice.textContent;
+  expect(notice.closest('details')).toBeNull();
+  expect(notice.compareDocumentPosition(consent)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(consent).toHaveProperty('checked',false);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh registration status'}));
+  await screen.findByRole('button',{name:provider==='apns'?'Disable APNs registration':provider==='unifiedpush'?'Pause and remove registration':'Pause and revoke token'});
+  const retained=screen.getByText(original!);
+  const help=screen.getByText('Setup and privacy details').closest('details')!;
+  expect(retained.closest('details')).toBe(help);
+  expect(help.open).toBe(false);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  fireEvent.click(screen.getByText('Setup and privacy details'));
+  expect(help.open).toBe(true);
+  expect(retained.textContent).toBe(original);
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_status']);
+});

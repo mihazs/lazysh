@@ -58,6 +58,7 @@ export default function PushSettingsPanel() {
   const apple = status?.provider === 'apns';
   const unified = status?.provider === 'unifiedpush';
   const provider = apple ? 'Apple APNs' : unified ? 'UnifiedPush' : 'Google Firebase';
+  const privacy=status && status.provider!=='none' ? <p className="push-privacy">{t('pushPrivacy',{provider})}</p> : null;
   const choices=[...new Set(status?.availableProviders??[])].filter(provider=>provider==='fcm'||provider==='unifiedpush');
   const choosingDisabled=busy||status?.enabled===true||status?.tokenPresent===true;
   const registering = ['push_registration_register','push_registration_enroll'].includes(activeCommand);
@@ -70,7 +71,7 @@ export default function PushSettingsPanel() {
     {choices.length>1&&<label className="push-provider"><span>{t('pushSetupService')}</span><select aria-label={t('pushProvider')} value={status?.provider} disabled={choosingDisabled} onChange={event=>void run('push_registration_provider',{provider:event.target.value})}>{choices.map(choice=><option key={choice} value={choice}>{choice==='unifiedpush'?'UnifiedPush':'Google Firebase'}</option>)}</select></label>}
     {choices.length>1&&choosingDisabled&&<p>{t('pushProviderChoiceHint')}</p>}
     <p role="status">{!isTauri() ? t('pushNativeRequired') : status?.provider === 'none' ? t('pushUnavailable') : status?.reason ?? t('pushInspecting')}</p>
-    {status && status.provider !== 'none' && <p className="push-privacy">{t('pushPrivacy',{provider})}</p>}
+    {!status?.enabled && privacy}
     {unified && status?.supported && !status.configured && <p>{t('pushUnifiedPrerequisite')}</p>}
     {status?.supported && status.configured && !status.enabled && <label className="push-consent">
       <input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} disabled={busy} />
@@ -90,7 +91,7 @@ export default function PushSettingsPanel() {
       </button></details>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}
-    <details className="push-help"><summary>{t('pushSetupHelp')}</summary>{status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}{unified && <><p>{t('pushUnifiedSetup')}</p><p>{t('pushUnifiedHint')}</p></>}</details>
+    <details className="push-help"><summary>{t('pushSetupHelp')}</summary>{status?.enabled && privacy}{status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}{unified && <><p>{t('pushUnifiedSetup')}</p><p>{t('pushUnifiedHint')}</p></>}</details>
     {error && <p role="alert">{t(error)}</p>}
   </section>;
 }
