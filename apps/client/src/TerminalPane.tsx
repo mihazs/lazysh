@@ -22,7 +22,7 @@ const labels: Partial<Record<ToolbarKey, string>> = {left: "←", up: "↑", dow
 type InputCaller = 'terminal-user' | 'terminal-nonuser' | 'named-key' | 'chord' | 'gesture';
 type InputOwner = {session: LiveSession; disposed: boolean};
 type DpadDirection = keyof typeof arrowLabelKeys;
-type DpadGesture = {pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;terminal:LiveSession['terminal'];id:string};
+type DpadGesture = {readonly shift:boolean;pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;terminal:LiveSession['terminal'];id:string};
 
 export function terminalWebUrl(value: string): string | undefined {
   if (value.length > 4096 || /[\s\x00-\x1f\x7f-\x9f\\]/.test(value) || !/^https?:\/\//i.test(value)) return;
@@ -71,15 +71,16 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
-  const repeat = useRef<{delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
+  const repeatShift = useRef<boolean | undefined>(undefined);
+  const repeat = useRef<{readonly shift?:boolean;delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
   const dpad = useRef<{pointers:Map<number,string>;pointerType:string;gesture:DpadGesture|null;blocked:boolean;suppressClick:boolean}>({pointers:new Map(),pointerType:"",gesture:null,blocked:false,suppressClick:false});
   const dpadView = useRef({session,enabled:false});
   const dpadElement = useRef<HTMLDivElement>(null);
   const [dpadDirection,setDpadDirection] = useState<DpadDirection|null>(null);
-  function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {};}
-  function startRepeat(action:()=>void,delay=400) {
-    stopRepeat();const owner:typeof repeat.current={};repeat.current=owner;
-    const tick=()=>{if(repeat.current===owner)action();};
+  function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {}; repeatShift.current = undefined;}
+  function startRepeat(action:()=>void,delay=400,shift=modifierState.current.shift) {
+    stopRepeat();const owner:typeof repeat.current={shift};repeat.current=owner;
+    const tick=()=>{if(repeat.current!==owner)return;repeatShift.current=owner.shift;try{action();}finally{repeatShift.current=undefined;}};
     owner.delay=setTimeout(()=>{if(repeat.current!==owner)return;repeated.current=true;tick();if(repeat.current===owner&&!document.hidden)owner.timer=setInterval(tick,80);},delay);
   }
   function cancelDpad() {
@@ -87,7 +88,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if(mounted.current)setDpadDirection(null);
   }
   function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; cancelDpad();}
-  function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);}}
+  function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);} state.shift = false; setShift(false);}
   function pasteLiteral(text: string) {if (imeInput.current?.flush() === false) return false; literalPaste.current = true; try {session.terminal.paste(text); return true;} finally {literalPaste.current = false;}}
   const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent, owner?:InputOwner) => boolean>(() => false);
   const [unappliedEdit, setUnappliedEdit] = useState<UnappliedTerminalEdit | null>(null);
@@ -164,7 +165,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       if(dpad.current.gesture!==gesture||!ownsDpad(gesture)||!gesture.direction){cancelDpad();return;}
       if(!sendNamedRef.current(gesture.direction[0].toUpperCase()+gesture.direction.slice(1),undefined,gesture.owner)){cancelDpad();return;}
       gesture.sent=true;
-    },age>=400?80:400-age);
+    },age>=400?80:400-age,gesture.shift);
   }
   function dpadDown(event:ReactPointerEvent<HTMLDivElement>) {
     const state=dpad.current;
@@ -174,7 +175,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const button=(event.target as Element).closest<HTMLButtonElement>('button[data-dpad-direction]');
     if(!button||event.button!==0||!inputOwner.current)return;
     event.preventDefault();
-    const gesture:DpadGesture={pointer:event.pointerId,x:event.clientX,y:event.clientY,started:performance.now(),direction:button.dataset.dpadDirection as DpadDirection,panned:false,sent:false,owner:inputOwner.current,terminal:session.terminal,id:session.id};
+    const gesture:DpadGesture={shift:modifierState.current.shift,pointer:event.pointerId,x:event.clientX,y:event.clientY,started:performance.now(),direction:button.dataset.dpadDirection as DpadDirection,panned:false,sent:false,owner:inputOwner.current,terminal:session.terminal,id:session.id};
     if(!ownsDpad(gesture)||!Number.isFinite(event.clientX)||!Number.isFinite(event.clientY))return;
     // Without capture, preserve ordinary clicks but do not start an unowned hold.
     if(!event.currentTarget.setPointerCapture)return;
@@ -490,11 +491,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (document.hidden) {clearModifiers(); repeated.current = true; return false;}
     if (imeInput.current?.flush() === false || !current() || document.hidden) return false;
     const state = modifierState.current;
-    const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
+    const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${((repeatShift.current ?? state.shift) && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
     try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`),expectedOwner).catch(error => reportError(captureUiError(error)));}
     catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return false;}
     consumeModifiers();
-    if (key === "Tab") {modifierState.current.shift = false; setShift(false);}
     focusTerminal();return true;
   }
   sendNamedRef.current = sendNamed;
@@ -736,6 +736,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         const action = () => {
           if (modifier) {
             if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
+            if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
             if (imeInput.current?.flush() === false) return;
             imeInput.current?.reset(); imeComposing.current = false;
           }

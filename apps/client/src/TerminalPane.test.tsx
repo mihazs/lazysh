@@ -83,18 +83,47 @@ it('preserves physical and toolbar Shift+Enter without submitting an ordinary En
   fireEvent.click(screen.getByRole('button',{name:'enter'}));
   expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u']);
 });
-it('applies latched Shift to keyless keyboard Enter without rewriting paste or terminal replies',()=>{
+it('applies one-shot Shift to keyless keyboard Enter without rewriting paste or terminal replies',()=>{
   const owner=mountInputOwner();owner.textarea.focus();
   fireEvent.click(screen.getByRole('button',{name:'Shift'}));
   for(const data of ['\r','\n']) {
     fireEvent.input(owner.textarea,{data,inputType:'insertLineBreak'});
-    owner.emit(data);
+    act(()=>owner.emit(data));
   }
   fireEvent.paste(owner.textarea);
   owner.emit('\n');
   owner.emit('\r',false);
-  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u','\n','\r']);
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\n','\n','\r']);
+  expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('false');
 });
+it('consumes one-shot toolbar Shift after a named key and a literal keyboard key',()=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  try {
+    const owner=mountInputOwner();const shift=screen.getByRole('button',{name:'Shift'});
+    fireEvent.click(shift);fireEvent.click(screen.getByRole('button',{name:'Arrow left'}));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');expect(shift.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    fireEvent.click(shift);fireEvent.input(owner.textarea,{data:'a',inputType:'insertText'});act(()=>owner.emit('a'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','a');expect(shift.getAttribute('aria-pressed')).toBe('false');
+  } finally {focused.mockRestore();}
+});
+it.each(['unapplied','composing'] as const)('disarms Shift locally while %s IME text remains guarded',mode=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+  try {
+    const owner=mountInputOwner(mode==='unapplied'?'previous':'');Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
+    const shift=screen.getByRole('button',{name:'Shift'});fireEvent.click(shift);
+    if(mode==='composing')fireEvent.compositionStart(owner.textarea);
+    else act(()=>{owner.textarea.value='previous';owner.textarea.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertReplacementText',bubbles:true,cancelable:true}));});
+    act(()=>{owner.textarea.value='local correction';owner.textarea.setSelectionRange(16,16);if(mode==='unapplied')fireEvent.input(owner.textarea,{data:'local correction',inputType:'insertReplacementText'});});
+    if(mode==='unapplied')expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+    terminal.focus.mockClear();const currentShift=screen.getByRole('button',{name:'Shift'});expect(currentShift).toHaveProperty('disabled',false);fireEvent.click(currentShift);
+    expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('false');expect(mocks.write).not.toHaveBeenCalled();expect(terminal.focus).not.toHaveBeenCalled();
+    if(mode==='unapplied'){expect(screen.getByText('Edit not sent · Review')).toBeDefined();expect(owner.textarea.readOnly).toBe(true);}
+    else expect(owner.textarea.value).toBe('local correction');
+  } finally {focused.mockRestore();}
+});
+
 function dpadFixture(initial="") {
   vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
   const owner=mountInputOwner(initial);fireEvent.click(screen.getByRole('button',{name:'dpad'}));
@@ -146,6 +175,12 @@ describe('expanded D-pad pointer ownership',()=>{
     fireEvent.click(pad.arrow('right'),{detail:0});expect(pad.bytes()).toEqual(['\x1b[A','\x1b[1;2C']);
     expect(pad.arrow('right').hasAttribute('aria-pressed')).toBe(false);
     fireEvent.click(screen.getByRole('button',{name:'D-pad left corner'}));expect(pad.bytes().at(-1)).toBe('\x03');
+  });
+  it('keeps Shift for one held D-pad pan and retires it at release',()=>{
+    const pad=dpadFixture();const shift=screen.getByRole('button',{name:'Shift'});fireEvent.click(shift);
+    pad.down();pad.advance(480);expect(shift.getAttribute('aria-pressed')).toBe('false');pad.move(-24,0);pad.advance(160);
+    expect(pad.bytes()).toEqual(['\x1b[1;2A','\x1b[1;2A','\x1b[1;2D','\x1b[1;2D']);pad.up();
+    fireEvent.click(pad.arrow('right'));expect(pad.bytes().at(-1)).toBe('\x1b[C');
   });
   it('preserves a corner touch click when its implicit pointer capture ends',()=>{
     const pad=dpadFixture(),corner=screen.getByRole('button',{name:'D-pad left corner'});
@@ -1160,7 +1195,7 @@ describe("extended touch toolbar", () => {
     expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\t','\x1b[C']);
     expect(onOpenAttachments).toHaveBeenCalledOnce();
   });
-  it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
+  it("cycles Control and Alt locks, consumes one-shot Shift, and sends named keys", () => {
     savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
     const key=(name:string)=>screen.getByRole('button',{name});
     fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl'));
@@ -1169,8 +1204,8 @@ describe("extended touch toolbar", () => {
     expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[24;5~','\x1b[5;5~']);
     fireEvent.click(key('ctrl · lock')); fireEvent.click(key('Shift')); fireEvent.click(key('Arrow left'));
     expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
-    expect(key('Shift').getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(key('Shift'));fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
     expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(key('AltGr')); fireEvent.click(key('Arrow right'));
     expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;7C');
@@ -1179,6 +1214,30 @@ describe("extended touch toolbar", () => {
     expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
     expect(key('Alt').getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(key('PageUp')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[5;7~');
+  });
+  it('keeps the initial Shift snapshot for one held toolbar key without lending it to another key',()=>{
+    vi.useFakeTimers();mount();const shift=screen.getByRole('button',{name:'Shift'}),left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.click(shift);fireEvent.pointerDown(left,{pointerId:7});act(()=>vi.advanceTimersByTime(560));
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[1;2D','\x1b[1;2D','\x1b[1;2D']);expect(shift.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    act(()=>vi.advanceTimersByTime(80));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    fireEvent.pointerUp(left,{pointerId:7});fireEvent.click(left,{detail:1});act(()=>vi.advanceTimersByTime(800));expect(mocks.write).toHaveBeenCalledTimes(5);
+    fireEvent.click(left);expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[D');
+  });
+  it.each(['cancel','blur','inactive','disconnect','lock'] as const)('retires held Shift at the %s boundary without leaking it to the next key',boundary=>{
+    vi.useFakeTimers();const owner=mountInputOwner();const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));fireEvent.pointerDown(left,{pointerId:17});act(()=>vi.advanceTimersByTime(400));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    if(boundary==='cancel')fireEvent.pointerCancel(left,{pointerId:17});
+    else if(boundary==='blur')fireEvent.blur(left);
+    else if(boundary==='lock'){act(()=>access(true));act(()=>access(false));}
+    else {
+      owner.view.rerender(<TerminalPane session={boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={owner.reportError} />);
+      owner.view.rerender(<TerminalPane session={owner.session} active reportError={owner.reportError} />);
+    }
+    act(()=>vi.advanceTimersByTime(800));expect(mocks.write).toHaveBeenCalledOnce();
+    if(boundary==='lock'){fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenCalledOnce();owner.view.unmount();terminal=createMockTerminal();mountInputOwner();}
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
   });
   it("repeats held navigation and stops on pointer cancellation and inactive sessions", () => {
     vi.useFakeTimers(); const view=mount();
