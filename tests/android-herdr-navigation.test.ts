@@ -128,12 +128,22 @@ test('the shared emulator wrapper rejects unknown owners and all exact command b
 
 function swipeGeometryFixture(){
   const rect={left:10,top:20,right:200,bottom:300,width:190,height:280};
-  const canvas={},surface={getClientRects:()=>[{}],getBoundingClientRect:()=>rect};
-  const terminal={classList:{contains:()=>true},parentElement:canvas,querySelectorAll:()=>[surface]};
-  const screen={parentElement:terminal,closest:()=>canvas,getBoundingClientRect:()=>rect,contains:(node:unknown)=>node===screen};
-  const viewport={offsetLeft:0,offsetTop:0,width:411,height:800,scale:1};
+  const rowState={height:'20px',lineHeight:'20px',count:14,connected:true,foreign:false,throws:false};
+  const canvas={isConnected:true,get ownerDocument(){return document;},getBoundingClientRect:()=>rect};
+  const surface={getClientRects:()=>[{}],getBoundingClientRect:()=>rect,scrollTop:0,scrollHeight:432,clientHeight:432};
+  const terminal={classList:{contains:()=>true},parentElement:canvas,querySelectorAll:()=>[surface],querySelector:()=>surface};
+  let rows:ReturnType<typeof createRow>[]=[];
+  function createRow(index:number){return {
+    get isConnected(){return rowState.connected;},get ownerDocument(){return rowState.foreign?{}:document;},closest:()=>screen,
+    style:{get height(){if(rowState.throws)throw Error('private row failure');return rowState.height;},get lineHeight(){return rowState.lineHeight;}},
+    getBoundingClientRect:()=>{const height=parseFloat(rowState.height),top=rect.top+index*height;return {...rect,top,bottom:top+height,height};},
+  };}
+  const screen={parentElement:terminal,closest:()=>canvas,isConnected:true,get ownerDocument(){return document;},textContent:'OLD500',
+    getBoundingClientRect:()=>rect,contains:(node:unknown)=>node===screen||rows.includes(node as never),
+    querySelectorAll:()=>{rows=Array.from({length:rowState.count},(_,index)=>createRow(index));return rows;}};
   const document={elementFromPoint:()=>screen};
-  return {rect,canvas,surface,terminal,screen,viewport,document};
+  const viewport={offsetLeft:0,offsetTop:0,width:411,height:800,scale:1};
+  return {rect,rowState,canvas,surface,terminal,screen,viewport,document};
 }
 test('native swipe geometry exposes the finite first unavailable stage instead of conflating empty hit results',async()=>{
   const geometry=await oracle('ownedHerdrSwipeGeometry'),f=swipeGeometryFixture();
@@ -156,6 +166,61 @@ test('native geometry identifies structure, surface, bounds and hit failures wit
   const hit=run(f=>{f.document.elementFromPoint=()=>({textContent:'private output',id:'secret'} as never);});
   expect(hit.diagnostic.stage).toBe('hits');expect(hit.diagnostic.hits).toEqual(['other','other','other']);
   expect(JSON.stringify(hit.diagnostic)).not.toMatch(/private|secret|textContent/);
+});
+
+test('gesture qualification uses current public cells after bootstrap expansion, never cached row ratios',async()=>{
+  const geometry=await oracle('ownedHerdrSwipeGeometry'),f=swipeGeometryFixture();
+  Object.assign(f.rect,{height:144,bottom:164});Object.assign(f.rowState,{height:'24px',lineHeight:'24px',count:6});
+  const bootstrap=geometry([f.screen],f.viewport,2.625,f.document);
+  expect(bootstrap.ready).toBe(true);
+  // Surface bootstrap remains possible while its quarter-point is still header chrome.
+  expect(geometry([f.screen],f.viewport,2.625,f.document,true).ready).toBe(false);
+  Object.assign(f.rect,{height:432,bottom:452});f.rowState.count=18;
+  const current=geometry([f.screen],f.viewport,2.625,f.document,true);
+  expect(current).toMatchObject({ready:true,rowHeight:24,rowCount:18,originRow:4});
+  expect(bootstrap.rect[1]+(bootstrap.rect[3]-bootstrap.rect[1])/4).toBe(56);
+  expect(current.rect[1]+(current.rect[3]-current.rect[1])/4).toBe(128);
+  expect(current.rect).not.toEqual(bootstrap.rect);
+});
+
+test.each(['missing','unitless','nonfinite','oversized','line-height','foreign','disconnected','throwing','bucket'] as const)('gesture qualification fails closed on %s public row metrics',async invalid=>{
+  const geometry=await oracle('ownedHerdrSwipeGeometry'),f=swipeGeometryFixture();
+  if(invalid==='missing')f.rowState.count=0;
+  if(invalid==='unitless')f.rowState.height='20';
+  if(invalid==='nonfinite')f.rowState.height='NaNpx';
+  if(invalid==='oversized')f.rowState.height=f.rowState.lineHeight='33px';
+  if(invalid==='line-height')f.rowState.lineHeight='21px';
+  if(invalid==='foreign')f.rowState.foreign=true;
+  if(invalid==='disconnected')f.rowState.connected=false;
+  if(invalid==='throwing')f.rowState.throws=true;
+  if(invalid==='bucket')f.rowState.height=f.rowState.lineHeight='1px';
+  const result=geometry([f.screen],f.viewport,2.625,f.document,true);
+  expect(result.ready).toBe(false);expect(JSON.stringify(result)).not.toMatch(/private|NaNpx/);
+});
+
+test.each(['unchanged','changed','metrics','row-count','foreign','disconnected','unavailable'] as const)('calibrated first DOWN keeps its original geometry or retires on %s landing',async state=>{
+  const f=swipeGeometryFixture();
+  const asset=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-herdr-finger.js'),'utf8');
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const wrapper=kotlin.match(/val fingerObservation = """([\s\S]*?)"""\.trimIndent\(\)/)![1].replaceAll('$fingerScript',asset).replaceAll('$screens','[screen]').replaceAll('$fingerKey',JSON.stringify('bound'));
+  const hooks=new Map<string,(event:any)=>void>(),globalHooks=new Map<string,(event:any)=>void>();
+  Object.assign(f.canvas,{contains:(node:unknown)=>node===f.screen||node===f.surface,
+    addEventListener:(name:string,callback:(event:any)=>void)=>hooks.set(name,callback),removeEventListener:(name:string)=>hooks.delete(name)});
+  const window:Record<string,any>={addEventListener:(name:string,callback:(event:any)=>void)=>globalHooks.set(name,callback),removeEventListener:(name:string)=>globalHooks.delete(name)};
+  window.visualViewport=f.viewport;
+  const installation=new Function('window','document','devicePixelRatio','screen','getComputedStyle',`return (${wrapper})`)(window,f.document,2.625,f.screen,()=>({visibility:'visible'}));
+  expect(installation).toMatchObject({installed:true,geometry:{ready:true,rowHeight:20,rowCount:14,originRow:3}});
+  if(state==='changed'){f.rect.height+=20;f.rect.bottom+=20;}
+  if(state==='metrics')f.rowState.height=f.rowState.lineHeight='24px';
+  if(state==='row-count')f.rowState.count=15;
+  if(state==='foreign')f.document.elementFromPoint=()=>({} as never);
+  if(state==='disconnected')f.screen.isConnected=false;
+  if(state==='unavailable')f.screen.getBoundingClientRect=()=>{throw Error('private layout failure');};
+  globalHooks.get('pointerdown')!({type:'pointerdown',isTrusted:true,eventPhase:1,target:f.screen,pointerId:7,clientX:105,clientY:90});
+  hooks.get('touchstart')!({type:'touchstart',isTrusted:true,target:f.screen,touches:[{identifier:7}]});
+  const sample=window.bound.sample();
+  expect(sample.active).toBe(state==='unchanged');expect(JSON.stringify(sample)).not.toContain('private');
+  window.bound.dispose();expect(hooks.size).toBe(0);expect(globalHooks.size).toBe(0);
 });
 
 test('passive finger observer keeps exact touch identity while bounding wheel observations and removing every listener',async()=>{

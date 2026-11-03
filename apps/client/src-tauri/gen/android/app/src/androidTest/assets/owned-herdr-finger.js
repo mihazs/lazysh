@@ -1,4 +1,20 @@
-function ownedHerdrSwipeGeometry(screens, viewport, density, document) {
+function ownedHerdrPublicRows(screen, canvas, document) {
+  try {
+    const elements=screen.querySelectorAll('.xterm-rows > div');
+    if(!Number.isInteger(elements.length)||elements.length<3||elements.length>4096||screen.isConnected!==true||
+      screen.ownerDocument!==document||canvas.isConnected!==true||canvas.ownerDocument!==document)return null;
+    const rows=Array.from(elements),height=rows[0].style.height,line=rows[0].style.lineHeight;
+    const pixels=value=>typeof value==='string'&&/^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)px$/.test(value)?parseFloat(value):NaN;
+    const rowHeight=pixels(height);
+    // A completed initial group contains TWO 16 CSS-pixel drags, not one.
+    if(!Number.isFinite(rowHeight)||rowHeight<=0||rowHeight>32||pixels(line)!==rowHeight||
+      rows.some(row=>row.isConnected!==true||row.ownerDocument!==document||row.closest('.xterm-screen')!==screen||
+        !screen.contains(row)||row.style.height!==height||pixels(row.style.lineHeight)!==rowHeight))return null;
+    return {rows,rowHeight};
+  }catch{return null;}
+}
+
+function ownedHerdrSwipeGeometry(screens, viewport, density, document, qualifyGesture=false) {
   const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):-1;
   const diagnostic={stage:'screen-count',screenCount:Math.min(8,screens.length),hasViewport:!!viewport,
     scale:viewport?bounded(viewport.scale):-1,density:bounded(density)};
@@ -31,14 +47,33 @@ function ownedHerdrSwipeGeometry(screens, viewport, density, document) {
   diagnostic.screenInside=inside(r);diagnostic.surfaceInside=inside(s);diagnostic.hits=hits;
   const ready=inside(r) && inside(s) && hits.every(hit=>hit==='screen' || hit==='viewport');
   diagnostic.stage=!inside(r)||!inside(s)?'bounds':ready?'ready':'hits';
-  return {ready,hits,diagnostic,rect:[r.left,r.top,r.right,r.bottom],
+  const result={ready,hits,diagnostic,rect:[r.left,r.top,r.right,r.bottom],
     viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density};
+  // Bootstrap admits the surface only; target calibration belongs to the current pre-DOWN snapshot.
+  if(!qualifyGesture||!ready)return result;
+  try {
+    const metrics=ownedHerdrPublicRows(screen,canvas,document);
+    if(!metrics)return unavailable('row-metrics');
+    const {rows,rowHeight}=metrics;
+    const x=(r.left+r.right)/2,y=r.top+r.height/4,originRow=Math.floor((y-r.top)/rowHeight);
+    if(originRow<2||originRow>=rows.length)return unavailable('row-origin');
+    const first=rows[0].getBoundingClientRect(),cell=rows[originRow].getBoundingClientRect();
+    if(first.top!==r.top||![cell.left,cell.top,cell.right,cell.bottom].every(Number.isFinite)||
+      !(cell.left<=x&&x<cell.right&&cell.top<=y&&y<cell.bottom))return unavailable('row-origin');
+    diagnostic.rowHeight=rowHeight;diagnostic.rowCount=rows.length;diagnostic.originRow=originRow;
+    return {...result,rowHeight,rowCount:rows.length,originRow};
+  }catch{return unavailable('row-metrics');}
 }
 
-function ownedHerdrObserveFinger(window, key, screens) {
+function ownedHerdrObserveFinger(window, key, screens, geometry=null) {
   if(Object.hasOwn(window,key) || screens.length!==1) return false;
   const screen=screens[0],canvas=screen.closest('.terminal-canvas');
   if(!canvas) return false;
+  const boundRect=geometry?.ready===true&&Array.isArray(geometry.rect)&&geometry.rect.length===4&&geometry.rect.every(Number.isFinite)?geometry.rect.slice():null;
+  const boundMetrics=geometry&&Number.isFinite(geometry.rowHeight)&&geometry.rowHeight>0&&geometry.rowHeight<=32&&
+    Number.isInteger(geometry.rowCount)&&geometry.rowCount>=3&&geometry.rowCount<=4096?{height:geometry.rowHeight,count:geometry.rowCount}:null;
+  if(geometry&&(!boundRect||!boundMetrics))return false;
+  const ownerDocument=screen.ownerDocument;
   let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
   let wheels=0,wheelUp=0,wheelDown=0,wheelZero=0,wheelInvalid=0;
   const terminal=screen.parentElement,surface=terminal?.querySelector('.xterm-viewport'),textarea=terminal?.querySelector('.xterm-helper-textarea');
@@ -71,7 +106,16 @@ function ownedHerdrObserveFinger(window, key, screens) {
     try {
       if(trace.length===24){overflow=true;return;}
       const touch=event.type.startsWith('touch'),point=touch?(event.changedTouches?.[0]??event.touches?.[0]):event;
-      if(landing===null&&event.isTrusted===true&&(event.type==='pointerdown'||event.type==='touchstart'))landing=observeLanding(event.target,point);
+      if(landing===null&&event.isTrusted===true&&(event.type==='pointerdown'||event.type==='touchstart')) {
+        landing=observeLanding(event.target,point);
+        if(boundRect) {
+          const current=ownedHerdrPublicRows(screen,canvas,ownerDocument);
+          valid=valid&&landing.state==='observed'&&landing.screenConnected&&landing.canvasConnected&&landing.targetOwned&&landing.hitOwned&&
+            screen.ownerDocument===ownerDocument&&screen.parentElement===terminal&&terminal?.parentElement===canvas&&
+            landing.screenRect.every((value,index)=>value===boundRect[index])&&current!==null&&
+            current.rowHeight===boundMetrics.height&&current.rows.length===boundMetrics.count;
+        }
+      }
       if(event.type==='pointerdown' && canvas.contains(event.target))pointerIdentity=event.pointerId;
       if(event.type==='touchstart' && canvas.contains(event.target))touchIdentity=point?.identifier;
       trace.push({type:globalEvents.includes(event.type)?event.type:'other',target:targetKind(event.target),trusted:event.isTrusted===true,
@@ -80,7 +124,7 @@ function ownedHerdrObserveFinger(window, key, screens) {
         atMs:Math.max(0,Math.min(65535,performance.now()-began)),point:[bounded(point?.clientX),bounded(point?.clientY)],
         identityMatches:touch?touchIdentity!=null&&point?.identifier===touchIdentity:pointerIdentity!=null&&event.pointerId===pointerIdentity,
         coalescedCount:typeof event.getCoalescedEvents==='function'?Math.min(8,event.getCoalescedEvents().length):-1});
-    } catch {traceAvailable=false;}
+    } catch {traceAvailable=false;if(boundRect)valid=false;}
   };
   globalEvents.forEach(type=>window.addEventListener(type,globalRecord,{capture:true,passive:true}));
   const reading=()=>{
