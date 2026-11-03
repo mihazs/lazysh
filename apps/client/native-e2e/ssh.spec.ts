@@ -8,7 +8,7 @@ import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -83,7 +83,7 @@ it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual ow
   const gui=fixture.gui=await NativeGui.start();
   const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
   await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
-  gui.stage='owned actual Codex Conversation';await (await browser.$('button=Transcript')).click();
+  gui.stage='owned actual Codex Conversation';await workspaceAction(gui,'Transcript');
   await (await browser.$('//label[normalize-space(text())="Agent"]/select')).selectByAttribute('value','codex');
   await (await browser.$('//label[normalize-space(text())="View"]/select')).selectByAttribute('value','conversation');
   const pathInput=await browser.$('input[placeholder="Absolute host path to session.jsonl"]');
@@ -143,7 +143,7 @@ it('pans the expanded D-pad through one native held pointer and stops bytes in i
   const {browser,terminal,owner}=await openOwnedSsh(gui,ssh);
   await challengeOwnedSsh(gui,ssh,terminal,owner);
   gui.stage='owned D-pad preference';
-  await (await browser.$('button[aria-label="Preferences"]')).click();
+  await workspaceAction(gui,'Preferences');
   const settings=await browser.$('[role="dialog"][aria-label="Preferences"]');await settings.waitForDisplayed();
   await (await settings.$('button[data-settings-target="input"]')).click();
   await (await settings.$('button[data-settings-target="preferencesToolbarKeysAndOrder"]')).click();
@@ -328,7 +328,7 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   expect(await terminal.getText()).not.toMatch(/MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:/);
   fixture.captureSafe=true;
   gui.stage='owned Mosh Herdr transcript';
-  await (await browser.$('button=Transcript')).click();
+  await workspaceAction(gui,'Transcript');
   await (await browser.$('input[placeholder="Absolute host path to session.jsonl"]')).setValue(herdr.transcript);
   await (await browser.$('button=Open transcript')).click();
   const messages=await browser.$('.chat-messages');
@@ -423,10 +423,13 @@ it('keeps real app sessions first in Workspaces and returns to the same owned te
   await browser.keys('\uE004');expect(await focused(rows[0])).toBe(true);
   await browser.keys('\uE004');expect(await focused(rows[1])).toBe(true);
   await browser.keys('\uE004');expect(await focused(await live.$('button[aria-label="Herdr server"]'))).toBe(true);
+  const focusInfo=await live.$('summary[aria-label="Changes focus for other connections."]');
+  await browser.keys('\uE004');expect(await focused(focusInfo)).toBe(true);
   await browser.keys('\uE004');expect(await focused(await live.$('button[title="Refresh Herdr tree"]'))).toBe(true);
   expect(await setup.isDisplayed()).toBe(false);
   const server=await setup.$('select');expect(await server.isDisplayed()).toBe(false);
   const warning='Shared focus changes focus for other connections to this server.';
+  await focusInfo.click();
   const warnings=await live.$$(`p=${warning}`);expect(warnings).toHaveLength(1);
   expect(await warnings[0].isDisplayed()).toBe(true);
   expect(await warnings[0].getText()).toBe(warning);
@@ -446,14 +449,13 @@ it('keeps real app sessions first in Workspaces and returns to the same owned te
   await firstRows[1].click();await second.terminal.waitForDisplayed();
   expect(await browser.execute((original,current)=>original===current,second.terminal,await browser.$(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for Owned SSH GUI second host / ${herdr.name}`)}] .xterm-screen`))).toBe(true);
   await workspaces.click();
-  const activeLive=await browser.$('.herdr-navigation');
-  await (await activeLive.$('button[title="Back to terminal"]')).click();
+  await (await browser.$('.workspace-destination-heading button[aria-label="Return to terminal"]')).click();
   expect(await second.terminal.isDisplayed()).toBe(true);
   await workspaces.click();
   await (await (await browser.$('.workspace-live-sessions')).$$('button'))[0].click();
   await first.terminal.waitForDisplayed();
   gui.stage='owned Workspaces contextual Return';
-  await (await browser.$('button=Transcript')).click();
+  await workspaceAction(gui,'Transcript');
   await (await browser.$('.context-navigation button[aria-label="Return to terminal"]')).click();
   await first.terminal.waitForDisplayed();
   await challengeOwnedSsh(gui,primary,first.terminal,first.owner,'AFTER_WORKSPACES');
@@ -571,7 +573,7 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
     await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_CLOSURE');
     gui.stage='owned Mosh image selection and closed upload';
-    await (await (await browser.$('.session-toolbar')).$('button=Attach')).click();
+    await workspaceAction(gui,'Attach');
     const panel=await browser.$('.attachment-panel');await panel.waitForDisplayed();
     // Reuse the repository's authored JPEG; trailing padding models screenshot-sized bytes.
     const artwork=await readFile(new URL('../e2e/fixtures/recorded-images/regions-progressive.jpg',import.meta.url));
@@ -609,7 +611,7 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     expect([retained.ino,retained.size,retained.mtimeMs]).toEqual([uploaded.ino,uploaded.size,uploaded.mtimeMs]);
     expect(hash(await readFile(remote))).toBe(hash(image));
     gui.stage='owned Mosh original terminal after upload recovery';
-    await (await (await browser.$('.session-toolbar')).$('button=Terminal')).click();
+    await workspaceAction(gui,'Terminal');
     expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
     expect((await browser.$('[role="tab"][aria-selected="true"]')).elementId).toBe(tabId);
     await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_RECOVERY');
