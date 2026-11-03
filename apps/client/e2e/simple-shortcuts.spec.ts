@@ -85,6 +85,27 @@ test('physical and toolbar Shift+Enter preserve the agent newline key',async({pa
   await page.getByRole('button',{name:'Shift',exact:true}).click();
   await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r','\x1b[13;2u']);
+  await expect(page.getByRole('button',{name:'Shift',exact:true})).toHaveAttribute('aria-pressed','false');
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r','\x1b[13;2u','\r']);
+});
+
+test('one-shot Shift keeps one held arrow shifted and leaves the next key plain',async({page},testInfo)=>{
+  await openShortcutTerminal(page);await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+  const shift=page.getByRole('button',{name:'Shift',exact:true}),left=page.getByRole('button',{name:'Arrow left',exact:true});
+  const colors=()=>shift.evaluate(element=>({background:getComputedStyle(element).backgroundColor,color:getComputedStyle(element).color}));
+  const resting=await colors();await shift.click();await expect(shift).toHaveAttribute('aria-pressed','true');
+  await left.scrollIntoViewIfNeeded();const box=(await left.boundingBox())!,point={x:box.x+box.width/2,y:box.y+box.height/2};
+  const cdp=await page.context().newCDPSession(page);
+  if(testInfo.project.name==='phone')await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});
+  else {await page.mouse.move(point.x,point.y);await page.mouse.down();}
+  await page.clock.runFor(560);
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[1;2D','\x1b[1;2D','\x1b[1;2D']);
+  await expect(shift).toHaveAttribute('aria-pressed','false');await expect.poll(colors).toEqual(resting);
+  if(testInfo.project.name==='phone')await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});else await page.mouse.up();
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toHaveLength(3);
+  await page.getByRole('button',{name:'Arrow right',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[1;2D','\x1b[1;2D','\x1b[1;2D','\x1b[C']);
 });
 
 test('expanded D-pad pans one held pointer with paced bytes and an idle dead zone',async({page},testInfo)=>{
