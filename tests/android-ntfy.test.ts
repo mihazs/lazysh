@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
@@ -358,6 +358,23 @@ test.each([
   eventDiagnostic+'x'.repeat(256*1024),
 ])('malformed or ambiguous event observations retain no private text: %#',text=>{
   expect(eventObservation(text)).toBeUndefined();
+});
+
+test('challenge failure state retains only closed phases and a nullable busy flag',()=>{
+  const sample='Ntfy challenge state[enrollment=VERIFY registration=READY busy=false]';
+  expect(challengeStateObservation(sample)).toEqual({enrollment:'VERIFY',registration:'READY',busy:false});
+  for(const phase of ['BOOTSTRAP','REGISTER','SUBSCRIBE','VERIFY','CONFIRMED','REVOKE_PENDING','FAILED','absent','unavailable','unknown'])
+    expect(challengeStateObservation(sample.replace('enrollment=VERIFY',`enrollment=${phase}`))?.enrollment).toBe(phase);
+  for(const phase of ['OFF','SELECTING','REQUESTED','READY','FAILED','UNAVAILABLE','REVOKE_PENDING','absent','unavailable','unknown'])
+    expect(challengeStateObservation(sample.replace('registration=READY',`registration=${phase}`))?.registration).toBe(phase);
+  for(const value of ['true','false','unavailable'])expect(challengeStateObservation(sample.replace('busy=false',`busy=${value}`))?.busy).toBe(value==='unavailable'?null:value==='true');
+  const privateValue='private-endpoint-key';
+  const unknown=challengeStateObservation(sample.replace('VERIFY',privateValue).replace('READY',privateValue));
+  expect(unknown).toEqual({enrollment:'unknown',registration:'unknown',busy:false});
+  expect(JSON.stringify(unknown)).not.toContain(privateValue);
+  for(const invalid of [sample+sample,sample.replace(' busy=false',''),sample.replace('busy=false','busy=private'),
+    sample.replace('busy=false]','busy=false endpoint=private]'),sample.replace('VERIFY','VERIFY registration=PRIVATE'),sample+'x'.repeat(256*1024)])
+    expect(challengeStateObservation(invalid)).toBeUndefined();
 });
 
 test('every fixed native selector label retains a finite failure stage without private text',async()=>{
