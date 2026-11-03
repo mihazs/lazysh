@@ -31,6 +31,11 @@ export function herdrHistoryFailureStage(error:unknown) {
   } catch {return 'unknown';}
 }
 
+/** Fixed public static paint before the original Mosh receiver starts; no input/RPC. */
+export function ownedMoshResizePaint() {
+  return "i=0; while [ \"$i\" -lt 511 ]; do printf 'OWNED_MOSH_ROW_%03d\\r\\n' \"$i\"; i=$((i+1)); done; printf 'OWNED_MOSH_ROW_511'; ";
+}
+
 export class HerdrFixture {
   readonly name:string;
   readonly record:string;
@@ -82,7 +87,7 @@ export class HerdrFixture {
       const snapshot=JSON.parse(await owned.run(['api','snapshot']));
       const pane=snapshot?.result?.snapshot?.focused_pane_id;
       if(typeof pane!=='string' || !pane || pane.length>128 || /[\x00-\x1f\x7f-\x9f]/.test(pane))throw new Error('Invalid owned receiver pane');
-      owned.receiver=await owned.startReceiver(pane,ssh.directory,navigation?'NAV_SOURCE_'+ssh.nonce:undefined);
+      owned.receiver=await owned.startReceiver(pane,ssh.directory,navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():'');
       // A custom hook report has no elapsed-time TTL. Seed only after the
       // original receiver is running; never heartbeat or mask its retirement.
       await owned.run(['pane','report-agent',pane,'--source','lazysh-owned-ui','--agent','codex','--state','unknown']);

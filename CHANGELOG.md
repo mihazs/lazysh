@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Keep Mosh repaint geometry synchronized with complete server frames during keyboard, composer and viewport resizes, avoiding duplicated screen rows in scrollback. Existing history cells retain their original width and can be clipped in narrower views until widened.
 - Increase custom-theme glass opacity only when its selected chrome colors need more backing for readable text; bundled theme glass and solid accessibility fallbacks remain unchanged.
 
 - Keep Compose and the expanded D-pad mutually exclusive so the draft stays editable above a mobile keyboard; switching tools preserves the unsent draft.
