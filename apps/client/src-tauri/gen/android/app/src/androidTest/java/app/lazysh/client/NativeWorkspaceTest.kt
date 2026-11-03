@@ -2883,7 +2883,10 @@ class NativeWorkspaceTest {
             }
             terminalProof(false)
             sessionView(scenario, "Agents")
-            val panel = "details.companion-install[data-install-outcome]"
+            val companionActivity = ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, companionActivity))
+                .perform(webScrollIntoView()).perform(webClick())
+            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")

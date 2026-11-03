@@ -964,7 +964,22 @@ test('native companion action stays owned during installed and reused results',a
   if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
   await openClockedNavigation(page);
   await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
-  await selectAgentSection(page,'activity');
+  const nativeCaller=nativeWorkspaceSource.slice(nativeWorkspaceSource.indexOf('fun verifyCompanionInstallation()'));
+  const activity=/val companionActivity = "([^"]+)"/.exec(nativeCaller)?.[1];
+  if(activity)await page.locator(activity).click();
+  await expect(page.locator(nativeCompanionReadiness('Install companion','idle').panel)).toBeVisible();
+  const initial=nativeCompanionReadiness('Install companion','idle');
+  await page.evaluate(()=>{
+    const panel=document.querySelector('details.companion-install[data-install-outcome]')!;
+    const foreign=panel.cloneNode(true) as HTMLDetailsElement;foreign.hidden=false;foreign.open=true;
+    Object.assign(foreign.style,{position:'fixed',top:'0',left:'0',width:'160px',height:'120px',overflow:'hidden',zIndex:'10000'});
+    document.body.append(foreign);Reflect.set(window,'nativeForeignCompanion',foreign);
+    panel.closest<HTMLElement>('.workspace-navigation-agents')!.hidden=true;
+  });
+  await expect(page.locator('body > details.companion-install')).toBeVisible();
+  expect(await page.evaluate(initial.expression)).toMatchObject({panelPresent:false,expectedActionVisible:false,matchingExpectedActionEnabled:false});
+  await page.evaluate(()=>{document.querySelector<HTMLElement>('.workspace-navigation-agents')!.hidden=false;Reflect.get(window,'nativeForeignCompanion').remove();});
+  await expect(page.locator(initial.panel)).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
   const records:unknown[]=[];
   for(const [action,before,after] of [['Install companion','idle','installed'],['Update companion','installed','reused']]){
