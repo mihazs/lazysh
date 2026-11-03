@@ -129,11 +129,15 @@ class GotifyAndroidTest {
         phase = "login-ca-import"
         val filename = input["caName"] as String
         if (!device.hasObject(By.pkg(documents).text(filename))) {
+            phase = "login-ca-roots"
             node(By.pkg(documents).desc("Show roots")).click()
             node(By.pkg(documents).text("Downloads")).click()
         }
+        phase = "login-ca-select"
         node(By.pkg(documents).text(filename)).click()
+        phase = "login-ca-callback"
         awaitCondition { device.hasObject(By.res(gotify, "toggle_ca_cert").text("Remove CA Certificate")) }
+        phase = "login-ca-confirm"
         check(!node(By.res(gotify, "disableSSL")).isChecked)
         node(By.res("android", "button1").pkg(gotify)).click()
         phase = "login-url-submit"
