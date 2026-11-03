@@ -43,3 +43,14 @@ it('keeps desktop choices expanded and restores focus when a compact layout hide
   expect(screen.getByRole('group').textContent).toContain('Connect to a host');
   expect(screen.queryByRole('button')).toBeNull();
 });
+
+it('returns a single current session directly without a redundant disclosure and preserves busy guards',()=>{
+  const choose=vi.fn(),state=props({sessions:[sessions[1]],onChoose:choose}),view=render(<WorkspaceSessions {...state}/>);
+  const current=screen.getByRole('button',{name:'Build terminal'});
+  expect(current.textContent).toBe('Build terminal');
+  expect(current.hasAttribute('aria-expanded')).toBe(false);
+  expect(screen.queryByRole('group')).toBeNull();
+  fireEvent.click(current);expect(state.onChoose).toHaveBeenCalledExactlyOnceWith('build');
+  choose.mockClear();view.rerender(<WorkspaceSessions {...state} busy/>);
+  fireEvent.click(current);expect(state.onChoose).not.toHaveBeenCalled();
+});

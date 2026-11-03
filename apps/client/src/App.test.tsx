@@ -296,7 +296,7 @@ it('opens attachments from the live toolbar and retires held callbacks after nav
   const open=mocks.terminalPaneProps.mock.lastCall![0].onOpenAttachments;
   expect(open).toBeTypeOf('function');
   await act(async()=>open());await screen.findByText('Attach to this host');
-  await user.click(screen.getByRole('button',{name:'Usage'}));
+  await chooseWorkspaceTool(user,'Usage');
   await screen.findByRole('button',{name:'Use latest report for Watch'});
   await act(async()=>open());expect(screen.queryByText('Attach to this host')).toBeNull();
   cleanup();await act(async()=>open());expect(mocks.api.write).not.toHaveBeenCalled();
@@ -327,10 +327,10 @@ it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>([
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   if(kind==='tmux'){
-    await user.click(screen.getByRole('button',{name:'Sessions'}));await user.click(await screen.findByRole('button',{name:'Attach work'}));
+    await chooseWorkspaceTool(user,'Sessions');await user.click(await screen.findByRole('button',{name:'Attach work'}));
     await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
   }
-  await user.click(screen.getByRole('button',{name:'Transcript'}));await user.selectOptions(await screen.findByLabelText('Agent'),agent);const path=screen.getByLabelText('Transcript path');await user.click(path);await user.paste(source.path);
+  await chooseWorkspaceTool(user,'Transcript');await user.selectOptions(await screen.findByLabelText('Agent'),agent);const path=screen.getByLabelText('Transcript path');await user.click(path);await user.paste(source.path);
   if('transcriptSessionId' in source)await user.type(screen.getByLabelText('Transcript session ID'),source.transcriptSessionId);
   await user.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByRole('button',{name:t('chatRefreshMessages')});
@@ -397,7 +397,7 @@ it('routes a selected actual Claude row to the exact SSH Chat prefill with read/
   const user=await openConnection(mark);
   mark('connect-ssh');await user.click(screen.getByRole('button',{name:'Connect'}));
   mark('wait-live-ssh');await screen.findByText('Live SSH terminal');
-  mark('open-agents');await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
+  mark('open-agents');await chooseWorkspaceTool(user,'Agents');await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
   mark('wait-history-action');const historyAction=await screen.findByRole('button',{name:'Use reported history'});
   mark('use-history');await user.click(historyAction);
   mark('wait-prefill');const path=await screen.findByLabelText('Transcript path');
@@ -409,9 +409,9 @@ it('routes a selected actual Claude row to the exact SSH Chat prefill with read/
   expect(mocks.api.write).not.toHaveBeenCalled();expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','');
   mark('open-transcript');await user.click(screen.getByRole('button',{name:'Open transcript'}));
   mark('wait-read-request');await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'ssh-reported-app',agent:'claude',path:reportedAppMetadata.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
-  mark('return-terminal');await user.click(screen.getByRole('button',{name:'Terminal'}));
+  mark('return-terminal');await chooseWorkspaceTool(user,'Terminal');
   mark('wait-terminal');await screen.findByText('Live SSH terminal');
-  mark('return-transcript');await user.click(screen.getByRole('button',{name:'Transcript'}));
+  mark('return-transcript');await chooseWorkspaceTool(user,'Transcript');
   mark('wait-retired-path');expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
   mark('assert-retired-notice');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
 });
@@ -419,7 +419,7 @@ it.each((['connections','live','live-return','live-batched-return','live-before-
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   reportedHistoryApp(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(screen.getByRole('button',{name:'Reported agent activity'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
+  await chooseWorkspaceTool(user,'Agents');await user.click(screen.getByRole('button',{name:'Reported agent activity'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
   const settle=()=>{if(outcome==='success')finish(reportedAppMetadata);else fail('old reported route error');};
   if(transition==='live-before-commit')await act(async()=>{screen.getByRole('button',{name:'Live Herdr agents'}).click();settle();});
   else{
@@ -428,7 +428,7 @@ it.each((['connections','live','live-return','live-batched-return','live-before-
     if(transition==='live-batched-return')await act(async()=>{screen.getByRole('button',{name:'Reported agent activity'}).click();screen.getByRole('button',{name:'Live Herdr agents'}).click();});
     await act(async()=>settle());
   }
-  expect(screen.getByRole('button',{name:'Terminal'})).toHaveProperty('ariaCurrent','page');
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
   expect(screen.queryByLabelText('Transcript path')).toBeNull();expect(screen.queryByText('old reported route error')).toBeNull();
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
 });
@@ -470,6 +470,14 @@ async function connectForNavigation(sessionId:string){
   await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
   return user;
+}
+
+async function chooseWorkspaceTool(user:ReturnType<typeof userEvent.setup>,name:string) {
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
+  const owner=Array.from(dialog.querySelectorAll('details')).find(group=>Array.from(group.querySelectorAll('button')).some(button=>button.textContent===name));
+  if(owner&&!owner.open)await user.click(owner.querySelector('summary')!);
+  await user.click(within(dialog).getByRole('button',{name}));
 }
 
 it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED','HOST_LAUNCH_MISSING','HOST_LAUNCH_AMBIGUOUS','HOST_LAUNCH_CHANGED','HOST_LAUNCH_BUSY','HOST_LAUNCH_INVALID'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
@@ -586,9 +594,9 @@ it('binds a newly offered mux picker to its new SSH control rather than the alre
   await screen.findByLabelText('Password');await user.type(screen.getByLabelText('Password'),'second-entry');
   await user.click(screen.getByRole('button',{name:'Connect'}));const row=await screen.findByRole('button',{name:'Attach chosen'});
   expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'new-exact-source',tmuxServer:'agents'},expect.anything());
-  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
+  await chooseWorkspaceTool(user,'Terminal');await screen.findByText('Live SSH terminal');
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.attachTmux).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button',{name:'Sessions'}));await screen.findByRole('button',{name:'Attach chosen'});
+  await chooseWorkspaceTool(user,'Sessions');await screen.findByRole('button',{name:'Attach chosen'});
   expect(screen.getByLabelText('tmux server')).toHaveProperty('value','agents');
   await user.click(screen.getByRole('button',{name:'Attach chosen'}));
   await waitFor(()=>expect(mocks.api.attachTmux).toHaveBeenCalledWith('new-exact-source','chosen',expect.any(Function),'agents'));
@@ -748,7 +756,7 @@ it('keeps the existing terminal session while clearing tool views across native 
   mocks.api.connect.mockResolvedValue({sessionId:'retained-ssh'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Transcript'}));
+  await chooseWorkspaceTool(user,'Transcript');
   await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
   expect(screen.queryByText('Live SSH terminal')).toBeNull();expect(screen.queryByRole('tab')).toBeNull();
   await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generationBase+2),nonce:'b'.repeat(64)}}));
@@ -1049,7 +1057,7 @@ describe("connection flow", () => {
     const user = await openConnection();
     await user.click(screen.getByRole("button", { name: "Connect" }));
     await screen.findByText("Live SSH terminal");
-    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    await chooseWorkspaceTool(user,'Sessions');
     await user.click(
       await screen.findByRole("button", { name: "Attach work" }),
     );
@@ -1078,11 +1086,11 @@ describe("connection flow", () => {
     mocks.api.tmuxJump.mockResolvedValue({...snapshot,current:{sessionId:'$2',windowId:'@2'}});
     const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
     await screen.findByText('Live SSH terminal');expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();
-    await user.click(screen.getByRole('button',{name:'Sessions'}));
+    await chooseWorkspaceTool(user,'Sessions');
     if(tmuxServer){await user.clear(screen.getByLabelText('tmux server'));await user.type(screen.getByLabelText('tmux server'),tmuxServer);await user.click(screen.getByRole('button',{name:'Browse server'}));}
     await user.click(await screen.findByRole('button',{name:'Attach work'}));
     expect(mocks.api.attachTmux).toHaveBeenCalledWith('source','work',expect.any(Function),tmuxServer);
-    await user.click(await screen.findByRole('button',{name:'Jump To'}));
+    await chooseWorkspaceTool(user,'Jump To');
     await user.click(await screen.findByRole('button',{name:'1: build'}).catch(error=>{
       // Failure evidence for #109; preserve the original query deadline and error.
       try {
@@ -1108,7 +1116,7 @@ describe("connection flow", () => {
     if (restoreName === null) expect(screen.getByText(/This tmux destination cannot be restored/)).toBeTruthy();
     else expect(screen.queryByText(/This tmux destination cannot be restored/)).toBeNull();
     mocks.api.tmuxJumpSnapshot.mockResolvedValue({...snapshot,current:{sessionId:'$2',windowId:'@2'}});
-    await user.click(screen.getByRole('button',{name:'Jump To'}));
+    await chooseWorkspaceTool(user,'Jump To');
     expect(await screen.findByRole('button',{name:'1: build · Current'})).toBeTruthy();
     expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
   });
@@ -1551,12 +1559,12 @@ it('restores Auto by probing transports again rather than restoring its last SSH
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
 });
 
-it('starts Workspace tools with six primary destinations and explicit closed action groups',async()=>{
+it('starts Workspace tools with seven primary destinations and explicit closed action groups',async()=>{
   const user=await connectForNavigation('short-tools');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
   const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
   const primary=within(dialog).getByRole('navigation',{name:'Session views'});
-  expect(within(primary).getAllByRole('button').map(button=>button.textContent)).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  expect(within(primary).getAllByRole('button').map(button=>button.textContent)).toEqual(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
   const groups=Array.from(dialog.querySelectorAll('details'));
   expect(groups.map(group=>group.open)).toEqual([false,false,false]);
   expect(groups.map(group=>group.querySelector('summary')?.textContent)).toEqual(['More tools','Connections','Application options']);
@@ -1565,6 +1573,7 @@ it('starts Workspace tools with six primary destinations and explicit closed act
   expect(mocks.api.disconnect).not.toHaveBeenCalled();
   await user.click(within(dialog).getByText('More tools',{selector:'summary'}));
   expect(groups[0].open).toBe(true);
+  expect(within(groups[0]).getAllByRole('button').map(button=>button.textContent)).toEqual(['Apple status','Transcript','Diff','Preview','Dictate','Devices']);
   await user.click(within(groups[0]).getByRole('button',{name:'Transcript'}));
   expect(screen.queryByRole('dialog',{name:'Workspace tools'})).toBeNull();
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
@@ -1583,7 +1592,7 @@ it('opens Apple status for the exact active session and routes review to agents'
   const user=await openConnection();
   await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Apple status'}));
+  await chooseWorkspaceTool(user,'Apple status');
   expect(await screen.findByText('Apple controls for apple-current')).toBeTruthy();
   await user.click(screen.getByRole('button',{name:'Review Apple approval'}));
   expect(await screen.findByText('Agent companion')).toBeTruthy();
@@ -1720,10 +1729,10 @@ it('disconnects a late local startup when the app closes',async()=>{
 it('keeps explicit Apple sharing mounted across tool navigation and binds the selected usage to its SSH session',async()=>{
   mocks.api.connect.mockResolvedValueOnce({sessionId:'usage-one'}).mockResolvedValueOnce({sessionId:'usage-two'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Apple status'}));await user.click(screen.getByRole('button',{name:'Start test Apple sharing'}));
-  await user.click(screen.getByRole('button',{name:'Usage'}));await user.click(await screen.findByRole('button',{name:'Use latest report for Watch'}));
+  await chooseWorkspaceTool(user,'Apple status');await user.click(screen.getByRole('button',{name:'Start test Apple sharing'}));
+  await chooseWorkspaceTool(user,'Usage');await user.click(await screen.findByRole('button',{name:'Use latest report for Watch'}));
   expect(mocks.appleProps).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'usage-one',usage:{recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000}}));
-  await user.click(screen.getByRole('button',{name:'Apple status'}));expect(screen.getByText('Apple sharing remains active')).toBeTruthy();
+  await chooseWorkspaceTool(user,'Apple status');expect(screen.getByText('Apple sharing remains active')).toBeTruthy();
   await user.click(screen.getByRole('button',{name:'Connect to Home'}));await user.type(screen.getByLabelText('Password'),'second-secret');await user.click(screen.getByRole('button',{name:'Connect'}));
   await waitFor(()=>expect(mocks.appleProps).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'usage-two',usage:null})));
   expect(localStorage.setItem).not.toHaveBeenCalledWith('lazysh.workspace.v1',expect.stringContaining('inputTokens'));
@@ -1732,7 +1741,7 @@ it('keeps explicit Apple sharing mounted across tool navigation and binds the se
 async function voiceConnection(id='dictation-current'){
   mocks.api.connect.mockResolvedValue({sessionId:id});mocks.api.write.mockResolvedValue(undefined);
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
-  await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Dictate'}));
+  await screen.findByText('Live SSH terminal');await chooseWorkspaceTool(user,'Dictate');
   await screen.findByText(`Voice for ${id}`);
   return {user,deliver:mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation as (request:import('./voiceDelivery').DirectDictation)=>Promise<void>};
 }
@@ -1759,9 +1768,9 @@ it('rejects wrong sessions, unsafe input and foreground/generation changes befor
 });
 it('rejects a held callback after navigation away, disconnect, or App unmount',async()=>{
   const {deliver,user}=await voiceConnection();const request={sessionId:'dictation-current',text:'old command',autoSend:true,claim:()=>true};
-  await user.click(screen.getByRole('button',{name:'Terminal'}));
+  await chooseWorkspaceTool(user,'Terminal');
   await expect(deliver(request)).rejects.toThrow('no longer active');
-  await user.click(screen.getByRole('button',{name:'Dictate'}));await screen.findByText('Voice for dictation-current');
+  await chooseWorkspaceTool(user,'Dictate');await screen.findByText('Voice for dictation-current');
   await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
   await expect(deliver(request)).rejects.toThrow('no longer active');
   cleanup();await expect(deliver(request)).rejects.toThrow('no longer active');expect(mocks.api.write).not.toHaveBeenCalled();
@@ -1769,7 +1778,7 @@ it('rejects a held callback after navigation away, disconnect, or App unmount',a
 it('preserves local session identity for direct input',async()=>{
   enableLocal();mocks.api.write.mockResolvedValue(undefined);const user=userEvent.setup();render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Open local terminal'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Dictate'}));await screen.findByText('Voice for local:desktop');
+  await chooseWorkspaceTool(user,'Dictate');await screen.findByText('Voice for local:desktop');
   await mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation({sessionId:'local:desktop',text:'pwd',autoSend:false,claim:()=>true});
   expect(mocks.api.write).toHaveBeenCalledExactlyOnceWith('local:desktop','pwd');
 });
@@ -1905,7 +1914,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
   expect(mocks.invoke.mock.calls.filter(([command])=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command))).toEqual([]);
-  await user.click(screen.getByRole('button',{name:'Agents'}));
+  await chooseWorkspaceTool(user,'Agents');
   await user.click(await screen.findByRole('button',{name:t('herdrAgentsServer')}));
   const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
   await waitFor(()=>expect(select).toHaveProperty('disabled',false));
@@ -1946,7 +1955,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   if(outcome==='current-second-display'){
-    await user.click(screen.getByRole('button',{name:'Sessions'}));
+    await chooseWorkspaceTool(user,'Sessions');
     await user.click(await screen.findByRole('button',{name:'List herdr sessions'}));
     await user.click(await screen.findByRole('button',{name:'Attach herdr named-work'}));
     await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true'));
@@ -2088,7 +2097,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   reportedHistoryApp(reportedAppMetadata);mocks.api.connect.mockResolvedValue({sessionId:'nav-agents'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
-  await user.click(screen.getByRole('button',{name:'Agents'}));
+  await chooseWorkspaceTool(user,'Agents');
   const live=screen.getByRole('group',{name:'Live Herdr agents'});
   await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
@@ -2138,11 +2147,11 @@ it('keeps late picker cleanup scoped while a new source is busy, then admits que
   const pending=new Map<string,(value:typeof navigationSnapshot)=>void>();
   mocks.api.tmuxJumpSnapshot.mockImplementation(id=>new Promise(resolve=>pending.set(id,resolve)));
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Jump To'}));await waitFor(()=>expect(pending.has('nav-display-a')).toBe(true));
+  await chooseWorkspaceTool(user,'Jump To');await waitFor(()=>expect(pending.has('nav-display-a')).toBe(true));
   // The bootstrap is retired by direct entry. Open a second owned display through the existing manager.
   await user.click(screen.getByRole('button',{name:'Open session manager'}));
   await user.click(await screen.findByRole('button',{name:'Attach other'}));
-  await user.click(await screen.findByRole('button',{name:'Jump To'}));await waitFor(()=>expect(pending.has('nav-display-b')).toBe(true));
+  await chooseWorkspaceTool(user,'Jump To');await waitFor(()=>expect(pending.has('nav-display-b')).toBe(true));
   mocks.hostLaunchReceipt=hostLaunchReceipt;await act(async()=>{mocks.launchEvent!({payload:null});});
   expect(screen.queryByRole('dialog',{name:'Connect to Home'})).toBeNull();
   await act(async()=>{pending.get('nav-display-a')!(navigationSnapshot);});
@@ -2159,7 +2168,8 @@ it('keeps a requested desktop mux manager and its lease while workspace navigati
   await screen.findByRole('button',{name:'Attach chosen'});
   expect(screen.getByRole('button',{name:'Workspaces'})).toHaveProperty('disabled',true);
   expect(screen.getByRole('button',{name:'Agents navigation'})).toHaveProperty('disabled',true);
-  expect(screen.getByRole('button',{name:'Agents'})).toHaveProperty('disabled',true);
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  expect(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('button',{name:'Agents'})).toHaveProperty('disabled',true);
   expect(mocks.api.tmuxJumpSnapshot).not.toHaveBeenCalled();
   expect(mocks.api.attachTmux).not.toHaveBeenCalled();
   expect(mocks.api.connect).toHaveBeenCalledWith(host.id,{password:'entry'},expect.any(Function),{launchReceipt:hostLaunchReceipt});

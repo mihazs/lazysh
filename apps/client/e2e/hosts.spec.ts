@@ -1,4 +1,4 @@
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
@@ -117,7 +117,7 @@ test('phone host form stays legible and fits the viewport while focusing fields'
 
 test('preferences expose host multiplexer editing and keep mobile checkbox text beside controls', async ({page},testInfo) => {
   await page.goto('/');
-  await page.getByRole('button', {name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   const settings=page.getByRole('dialog',{name:'Preferences',exact:true});
   await openPreferenceCategory(page,'Security');
   const lock=settings.getByRole('region',{name:'App lock settings',exact:true});

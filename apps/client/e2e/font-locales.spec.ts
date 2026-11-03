@@ -1,4 +1,4 @@
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {observeFontOperations} from './fixtures/fontOperations';
@@ -12,7 +12,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} retained font 
   },initial);
   // Preferences has already initialized its font store; no locale change may reopen it.
   const preferencesName=await page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return t('appPreferences');});
-  await page.getByRole('button',{name:preferencesName,exact:true}).click();
+  await (await workspaceControl(page,preferencesName)).click();
   const labels=()=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {import:t('preferencesImportFontFile'),summary:t('preferencesImportedFonts'),primary:t('preferencesImportedTerminalFont'),invalid:t('validationChooseAFontFileNoLargerThan24MiB'),delete:t('preferencesDeleteFontValue1',{value1:'LiberationMono-Regular.ttf'})};});
   let names=await labels();
   await openPreferenceCategory(page,'Appearance');
@@ -62,7 +62,7 @@ test('retained missing-role and rejected-font warnings translate without font or
     });
     localStorage.setItem('lazysh.device-fonts.v1',JSON.stringify({primary:id,cjk:'22222222-2222-4222-8222-222222222222'}));
   },rawName);
-  await page.reload();await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await page.reload();await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts',{exact:true}).click();
   const warnings=page.locator('details:not(.preferences-category)').filter({has:page.locator('input[accept=".ttf,.otf,.woff,.woff2,.ttc"]')}).getByRole('status');
