@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -356,4 +356,31 @@ test('Gotify continuity failure identifies the first rejected comparison without
   for(const operation of ['continuity-ownership','continuity-server-probe','continuity-guest-probe'])
     expect(gotifyHostDiagnostic(operation,undefined,undefined).operation).toBe(operation);
   expect(gotifyHostDiagnostic('continuity-server-private-token',undefined,undefined).operation).toBe('unavailable');
+});
+
+test('Gotify stage deadline reports only bounded known Gradle markers, never captured output or a cause verdict',()=>{
+  const operation=(out:unknown,err:unknown='')=>{
+    const label=gotifyStageWaitOperation(out,err),value=gotifyHostDiagnostic(label,{state:'running',exitCode:null},false);
+    expect(value.operation).toBe(label);expect(JSON.stringify(value)).not.toContain('private-');return label;
+  };
+  const prefix='stage-wait-gradle-';
+  for(const value of [undefined,null,{},'private-token',Object.defineProperty({},'stdout',{get(){throw Error('private-token');}})])
+    expect(operation(value)).toBe(prefix+'unobserved');
+  expect(operation('> Configure project :app')).toBe(prefix+'configure');
+  expect(operation('', '> Task :app:connectedUniversalDebugAndroidTest')).toBe(prefix+'unobserved');
+  expect(operation('> Configure project :app\n> Task :app:compileUniversalDebugAndroidTestKotlin')).toBe(prefix+'compile');
+  expect(operation('> Task :app:packageUniversalDebugAndroidTest FROM-CACHE')).toBe(prefix+'package');
+  expect(operation('> Task :app:installUniversalDebugAndroidTest')).toBe(prefix+'install');
+  expect(operation('> Task :app:connectedUniversalDebugAndroidTest')).toBe(prefix+'connected-task');
+  expect(operation('> Task :app:connectedUniversalDebugAndroidTest\nStarting 1 tests on private-device')).toBe(prefix+'test-count');
+  expect(operation('> Task :foreign:compileUniversalDebugAndroidTestKotlin')).toBe(prefix+'unobserved');
+  expect(operation('> Task :app:compileUniversalDebugAndroidTestKotlin private-token')).toBe(prefix+'unobserved');
+  expect(operation('> Task :app:compileUniversalDebugAndroidTestKotlin\n'+'x'.repeat(16384))).toBe(prefix+'unobserved');
+  expect(operation('> Task :app:connectedUniversalDebugAndroidTest','private-token TimeoutException')).toBe(prefix+'deadlineReported');
+  expect(operation('private-token Process crashed')).toBe(prefix+'processCrash');
+  expect(operation('private-token DeviceOfflineException')).toBe(prefix+'deviceUnavailable');
+  expect(operation('private-token AdbCommandRejectedException')).toBe(prefix+'adbRejected');
+  expect(operation('private-token Connection reset')).toBe(prefix+'connectionReset');
+  expect(operation('private-token INSTRUMENTATION_FAILED')).toBe(prefix+'incompleteRun');
+  expect(gotifyHostDiagnostic(prefix+'private-token',undefined,undefined).operation).toBe('unavailable');
 });

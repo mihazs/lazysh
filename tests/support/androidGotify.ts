@@ -4,7 +4,8 @@ import {constants} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:net';
-import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity,compareHostAdbServer,compareEmulatorContinuity} from './androidSsh';
+import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity,compareHostAdbServer,compareEmulatorContinuity,gradleFailureClasses} from './androidSsh';
+import {OUTPUT_LIMIT} from './ownedProcess';
 import {sameNtfyClockOwner,privateInputCommand,writePrivateInput} from './androidNtfy';
 import {attestQrCamera,readQrMetadata} from './androidQrOwnership';
 
@@ -44,9 +45,26 @@ export function gotifyContinuityOperation(before:Parameters<typeof sameNtfyClock
     if(state!=='same')return `continuity-${kind}-${state}`;
   return 'continuity';
 }
+const gotifyGradleFailures=['processCrash','deviceUnavailable','adbRejected','connectionReset','deadlineReported','incompleteRun'] as const;
+const gotifyGradleProgress=['unobserved','configure','compile','package','install','connected-task','test-count'] as const;
+export function gotifyStageWaitOperation(stdout:unknown,stderr:unknown) {
+  const out=typeof stdout==='string'?stdout.slice(-OUTPUT_LIMIT):'',err=typeof stderr==='string'?stderr.slice(-OUTPUT_LIMIT):'';
+  const flags=gradleFailureClasses(out,err);
+  for(const kind of gotifyGradleFailures)if(flags[kind])return `stage-wait-gradle-${kind}`;
+  let progress:typeof gotifyGradleProgress[number]='unobserved';
+  for(const line of out.split(/\r?\n/)) {
+    if(/^> Configure project :app$/.test(line))progress='configure';
+    if(/^> Task :app:compileUniversalDebug(?:AndroidTestKotlin|AndroidTestJavaWithJavac|Kotlin|JavaWithJavac)(?: UP-TO-DATE| FROM-CACHE| SKIPPED)?$/.test(line))progress='compile';
+    if(/^> Task :app:packageUniversalDebug(?:AndroidTest)?(?: UP-TO-DATE| FROM-CACHE| SKIPPED)?$/.test(line))progress='package';
+    if(/^> Task :app:installUniversalDebug(?:AndroidTest)?(?: UP-TO-DATE| FROM-CACHE| SKIPPED)?$/.test(line))progress='install';
+    if(/^> Task :app:connectedUniversalDebugAndroidTest(?: FAILED)?$/.test(line))progress='connected-task';
+    if(/^Starting [1-9][0-9]{0,5} tests? on /.test(line))progress='test-count';
+  }
+  return `stage-wait-gradle-${progress}`;
+}
 /** Failure-only metadata: never serialize child output or exception properties. */
 export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown) {
-  const result={operation:['continuity','continuity-ownership','continuity-server-probe','continuity-guest-probe',...gotifyContinuityOperations,'ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
+  const result={operation:['continuity','continuity-ownership','continuity-server-probe','continuity-guest-probe',...gotifyContinuityOperations,...[...gotifyGradleFailures,...gotifyGradleProgress].map(kind=>`stage-wait-gradle-${kind}`),'ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
     nativeState:'unavailable',exitCode:null as number|null,signaled:typeof signaled==='boolean'?signaled:null};
   try {
     if(native===null||typeof native!=='object'||Array.isArray(native)||Object.keys(native).length!==2)return result;
@@ -462,6 +480,7 @@ async function runGotifyAndroid(root:string) {
         if(files.length===1)phase=gotifyNativeFailure((await readQrMetadata(join(reports,files[0]),262144)).toString())??phase;
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
+    if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);
     let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined);
     try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined);}
     catch{/* Keep the original failure when process metadata is unavailable. */}
