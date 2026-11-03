@@ -4439,7 +4439,7 @@ class NativeWorkspaceTest {
               return {pressed:button.getAttribute('aria-pressed'),active:button.matches(':active'),disabled:button.disabled,
                 paint:[style.backgroundColor,style.color,style.borderTopColor,style.boxShadow]};}
         """
-        fun toolbarSnapshot(name:String)=JSONObject(evaluate(scenario,"JSON.stringify(($toolbarState)(${JSONObject.quote(name)}))"))
+        fun toolbarSnapshot(name:String)=JSONObject(evaluate(scenario,"($toolbarState)(${JSONObject.quote(name)})"))
         fun toolbarPreferences() {
             if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
             else workspaceMenuAction(scenario,"Preferences")

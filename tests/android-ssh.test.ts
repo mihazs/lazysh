@@ -2231,7 +2231,14 @@ test('native toolbar paint observation distinguishes latched Shift from released
   const button={textContent:'Shift',disabled:false,getAttribute:()=> 'false' as string|null,matches:()=>false};
   const document={querySelectorAll:()=>[button]};
   const observe=new Function('document','getComputedStyle',`return (${source})`)(document,()=>paint);
-  expect(observe('Shift')).toEqual({pressed:'false',active:false,disabled:false,paint:Object.values(paint)});
+  const invocation=body.match(/fun toolbarSnapshot\(name:String\)=JSONObject\(evaluate\(scenario,"([^"]+)"\)\)/)?.[1];
+  expect(invocation).toBeDefined();
+  const nativeSnapshot=(name:string)=>{
+    const expression=invocation!.replaceAll('$toolbarState',source).replaceAll('${JSONObject.quote(name)}',JSON.stringify(name));
+    const result=new Function('document','getComputedStyle',`return ${expression}`)(document,()=>paint);
+    return JSON.parse(JSON.stringify(result));
+  };
+  expect(nativeSnapshot('Shift')).toEqual({pressed:'false',active:false,disabled:false,paint:Object.values(paint)});
   button.getAttribute=()=> 'true';expect(observe('Shift').pressed).toBe('true');
   button.textContent='enter';button.getAttribute=()=>null;button.matches=()=>true;
   expect(observe('enter')).toMatchObject({pressed:null,active:true});
