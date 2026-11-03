@@ -105,17 +105,21 @@ it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual ow
     }
     expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
   }
-  const region=await browser.$('.chat-conversation-messages');await region.click();await browser.keys('Home');
+  const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';await draft.setValue(text);
+  const region=await browser.$('.chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
+  expect(await region.isFocused()).toBe(true);
+  await browser.waitUntil(async()=>await region.isFocused()&&await region.getProperty('scrollTop')===0,{timeout:5000,timeoutMsg:'Owned Codex reader did not settle at Home'});
   const position=await browser.execute(()=>{const element=document.querySelector('.chat-conversation-messages')!;return {top:element.scrollTop,height:element.clientHeight,total:element.scrollHeight};});
   const readingOverflow=position.total>position.height;
+  console.info('Owned Codex reading baseline',JSON.stringify({...position,overflow:readingOverflow}));
   if(readingOverflow)expect(position.top).toBe(0);
-  await region.scrollIntoView({block:'start'});
-  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-readable-conversation.png'));
-  const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';
-  await draft.setValue(text);await (await browser.$('button=Refresh new messages')).click();
+  await (await browser.$('button=Refresh new messages')).click();
   await browser.waitUntil(async()=>await browser.$('button=Refresh new messages').isEnabled(),{timeout:20_000});
   expect(await readMessages()).toEqual(branch.map((value,i)=>({role:i%2?'Assistant':'User',text:value})));expect(await draft.getValue()).toBe(text);
-  if(readingOverflow)expect(await browser.execute(()=>document.querySelector('.chat-conversation-messages')!.scrollTop)).toBe(position.top);
+  const refreshedPosition=await browser.execute(()=>document.querySelector('.chat-conversation-messages')!.scrollTop);
+  if(readingOverflow)expect(refreshedPosition).toBe(position.top);
+  console.info('Owned Codex refreshed reading position',JSON.stringify({top:refreshedPosition,overflow:readingOverflow}));
+  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-readable-conversation.png'));
   await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-fork-conversation.png'));
   await (await browser.$('button=Stage in terminal')).click();await terminal.waitForDisplayed();
   expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
@@ -128,7 +132,7 @@ it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual ow
     expect(digest(await readFile(path))).toBe(before[index].hash);expect(digest(await protectedInput(manifest.rollouts[index].path,1024*1024))).toBe(manifest.rollouts[index].sha256);
   }
   expect(digest(await readFile(image))).toBe(manifest.companion.sha256);
-  console.info('Owned Codex native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,parentMessages:parent.length,forkMessages:branch.length,readingPosition:{...position,overflowQualified:readingOverflow},rolloutHashes:before.map(value=>value.hash)}));
+  console.info('Owned Codex native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,parentMessages:parent.length,forkMessages:branch.length,readingPosition:{...position,refreshedTop:refreshedPosition,overflowQualified:readingOverflow},rolloutHashes:before.map(value=>value.hash)}));
   await disconnectOwnedSsh(gui,terminal);
 });
 
