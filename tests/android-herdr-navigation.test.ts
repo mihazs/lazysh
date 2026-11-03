@@ -111,7 +111,8 @@ test('the shared emulator wrapper rejects unknown owners and all exact command b
   const auxiliary=workflow.jobs['native-android-auxiliary'];
   expect(auxiliary.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('auxiliary');
   expect(script).toBe(action(auxiliary).with.script);
-  expect(script).toContain('bun run test:android-mosh && bun run test:android-ssh;');
+  expect(script).toContain('mosh) bun run test:android-mosh; exit $? ;;');
+  expect(script).toContain('guarded) bun run test:android-ssh; exit $? ;;');
   expect(script).toContain('bun run test:android-fdroid;');
   const body=script.slice("bash -c '".length,-1);
   const syntax=Bun.spawn(['bash','-n'],{stdin:Buffer.from(body),stdout:'pipe',stderr:'pipe'});
