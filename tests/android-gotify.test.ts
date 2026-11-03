@@ -52,6 +52,11 @@ test('failed owned native reports expose only a closed failure phase and cannot 
   const xml=report(failure);
   expect(gotifyNativeFailure(xml)).toBe('android-native-login');
   expect(gotifyNativeFailure(report('<![CDATA['+failure+']]>'))).toBe('android-native-login');
+  for(const phase of ['parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace']) {
+    const observed=gotifyNativeFailure(report(failure.replace('login',phase)));
+    expect(observed).toBe(`android-native-${phase}`);
+    expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${observed}`))).toBe(observed);
+  }
   expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${gotifyNativeFailure(xml)}`))).toBe('android-native-login');
   expect(()=>gotifyNativeReport(xml)).toThrow();
   for(const bad of [report('private-token'),report(failure.replace('login','unknown')),

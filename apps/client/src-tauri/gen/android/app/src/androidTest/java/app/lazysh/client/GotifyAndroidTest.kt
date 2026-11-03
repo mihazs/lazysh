@@ -52,8 +52,11 @@ class GotifyAndroidTest {
         val started = System.currentTimeMillis()
         try {
             check(Build.VERSION.SDK_INT == 36) { "Owned API36 required" }
+            phase = "parser-calibration"
             parserChecks()
+            phase = "fixture-input"
             input = consume(".json", setOf("schemaVersion", "nonce", "origin", "username", "password", "caName", "alias", "applicationId", "gotifyUid"))
+            phase = "fixture-identity"
             val origin = input["origin"] as? String ?: error("Invalid origin")
             check(origin.matches(Regex("https://localhost:[1-9][0-9]{0,4}")) && java.net.URI(origin).port in 1..65535)
             check(input["username"] == "admin" && (input["password"] as? String).orEmpty()
@@ -63,8 +66,11 @@ class GotifyAndroidTest {
             // The host attests the exact APK/signature and installed UID before instrumentation.
             val uid = integer(input, "gotifyUid")
             check(uid / 100000 == android.os.Process.myUid() / 100000)
+            phase = "fresh-permission"
             check(!permissionGranted()) { "Fresh Gotify permission state required" }
+            phase = "record-calibration"
             recordChecks(uid, started)
+            phase = "workspace"
             NativeActivityFixture.scenario
             phase = "login"
             login(origin)
