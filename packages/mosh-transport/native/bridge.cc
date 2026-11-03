@@ -49,6 +49,7 @@ struct Client {
     Terminal::Display display{false};
     Terminal::Framebuffer last;
     uint64_t state_num = 0;
+    uint64_t frame_id = 0;
     bool initialized = false;
     bool output_paused = false;
     std::string output;
@@ -135,7 +136,20 @@ extern "C" int lazysh_mosh_step(void* pointer, size_t* length, int* finished, in
         const auto& remote = network.get_latest_remote_state();
         if (!client.output_paused && (!client.initialized || client.state_num != remote.num)) {
             client.output = client.display.new_frame(client.initialized, client.last, remote.state.get_fb());
-            if (client.output.size() > output_limit) throw std::runtime_error("Mosh display output exceeds 8 MiB");
+            if (!client.output.empty()) {
+                // Rendering geometry belongs to this complete canonical frame, not
+                // to an asynchronously arriving user resize request. IDs describe
+                // local emissions: forced redraws can reuse a remote state number.
+                if (client.frame_id >= 9007199254740991ULL) throw std::runtime_error("Mosh frame sequence exhausted");
+                const auto id = std::to_string(++client.frame_id);
+                const auto& fb = remote.state.get_fb();
+                const std::string begin = "\033]7777;lazysh-mosh;1;begin;" + id + ";"
+                    + std::to_string(fb.ds.get_width()) + ";" + std::to_string(fb.ds.get_height()) + "\033\\";
+                const std::string end = "\033]7777;lazysh-mosh;1;end;" + id + "\033\\";
+                if (client.output.size() > output_limit - begin.size() - end.size())
+                    throw std::runtime_error("Mosh display output exceeds 8 MiB");
+                client.output = begin + client.output + end;
+            }
             client.last = remote.state.get_fb();
             client.state_num = remote.num;
             client.initialized = true;
