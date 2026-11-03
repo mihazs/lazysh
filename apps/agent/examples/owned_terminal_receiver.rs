@@ -90,7 +90,8 @@ mod receiver {
         terminal: &mut impl Write,
     ) -> io::Result<()> {
         let mut total = 0;
-        let expected = nonce.map(|nonce| format!("there\x7f\x7ftheowned-current-{nonce}"));
+        let expected = nonce
+            .map(|nonce| format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
         let mut observed = Vec::new();
         let mut acknowledged = false;
         let mut announced = [0; 4];
@@ -309,7 +310,8 @@ mod receiver {
         #[test]
         fn delivery_ack_requires_the_exact_written_wire_and_never_normalizes_extra_bytes() {
             let nonce = "0123456789abcdef0123456789abcdef";
-            let expected = format!("there\x7f\x7ftheowned-current-{nonce}").into_bytes();
+            let expected =
+                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}").into_bytes();
             let ack = format!("IME_{nonce}_DELIVERED\r\n").into_bytes();
             let mut stored = Vec::new();
             let mut terminal = Vec::new();
@@ -324,7 +326,12 @@ mod receiver {
             .unwrap();
             assert_eq!(stored, expected);
             assert_eq!(terminal, ack);
-            for input in [b"thethe".to_vec(), [expected.as_slice(), b"extra"].concat()] {
+            for input in [
+                b"thethe".to_vec(),
+                [expected.as_slice(), b"extra"].concat(),
+                format!("there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
+                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-{nonce}owned-current-{nonce}").into_bytes(),
+            ] {
                 stored.clear();
                 terminal.clear();
                 copy_bounded(
@@ -435,7 +442,7 @@ mod receiver {
             }
             let nonce = "0123456789abcdef0123456789abcdef";
             let mut terminal = Vec::new();
-            let input = format!("there\x7f\x7ftheowned-current-{nonce}");
+            let input = format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
             assert!(copy_bounded(
                 &mut Cursor::new(input),
                 &mut Unflushed,

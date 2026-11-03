@@ -140,6 +140,35 @@ function dpadFixture(initial="") {
   return {...owner,pad,arrow,point,down,move,up,advance,bytes};
 }
 describe('expanded D-pad pointer ownership',()=>{
+  function touchStart(target:Element,count=1) {
+    const event=new Event('touchstart',{bubbles:true,cancelable:true});
+    Object.defineProperty(event,'touches',{value:Array.from({length:count},(_,identifier)=>({identifier}))});
+    fireEvent(target,event);return event;
+  }
+  it('consumes only an admitted direction touchstart and retires its listener on teardown',()=>{
+    const owner=dpadFixture(),arrow=owner.arrow('up');
+    expect(touchStart(arrow).defaultPrevented).toBe(false);
+    owner.down();expect(touchStart(arrow).defaultPrevented).toBe(true);
+    expect(touchStart(screen.getByRole('button',{name:'D-pad left corner'})).defaultPrevented).toBe(false);
+    expect(touchStart(owner.textarea).defaultPrevented).toBe(false);
+    owner.advance(400);expect(owner.bytes()).toEqual(['\x1b[A']);
+    owner.up();expect(touchStart(arrow).defaultPrevented).toBe(false);
+    fireEvent.click(arrow,{detail:0});expect(owner.bytes()).toEqual(['\x1b[A','\x1b[A']);
+    owner.down();owner.view.unmount();expect(touchStart(arrow).defaultPrevented).toBe(false);
+    owner.advance(800);expect(owner.bytes()).toEqual(['\x1b[A','\x1b[A']);
+  });
+  it.each(['multitouch','disabled','reader','inactive','disconnected','revoked','stale'] as const)('leaves %s touchstarts to the browser without broad suppression',boundary=>{
+    const owner=dpadFixture(),arrow=owner.arrow('up');owner.down();
+    if(boundary==='disabled')(arrow as HTMLButtonElement).disabled=true;
+    if(boundary==='reader')act(()=>savePreferences({...getPreferences(),screenReader:true}));
+    if(boundary==='inactive')owner.view.rerender(<TerminalPane session={owner.session} active={false} reportError={owner.reportError}/>);
+    if(boundary==='disconnected')owner.view.rerender(<TerminalPane session={{...owner.session,connected:false}} active reportError={owner.reportError}/>);
+    if(boundary==='revoked')act(()=>access(true));
+    if(boundary==='stale')owner.view.rerender(<TerminalPane session={{...owner.session,id:'other'}} active reportError={owner.reportError}/>);
+    expect(touchStart(arrow,boundary==='multitouch'?2:1).defaultPrevented).toBe(false);
+    expect(owner.bytes()).toEqual([]);
+  });
+
   it('sends one tap, preserves accessible activation and modifiers without arrow toggles',()=>{
     const pad=dpadFixture();pad.down();pad.advance(399);expect(pad.bytes()).toEqual([]);pad.up();
     fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual(['\x1b[A']);
