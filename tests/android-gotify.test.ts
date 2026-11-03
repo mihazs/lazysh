@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -331,4 +331,29 @@ test('Gotify host failure evidence projects only closed operations and native pr
   }
   const unexpected=Object.defineProperty({},'exitCode',{get(){throw new Error('private-token');}});
   expect(gotifyHostDiagnostic('command',unexpected,false)).toEqual({...unknown,operation:'command',signaled:false});
+});
+
+test('Gotify continuity failure identifies the first rejected comparison without exposing owner samples',()=>{
+  const owner={server:{state:'available' as const,hash:'private-server'},guest:{connection:'device',process:'unavailable',mainPids:[],reverse:'not-created',
+    transport:'available',transportHash:'private-transport',boot:'available',bootHash:'private-boot',adbd:'available',adbdHash:'private-adbd'}};
+  const observe=(before:Parameters<typeof gotifyContinuityOperation>[0],after:Parameters<typeof gotifyContinuityOperation>[1]=owner)=>{
+    const operation=gotifyContinuityOperation(before,after),value=gotifyHostDiagnostic(operation,{state:'running',exitCode:null},false);
+    expect(value.operation).toBe(operation);expect(JSON.stringify(value)).not.toContain('private-');return operation;
+  };
+  expect(observe(owner)).toBe('continuity');
+  expect(observe(undefined)).toBe('continuity-missing-owner');
+  expect(observe({...owner,guest:{...owner.guest,connection:'private-connection'}})).toBe('continuity-before-connection');
+  expect(observe(owner,{...owner,guest:{...owner.guest,connection:'offline'}})).toBe('continuity-after-connection');
+  expect(observe(owner,{...owner,server:{state:'available',hash:'changed'}})).toBe('continuity-server-changed');
+  expect(observe(owner,{...owner,server:{state:'inconclusive',hash:null}})).toBe('continuity-server-unknown');
+  for(const kind of ['transport','boot','adbd'] as const) {
+    expect(observe(owner,{...owner,guest:{...owner.guest,[`${kind}Hash`]:'changed'}})).toBe(`continuity-${kind}-changed`);
+    expect(observe(owner,{...owner,guest:{...owner.guest,[kind]:'unavailable'}})).toBe(`continuity-${kind}-unknown`);
+  }
+  const multiple={...owner,guest:{...owner.guest,transportHash:'changed',bootHash:'changed',adbd:'unavailable'}};
+  expect(observe(owner,multiple)).toBe('continuity-transport-changed');
+  expect(observe(owner,{...multiple,server:{state:'available',hash:'changed'}})).toBe('continuity-server-changed');
+  for(const operation of ['continuity-ownership','continuity-server-probe','continuity-guest-probe'])
+    expect(gotifyHostDiagnostic(operation,undefined,undefined).operation).toBe(operation);
+  expect(gotifyHostDiagnostic('continuity-server-private-token',undefined,undefined).operation).toBe('unavailable');
 });

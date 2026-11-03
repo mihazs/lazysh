@@ -4,7 +4,7 @@ import {constants} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:net';
-import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity} from './androidSsh';
+import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity,compareHostAdbServer,compareEmulatorContinuity} from './androidSsh';
 import {sameNtfyClockOwner,privateInputCommand,writePrivateInput} from './androidNtfy';
 import {attestQrCamera,readQrMetadata} from './androidQrOwnership';
 
@@ -33,9 +33,20 @@ export function gotifyFailurePhase(error:unknown):GotifyFixturePhase|'fixture' {
   }catch{/* Unknown exceptions never become public diagnostics. */}
   return 'fixture';
 }
+const gotifyContinuityOperations=['continuity-missing-owner','continuity-before-connection','continuity-after-connection',
+  ...(['server','transport','boot','adbd'] as const).flatMap(kind=>[`continuity-${kind}-unknown`,`continuity-${kind}-changed`])];
+export function gotifyContinuityOperation(before:Parameters<typeof sameNtfyClockOwner>[0]|undefined,after:Parameters<typeof sameNtfyClockOwner>[1]) {
+  if(!before)return 'continuity-missing-owner';
+  if(before.guest.connection!=='device')return 'continuity-before-connection';
+  if(after.guest.connection!=='device')return 'continuity-after-connection';
+  const guest=compareEmulatorContinuity(before.guest,after.guest);
+  for(const [kind,state] of Object.entries({server:compareHostAdbServer(before.server,after.server),transport:guest.transport,boot:guest.boot,adbd:guest.adbd}))
+    if(state!=='same')return `continuity-${kind}-${state}`;
+  return 'continuity';
+}
 /** Failure-only metadata: never serialize child output or exception properties. */
 export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown) {
-  const result={operation:['continuity','ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
+  const result={operation:['continuity','continuity-ownership','continuity-server-probe','continuity-guest-probe',...gotifyContinuityOperations,'ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
     nativeState:'unavailable',exitCode:null as number|null,signaled:typeof signaled==='boolean'?signaled:null};
   try {
     if(native===null||typeof native!=='object'||Array.isArray(native)||Object.keys(native).length!==2)return result;
@@ -301,7 +312,14 @@ async function runGotifyAndroid(root:string) {
   const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args]));
   const guest=()=>emulatorContinuity(adb,serial,undefined,0);
   let original:{server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof guest>>}|undefined;
-  const continuous=async()=>{hostOperation='continuity';await ownership.check();if(!original||!sameNtfyClockOwner(original,{server:await hostAdbServerIdentity(adb),guest:await guest()}))throw rejection();};
+  const continuous=async()=>{
+    hostOperation='continuity-ownership';await ownership.check();
+    if(!original){hostOperation='continuity-missing-owner';throw rejection();}
+    hostOperation='continuity-server-probe';const server=await hostAdbServerIdentity(adb);
+    hostOperation='continuity-guest-probe';const current={server,guest:await guest()};
+    if(!original||!sameNtfyClockOwner(original,current)){hostOperation=gotifyContinuityOperation(original,current);throw rejection();}
+    hostOperation='continuity';
+  };
   const installed=new OwnedGotifyPackages(shell);
   const wait=async<T>(until:number,read:()=>Promise<T|undefined>)=>{
     while(performance.now()<until){await continuous();const result=await read();if(result!==undefined)return result;await Bun.sleep(100);}hostOperation='stage-wait';throw rejection();
