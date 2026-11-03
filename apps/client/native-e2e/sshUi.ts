@@ -6,6 +6,20 @@ type Terminal=Awaited<ReturnType<NonNullable<NativeGui['browser']>['$']>>;
 type Owner=Awaited<ReturnType<NativeGui['appOwner']>>;
 type OwnedHostLabel='Owned SSH GUI host'|'Owned SSH GUI second host';
 
+/** Use the visible public workspace menu; never adopt a hidden header control. */
+export async function workspaceAction(gui:NativeGui,name:string) {
+  const browser=gui.browser!,opener=await browser.$('button[aria-label="Workspace tools"]');
+  await opener.click();
+  const menu=await browser.$('[role="dialog"][aria-label="Workspace tools"]');await menu.waitForDisplayed();
+  for(const group of ['workspace-more-tools','workspace-connection-actions','workspace-application-options']) {
+    const details=await menu.$(`details.${group}`);if(!await details.isExisting())continue;
+    const action=await details.$(`button=${name}`);
+    if(await action.isExisting() && !await action.isDisplayed())await (await details.$(':scope > summary')).click();
+  }
+  const action=await menu.$(`button=${name}`);await action.waitForDisplayed();await action.click();
+  return opener;
+}
+
 export async function typeText(browser:NonNullable<NativeGui['browser']>,text:string) {
   const action=browser.action('key');
   // keys([...]) holds the entire sequence as a chord; controlled fields need individual presses.
@@ -95,9 +109,8 @@ export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Te
 }
 
 export async function disconnectOwnedSsh(gui:NativeGui,terminal:Terminal,name='Owned SSH GUI host') {
-  const browser=gui.browser!;
   gui.stage='owned SSH explicit disconnect';
-  await (await browser.$(`button[aria-label=${JSON.stringify(`End ${name} connection`)}]`)).click();
+  await workspaceAction(gui,`End ${name} connection`);
   await terminal.waitForDisplayed({reverse:true});
 }
 

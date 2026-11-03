@@ -136,8 +136,9 @@ class GotifyAndroidTest {
         phase = "login-ca-import"
         val filename = input["caName"] as String
         if (!device.hasObject(By.pkg(documents).text(filename))) {
-            phase = "login-ca-roots"
+            phase = "login-ca-show-roots"
             node(By.pkg(documents).desc("Show roots")).click()
+            phase = "login-ca-downloads"
             node(By.pkg(documents).text("Downloads")).click()
         }
         phase = "login-ca-select"

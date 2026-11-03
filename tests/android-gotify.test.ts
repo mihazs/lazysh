@@ -54,7 +54,7 @@ test('failed owned native reports expose only a closed failure phase and cannot 
   expect(gotifyNativeFailure(xml)).toBe('android-native-login');
   expect(gotifyNativeFailure(report('<![CDATA['+failure+']]>'))).toBe('android-native-login');
   for(const phase of ['parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login-launch','login-url','login-advanced','login-ca-picker',
-    'login-ca-import','login-ca-roots','login-ca-select','login-ca-callback','login-ca-confirm','login-url-submit','login-auth-form','login-client-name']) {
+    'login-ca-import','login-ca-roots','login-ca-show-roots','login-ca-downloads','login-ca-select','login-ca-callback','login-ca-confirm','login-url-submit','login-auth-form','login-client-name']) {
     const observed=gotifyNativeFailure(report(failure.replace('login',phase)));
     expect(observed).toBe(`android-native-${phase}`);
     expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${observed}`))).toBe(observed);
@@ -394,6 +394,13 @@ test('native phase evidence requires a complete nonce/UID-bound immutable frame 
   const phase=(value='login-ca-select',token=nonce)=>JSON.stringify({schemaVersion:1,nonce:token,phase:value});
   const raw=frame(phase());
   expect(gotifyNativePhase(raw,nonce,10235)).toBe('login-ca-select');
+  for(const action of ['login-ca-show-roots','login-ca-downloads']) {
+    const actionFrame=frame(phase(action));
+    expect(gotifyNativePhase(actionFrame,nonce,10235)).toBe(action);
+    expect(()=>gotifyStage(phase(action),nonce,0)).toThrow();
+    for(const bad of [frame(phase(action+'-unknown')),frame(phase(action,'f'.repeat(32))),frame(phase(action),10236),actionFrame.slice(0,-2)])
+      expect(()=>gotifyNativePhase(bad,nonce,10235)).toThrow();
+  }
   expect(await observeGotifyNativePhase(async()=>{},async()=>raw,nonce,10235)).toBe('login-ca-select');
   expect(await observeGotifyNativePhase(async()=>{},async()=>raw,nonce,10236)).toBe('unavailable');
   expect(gotifyNativePhase('pending\n',nonce,10235)).toBe('not-observed');

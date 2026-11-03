@@ -73,6 +73,7 @@ jobs:
             bun .changeset/release-companion.ts candidate ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
           fi
       - name: Observe full Windows CLI, WAL and installation owners with finite phases
+        id: windows_storage_owner
         if: runner.os == 'Windows'
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
@@ -107,6 +108,9 @@ jobs:
           if [ "$capture" -ne 0 ]; then exit "$capture"; fi
           if [ "$projection" -ne 0 ]; then exit "$projection"; fi
           exit "$cleanup"
+      - name: Measure Windows storage writer phases
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.windows_storage_owner.outcome == 'success' || steps.windows_storage_owner.outcome == 'failure') }}
+        run: cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
       - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
         if: runner.os != 'Windows'
         env:

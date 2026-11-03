@@ -1368,14 +1368,15 @@ async function herdrVisualFixture() {
   const rectangle=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
   const labels=Array.from({length:3},(_,i)=>({bounds:rectangle(10,10+i*30,80,30+i*30),glyphs:[] as object[],contains:(hit:unknown)=>(hit as {ownedLabel?:number})?.ownedLabel===i,textContent:'private terminal text'}));
   labels.forEach(label=>label.glyphs=[label.bounds]);
-  const card={getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
+  const group={getAttribute:()=>labels[1].textContent,querySelector:(selector:string)=>selector===':scope > h4'?labels[1]:null};
+  const card={closest:(selector:string)=>selector==='section[aria-label]'?group:null,getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
     querySelector:(selector:string)=>labels[['strong',':scope > small','span > small'].indexOf(selector)]};
   const state={cards:[card],blockers:[] as object[],hit:undefined as object|undefined,live:true};
   const window={visualViewport:{offsetLeft:0,offsetTop:0,width:411,height:659,scale:1}};
   const document={querySelectorAll:(selector:string)=>selector.includes('.herdr-navigation-row')?state.cards:state.blockers,
     elementFromPoint:(_x:number,y:number)=>state.hit??labels.find(label=>y>=label.bounds.top&&y<=label.bounds.bottom),
     createRange:()=>{let selected=labels[0];return {selectNodeContents:(label:typeof selected)=>{selected=label;},getClientRects:()=>selected.glyphs,getBoundingClientRect:()=>selected.bounds};}};
-  return {labels,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
+  return {labels,group,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
 }
 
 test('Herdr visual failure observations distinguish viewport and glyph-hit clauses without changing admission',async()=>{
@@ -1386,6 +1387,9 @@ test('Herdr visual failure observations distinguish viewport and glyph-hit claus
   f.state.live=false;f.labels[0].bounds.left=-10;
   expect(f.observe()).toMatchObject({liveReady:false,viewportReady:false});
   f.state.cards=[];expect(f.observe()).toMatchObject({cards:0,cardShown:false,cardRect:null,viewportReady:false});
+  const wrongGroup=await herdrVisualFixture();expect(wrongGroup.observe().viewportReady).toBe(true);
+  wrongGroup.group.getAttribute=()=> 'different status';
+  expect(wrongGroup.observe()).toMatchObject({state:'observed',viewportReady:false});expect(wrongGroup.observe().labels[1].present).toBe(false);
 });
 
 test('Herdr visual observations bound rectangles and counts and discard private DOM and exceptions',async()=>{

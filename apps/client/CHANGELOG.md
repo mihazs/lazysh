@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.10.3
+
+### Patch Changes
+
+- 8ac0833: Replace competing workspace navigation layers with focused Workspaces and Agents destinations, compact session context and contextual desktop tools. Preserve the compact phone terminal, mounted sessions and input authority while refining branded glass navigation and readable work-state rows.
+- ba14491: Bound the ntfy Android CI fixture userdata partition to 4 GiB so emulator startup fits hosted runner disk space.
+- 0465ecb: Measure the existing synthetic Windows companion writer phases after native acceptance, including failed owners, while retaining mandatory acceptance and release receipt gates.
+- @lazysh/account-usage@1.10.3
+  - @lazysh/common@1.10.3
+  - @lazysh/display-idle@1.10.3
+  - @lazysh/et-transport@1.10.3
+  - @lazysh/mosh-transport@1.10.3
+
 ## 1.10.2
 
 ### Patch Changes

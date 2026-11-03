@@ -1891,3 +1891,37 @@ button svg {
 @media (prefers-reduced-motion: reduce) {
   .workspace-navigation-modes button, .herdr-report-reference summary { transition: none; }
 }
+
+/* Contextual workspace chrome replaces the always-visible tool catalogue. */
+.header-right > .workspace-tools-trigger { display: inline-flex; min-width: 44px; min-height: 44px; }
+@media (min-width: 601px) {
+  .workspace-header { height: 54px; }
+  .header-right > button:not(.workspace-tools-trigger) { display: none; }
+  .workspace-navigation-modes { flex-direction: column; gap: 5px; padding: 0; margin: 24px 0 18px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .workspace-navigation-modes button { display: flex; justify-content: flex-start; gap: 12px; padding: 10px 12px; font-size: 13px; border-radius: 10px; }
+  .workspace-navigation-modes button[aria-current=page] { background: var(--theme-control); box-shadow: inset 2px 0 var(--accent); }
+  .sidebar:not([data-navigation=connections]) > .workspace-navigation-modes { order: 9; margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--theme-border); }
+}
+.workspace-navigation-modes button { display: flex; align-items: center; justify-content: center; gap: 8px; }
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .workspace-navigation-modes, .herdr-navigation[data-mode=agents] .herdr-agent-row { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
+}
+@media (min-width: 601px) {
+  .sidebar .workspace-navigation-modes button { justify-content: flex-start; }
+}
+@supports (backdrop-filter: blur(1px)) {
+  .sidebar > .workspace-navigation-modes { background: color-mix(in srgb, var(--theme-panel) max(86%, var(--theme-glass-opacity-floor, 0%)), transparent); backdrop-filter: blur(18px) saturate(125%); }
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .sidebar > .workspace-navigation-modes { background: var(--theme-panel); backdrop-filter: none; }
+}
+@media (min-width: 601px) {
+  .sidebar[data-navigation=connections] > .brand { margin-bottom: 12px; }
+  .sidebar[data-navigation=connections] > .workspace-navigation-modes { margin: 8px 0 14px; gap: 2px; }
+  .sidebar .workspace-navigation-modes button { min-height: 44px; padding-block: 7px; }
+  .workspace-navigation-modes button[aria-current=page] { box-shadow: none; border-color: color-mix(in srgb, var(--accent) 65%, transparent); }
+}
+@media (min-width: 601px) {
+  .sidebar > .workspace-navigation-modes { flex-shrink: 0; flex-wrap: nowrap; }
+  .sidebar .workspace-navigation-modes button { flex: 0 0 auto; }
+}
