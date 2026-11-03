@@ -273,3 +273,50 @@ test('actual owned mouse recognizer accepts only six exact chunked controls and 
   capture.write('unexpected-string-chunk');
   expect(capture.sample().state).toBe('unavailable');expect(capture.enabled()).toBe(false);
 });
+
+function landingFixture() {
+  const global=new Map<string,(event:any)=>void>();let hit:unknown,reads=0;
+  const rect={left:2,top:98,right:397,bottom:243,height:145};
+  const canvas={isConnected:true,contains:(node:unknown)=>node===screen||node===canvas,addEventListener:()=>{},removeEventListener:()=>{},getBoundingClientRect:()=>rect};
+  const document={elementFromPoint:(x:number,y:number)=>{expect([x,y]).toEqual([199,134]);reads++;return hit;}};
+  const screen={isConnected:true,closest:()=>canvas,textContent:'OLD496 NEW512',ownerDocument:document,getBoundingClientRect:()=>rect};
+  hit=screen;
+  const window:Record<string,any>={addEventListener:(name:string,callback:any)=>global.set(name,callback),removeEventListener:(name:string)=>global.delete(name)};
+  const event=(type:string,target:unknown=screen,isTrusted=true)=>global.get(type)!({type,target,isTrusted,clientX:199,clientY:134,pointerId:0,eventPhase:1,changedTouches:[{identifier:0,clientX:199,clientY:134}],touches:[{identifier:0,clientX:199,clientY:134}],preventDefault:()=>{throw Error('observer must remain passive');}});
+  return {global,rect,canvas,screen,document,window,event,setHit:(value:unknown)=>{hit=value;},reads:()=>reads};
+}
+
+test('first trusted finger landing observes current bounds and hit ownership once without admitting a gesture',async()=>{
+  const observe=await oracle('ownedHerdrObserveFinger'),f=landingFixture();
+  expect(observe(f.window,'owned',[f.screen])).toBe(true);
+  f.event('pointerdown',f.screen,false);
+  expect(f.window.owned.sample().global.landing).toBeNull();
+  f.rect.top=300;f.rect.bottom=670;
+  const other={textContent:'private terminal text',id:'private-id',className:'private-class'};
+  f.setHit(other);f.event('pointerdown',other);
+  const landing=f.window.owned.sample().global.landing;
+  expect(landing).toEqual({state:'observed',screenConnected:true,canvasConnected:true,screenRect:[2,300,397,670],canvasRect:[2,300,397,670],point:[199,134],target:'other',targetOwned:false,hit:'other',hitOwned:false});
+  for(const name of ['pointermove','touchstart','pointerdown'])f.event(name);
+  expect(f.reads()).toBe(1);expect(f.window.owned.sample().global.landing).toEqual(landing);
+  expect(f.window.owned.sample()).toMatchObject({moves:0,wheels:0,active:true,held:false});
+  expect(JSON.stringify(landing)).not.toMatch(/private|textContent|className/);
+  f.window.owned.dispose();expect(f.global.size).toBe(0);
+});
+
+test.each(['owned','fallback','no-hit','disconnected','missing','throwing','invalid','invalid-owner','clamped'])('finger landing keeps closed %s observations and never changes the canvas oracle',async mode=>{
+  const observe=await oracle('ownedHerdrObserveFinger'),f=landingFixture();
+  if(mode==='no-hit')f.setHit(null);
+  if(mode==='disconnected'){f.screen.isConnected=false;f.canvas.isConnected=false;}
+  if(mode==='missing')f.screen.ownerDocument=undefined as never;
+  if(mode==='throwing')f.document.elementFromPoint=()=>{throw Error('private error URL/token');};
+  if(mode==='invalid')f.rect.right=NaN;
+  if(mode==='invalid-owner')f.canvas.contains=()=> 'private-owner-result' as never;
+  if(mode==='clamped')f.rect.right=1e9;
+  expect(observe(f.window,'owned',[f.screen])).toBe(true);f.event(mode==='fallback'?'touchstart':'pointerdown');
+  const landing=f.window.owned.sample().global.landing;
+  if(['missing','throwing','invalid','invalid-owner'].includes(mode))expect(landing).toEqual({state:'unavailable',screenConnected:null,canvasConnected:null,screenRect:null,canvasRect:null,point:null,target:'unknown',targetOwned:null,hit:'unknown',hitOwned:null});
+  else expect(landing).toMatchObject({state:'observed',screenConnected:mode!=='disconnected',canvasConnected:mode!=='disconnected',target:'screen',targetOwned:true,hit:mode==='no-hit'?'none':'screen',hitOwned:mode!=='no-hit',screenRect:[2,98,mode==='clamped'?65535:397,243]});
+  expect(JSON.stringify(landing)).not.toMatch(/private|URL|token/);
+  expect(f.window.owned.sample()).toMatchObject({moves:0,wheels:0,held:false,active:mode!=='disconnected'});
+  f.window.owned.dispose();expect(f.global.size).toBe(0);
+});
