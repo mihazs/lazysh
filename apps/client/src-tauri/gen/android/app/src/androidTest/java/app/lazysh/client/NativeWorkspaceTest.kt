@@ -4567,6 +4567,61 @@ class NativeWorkspaceTest {
         raw.start()
         fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
+        // Passive DOM event candidates only: native API names/input types do not prove fallback execution.
+        var imeEventsStarted = false
+        var imeEventsFinished = false
+        val imeEventsInstall = """
+            (()=>{const key='__lazyshOwnedImeEvents',owner=${JSONObject.quote(nonce)};
+              if(Object.hasOwn(window,key))return false;
+              const selector='.terminal-canvas .xterm-helper-textarea',areas=document.querySelectorAll(selector);
+              if(areas.length!==1)return false;const area=areas[0];
+              const names=['keydown','beforeinput','input','compositionstart','compositionupdate','compositionend'];
+              const types=['insertText','insertReplacementText','insertCompositionText','insertFromComposition','insertFromPaste','deleteContentBackward','deleteContentForward'];
+              const events=[];let closed=false,retired=false,overflow=false,unavailable=false,owned;
+              const flag=value=>typeof value==='boolean'?value:null;
+              const observe=event=>{
+                if(closed||retired)return;
+                if(events.length>=64){overflow=true;return;}
+                try {const current=document.querySelectorAll(selector);
+                  const originalOwner=area.isConnected===true&&current.length===1&&current[0]===area&&event.target===area;
+                  events.push({event:names.includes(event.type)?event.type:'unknown',trusted:flag(event.isTrusted),
+                    key229:event.type==='keydown'&&typeof event.keyCode==='number'?event.keyCode===229:null,
+                    inputType:['beforeinput','input'].includes(event.type)?(types.includes(event.inputType)?event.inputType:'unknown'):null,
+                    composing:flag(event.isComposing),originalOwner});
+                  if(!originalOwner)retired=true;
+                }catch{unavailable=true;retired=true;}
+              };
+              const cleanup=()=>{closed=true;
+                for(const name of names)try{area.removeEventListener(name,observe,true);}catch{unavailable=true;}
+                try{if(window[key]===owned)delete window[key];}catch{unavailable=true;}
+              };
+              try {for(const name of names)area.addEventListener(name,observe,{capture:true,passive:true});
+                window[key]=owned={owner,stop(){cleanup();return {state:unavailable?'unavailable':'observed',retired,overflow,events};}};
+                return true;
+              }catch{cleanup();return false;}
+            })()
+        """.trimIndent()
+        fun finishImeEvents() {
+            if(!imeEventsStarted||imeEventsFinished)return
+            imeEventsFinished=true
+            val result=runCatching {
+                val observed=JSONObject(evaluate(scenario,"window.__lazyshOwnedImeEvents?.owner===${JSONObject.quote(nonce)} ? window.__lazyshOwnedImeEvents.stop() : {state:'unavailable'}",1_000))
+                require(observed.keys().asSequence().toSet()==setOf("state","retired","overflow","events"))
+                require(observed.getString("state") in listOf("observed","unavailable"))
+                require(observed.get("retired") is Boolean && observed.get("overflow") is Boolean)
+                val events=observed.getJSONArray("events");require(events.length()<=64)
+                for(index in 0 until events.length()) {
+                    val event=events.getJSONObject(index)
+                    require(event.keys().asSequence().toSet()==setOf("event","trusted","key229","inputType","composing","originalOwner"))
+                    require(event.getString("event") in listOf("keydown","beforeinput","input","compositionstart","compositionupdate","compositionend","unknown"))
+                    require(event.isNull("inputType") || event.getString("inputType") in listOf("insertText","insertReplacementText","insertCompositionText","insertFromComposition","insertFromPaste","deleteContentBackward","deleteContentForward","unknown"))
+                    for(name in listOf("trusted","key229","composing"))require(event.get(name) is Boolean || event.isNull(name))
+                    require(event.get("originalOwner") is Boolean)
+                }
+                observed.toString()
+            }.getOrDefault("{\"state\":\"unavailable\"}")
+            runCatching {println("Owned IME event candidates[$result]")}
+        }
         var imeOrderInstalled = false
         var imeOrderFinished = false
         var imeOrderUnavailable = false
@@ -4776,6 +4831,8 @@ class NativeWorkspaceTest {
             finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
+            imeEventsStarted=true
+            runCatching {evaluate(scenario,imeEventsInstall,1_000)}
             for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
                 terminalEditor()
                 val result = ime.call(operation)
@@ -4787,6 +4844,7 @@ class NativeWorkspaceTest {
                     awaitDocument(scenario, "settled native non-tail correction stays editable", "window.__lazyshNonTailImeSettled===true && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.selectionStart===0 && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===false")
                 }
             }
+            finishImeEvents()
             clickIcon("Compose")
             awaitDocument(scenario, "composer revokes packaged terminal editor", "document.querySelector('.terminal-compose textarea')?.value==='' && document.querySelector('.terminal-canvas .xterm-helper-textarea')?.readOnly===true")
             val old = ime.call("old")
@@ -4827,6 +4885,7 @@ class NativeWorkspaceTest {
             android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
         } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
+            finishImeEvents()
             finishImeOrder(primary)
             var cleanupFailure:Throwable?=null
             try { ime.restore() } catch (cleanup: Throwable) {cleanupFailure=cleanup}

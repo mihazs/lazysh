@@ -2306,3 +2306,69 @@ test('native toolbar paint observation distinguishes latched Shift from released
   document.querySelectorAll=()=>[button,button];expect(()=>observe('enter')).toThrow('unique');
   document.querySelectorAll=()=>[];expect(()=>observe('enter')).toThrow('unique');
 });
+
+async function nativeImeEventFixture() {
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const source=kotlin.match(/val imeEventsInstall = """([\s\S]*?)"""\.trimIndent\(\)/)![1]
+    .replaceAll('${JSONObject.quote(nonce)}',JSON.stringify('owned-fixture'));
+  const listeners=new Map<string,(event:Record<string,unknown>)=>void>();
+  const area={isConnected:true,addEventListener(name:string,callback:(event:Record<string,unknown>)=>void,options:unknown){
+    expect(options).toEqual({capture:true,passive:true});listeners.set(name,callback);
+  },removeEventListener(name:string,callback:unknown,capture:unknown){expect(capture).toBe(true);expect(listeners.get(name)).toBe(callback);listeners.delete(name);}};
+  for(const key of ['value','textContent','innerHTML','selectionStart','selectionEnd'])Object.defineProperty(area,key,{get(){throw new Error('private editor read');}});
+  const state={current:[area] as unknown[],throws:false};
+  const document={querySelectorAll(selector:string){expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');if(state.throws)throw new Error('private failure');return state.current;}};
+  const window={} as Record<string,any>;
+  const install=()=>new Function('document','window',`return (${source})`)(document,window);
+  const emit=(type:string,extra:Record<string,unknown>={})=>{
+    const event={type,target:area,isTrusted:true,isComposing:false,...extra};
+    for(const key of ['data','dataTransfer','clipboardData'])Object.defineProperty(event,key,{get(){throw new Error('private event read');}});
+    listeners.get(type)?.(event);return event;
+  };
+  return {state,area,window,listeners,install,emit,stop:()=>window.__lazyshOwnedImeEvents.stop()};
+}
+
+test('native IME event candidates retain only closed trusted/type/composition facts, never editing data',async()=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);expect(f.install()).toBe(false);
+  f.emit('keydown',{keyCode:229});f.emit('keydown',{keyCode:65});f.emit('keydown');f.emit('compositionstart',{isComposing:true});
+  f.emit('beforeinput',{inputType:'insertCompositionText',isComposing:true});
+  f.emit('input',{inputType:'insertFromPaste',isTrusted:false});
+  f.emit('compositionend');f.emit('input',{inputType:'private-unknown-type',isTrusted:undefined,isComposing:undefined});
+  expect(f.stop()).toEqual({state:'observed',retired:false,overflow:false,events:[
+    {event:'keydown',trusted:true,key229:true,inputType:null,composing:false,originalOwner:true},
+    {event:'keydown',trusted:true,key229:false,inputType:null,composing:false,originalOwner:true},
+    {event:'keydown',trusted:true,key229:null,inputType:null,composing:false,originalOwner:true},
+    {event:'compositionstart',trusted:true,key229:null,inputType:null,composing:true,originalOwner:true},
+    {event:'beforeinput',trusted:true,key229:null,inputType:'insertCompositionText',composing:true,originalOwner:true},
+    {event:'input',trusted:false,key229:null,inputType:'insertFromPaste',composing:false,originalOwner:true},
+    {event:'compositionend',trusted:true,key229:null,inputType:null,composing:false,originalOwner:true},
+    {event:'input',trusted:null,key229:null,inputType:'unknown',composing:null,originalOwner:true},
+  ]});
+  expect(f.listeners.size).toBe(0);expect(f.window.__lazyshOwnedImeEvents).toBeUndefined();
+});
+
+test.each(['foreign','replacement','disconnected','throwing'] as const)('native IME event candidates retire on %s owner without following replacement',async reason=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);
+  const saved=f.listeners.get('input')!;
+  if(reason==='replacement')f.state.current=[{}];
+  if(reason==='disconnected')f.area.isConnected=false;
+  if(reason==='throwing')f.state.throws=true;
+  f.emit('input',{inputType:'deleteContentForward',...(reason==='foreign'?{target:{}}:{})});
+  f.state.current=[f.area];f.area.isConnected=true;f.state.throws=false;
+  f.emit('input',{inputType:'insertText'});
+  const result=f.stop();expect(result.retired).toBe(true);expect(result.state).toBe(reason==='throwing'?'unavailable':'observed');
+  expect(result.events).toHaveLength(reason==='throwing'?0:1);
+  if(result.events.length)expect(result.events[0].originalOwner).toBe(false);
+  saved({type:'input',target:f.area,inputType:'insertText'});expect(result.events).toHaveLength(reason==='throwing'?0:1);
+  expect(f.listeners.size).toBe(0);
+});
+
+test('native IME event candidates cap evidence and remain quiet after cleanup without touching event defaults',async()=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);
+  let prevented=0;const saved=f.listeners.get('input')!;
+  for(let i=0;i<65;i++)f.emit('input',{inputType:'insertReplacementText',preventDefault(){prevented++;}});
+  const result=f.stop();expect(result.events).toHaveLength(64);expect(result.overflow).toBe(true);expect(prevented).toBe(0);
+  saved({type:'input',target:f.area});expect(result.events).toHaveLength(64);expect(f.listeners.size).toBe(0);
+  expect(JSON.stringify(result)).not.toContain('private');
+  const unavailable=await nativeImeEventFixture();unavailable.state.current=[];expect(unavailable.install()).toBe(false);expect(unavailable.listeners.size).toBe(0);
+});
