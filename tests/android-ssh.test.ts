@@ -1449,7 +1449,7 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
 
 test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
-  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
   const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
   try {
     for(const bytes of samples) {
@@ -1521,7 +1521,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
   const logger=spyOn(console,'error').mockImplementation(()=>{});
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
@@ -1545,11 +1545,14 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
 
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
-  const expected=Buffer.from(`there\x7f\x7fthe${current}`);
+  const expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2u${current}`);
   expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
   for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
     Buffer.from(`there\x7f\x7ftheowned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
-    Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`)]) {
+    Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`),
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2u${current}`),
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}`),
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}`)]) {
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
@@ -1614,7 +1617,7 @@ test('native D-pad routing preserves default isolation and the packaged/raw-SSH 
 
 test('native IME failed-editor observation exposes each unchanged predicate clause without reading private editor data',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('fun terminalEditor() {')[1].split('fun tapTerminal()')[0];
+  const body=kotlin.split('fun terminalEditor() {')[1].split('val toolbarOrder =')[0];
   const selectorInterpolation='${JSONObject.quote("button[aria-label=\'Disconnect ${fixture.getString("name")}\']")}';
   const expressions=[...body.matchAll(/"""([\s\S]*?)"""/g)].map(match=>match[1].replaceAll(selectorInterpolation,JSON.stringify("button[aria-label='Disconnect owned']")).replaceAll('$collectOrder','false').replaceAll('${JSONObject.quote(nonce)}',JSON.stringify('owned')));
   expect(expressions).toHaveLength(2);
@@ -2137,7 +2140,7 @@ test('native IME single failure envelope stops owned observation despite editor 
   const missingOrder=foreign.failureEnvelope(document);expect(missingOrder.editor.writable).toBe(true);expect(missingOrder.order).toBeNull();expect(calls).toBe(0);
   original.stop();expect(foreign.listenerCount).toBe(0);
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const failure=kotlin.split('fun terminalEditor()')[1].split('fun tapTerminal()')[0];
+  const failure=kotlin.split('fun terminalEditor()')[1].split('val toolbarOrder =')[0];
   expect(failure.match(/evaluate\(scenario/g)).toHaveLength(1);
   expect(failure.indexOf('imeOrderFinished=true')).toBeLessThan(failure.indexOf('evaluate(scenario'));
   expect(failure).toContain('if(collectOrder)retainImeOrder(order,primary)');expect(failure).toContain('throw primary');
@@ -2217,4 +2220,22 @@ test('paired D-pad native source wiring rejects changed epochs, missing identity
   };
   expect(wired(source)).toBe(true);
   for(const mutated of [source.replace('event.downTime == epoch','true'),source.replace('SystemClock.uptimeMillis() - epoch','0'),source.replace('window.decorView === root','true'),source.replace('attempts++ >= 32','false'),source.replace('return original.dispatchTouchEvent(event)','original.dispatchTouchEvent(event); return original.dispatchTouchEvent(event)'),source.replace('if (window.callback === this) { window.callback = original','if (true) { window.callback = original')])expect(wired(mutated)).toBe(false);
+});
+
+
+test('native toolbar paint observation distinguishes latched Shift from released momentary keys without fixed theme colors',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
+  const source=body.split('val toolbarState = """')[1].split('"""')[0];
+  const paint={backgroundColor:'custom-surface',color:'custom-foreground',borderTopColor:'custom-border',boxShadow:'none'};
+  const button={textContent:'Shift',disabled:false,getAttribute:()=> 'false' as string|null,matches:()=>false};
+  const document={querySelectorAll:()=>[button]};
+  const observe=new Function('document','getComputedStyle',`return (${source})`)(document,()=>paint);
+  expect(observe('Shift')).toEqual({pressed:'false',active:false,disabled:false,paint:Object.values(paint)});
+  button.getAttribute=()=> 'true';expect(observe('Shift').pressed).toBe('true');
+  button.textContent='enter';button.getAttribute=()=>null;button.matches=()=>true;
+  expect(observe('enter')).toMatchObject({pressed:null,active:true});
+  button.matches=()=>false;expect(observe('enter')).toMatchObject({pressed:null,active:false});
+  document.querySelectorAll=()=>[button,button];expect(()=>observe('enter')).toThrow('unique');
+  document.querySelectorAll=()=>[];expect(()=>observe('enter')).toThrow('unique');
 });

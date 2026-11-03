@@ -405,7 +405,7 @@ export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
 
 function imeExpectedWire(nonce:string) {
   if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
-  return Buffer.from(`there\x7f\x7ftheowned-current-${nonce}`);
+  return Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
 }
 export async function readRawReceiverBytes(path:string) {
   const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
