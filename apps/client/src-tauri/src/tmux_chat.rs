@@ -69,7 +69,7 @@ impl Source {
             || (self.view == View::Conversation
                 && !matches!(
                     &self.agent,
-                    Agent::Claude | Agent::GrokAcp | Agent::Opencode
+                    Agent::Claude | Agent::GrokAcp | Agent::Opencode | Agent::Codex
                 ))
             || (self.inline_images
                 && !(matches!(&self.agent, Agent::Claude)
@@ -798,7 +798,7 @@ mod tests {
                     }
                     let source: Source = serde_json::from_value(value.clone()).unwrap();
                     let expected = (view == "records"
-                        || matches!(agent, "claude" | "grok-acp" | "opencode"))
+                        || matches!(agent, "claude" | "grok-acp" | "opencode" | "codex"))
                         && (!images
                             || agent == "claude"
                             || (view == "records" && matches!(agent, "codex" | "grok-acp")));

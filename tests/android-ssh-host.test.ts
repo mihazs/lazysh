@@ -442,7 +442,7 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         }
         expect(owned).toBe(true);
         expect(createHash('sha256').update(await readFile(`/proc/${saved!.pid}/exe`)).digest('hex')===hash).toBe(true);
-        const wire=Buffer.from(`there\x7f\x7ftheowned-current-${fixture.nonce}`);
+        const wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${fixture.nonce}`);
         client.child.stdin!.write(wire);
         await wait('delivery',()=>client!.stdout.includes(delivered));
         expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);

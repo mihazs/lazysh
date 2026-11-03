@@ -1076,6 +1076,7 @@ const translations = {
   chatStepLimit: ["exibindo até 500 registros de etapas", "mostrando hasta 500 registros de pasos"],
   chatMessageLimit: ["exibindo até 500 mensagens registradas", "mostrando hasta 500 mensajes registrados"],
   chatFollow: ["Acompanhar ramificação Claude selecionada", "Seguir la rama de Claude seleccionada"],
+  chatCodexFollow: ["Acompanhar conversa registrada do Codex", "Seguir la conversación registrada de Codex"],
   chatFollowExplanation: ["Atualiza dois segundos após cada leitura. Páginas ocultas pausam o acompanhamento. Erros o interrompem; ative novamente para continuar.", "Actualiza dos segundos después de cada lectura. Las páginas ocultas pausan el seguimiento. Los errores lo detienen; actívalo de nuevo para continuar."],
   chatFollowing: ["Acompanhando a ramificação selecionada.", "Siguiendo la rama seleccionada."],
   chatFollowPaused: ["Acompanhamento pausado enquanto esta página está oculta.", "Seguimiento pausado mientras esta página está oculta."],

@@ -2847,7 +2847,7 @@ fn transcript_view_command(
     match view {
         None | Some("records") => {}
         Some("conversation")
-            if matches!(agent, "claude" | "grok-acp" | "opencode") && offset == 0 =>
+            if matches!(agent, "claude" | "grok-acp" | "opencode" | "codex") && offset == 0 =>
         {
             command.push_str(" --view conversation")
         }
@@ -3912,7 +3912,9 @@ mod tests {
             ("opencode", 1, Some("conversation"), false),
             ("grok-acp", 1, Some("conversation"), false),
             ("claude", 1, Some("conversation"), false),
-            ("codex", 0, Some("conversation"), false),
+            ("codex", 0, Some("conversation"), true),
+            ("codex", 1, Some("conversation"), false),
+            ("codex", 0, Some("conversation; execute"), false),
             ("antigravity-jsonl", 0, Some("conversation"), false),
             ("grok-acp", 0, Some("conversation; execute"), false),
             ("grok-acp", 7, Some("records"), true),

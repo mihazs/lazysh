@@ -1,5 +1,29 @@
 # @lazysh/notification-client
 
+## 1.10.0
+
+### Patch Changes
+
+- @lazysh/common@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- @lazysh/common@1.9.11
+
+## 1.9.10
+
+### Patch Changes
+
+- @lazysh/common@1.9.10
+
+## 1.9.9
+
+### Patch Changes
+
+- @lazysh/common@1.9.9
+
 ## 1.9.8
 
 ### Patch Changes

@@ -32,7 +32,7 @@ The closed reader IDs are `claude`, `codex`, `pi`, `omp`, `hermes`, `opencode`,
 record/export formats; it does not make them verified live-process integrations.
 Gemini/Qwen's hook-only tier and unknown IDs retain the TUI fallback.
 
-Records are supported for every reader. Conversation is supported for Claude, Grok and OpenCode; recorded images retain the existing Claude Records/conversation and
+Records are supported for every reader. Conversation is supported for Claude, Grok, OpenCode and the qualified recorded Codex formats; recorded images retain the existing Claude Records/conversation and
 Grok/Codex Records limits. Other option combinations fail closed. Hermes and
 OpenCode additionally require their exact database `transcriptSessionId`, bounded
 to 256 UTF-8 bytes without control characters. Other readers must omit that field;

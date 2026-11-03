@@ -163,8 +163,9 @@ it("retains explicit Grok file reads without automatic discovery or conversation
   ).toBe(false);
 });
 
-function openHostTranscript(view?: string) {
+function openHostTranscript(view?: string, agent="claude") {
   const rendered = render(<ChatPanel sessionId="ssh1" />);
+  if(agent!=="claude")fireEvent.change(screen.getByLabelText("Agent"),{target:{value:agent}});
   fireEvent.change(screen.getByLabelText("Transcript path"), { target: { value: "/host/session.jsonl" } });
   if (view) fireEvent.change(screen.getByLabelText("View"), { target: { value: view } });
   fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
@@ -226,17 +227,17 @@ it("rejects a non-advancing pagination cursor", async () => {
   );
 });
 
-it("replaces the visible branch on conversation refresh instead of retaining abandoned messages", async () => {
+it.each(["claude","codex"])("replaces the visible %s branch on conversation refresh instead of retaining abandoned messages", async agent => {
   vi.mocked(invoke)
     .mockResolvedValueOnce({
-      ...page,
+      ...page,agent,
       view: "active_branch",
       messages: [
         { ...message, blocks: [{ type: "text", text: "Abandoned branch" }] },
       ],
     })
     .mockResolvedValueOnce({
-      ...page,
+      ...page,agent,
       view: "active_branch",
       messages: [
         {
@@ -246,14 +247,14 @@ it("replaces the visible branch on conversation refresh instead of retaining aba
         },
       ],
     });
-  openHostTranscript("conversation");
+  openHostTranscript("conversation",agent);
   await screen.findByText("Abandoned branch");
   fireEvent.click(screen.getByRole("button", { name: "Refresh new messages" }));
   await screen.findByText("Current branch");
   expect(screen.queryByText("Abandoned branch")).toBeNull();
   expect(invoke).toHaveBeenLastCalledWith("agent_transcript", {
     sessionId: "ssh1",
-    agent: "claude",
+    agent,
     path: "/host/session.jsonl",
     view: "conversation",
     offset: 0,
@@ -450,7 +451,8 @@ it.each(['en','pt-BR','es'])('explains reported provenance and explicit Open in 
 
 it.each(['chosen','foreign'])('publishes only the selected OpenCode conversation (returned session=%s)', async branchId=>{
   const response={...page,agent:'opencode',view:'active_branch',nextOffset:0,branchId,truncated:false};
-  vi.mocked(invoke).mockResolvedValueOnce({...response,messages:[{...message,blocks:[{type:'text',text:'Before rewind'}]}]}).mockResolvedValueOnce({...response,messages:[{...message,id:'new',blocks:[{type:'tool_result',id:'tool',text:'Current tool failure',status:'failed',isError:true}]}]});
+  vi.mocked(invoke).mockResolvedValueOnce({...response,messages:[{...message,blocks:[{type:'text',text:'Before rewind'}]}]});
+  if(branchId==='chosen')vi.mocked(invoke).mockResolvedValueOnce({...response,messages:[{...message,id:'new',blocks:[{type:'tool_result',id:'tool',text:'Current tool failure',status:'failed',isError:true}]}]});
   render(<ChatPanel sessionId="opencode-host"/>);
   fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'opencode'}});
   expect(screen.getByLabelText('View')).toHaveProperty('value','records');
@@ -485,4 +487,25 @@ it('requires bounded OpenCode projection metadata and valid error-result blocks'
     expect(()=>parseTranscript({...response,...invalid})).toThrow();
   }
   expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{type:'image',text:'File',isError:true}]}]})).toThrow('Invalid recorded tool error');
+});
+
+it.each(['en','pt-BR','es'])('labels explicit Codex recorded follow accurately in %s',async locale=>{
+  try {
+  await uiI18n.changeLanguage(locale);
+  vi.mocked(invoke).mockResolvedValue({...page,agent:'codex',view:'active_branch'});
+  render(<ChatPanel sessionId="codex-recorded"/>);
+  fireEvent.change(screen.getByLabelText(t('chatAgent')),{target:{value:'codex'}});
+  fireEvent.change(screen.getByLabelText(t('chatView')),{target:{value:'conversation'}});
+  fireEvent.change(screen.getByLabelText(t('chatPath')),{target:{value:'/owned/codex.jsonl'}});
+  fireEvent.click(screen.getByRole('button',{name:t('chatOpen')}));
+  expect(await screen.findByRole('checkbox',{name:t('chatCodexFollow')})).toHaveProperty('checked',false);
+  expect(screen.queryByRole('button',{name:/approve|deny|stop/i})).toBeNull();
+  expect(invoke).toHaveBeenCalledWith('agent_transcript',expect.objectContaining({agent:'codex',view:'conversation',offset:0}),expect.anything());
+  } finally {await uiI18n.changeLanguage('en');}
+});
+it('admits Codex recorded command failures only in a reconstructed conversation',()=>{
+  const response={...page,agent:'codex',view:'active_branch',messages:[{...message,blocks:[{type:'tool_result',id:'call',text:'literal failed output',isError:true}]}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const view of ['record_stream',undefined])expect(()=>parseTranscript({...response,view})).toThrow('Invalid recorded tool error');
+  for(const isError of ['false',null,0])expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{...response.messages[0].blocks[0],isError}]}]})).toThrow('Invalid recorded tool error');
 });
