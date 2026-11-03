@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/common",
-  "version": "1.9.9",
+  "version": "1.9.10",
   "private": true,
   "license": "GPL-3.0-or-later",
   "scripts": {
