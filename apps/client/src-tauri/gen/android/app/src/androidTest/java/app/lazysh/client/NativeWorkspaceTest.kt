@@ -1374,7 +1374,7 @@ class NativeWorkspaceTest {
     }
 
     private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
-        val closeHosts = "button[aria-label='Close hosts']"
+        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
         if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
             awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
@@ -1510,7 +1510,8 @@ class NativeWorkspaceTest {
                 val visualObservation = """
                     (()=>{try {
                       const cards=document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row'), card=cards[0];
-                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const group=card?.closest('section[aria-label]');
+                      const labels=[card?.querySelector('strong'),group?.getAttribute('aria-label')===card?.querySelector(':scope > small')?.textContent?group?.querySelector(':scope > h4'):null,card?.querySelector('span > small')];
                       const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
                       const box=rect=>rect?[rect.left,rect.top,rect.right,rect.bottom].map(bounded):null;
                       const viewport=window.visualViewport;
@@ -1540,7 +1541,8 @@ class NativeWorkspaceTest {
                     (()=>{
                       if(!($liveHerdr)) return false;
                       const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
-                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const group=card?.closest('section[aria-label]');
+                      const labels=[card?.querySelector('strong'),group?.getAttribute('aria-label')===card?.querySelector(':scope > small')?.textContent?group?.querySelector(':scope > h4'):null,card?.querySelector('span > small')];
                       if(!card || labels.some(label=>!label)) return false;
                       const ranges=labels.map(label=>{
                         const range=document.createRange(); range.selectNodeContents(label); return range;
