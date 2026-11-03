@@ -795,6 +795,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
       - run: bun install --frozen-lockfile
+      - name: Reclaim unused host toolchains for Google ntfy
+        if: matrix.push-variant == 'google'
+        run: |
+          df -h /
+          # Keep the active Android SDK/NDK; only unrelated host toolchains are unused.
+          sudo rm -rf -- /usr/share/dotnet /usr/local/.ghcup
+          df -h /
       - name: Build current Google APK for Firebase-free push acceptance
         if: matrix.push-variant == 'google'
         run: bun run build:android:emulator
