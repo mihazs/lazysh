@@ -4,7 +4,7 @@ import {constants} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:net';
-import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity,compareHostAdbServer,compareEmulatorContinuity,gradleFailureClasses} from './androidSsh';
+import {OwnedProcess,nativeReportCases,hostAdbServerIdentity,emulatorContinuity,compareHostAdbServer,compareEmulatorContinuity,gradleFailureClasses,continuityProbeOutcomes} from './androidSsh';
 import {OUTPUT_LIMIT} from './ownedProcess';
 import {sameNtfyClockOwner,privateInputCommand,writePrivateInput} from './androidNtfy';
 import {attestQrCamera,readQrMetadata} from './androidQrOwnership';
@@ -62,9 +62,21 @@ export function gotifyStageWaitOperation(stdout:unknown,stderr:unknown) {
   }
   return `stage-wait-gradle-${progress}`;
 }
+function gotifyAdbdProbe(input:unknown) {
+  const unknown={sampleState:'not-observed',outcome:'unavailable',elapsed:'unavailable',exitCode:null as number|null};
+  try {
+    if(input===null||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==4)return unknown;
+    const {sampleState,outcome,elapsed,exitCode}=input as Record<string,unknown>;
+    if(!['available','unavailable','overflow','unrecognized'].includes(sampleState as string)||
+      !continuityProbeOutcomes.includes(outcome as typeof continuityProbeOutcomes[number])||!['within-budget','over-budget'].includes(elapsed as string)||
+      !(exitCode===null||typeof exitCode==='number'&&Number.isInteger(exitCode)&&exitCode>=0&&exitCode<=255))return unknown;
+    return {sampleState:sampleState as string,outcome:outcome as string,elapsed:elapsed as string,exitCode:exitCode as number|null};
+  }catch{return unknown;}
+}
 /** Failure-only metadata: never serialize child output or exception properties. */
-export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown,nativePhase:unknown=undefined) {
+export function gotifyHostDiagnostic(operation:unknown,native:unknown,signaled:unknown,nativePhase:unknown=undefined,adbdProbe:unknown=undefined) {
   const result={operation:['continuity','continuity-ownership','continuity-server-probe','continuity-guest-probe',...gotifyContinuityOperations,...[...gotifyGradleFailures,...gotifyGradleProgress].map(kind=>`stage-wait-gradle-${kind}`),'ownership','command','stage-record','native-state','stage-wait'].includes(operation as string)?operation as string:'unavailable',
+    adbdProbe:gotifyAdbdProbe(adbdProbe),
     nativePhase:['not-observed',...gotifyNativeFailures].includes(nativePhase as string)?nativePhase as string:'unavailable',
     nativeState:'unavailable',exitCode:null as number|null,signaled:typeof signaled==='boolean'?signaled:null};
   try {
@@ -80,7 +92,7 @@ function gotifyErrorDiagnostic(error:unknown) {
   try {
     if(error instanceof Error) {
       const metadata=(error as Error & {gotifyDiagnostic?:ReturnType<typeof gotifyHostDiagnostic>}).gotifyDiagnostic;
-      if(metadata)return gotifyHostDiagnostic(metadata.operation,{state:metadata.nativeState,exitCode:metadata.exitCode},metadata.signaled,metadata.nativePhase);
+      if(metadata)return gotifyHostDiagnostic(metadata.operation,{state:metadata.nativeState,exitCode:metadata.exitCode},metadata.signaled,metadata.nativePhase,metadata.adbdProbe);
     }
   }catch{/* Failure evidence cannot replace the primary error. */}
   return gotifyHostDiagnostic(undefined,undefined,undefined);
@@ -350,12 +362,17 @@ async function runGotifyAndroid(root:string) {
   const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args]));
   const guest=()=>emulatorContinuity(adb,serial,undefined,0);
   let original:{server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof guest>>}|undefined;
+  let failedAdbdProbe:unknown;
   const continuous=async()=>{
     hostOperation='continuity-ownership';await ownership.check();
     if(!original){hostOperation='continuity-missing-owner';throw rejection();}
     hostOperation='continuity-server-probe';const server=await hostAdbServerIdentity(adb);
     hostOperation='continuity-guest-probe';const current={server,guest:await guest()};
-    if(!original||!sameNtfyClockOwner(original,current)){hostOperation=gotifyContinuityOperation(original,current);throw rejection();}
+    if(!original||!sameNtfyClockOwner(original,current)){
+      hostOperation=gotifyContinuityOperation(original,current);
+      if(hostOperation==='continuity-adbd-unknown')failedAdbdProbe={sampleState:current.guest.adbd,...current.guest.adbdProbe};
+      throw rejection();
+    }
     hostOperation='continuity';
   };
   const installed=new OwnedGotifyPackages(shell);
@@ -501,7 +518,7 @@ async function runGotifyAndroid(root:string) {
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
     if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);
-    const failedPhase=phase,failedOperation=hostOperation;
+    const failedPhase=phase,failedOperation=hostOperation,originalAdbdProbe=failedAdbdProbe;
     let nativePhase='unavailable';
     if(native&&targetUid>=10000&&phase.startsWith('android-native-stage'))try {
       const entries=[...gotifyNativeFailures].reverse().join(' ');
@@ -509,8 +526,8 @@ async function runGotifyAndroid(root:string) {
       nativePhase=await observeGotifyNativePhase(continuous,()=>run(failedPhase,adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',command],1000),nonce,targetUid);
     }catch{/* Missing, foreign or changing evidence never replaces the primary failure. */}
     finally{phase=failedPhase;hostOperation=failedOperation;}
-    let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined,nativePhase);
-    try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined,nativePhase);}
+    let diagnostic=gotifyHostDiagnostic(hostOperation,undefined,undefined,nativePhase,originalAdbdProbe);
+    try{diagnostic=gotifyHostDiagnostic(hostOperation,native?await native.startupDiagnostic():undefined,native?native.child.signalCode!==null:undefined,nativePhase,originalAdbdProbe);}
     catch{/* Keep the original failure when process metadata is unavailable. */}
     throw Object.assign(new Error(`Owned Gotify acceptance failed: ${phase}`),{gotifyDiagnostic:diagnostic});
   }

@@ -258,7 +258,7 @@ test.each([
   await withDiagnosticAdb(body,code,async(adb,args)=>{
     const summary=await emulatorContinuity(adb,'emulator-5580','46867',45678);
     const state=code!==0?'unavailable':'unrecognized';
-    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null});
+    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null,adbdProbe:{outcome:code===0?'completed':'nonzero-exit',elapsed:'within-budget',exitCode:code}});
     expect((await readFile(args,'utf8')).trim().split('\n').sort()).toEqual([
       '-s emulator-5580 get-state','-s emulator-5580 shell pidof app.lazysh.client','-s emulator-5580 reverse --list',
       '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id','-s emulator-5580 shell sh -c '+String.raw`'p=$(pidof adbd) || exit 1; case "$p" in ""|*[!0-9]*) exit 1 ;; esac; printf "%s\n" "$p"; cat "/proc/$p/stat"'`,
@@ -626,6 +626,64 @@ test.each([
     expect(result.adbdHash).toBe(state==='available'?createHash('sha256').update('123:456').digest('hex'):null);
     expect(JSON.stringify(result)).not.toContain('private-secret');
     if(state==='available')expect((await readFile(args,'utf8')).split('\n').filter(line=>line.startsWith('-s emulator-5580 shell sh -c '))).toHaveLength(1);
+  });
+});
+
+test.each([
+  {code:0,stat:daemonStat('123','456'),state:'available',outcome:'completed'},
+  {code:31,stat:daemonStat('123','456'),state:'unavailable',outcome:'nonzero-exit'},
+  {code:0,stat:'private-malformed',state:'unrecognized',outcome:'completed'},
+  {code:0,stat:'private-overflow'.repeat(500),state:'overflow',outcome:'completed'},
+])('daemon continuity retains the original bounded command outcome: $state/$outcome',async({code,stat,state,outcome})=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${stat}\n`,code,async adb=>{
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe(state);
+    expect(result.adbdProbe).toEqual({outcome,elapsed:'within-budget',exitCode:code});
+    expect(JSON.stringify(result.adbdProbe)).not.toContain('private-');
+  });
+});
+
+test.each([
+  {action:'kill -TERM $$',outcome:'signaled',elapsed:'within-budget'},
+  {action:'exec sleep 120',outcome:'deadline',elapsed:'over-budget'},
+])('daemon original $outcome observation retires its owned fake process',async({action,outcome,elapsed})=>{
+  await withDiagnosticAdb(continuityBody('42',bootA),0,async(adb,args)=>{
+    const script=await readFile(adb,'utf8');
+    await writeFile(adb,script.replace('case "$3 $4" in',()=>`case "$3 $4" in
+  'shell sh') printf '%s' "$$" > "$EXIT_INFO_ARGS.pid"; ${action} ;;
+esac
+case "$3 $4" in`));
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe('unavailable');
+    expect(result.adbdProbe).toEqual({outcome,elapsed,exitCode:null});
+    const pid=Number(await readFile(args+'.pid','utf8'));
+    expect(pid).toBeGreaterThan(0);expect(()=>process.kill(pid,0)).toThrow();
+  });
+},5000);
+
+test('daemon original spawn failure and an exhausted budget remain distinct without querying a device',async()=>{
+  const missing=await emulatorContinuity('/nonexistent-owned-adb','emulator-5580',undefined,0);
+  expect(missing.adbdProbe).toEqual({outcome:'spawn-failed',elapsed:'within-budget',exitCode:null});
+  let tick=0;const clock=spyOn(performance,'now').mockImplementation(()=>++tick*1001);
+  try {
+    const expired=await emulatorContinuity('/nonexistent-owned-adb','emulator-5580',undefined,0);
+    expect(expired.adbdProbe).toEqual({outcome:'not-started',elapsed:'over-budget',exitCode:null});
+  } finally {clock.mockRestore();}
+});
+
+test('daemon zero exit after its original deadline is not mislabeled as a command timeout',async()=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${daemonStat('123','456')}\n`,0,async adb=>{
+    let now=0;const clock=spyOn(performance,'now').mockImplementation(()=>now),finish=OwnedProcess.prototype.finish;
+    const observed=spyOn(OwnedProcess.prototype,'finish').mockImplementation(async function(this:OwnedProcess,stage,budget){
+      const result=await finish.call(this,stage,budget);
+      if(this.child.spawnargs.some(arg=>arg.includes('pidof adbd')))now=1001;
+      return result;
+    });
+    try {
+      const result=await emulatorContinuity(adb,'emulator-5580',undefined,0);
+      expect(result.adbd).toBe('unavailable');
+      expect(result.adbdProbe).toEqual({outcome:'completed',elapsed:'over-budget',exitCode:0});
+    } finally {observed.mockRestore();clock.mockRestore();}
   });
 });
 

@@ -90,9 +90,13 @@ export async function packageExitInfo(adb:string,serial:string) {
 async function continuityOutput(adb:string,serial:string,args:string[],deadline:number) {
   return diagnosticOutput(adb,['-s',serial,...args],deadline);
 }
+export const continuityProbeOutcomes=['completed','not-started','spawn-failed','nonzero-exit','deadline','signaled','unavailable'] as const;
+export type ContinuityProbe={outcome:typeof continuityProbeOutcomes[number];elapsed:'within-budget'|'over-budget';exitCode:number|null};
 async function diagnosticOutput(program:string,args:string[],deadline:number) {
+  const observation=(outcome:ContinuityProbe['outcome'],exitCode:number|null=null):ContinuityProbe=>({outcome,
+    elapsed:performance.now()>=deadline?'over-budget':'within-budget',exitCode:typeof exitCode==='number'&&Number.isInteger(exitCode)&&exitCode>=0&&exitCode<=255?exitCode:null});
   const remaining=Math.floor(deadline-performance.now());
-  if(remaining<=0)return {state:'unavailable',output:''};
+  if(remaining<=0)return {state:'unavailable',output:'',probe:observation('not-started')};
   const owned=new OwnedProcess(program,args,undefined,process.env,false);
   let output='',overflow=false;
   owned.child.stdout!.on('data',(data:Buffer)=>{
@@ -101,9 +105,15 @@ async function diagnosticOutput(program:string,args:string[],deadline:number) {
   });
   try {
     await owned.finish('owned emulator continuity',remaining);
-    if(performance.now()>=deadline)return {state:'unavailable',output:''};
-    return {state:overflow?'overflow':'available',output:overflow?'':output.trim()};
-  } catch {return {state:'unavailable',output:''};}
+    const probe=observation('completed',0);
+    if(probe.elapsed==='over-budget')return {state:'unavailable',output:'',probe};
+    return {state:overflow?'overflow':'available',output:overflow?'':output.trim(),probe};
+  } catch(error) {
+    let deadlineReported=false;try{deadlineReported=error instanceof Error&&error.message==='Owned fixture deadline: owned emulator continuity';}catch{/* Closed unknown. */}
+    const exit=owned.child.exitCode;
+    const outcome=deadlineReported?'deadline':!owned.child.pid?'spawn-failed':exit!==null&&exit!==0?'nonzero-exit':owned.child.signalCode?'signaled':'unavailable';
+    return {state:'unavailable',output:'',probe:observation(outcome,exit)};
+  }
 }
 
 export type HostAdbServerSample={state:'available'|'inconclusive',hash:string|null,reason?:'unsupported-endpoint'|'probe-unavailable'|'missing-listener'|'unrecognized-listener'|'overflow'|'ownership-unverified'};
@@ -139,13 +149,14 @@ export function compareHostAdbServer(before:HostAdbServerSample|undefined,after:
 }
 
 export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
-  const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null;adbd:string;adbdHash:string|null}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null,adbd:'unavailable',adbdHash:null};
+  const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null;adbd:string;adbdHash:string|null;adbdProbe?:ContinuityProbe}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null,adbd:'unavailable',adbdHash:null};
   const daemonRead=String.raw`'p=$(pidof adbd) || exit 1; case "$p" in ""|*[!0-9]*) exit 1 ;; esac; printf "%s\n" "$p"; cat "/proc/$p/stat"'`;
   await Promise.all((['connection','process','reverse','transport','boot','adbd'] as const).map(async kind=>{
     if(kind==='reverse' && !reverse)return;
     const deadline=performance.now()+1000;
     const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:kind==='adbd'?['shell','sh','-c',daemonRead]:['reverse','--list'];
     const result=await continuityOutput(adb,serial,args,deadline);
+    if(kind==='adbd')summary.adbdProbe=result.probe;
     if(result.state!=='available'){summary[kind]=result.state;return;}
     const output=result.output;
     if(kind==='adbd') {

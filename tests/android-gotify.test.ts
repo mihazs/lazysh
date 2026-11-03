@@ -9,6 +9,7 @@ import {resolve} from 'node:path';
 import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation,gotifyNativePhase,observeGotifyNativePhase} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
+const unobservedAdbd={sampleState:'not-observed',outcome:'unavailable',elapsed:'unavailable',exitCode:null};
 const background={schemaVersion:1,nonce,step:0,background:true};
 test('background stage accepts only the exact owner and completed native facts',()=>{
   expect(gotifyStage(JSON.stringify(background),nonce,0)).toEqual({step:0,verified:true});
@@ -302,7 +303,7 @@ test('proxy admission failure retains only a finite failure artifact without tar
     const path=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/gotify');
     const {readdir}=await import('node:fs/promises');expect(await readdir(path)).toEqual(['failure.json']);
     const receipt=JSON.parse(await readFile(join(path,'failure.json'),'utf8'));
-    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',hostDiagnostic:{operation:'unavailable',nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null},runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
+    expect(receipt).toEqual({schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',hostDiagnostic:{operation:'unavailable',adbdProbe:unobservedAdbd,nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null},runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});
     expect(JSON.stringify(receipt)).not.toMatch(/127\.0\.0\.1|http:|FAKE_ROOT|token|password|stack/);
   }finally{await child.stop();await rm(root,{recursive:true,force:true});}
 });
@@ -316,13 +317,13 @@ test.skipIf(process.env.LAZYSH_ANDROID_GOTIFY!=='1')('official Gotify displays a
 
 test('Gotify host failure evidence projects only closed operations and native process metadata',()=>{
   for(const operation of ['continuity','ownership','command','stage-record','native-state','stage-wait'])
-    expect(gotifyHostDiagnostic(operation,{state:'early-exit',exitCode:1},false)).toEqual({operation,nativePhase:'unavailable',nativeState:'early-exit',exitCode:1,signaled:false});
-  expect(gotifyHostDiagnostic('stage-record',{state:'running',exitCode:null},false)).toEqual({operation:'stage-record',nativePhase:'unavailable',nativeState:'running',exitCode:null,signaled:false});
-  expect(gotifyHostDiagnostic('native-state',{state:'signaled',exitCode:null},true)).toEqual({operation:'native-state',nativePhase:'unavailable',nativeState:'signaled',exitCode:null,signaled:true});
+    expect(gotifyHostDiagnostic(operation,{state:'early-exit',exitCode:1},false)).toEqual({operation,adbdProbe:unobservedAdbd,nativePhase:'unavailable',nativeState:'early-exit',exitCode:1,signaled:false});
+  expect(gotifyHostDiagnostic('stage-record',{state:'running',exitCode:null},false)).toEqual({operation:'stage-record',adbdProbe:unobservedAdbd,nativePhase:'unavailable',nativeState:'running',exitCode:null,signaled:false});
+  expect(gotifyHostDiagnostic('native-state',{state:'signaled',exitCode:null},true)).toEqual({operation:'native-state',adbdProbe:unobservedAdbd,nativePhase:'unavailable',nativeState:'signaled',exitCode:null,signaled:true});
   const hostile=Object.defineProperty({},'state',{get(){throw new Error('private-token');}});
   for(const state of ['missing-launcher','launch-denied','launch-failed','signaled','running','launch-unavailable'])
     expect(gotifyHostDiagnostic('command',{state,exitCode:null},false).nativeState).toBe(state);
-  const unknown={operation:'unavailable',nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null};
+  const unknown={operation:'unavailable',adbdProbe:unobservedAdbd,nativePhase:'unavailable',nativeState:'unavailable',exitCode:null,signaled:null};
   for(const candidate of [null,hostile,{state:'private-token',exitCode:0},{state:'early-exit',exitCode:256},
     {state:'early-exit',exitCode:-1},{state:'early-exit',exitCode:NaN},{state:'running',exitCode:0},
     {state:'running',exitCode:null,stdout:'private-token'},{state:'x'.repeat(20000),exitCode:null}]) {
@@ -398,7 +399,7 @@ test('native phase evidence requires a complete nonce/UID-bound immutable frame 
   expect(gotifyNativePhase('pending\n',nonce,10235)).toBe('not-observed');
   expect(gotifyNativePhase(frame(phase(),10235,2),nonce,10235)).toBe('not-observed');
   expect(gotifyHostDiagnostic('stage-wait',{state:'running',exitCode:null},false,gotifyNativePhase(raw,nonce,10235)))
-    .toEqual({operation:'stage-wait',nativePhase:'login-ca-select',nativeState:'running',exitCode:null,signaled:false});
+    .toEqual({operation:'stage-wait',adbdProbe:unobservedAdbd,nativePhase:'login-ca-select',nativeState:'running',exitCode:null,signaled:false});
   for(const bad of [frame(phase('private-token')),frame(phase('login','f'.repeat(32))),frame(phase(),10236),
     frame('{'),frame('{}'),frame(phase().replace('"phase":','"extra":true,"phase":')),
     frame(phase().replace('"phase":','"phase":"login","phase":')),raw.replace('1234','1235'),
@@ -420,4 +421,25 @@ test('native phase observation checks ownership once and makes failed secondary 
   expect(await observeGotifyNativePhase(check,async()=>{reads++;return 'malformed-private-token';},nonce,10235)).toBe('unavailable');
   expect(await observeGotifyNativePhase(check,async()=>{reads++;return 'pending\n';},nonce,10235)).toBe('not-observed');
   expect({checks,reads}).toEqual({checks:4,reads:3});
+});
+
+test('original adbd probe projects only closed sample, command, elapsed and exit observations',()=>{
+  const project=(input:unknown)=>gotifyHostDiagnostic('continuity-adbd-unknown',{state:'running',exitCode:null},false,'not-observed',input).adbdProbe;
+  for(const sampleState of ['unavailable','unrecognized','overflow']) {
+    const value={sampleState,outcome:'completed',elapsed:'within-budget',exitCode:0};
+    expect(project(value)).toEqual(value);
+  }
+  for(const [outcome,elapsed,exitCode]of [['deadline','over-budget',null],['nonzero-exit','within-budget',31],
+    ['completed','over-budget',0],['spawn-failed','within-budget',null],['not-started','over-budget',null],['signaled','within-budget',null]]as const) {
+    const value={sampleState:'unavailable',outcome,elapsed,exitCode};expect(project(value)).toEqual(value);
+  }
+  const valid={sampleState:'unavailable',outcome:'deadline',elapsed:'over-budget',exitCode:null};
+  let reads=0;const changing=Object.defineProperty({...valid},'sampleState',{get(){return ++reads===1?'unavailable':'private-token';}});
+  expect(project(changing)).toEqual(valid);expect(reads).toBe(1);
+  for(const value of [undefined,null,{},'private-token',{...valid,sampleState:'private-token'},
+    {...valid,outcome:'private-token'},{...valid,elapsed:'private-token'},{...valid,exitCode:256},
+    {...valid,exitCode:-1},{...valid,stdout:'private-token'},{...valid,pid:123},
+    Object.defineProperty({...valid},'sampleState',{get(){throw Error('private-token');}})]) {
+    const result=project(value);expect(result).toEqual(unobservedAdbd);expect(JSON.stringify(result)).not.toContain('private-token');
+  }
 });
