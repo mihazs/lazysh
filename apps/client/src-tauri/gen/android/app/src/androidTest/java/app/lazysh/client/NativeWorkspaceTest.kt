@@ -1807,7 +1807,7 @@ class NativeWorkspaceTest {
                     assertSame("Mosh resize retains its Window", window, current.window)
                     assertSame("Mosh resize retains its WebView", web, webView(current.window.decorView))
                     imeVisible = ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime())
-                    ready = scenario.state == androidx.lifecycle.Lifecycle.State.RESUMED && web.isAttachedToWindow && web.isShown && web.hasWindowFocus() &&
+                    ready = current.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED && web.isAttachedToWindow && web.isShown && web.hasWindowFocus() &&
                         imeVisible != null && (keyboard == null || imeVisible == keyboard)
                 }
                 val state = JSONObject(evaluate(scenario, observation, remaining.coerceAtMost(1000)))
