@@ -2,6 +2,20 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  herdrSharedFocusShort: ["Altera o foco de outras conexões.", "Cambia el foco de otras conexiones."],
+  herdrLiveSearch: ["Buscar agentes ativos", "Buscar agentes activos"],
+  pushUnifiedPrerequisite: ["Instale e abra um distribuidor UnifiedPush, como o ntfy. Configure o servidor, ative as notificações pela caixa de entrada do lazysh e atualize.", "Instala y abre un distribuidor UnifiedPush, como ntfy. Configura su servidor, activa las notificaciones desde la bandeja de lazysh y actualiza."],
+  pushUnifiedEnrollment: ["Abra e configure o ntfy ou seu distribuidor UnifiedPush. Ative as notificações pela caixa de entrada do lazysh. O endereço HTTPS do relay e o código de uso único do operador conectam a entrega e registram este dispositivo. Revise a exibição separadamente.", "Abre y configura ntfy o tu distribuidor UnifiedPush. Activa las notificaciones desde la bandeja de lazysh. La dirección HTTPS del relay y el código de un solo uso del operador conectan la entrega y registran este dispositivo. Revisa la visualización por separado."],
+  pushRegistrationOnly: ["Somente registro (opcional)", "Solo registro (opcional)"],
+  pushUnifiedPauseBeforeConnect: ["Pause o registro e conclua a limpeza antes de iniciar uma nova conexão com o relay.", "Pausa el registro y completa la limpieza antes de iniciar una nueva conexión con el relay."],
+  pushSetupService: ["Escolha um serviço", "Elige un servicio"],
+  pushSetupDevice: ["Registre este dispositivo", "Registra este dispositivo"],
+  pushSetupDelivery: ["Conecte a entrega", "Conecta la entrega"],
+  pushSetupDisplay: ["Revise a exibição de notificações", "Revisa la visualización de notificaciones"],
+  pushSetupHelp: ["Detalhes de configuração e privacidade", "Detalles de configuración y privacidad"],
+  attachmentOptions: ["Opções de envio", "Opciones de carga"],
+  attachmentOtherActions: ["Mais ações do anexo", "Más acciones del archivo"],
+
   agentsSections: ["Seções de agentes", "Secciones de agentes"],
   agentsJumpLive: ["Agentes ativos", "Agentes activos"],
   agentsJumpActivity: ["Atividade", "Actividad"],
@@ -1074,6 +1088,7 @@ const translations = {
   chatStepLimit: ["exibindo até 500 registros de etapas", "mostrando hasta 500 registros de pasos"],
   chatMessageLimit: ["exibindo até 500 mensagens registradas", "mostrando hasta 500 mensajes registrados"],
   chatFollow: ["Acompanhar ramificação Claude selecionada", "Seguir la rama de Claude seleccionada"],
+  chatCodexFollow: ["Acompanhar conversa registrada do Codex", "Seguir la conversación registrada de Codex"],
   chatFollowExplanation: ["Atualiza dois segundos após cada leitura. Páginas ocultas pausam o acompanhamento. Erros o interrompem; ative novamente para continuar.", "Actualiza dos segundos después de cada lectura. Las páginas ocultas pausan el seguimiento. Los errores lo detienen; actívalo de nuevo para continuar."],
   chatFollowing: ["Acompanhando a ramificação selecionada.", "Siguiendo la rama seleccionada."],
   chatFollowPaused: ["Acompanhamento pausado enquanto esta página está oculta.", "Seguimiento pausado mientras esta página está oculta."],

@@ -51,6 +51,24 @@ async function observeDpadPointers(page:Page) {
   await page.evaluate(()=>{const events:unknown[]=[];Reflect.set(window,'dpadEvents',events);for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture'])document.addEventListener(type,event=>{const pointer=event as PointerEvent;events.push({type,x:pointer.clientX,y:pointer.clientY,id:pointer.pointerId,primary:pointer.isPrimary,target:(event.target as HTMLElement).className});},true);});
 }
 
+test('expanded D-pad keeps the composer editable in a keyboard-sized viewport',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Mobile keyboard viewport');
+  await openExpandedDpad(page,true);
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  const editor=page.getByLabel('Compose text',{exact:true});
+  await expect(page.getByRole('button',{name:'D-pad up',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'dpad',exact:true})).toHaveAttribute('aria-pressed','false');
+  for(const height of [659,360]){
+    await page.setViewportSize({width:411,height});
+    await page.screenshot({path:testInfo.outputPath(`dpad-compose-${height}.png`)});
+    expect((await editor.boundingBox())!.height).toBeGreaterThan(16);
+    await editor.fill('Owned draft');
+    await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+    await expect(editor).toHaveValue('');
+  }
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['Owned draft','Owned draft']);
+});
+
 test('D-pad context menus are cancelled without consuming unrelated menus or terminal input',async({page},testInfo)=>{
   await openExpandedDpad(page,testInfo.project.name==='phone');
   await page.evaluate(()=>{

@@ -481,3 +481,54 @@ test('sustained software messages keep a long owned context without replaying it
   const remote:string[]=[];for(const character of writes.join('')){if(character==='\x7f')remote.pop();else remote.push(character);}
   expect(remote.join(''),JSON.stringify({writes})).toBe((prefix+'the\r').repeat(3));
 });
+
+for(const [inputType,initial,replacement,typed,final] of [
+  ['insertCompositionText','teh','the','The tail','The the tail'],
+  ['insertFromPaste','teh','the tail','The tail','The the tail'],
+  ['deleteContentForward','abc def','abc ','ABC more','ABC '],
+] as const)test(`owned fallback ${inputType} preserves exact edits and the next editable suffix`,async({page})=>{
+  await page.evaluate(initial=>window.ownedIme.replace(initial),initial);
+  const read=()=>page.evaluate(()=>{const o=window.ownedIme;let remote='';for(const c of o.writes.join(''))remote=c==='\x7f'?remote.slice(0,-1):remote+c;return {remote,proposal:o.proposal,readOnly:o.textarea.readOnly,sends:o.writes.length};});
+  await page.evaluate(({replacement,inputType})=>window.ownedIme.replace(replacement,inputType,0),{replacement,inputType});
+  expect(await read()).toEqual({remote:replacement,proposal:null,readOnly:false,sends:2});
+  await page.evaluate(typed=>window.ownedIme.replace(typed,'insertReplacementText',0),typed);
+  expect(await read()).toEqual({remote:typed,proposal:null,readOnly:false,sends:3});
+  await page.evaluate(({final,inputType})=>window.ownedIme.replace(final,inputType,0),{final,inputType});
+  expect(await read()).toEqual({remote:final,proposal:null,readOnly:false,sends:4});
+});
+
+for(const barrier of ['blur','reset','access','replacement'] as const)test(`pending owned fallback retires before ${barrier} and fresh input`,async({page})=>{
+  const result=await page.evaluate(async barrier=>{
+    const o=window.ownedIme;await o.replace('old');const staleWrites=o.writes;
+    const area=o.textarea;area.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true,composed:true}));
+    area.value='new';area.setSelectionRange(0,0);area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',data:'new',bubbles:true,composed:true}));
+    if(barrier==='replacement'){o.dispose();const {mountTerminalImeHarness}=await import('/e2e/fixtures/TerminalImeHarness.ts');window.ownedIme=mountTerminalImeHarness();}
+    else if(barrier==='access')o.setAcceptsInput(false);
+    else if(barrier==='reset')o.observation.reset();else area.blur();
+    await new Promise(resolve=>setTimeout(resolve,10));const afterRetirement=[...staleWrites];
+    if(barrier!=='replacement'){if(barrier==='access')o.setAcceptsInput(true);o.observation.resume();o.terminal.focus();}
+    await window.ownedIme.replace('fresh');
+    return {afterRetirement,oldWrites:[...staleWrites],freshWrites:[...window.ownedIme.writes],replaced:window.ownedIme.terminal!==o.terminal};
+  },barrier);
+  expect(result.afterRetirement).toEqual(['old']);expect(result.replaced).toBe(barrier==='replacement');
+  expect(result.oldWrites).toEqual(barrier==='replacement'?['old']:['old','fresh']);
+  expect(result.freshWrites).toEqual(barrier==='replacement'?['fresh']:['old','fresh']);
+});
+
+test('unknown edits without key229 keep the upstream fallback boundary',async({page})=>{
+  const writes=await page.evaluate(async()=>{const o=window.ownedIme;await o.replace('owned');o.textarea.value='other';o.textarea.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',data:'other',bubbles:true,composed:true}));await new Promise(resolve=>setTimeout(resolve,10));return o.writes;});
+  expect(writes).toEqual(['owned']);
+});
+
+test('beforeinput and the next key229 flush each pending fallback exactly once',async({page})=>{
+  const writes=await page.evaluate(async()=>{
+    const o=window.ownedIme;await o.replace('teh');const area=o.textarea;
+    for(const [value,inputType]of [['the','insertCompositionText'],['there','insertText'],['there the','insertCompositionText']]){
+      area.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true,composed:true}));
+      area.dispatchEvent(new InputEvent('beforeinput',{inputType,data:value,bubbles:true,composed:true,cancelable:true}));
+      area.value=value;area.setSelectionRange(0,0);area.dispatchEvent(new InputEvent('input',{inputType,data:value,bubbles:true,composed:true}));
+    }
+    await new Promise(resolve=>setTimeout(resolve,10));return o.writes;
+  });
+  expect(writes).toEqual(['teh','\x7f\x7fhe','re',' the']);
+});

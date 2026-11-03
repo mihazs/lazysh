@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
   createTerminal: vi.fn(),
+  installMoshResize: vi.fn(),
   invoke: vi.fn(),
   accountUsageSession: vi.fn(),
   accountUsageRefresh: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock('@tauri-apps/api/app',async original=>({...await original<typeof import(
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
+vi.mock("./moshResize", () => ({installMoshResize: (...args:unknown[])=>mocks.installMoshResize(...args)}));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
     mocks.terminalPaneProps(props);
@@ -128,6 +130,7 @@ beforeEach(() => {
     length: 0,
   });
   mocks.createTerminal.mockImplementation(()=>{if(mocks.prepareError)throw mocks.prepareError;return mocks.terminal;});
+  mocks.installMoshResize.mockImplementation(()=>({failure:null as null|'invalid-frame'|'partial-frame',close:vi.fn().mockResolvedValue(undefined),dispose:vi.fn()}));
   mocks.api.listHosts.mockResolvedValue([host]);
   mocks.invoke.mockResolvedValue(false);
   mocks.api.disconnect.mockResolvedValue(undefined);
@@ -394,7 +397,7 @@ it('routes a selected actual Claude row to the exact SSH Chat prefill with read/
   const user=await openConnection(mark);
   mark('connect-ssh');await user.click(screen.getByRole('button',{name:'Connect'}));
   mark('wait-live-ssh');await screen.findByText('Live SSH terminal');
-  mark('open-agents');await user.click(screen.getByRole('button',{name:'Agents'}));
+  mark('open-agents');await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
   mark('wait-history-action');const historyAction=await screen.findByRole('button',{name:'Use reported history'});
   mark('use-history');await user.click(historyAction);
   mark('wait-prefill');const path=await screen.findByLabelText('Transcript path');
@@ -412,13 +415,20 @@ it('routes a selected actual Claude row to the exact SSH Chat prefill with read/
   mark('wait-retired-path');expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
   mark('assert-retired-notice');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
 });
-it.each(['success','failure'] as const)('prevents a pending actual Agent lookup %s from reopening Chat after hiding its navigation',async outcome=>{
+it.each((['connections','live','live-return','live-batched-return','live-before-commit'] as const).flatMap(transition=>(['success','failure'] as const).map(outcome=>({transition,outcome}))))('prevents a pending actual Agent lookup $outcome from reopening Chat after $transition navigation',async({transition,outcome})=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   reportedHistoryApp(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
-  await user.click(screen.getByRole('button',{name:'Connections'}));await screen.findByText('Live SSH terminal');
-  await act(async()=>{if(outcome==='success')finish(reportedAppMetadata);else fail('old reported route error');});
+  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(screen.getByRole('button',{name:'Reported agent activity'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
+  const settle=()=>{if(outcome==='success')finish(reportedAppMetadata);else fail('old reported route error');};
+  if(transition==='live-before-commit')await act(async()=>{screen.getByRole('button',{name:'Live Herdr agents'}).click();settle();});
+  else{
+    await user.click(screen.getByRole('button',{name:transition==='connections'?'Connections':'Live Herdr agents'}));await screen.findByText('Live SSH terminal');
+    if(transition==='live-return')await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
+    if(transition==='live-batched-return')await act(async()=>{screen.getByRole('button',{name:'Reported agent activity'}).click();screen.getByRole('button',{name:'Live Herdr agents'}).click();});
+    await act(async()=>settle());
+  }
+  expect(screen.getByRole('button',{name:'Terminal'})).toHaveProperty('ariaCurrent','page');
   expect(screen.queryByLabelText('Transcript path')).toBeNull();expect(screen.queryByText('old reported route error')).toBeNull();
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
 });
@@ -2079,22 +2089,22 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
   await user.click(screen.getByRole('button',{name:'Agents'}));
+  const live=screen.getByRole('group',{name:'Live Herdr agents'});
+  await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
   await user.click(screen.getByRole('button',{name:'Setup'}));
   const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
   const jumps=screen.getByRole('navigation',{name:'Agent sections'});
-  const activity=screen.getByRole('group',{name:'Reported agent activity'}),live=screen.getByRole('group',{name:'Live Herdr agents'});
+  const activity=screen.getByRole('group',{name:'Reported agent activity'});
   const scroller=activity.closest('.workspace-navigation-scroll') as HTMLDivElement;
-  vi.spyOn(scroller,'getBoundingClientRect').mockReturnValue(new DOMRect(0,20,300,400));
-  vi.spyOn(activity,'getBoundingClientRect').mockReturnValue(new DOMRect(0,230,300,400));
-  vi.spyOn(live,'getBoundingClientRect').mockReturnValue(new DOMRect(0,-300,300,400));
   const pageScroll=vi.spyOn(window,'scrollTo');onTestFinished(()=>{pageScroll.mockRestore();});scroller.scrollTop=30;
   const readsBeforeJump=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
   const activityButton=within(jumps).getByRole('button',{name:'Reported agent activity'});
-  fireEvent.click(activityButton);expect(document.activeElement).toBe(activity);expect(scroller.scrollTop).toBeGreaterThan(30);
+  fireEvent.click(activityButton);expect(document.activeElement).toBe(activity);expect(scroller.scrollTop).toBe(30);
   fireEvent.click(within(jumps).getByRole('button',{name:'Live Herdr agents'}));
   expect(document.activeElement).toBe(live);expect(scroller.scrollTop).toBe(0);expect(pageScroll).not.toHaveBeenCalled();
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(readsBeforeJump);
+  fireEvent.click(activityButton);expect(scroller.scrollTop).toBe(30);
   expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(settings).toHaveProperty('checked',false);
 
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
@@ -2109,6 +2119,11 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledOnce();
+  const connections=screen.getByRole('button',{name:'Connections'});
+  await act(async()=>{within(jumps).getByRole('button',{name:'Live Herdr agents'}).click();connections.click();});
+  const agentsEntry=screen.getByRole('button',{name:'Agents navigation'});
+  await user.click(agentsEntry);expect(document.activeElement).toBe(agentsEntry);
+  await user.click(activityButton);
   await user.click(screen.getByRole('button',{name:'Workspaces'}));
   expect(screen.getByRole('group',{name:'Spaces'})).toBe(live);
   expect(screen.queryByRole('group',{name:'Live Herdr agents'})).toBeNull();
@@ -2233,4 +2248,64 @@ it('uses the existing guarded dialog shell for long mobile tasks and keeps choic
   expect(connection.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
   await user.click(within(connection).getByRole('button',{name:'Close Connect to Home'}));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+
+it('installs canonical Mosh rendering before early output and preserves exact pending byte acknowledgements',async()=>{
+  verifiedMoshControl();
+  const terminals=Array.from({length:2},()=>({write:vi.fn((_data:Uint8Array,done?:()=>void)=>done?.()),dispose:vi.fn()}));
+  let index=0;mocks.createTerminal.mockImplementation(()=>terminals[index++]);
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{
+    expect(mocks.installMoshResize).toHaveBeenCalledExactlyOnceWith(terminals[1]);
+    onEvent({type:'data',data:[1,2,3]});return {sessionId:'early-mosh'};
+  });
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.ackOutput).toHaveBeenCalledExactlyOnceWith('early-mosh',3);
+  expect(terminals[1].write).toHaveBeenCalledExactlyOnceWith(new Uint8Array([1,2,3]),expect.any(Function));
+  expect(terminals[0].dispose).toHaveBeenCalledOnce();
+  const controller=mocks.installMoshResize.mock.results[0].value;
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
+  expect(controller.dispose).toHaveBeenCalledOnce();expect(terminals[1].dispose).toHaveBeenCalledOnce();
+  expect(controller.dispose.mock.invocationCallOrder[0]).toBeLessThan(terminals[1].dispose.mock.invocationCallOrder[0]);
+});
+
+it.each(['closed','invalid'] as const)('keeps Mosh parser drain separate from terminal disposal on %s output',async branch=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'drained-mosh'};});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const session=mocks.terminalPaneProps.mock.lastCall?.[0].session,controller=mocks.installMoshResize.mock.results[0].value;
+  if(branch==='invalid')controller.failure='invalid-frame';
+  await act(async()=>{receive(branch==='closed'?{type:'closed'}:{type:'data',data:[4,5]});});
+  expect(session.connected).toBe(false);expect(controller.close).toHaveBeenCalledOnce();expect(controller.dispose).not.toHaveBeenCalled();
+  if(branch==='invalid'){
+    expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(1);
+    await act(async()=>receive({type:'data',data:[6]}));
+    expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(1);
+  } else expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(0);
+});
+
+it('rejects unsupported canonical rendering before starting forced Mosh',async()=>{
+  verifiedMoshControl();mocks.installMoshResize.mockImplementation(()=>{throw new Error('unsupported owned ABI');});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.terminal.dispose).toHaveBeenCalled());expect(mocks.api.connectMosh).not.toHaveBeenCalled();
+  expect(screen.queryByText('Live SSH terminal')).toBeNull();expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'ssh-control'});
+});
+
+
+it('Auto uses its existing fallback when the local canonical Mosh renderer is unsupported',async()=>{
+  enableTransports();mocks.installMoshResize.mockImplementation(()=>{throw new Error('owned unavailable ABI');});mocks.api.connectEt.mockResolvedValue({sessionId:'renderer-fallback-et'});
+  await connectAuto();await screen.findByText(/Auto selected Eternal Terminal/);
+  expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).toHaveBeenCalledExactlyOnceWith('verified-control',autoOptions.et,expect.any(Function));
+});
+
+it('does not renew revoked access to disconnect a locally failed Mosh display',async()=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'revoked-display'};});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const controller=mocks.installMoshResize.mock.results[0].value;
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked:true,generation:String(generationBase+2),reason:''});controller.failure='invalid-frame';
+  await act(async()=>receive({type:'data',data:[9]}));
+  expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='revoked-display')).toHaveLength(0);
+  expect(controller.close).toHaveBeenCalledOnce();
 });

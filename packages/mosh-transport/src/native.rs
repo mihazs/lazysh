@@ -429,6 +429,184 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+    fn next_owned_frame(client: &mut Client) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let update = client.poll().unwrap();
+            assert!(!update.finished);
+            assert!(update.bytes.len() <= OUTPUT_LIMIT);
+            if !update.bytes.is_empty() {
+                assert!(update.connected);
+                return update.bytes;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owned display frame missing"
+            );
+            client.wait(Duration::from_millis(10)).unwrap();
+        }
+    }
+
+    fn frame_parts(bytes: &[u8]) -> (u64, u16, u16, &[u8]) {
+        let prefix = b"\x1b]7777;lazysh-mosh;1;begin;";
+        assert!(bytes.starts_with(prefix));
+        let split = bytes.windows(2).position(|part| part == b"\x1b\\").unwrap();
+        let fields: Vec<_> = std::str::from_utf8(&bytes[prefix.len()..split])
+            .unwrap()
+            .split(';')
+            .collect();
+        assert_eq!(fields.len(), 3);
+        let id: u64 = fields[0].parse().unwrap();
+        assert!((1..=9_007_199_254_740_991).contains(&id));
+        let cols: u16 = fields[1].parse().unwrap();
+        let rows: u16 = fields[2].parse().unwrap();
+        let suffix = format!("\x1b]7777;lazysh-mosh;1;end;{id}\x1b\\");
+        assert!(bytes.ends_with(suffix.as_bytes()));
+        (
+            id,
+            cols,
+            rows,
+            &bytes[split + 2..bytes.len() - suffix.len()],
+        )
+    }
+
+    #[test]
+    fn authenticated_resize_frames_preserve_the_remote_top_rows_without_reflow() {
+        let (mut client, socket, address) = fake_server();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../apps/client/e2e/fixtures/mosh-resize-frames.json"
+        ))
+        .unwrap();
+        let mut frames = Vec::new();
+        let mut last_frame_id = 0;
+        for (index, (cols, rows)) in [
+            (40_u16, 12_u16),
+            (40, 6),
+            (40, 12),
+            (41, 12),
+            (20, 12),
+            (40, 12),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            client.resize(cols, rows).unwrap();
+            // HostBuffers.HostMessage.resize, with these fixed one-byte dimensions.
+            // The peer input is application paint; captured output comes ONLY from
+            // Client.poll's production Display.new_frame, not a guessed ANSI frame.
+            let mut data = vec![0x0a, 6, 0x1a, 4, 0x28, cols as u8, 0x30, rows as u8];
+            if index == 0 || index == 3 {
+                data.extend(host_bytes("\x1b[H\x1b[2J"));
+                for row in 0..12 {
+                    let suffix = if row == 4 {
+                        "_世界"
+                    } else if row == 1 {
+                        "_0123456789ABCDEFGHIJKLMN"
+                    } else {
+                        ""
+                    };
+                    let style = if row == 0 { "\x1b[1;31m" } else { "\x1b[0m" };
+                    data.extend(host_bytes(&format!(
+                        "\x1b[{};1H{style}OWNED_ROW_{row:02}{suffix}",
+                        row + 1
+                    )));
+                }
+                data.extend(host_bytes("\x1b[0m\x1b[12;33H"));
+            }
+            assert!(data.len() <= 512);
+            let state = index as u64 + 1;
+            socket
+                .send_to(&packet(true, state - 1, state, 0, &data), address)
+                .unwrap();
+            let output = next_owned_frame(&mut client);
+            {
+                let _guard = locked().unwrap();
+                // SAFETY: this unit owns the client and holds the same core lock.
+                assert_eq!(
+                    unsafe { lazysh_mosh_test_state_num(client.pointer.as_ptr()) },
+                    state
+                );
+            }
+            let (frame_id, frame_cols, frame_rows, body) = frame_parts(&output);
+            assert!(frame_id > last_frame_id);
+            last_frame_id = frame_id;
+            assert_eq!((frame_cols, frame_rows), (cols, rows));
+            // Emission IDs depend on initial blank polling and forced redraws;
+            // body bytes (including UTF8, cursor and styles) do not get normalized.
+            let expected = &golden["frames"][index];
+            assert_eq!(expected["cols"], cols);
+            assert_eq!(expected["rows"], rows);
+            let hex = expected["bodyHex"].as_str().unwrap();
+            let expected_body: Vec<u8> = hex
+                .as_bytes()
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            assert_eq!(body, expected_body);
+            let clear = b"\x1b[r\x1b[0m\x1b[H\x1b[2J";
+            assert!(output.windows(clear.len()).any(|part| part == clear));
+            let visible_rows = if index == 0 || index >= 3 { 12 } else { 6 };
+            for row in 0..visible_rows {
+                let marker = format!("OWNED_ROW_{row:02}");
+                assert_eq!(
+                    output
+                        .windows(marker.len())
+                        .filter(|part| *part == marker.as_bytes())
+                        .count(),
+                    1
+                );
+            }
+            if index == 1 || index == 2 {
+                for row in 6..12 {
+                    let marker = format!("OWNED_ROW_{row:02}");
+                    assert!(!output
+                        .windows(marker.len())
+                        .any(|part| part == marker.as_bytes()));
+                }
+            }
+            frames.push(serde_json::json!({
+                "cols": cols, "rows": rows, "state": state, "frameId": frame_id, "bodyBytes": body, "frameBytes": output,
+                "expectedVisibleRows": visible_rows,
+                "expectedFirstRowBoldRed": true,
+                "expectedCursor": [if index < 4 {32} else {19}, if index == 0 || index >= 3 {11} else {5}],
+                "expectedLongRow": if index < 4 {"OWNED_ROW_01_0123456789ABCDEFGHIJKLMN"} else {&"OWNED_ROW_01_0123456789ABCDEFGHIJKLMN"[..20]},
+            }));
+        }
+        let receipt = serde_json::to_string(&serde_json::json!({
+            "scope": "production Client.poll/Display.new_frame over authenticated fixed-public-key loopback test peer; not an official server process",
+            "version": env!("CARGO_PKG_VERSION"), "initialClientSize": [80,24], "frames": frames,
+        })).unwrap();
+        assert!(receipt.len() <= 32 * 1024);
+        println!("OWNED_MOSH_RESIZE_FRAMES {receipt}");
+    }
+
+    #[test]
+    fn remote_osc_cannot_forge_the_local_frame_envelope() {
+        let (mut client, socket, address) = fake_server();
+        let mut paint = Vec::new();
+        for part in [
+            "\x1b]7777;lazysh-mosh;1;begin;999;2;1\x1b\\",
+            "\u{009d}7777;lazysh-mosh;1;begin;998;2;1\u{009c}",
+            "\x1b]2;OWNED_TITLE\x07",
+            "\x1b]8;;https://example.invalid/owned\x1b\\OWNED_LINK\x1b]8;;\x1b\\",
+        ] {
+            paint.extend(host_bytes(part));
+        }
+        socket
+            .send_to(&packet(true, 0, 1, 0, &paint), address)
+            .unwrap();
+        let output = next_owned_frame(&mut client);
+        let (_, cols, rows, body) = frame_parts(&output);
+        assert_eq!((cols, rows), (80, 24));
+        assert!(!body
+            .windows(b"lazysh-mosh;".len())
+            .any(|part| part == b"lazysh-mosh;"));
+        assert!(String::from_utf8_lossy(body).contains("OWNED_TITLE"));
+        assert!(String::from_utf8_lossy(body).contains("OWNED_LINK"));
+    }
+
     #[test]
     fn paused_output_keeps_authenticated_state_and_resumes_with_full_redraw() {
         let (mut client, socket, address) = fake_server();
@@ -451,13 +629,16 @@ mod tests {
         }
         client.pause_output(false).unwrap();
         let update = client.poll().unwrap();
+        let (first_id, _, _, _) = frame_parts(&update.bytes);
         assert!(String::from_utf8_lossy(&update.bytes).contains("LATEST_LOCKED"));
         assert!(update.bytes.len() <= OUTPUT_LIMIT);
         assert!(client.poll().unwrap().bytes.is_empty());
         client.pause_output(true).unwrap();
         assert!(client.poll().unwrap().bytes.is_empty());
         client.pause_output(false).unwrap();
-        assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("LATEST_LOCKED"));
+        let redraw = client.poll().unwrap();
+        assert!(frame_parts(&redraw.bytes).0 > first_id);
+        assert!(String::from_utf8_lossy(&redraw.bytes).contains("LATEST_LOCKED"));
     }
     #[test]
     fn drained_receive_is_nonfatal_and_same_client_accepts_later_traffic() {

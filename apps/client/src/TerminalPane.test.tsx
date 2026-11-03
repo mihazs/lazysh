@@ -9,9 +9,9 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("./bridge", () => ({api: mocks}));
-vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
+vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
@@ -30,6 +30,7 @@ beforeEach(() => {
     constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string; isPrimary?:boolean} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch"; this.isPrimary=options.isPrimary??true;}
   });
   mocks.write.mockResolvedValue(undefined); mocks.writeSequence.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
+  mocks.propose.mockReturnValue({cols:80,rows:24});
   mocks.openWebUrl.mockResolvedValue(undefined);
   mocks.zellijNavigate.mockResolvedValue(undefined);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -205,7 +206,7 @@ describe('expanded D-pad pointer ownership',()=>{
   });
   it.each(['pending','repeating'] as const)('cancels every %s gesture at each input boundary',phase=>{
     // Each boundary starts with a fresh lease and gesture; no canceled timer may resume.
-    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','keys','modal','dispose']){
+    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','compose','keys','modal','dispose']){
       const pad=dpadFixture();pad.down();if(phase==='repeating')pad.advance(400);
       const sent=pad.bytes().length;let hidden:ReturnType<typeof vi.spyOn>|undefined,dialog:HTMLElement|undefined;
       if(boundary==='cancel')fireEvent.pointerCancel(pad.pad,pad.point);
@@ -218,6 +219,7 @@ describe('expanded D-pad pointer ownership',()=>{
         pad.view.rerender(<TerminalPane session={session} active={boundary!=='inactive'} reportError={pad.reportError} />);
       }
       if(boundary==='close')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+      if(boundary==='compose')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
       if(boundary==='keys')fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
       if(boundary==='modal'){dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');document.body.append(dialog);}
       if(boundary==='dispose')pad.view.unmount();
@@ -228,6 +230,19 @@ describe('expanded D-pad pointer ownership',()=>{
       pad.advance(1000);expect(pad.bytes(),`trailing ${phase}/${boundary}`).toHaveLength(sent);
       cleanup();act(()=>access());mocks.write.mockClear();
     }
+  });
+  it('switches expanded input tools without losing an unsent draft or sending bytes',()=>{
+    const pad=dpadFixture();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect(screen.queryByRole('button',{name:'D-pad up'})).toBeNull();
+    expect(screen.getByRole('button',{name:'dpad'}).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'Unsent draft'}});
+    fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+    expect(screen.queryByLabelText('Compose text')).toBeNull();
+    expect(screen.getByRole('button',{name:'D-pad up'})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect((screen.getByLabelText('Compose text') as HTMLTextAreaElement).value).toBe('Unsent draft');
+    expect(pad.bytes()).toEqual([]);
   });
   it('keeps the same live input owner across metadata replacement but retires a replaced terminal',()=>{
     const pad=dpadFixture();pad.down();pad.advance(400);
@@ -1330,4 +1345,42 @@ it('publishes only the active local overlay Back handler and keeps its draft wit
   expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
   view.unmount();expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
   expect(mocks.write).not.toHaveBeenCalled();expect(terminal.paste).not.toHaveBeenCalled();
+});
+
+
+it('routes every Mosh fit path through proposals and guarded intents without clearing or echoing canonical resizes',async()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(400);
+  let observe!:()=>void,receive!:(size:{cols:number;rows:number})=>void;
+  vi.stubGlobal('ResizeObserver',class {constructor(callback:()=>void){observe=callback;}observe(){}disconnect(){}});
+  const stop=vi.fn(),controller={onResizeIntent:vi.fn(callback=>{receive=callback;return{dispose:stop};}),requestSize:vi.fn(),dispose:vi.fn()};
+  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  const resized=vi.spyOn(terminal,'onResize'),reportError=vi.fn();
+  try {
+    const view=render(<TerminalPane session={session} active reportError={reportError}/>);
+    const initial=controller.requestSize.mock.calls.length;expect(initial).toBeGreaterThan(0);
+    act(()=>observe());expect(controller.requestSize.mock.calls.length).toBeGreaterThan(initial);
+    act(()=>savePreferences({...defaults,fontSize:18}));
+    await act(async()=>view.rerender(<TerminalPane session={session} active={false} reportError={reportError}/>));
+    await act(async()=>view.rerender(<TerminalPane session={session} active reportError={reportError}/>));
+    expect(controller.requestSize).toHaveBeenLastCalledWith(80,24);expect(mocks.fit).not.toHaveBeenCalled();expect(resized).not.toHaveBeenCalled();
+    await act(async()=>receive({cols:91,rows:17}));expect(mocks.resize).toHaveBeenLastCalledWith('mosh',91,17);
+    access(true);await act(async()=>receive({cols:92,rows:18}));expect(mocks.resize).toHaveBeenCalledTimes(1);
+    const count=controller.requestSize.mock.calls.length;session.connected=false;act(()=>observe());expect(controller.requestSize).toHaveBeenCalledTimes(count);
+    view.unmount();expect(stop).toHaveBeenCalledOnce();expect(controller.dispose).not.toHaveBeenCalled();
+    access();session.connected=true;render(<TerminalPane session={session} active reportError={reportError}/>);
+    expect(controller.onResizeIntent).toHaveBeenCalledTimes(2);expect(controller.requestSize.mock.calls.length).toBeGreaterThan(count);
+  } finally {width.mockRestore();}
+});
+
+it('keeps ordinary non-Mosh fits and resize notifications on the stock path',async()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(400);let resize!:(size:{cols:number;rows:number})=>void;
+  terminal.onResize=callback=>{resize=callback;return{dispose(){}};};
+  try{mount();expect(mocks.fit).toHaveBeenCalled();expect(mocks.propose).not.toHaveBeenCalled();await act(async()=>resize({cols:72,rows:19}));expect(mocks.resize).toHaveBeenCalledWith('ssh',72,19);}finally{width.mockRestore();}
+});
+
+it('reports an unsupported measured Mosh size without clearing the canonical screen or issuing remote resize',()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(6000),reportError=vi.fn();
+  const controller={onResizeIntent:()=>({dispose(){}}),requestSize:()=>{throw new Error('unsupported measured grid');}};
+  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  try{render(<TerminalPane session={session} active reportError={reportError}/>);expect(reportError).toHaveBeenCalled();expect(mocks.fit).not.toHaveBeenCalled();expect(mocks.resize).not.toHaveBeenCalled();}finally{width.mockRestore();}
 });

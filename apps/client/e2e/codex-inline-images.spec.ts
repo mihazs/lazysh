@@ -43,7 +43,7 @@ async function openRecords(page:Page) {
 
 test('switching from an opted-in Claude conversation establishes Codex Records with image admission off',async({page})=>{
   const external=await setup(page);
-  await expect(page.getByRole('combobox',{name:'View',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('combobox',{name:'View',exact:true})).toHaveValue('records');
   await expect(page.getByLabel('Include recorded images',{exact:true})).not.toBeChecked();
   await openRecords(page);
   const initial=(await counters(page)).calls.at(-1)!;

@@ -1,5 +1,54 @@
 # @lazysh/client
 
+## 1.10.2
+
+### Patch Changes
+
+- a706336: Preserve validated owned ASCII edits across Android IME fallback transactions without replaying the previous text or losing multi-character deletion. Retain input ownership, cancellation and unsupported-edit review.
+- 20fa847: Keep Mosh repaint geometry synchronized with each complete server frame so keyboard, composer and viewport resizes do not duplicate the screen into local scrollback. Preserve existing history cells without reflow; narrow views can clip old history until widened.
+- @lazysh/account-usage@1.10.2
+  - @lazysh/common@1.10.2
+  - @lazysh/display-idle@1.10.2
+  - @lazysh/et-transport@1.10.2
+  - @lazysh/mosh-transport@1.10.2
+
+## 1.10.1
+
+### Patch Changes
+
+- e05e4a2: Make terminal composition compact, put uploaded attachment paths before secondary tools, guide notification setup, and separate live agents from reported activity while keeping pending approvals reachable.
+- 3207d0c: Keep custom theme text readable on translucent navigation and short sheets by increasing backing opacity only when the palette needs it. Preserve bundled glass and solid reduced-transparency/forced-colors rendering.
+- @lazysh/account-usage@1.10.1
+  - @lazysh/common@1.10.1
+  - @lazysh/display-idle@1.10.1
+  - @lazysh/et-transport@1.10.1
+  - @lazysh/mosh-transport@1.10.1
+
+## 1.10.0
+
+### Minor Changes
+
+- f1d7feb: Add a recorded Codex Conversation reader with mode-aware turn replay, bounded protected fork/revert prefixes, explicit refresh and opt-in Follow. Records remains the default; recorded history does not establish a live agent or authorize requests.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.10.0
+  - @lazysh/common@1.10.0
+  - @lazysh/display-idle@1.10.0
+  - @lazysh/et-transport@1.10.0
+  - @lazysh/mosh-transport@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- f164bfc: Retain one closed, passive native finger-landing observation to distinguish terminal geometry and hit-target failures without changing gesture admission, deadlines or scrolling behavior.
+- @lazysh/account-usage@1.9.11
+  - @lazysh/common@1.9.11
+  - @lazysh/display-idle@1.9.11
+  - @lazysh/et-transport@1.9.11
+  - @lazysh/mosh-transport@1.9.11
+
 ## 1.9.10
 
 ### Patch Changes
