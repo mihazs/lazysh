@@ -37,3 +37,30 @@ export function namespaceArguments(program:string,args:string[],directory:string
     '--dir','/tmp/.X11-unix','--bind',directory,directory,'--ro-bind',socket,socket,
     ...files.flatMap(file=>['--dir',path.dirname(file),'--ro-bind',file,file]),'--chdir',directory,'--',program,...args];
 }
+
+// Immutable, actually produced owned OpenCode captures; no CLI is executed by this lane.
+export const openCodeNativeCapturePins=[
+  {version:'1.19.5',sessionId:'ses_e6023d470ffesdNykvfQWhjWzF',databaseSha256:'2143e7e66e9e96ca35f00865b08518fd85e62b5c9a8ff663b5eeead03afff127',groundTruthSha256:'07129ad3b5dc9b321efe99aad9390981c0b26fc7333ccaf5dbfab16fa0faa581'},
+  {version:'2.2.5',sessionId:'ses_e6023cde7ffejxVoGVBgWFN37Q',databaseSha256:'d1179953d4cb0e3755fde6a870d6af65e242cef9a135d1cbad7245c48b636836',groundTruthSha256:'64aab42aff9acfde6aea736212e3c0cef8638b2ffe860b46b451af707a2740c7'},
+] as const;
+type NativeRecord={path:string;sha256:string};
+type NativeOpenCodeManifest={schemaVersion:1;source:string;clientSha256:string;companion:NativeRecord&{version:string};captures:{version:string;sessionId:string;database:NativeRecord;groundTruth:NativeRecord}[]};
+export function nativeOpenCodeManifest(input:unknown,source:string,version:string):NativeOpenCodeManifest {
+  const reject=()=>{throw new Error('Invalid owned OpenCode native manifest');};
+  const shape=(value:unknown,keys:string[]):value is Record<string,unknown>=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+  const hash=(value:unknown)=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  const record=(value:unknown)=>shape(value,['path','sha256'])&&typeof value.path==='string'&&path.isAbsolute(value.path)&&path.normalize(value.path)===value.path&&value.path.length<=4096&&!/[\x00-\x1f\x7f]/.test(value.path)&&hash(value.sha256);
+  try {
+    if(!/^[a-f0-9]{40}$/.test(source)||!/^\d+\.\d+\.\d+$/.test(version)||!shape(input,['schemaVersion','source','clientSha256','companion','captures'])||input.schemaVersion!==1||input.source!==source||!hash(input.clientSha256))return reject();
+    if(!shape(input.companion,['path','sha256','version'])||input.companion.version!==version||!record({path:input.companion.path,sha256:input.companion.sha256})||!Array.isArray(input.captures)||input.captures.length!==2)return reject();
+    for(const [index,capture]of input.captures.entries()) {
+      const expected=openCodeNativeCapturePins[index];
+      if(!shape(capture,['version','sessionId','database','groundTruth'])||capture.version!==expected.version||capture.sessionId!==expected.sessionId||!record(capture.database)||!record(capture.groundTruth))return reject();
+      if((capture.database as NativeRecord).sha256!==expected.databaseSha256||(capture.groundTruth as NativeRecord).sha256!==expected.groundTruthSha256)return reject();
+    }
+    return input as unknown as NativeOpenCodeManifest;
+  }catch{return reject();}
+}
+
+// UI projection for the fixed-hash plain-paragraph captures only; raw companion checks stay exact.
+export function nativeOpenCodeParagraphText(text:string):string {return text.endsWith('\n')?text.slice(0,-1):text;}
