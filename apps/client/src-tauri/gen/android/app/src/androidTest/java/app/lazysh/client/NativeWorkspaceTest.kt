@@ -2098,8 +2098,8 @@ class NativeWorkspaceTest {
                         }
                     } else completed.countDown()
                 })
-                assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
-                return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget" }
+                assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches cachedSample=$lastFingerSample", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
+                return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget cachedSample=$lastFingerSample" }
             }
             fun fingerSample(timeoutMillis: Long) = fingerRead("window[$fingerKey].sample()", timeoutMillis)
             fun observedDelivery(ended: Boolean, before: Int? = null): JSONObject {
