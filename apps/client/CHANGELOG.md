@@ -1,5 +1,29 @@
 # @lazysh/client
 
+## 1.9.10
+
+### Patch Changes
+
+- b7aeb55: Extend owned Android SSH acceptance to verify toolbar Shift one-shot and pending-composition toggling, modified Enter, and momentary key appearance against the exact receiver stream.
+- 9869796: Prevent the browser touch default only on admitted expanded D-pad direction gestures, preserving ordinary clicks, corner shortcuts and accessibility controls. Native Android long-press and IME behavior remain subject to the original acceptance case.
+- f39cd05: Retain only closed native registration and enrollment phases after an unchanged ntfy challenge-confirmation failure. Preserve the original failure, deadlines and privacy guards; this is diagnostic evidence, not a confirmation or delivery fix.
+- @lazysh/account-usage@1.9.10
+  - @lazysh/common@1.9.10
+  - @lazysh/display-idle@1.9.10
+  - @lazysh/et-transport@1.9.10
+  - @lazysh/mosh-transport@1.9.10
+
+## 1.9.9
+
+### Patch Changes
+
+- 657ee0b: Qualify standalone Android Mosh interoperability independently from guarded client UI acceptance while preserving their existing deadlines and assertions.
+- @lazysh/account-usage@1.9.9
+  - @lazysh/common@1.9.9
+  - @lazysh/display-idle@1.9.9
+  - @lazysh/et-transport@1.9.9
+  - @lazysh/mosh-transport@1.9.9
+
 ## 1.9.8
 
 ### Patch Changes

@@ -411,6 +411,17 @@ export function returnStateObservation(text:string) {
   return {foreground:match[1],...Object.fromEntries(
     ['settings','defaultDialog','add','certificate','allow','deny','ime'].map((key,index)=>[key,match[index+2]==='unavailable'?null:match[index+2]==='true']))};
 }
+export function challengeStateObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy challenge state[').length!==2)return;
+  const match=/Ntfy challenge state\[enrollment=([^\s\]]{1,128}) registration=([^\s\]]{1,128}) busy=(true|false|unavailable)\]/.exec(text);
+  if(!match)return;
+  const phase=(value:string,allowed:string[])=>allowed.includes(value)?value:'unknown';
+  return {
+    enrollment:phase(match[1],['BOOTSTRAP','REGISTER','SUBSCRIBE','VERIFY','CONFIRMED','REVOKE_PENDING','FAILED','absent','unavailable','unknown']),
+    registration:phase(match[2],['OFF','SELECTING','REQUESTED','READY','FAILED','UNAVAILABLE','REVOKE_PENDING','absent','unavailable','unknown']),
+    busy:match[3]==='unavailable'?null:match[3]==='true',
+  };
+}
 export function eventObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;
   const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow)(?: hostProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) issuedInHandler=(within|outside|unavailable) postProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) callbackProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) postClock=(unavailable|beforeIssued|expired|withinWindow))?)?\]/g)];
@@ -435,7 +446,8 @@ async function nativeFailure(directory:string) {
     const settings=settingsObservation(failure);
     const event=eventObservation(failure);
     const returnState=returnStateObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{})};
+    const challengeState=challengeStateObservation(failure);
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{})};
   }catch{return {};}
 }
 
