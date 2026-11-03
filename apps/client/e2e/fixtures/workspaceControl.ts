@@ -4,18 +4,21 @@ import {expect,type Page} from '@playwright/test';
 export async function workspaceControl(page:Page,name:string) {
   const button=page.getByRole('button',{name,exact:true}).first();
   const dialogButton=page.getByRole('dialog').getByRole('button',{name,exact:true}).first();
-  await expect.poll(async()=>await dialogButton.isVisible() || await button.isVisible() || await page.locator('.workspace-terminal-focus').isVisible()).toBe(true);
+  await expect.poll(async()=>await dialogButton.isVisible() || await button.isVisible() || await page.locator('.workspace-tools-trigger:visible').isVisible()).toBe(true);
   if(await dialogButton.isVisible())return dialogButton;
-  if(await button.isVisible())return button;
-  await page.locator('.mobile-tools:visible').click();
+  const menu=page.getByRole('dialog').filter({has:page.locator('.workspace-tools-content')});
+  if(!await menu.isVisible()) {
+    if(await button.isVisible())return button;
+    await page.locator('.workspace-tools-trigger:visible').click();
+  }
   for(const group of ['workspace-more-tools','workspace-connection-actions','workspace-application-options']) {
-    const owner=page.getByRole('dialog').locator(`details.${group}`);
+    const owner=menu.locator(`details.${group}`);
     if(await owner.count() && await owner.evaluate((node,name)=>!(node as HTMLDetailsElement).open
       && Array.from(node.querySelectorAll('button')).some(button=>button.textContent?.trim()===name && button.closest('details')===node),name)) {
       await owner.locator(':scope > summary').click();
     }
   }
-  const revealed=page.getByRole('dialog').getByRole('button',{name,exact:true}).first();
+  const revealed=menu.getByRole('button',{name,exact:true}).first();
   await expect(revealed).toBeVisible();
   return revealed;
 }

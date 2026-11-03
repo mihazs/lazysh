@@ -1,4 +1,4 @@
-import {openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
@@ -102,7 +102,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
@@ -117,7 +117,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         const pane=tree.panes[0],agent=tree.agents[0];
         tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
-      }if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
+      }if(state.visualStates){tree.agents=tree.agents.map((agent,index)=>({...agent,agent_status:index%3===0?'blocked':index%3===1?'working':'done'}));tree.panes=tree.panes.map((pane,index)=>({...pane,agent_status:tree.agents[index].agent_status}));}if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
@@ -175,8 +175,8 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
 async function openConnectedAgents(page:Page,phone:boolean){
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
-  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await (await workspaceControl(page,'Agents' )).click();
 }
 
 async function selectAgentSection(page:Page,section:'live'|'activity') {
@@ -212,7 +212,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
   await expect(modes.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');
   await connectPasswordHost(page);
-  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   const views=page.getByRole('navigation',{name:'Session views',exact:true});
   for(const width of (phone?[360,393,412]:[1280])){
     await page.setViewportSize({width,height:844});
@@ -236,7 +236,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await views.evaluate(node=>{for(const button of node.querySelectorAll('button'))button.style.fontSize='';});
   await views.getByRole('button').first().scrollIntoViewIfNeeded();
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command)))).toEqual([]);
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await (await workspaceControl(page,'Agents' )).click();
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
@@ -267,7 +267,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
     await page.setViewportSize({width:393,height:852});
     const navigation=await page.locator('.sidebar').boundingBox();
     expect(navigation?.x).toBe(0);expect(navigation?.width).toBe(393);
-    const actions=live.locator('header button');
+    const actions=live.locator('header button:visible');
     for(const action of await actions.all()){
       const bounds=(await action.boundingBox())!;
       expect(bounds.width).toBeGreaterThanOrEqual(44);expect(bounds.height).toBeGreaterThanOrEqual(44);
@@ -285,18 +285,18 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
       await firstLiveAgent.scrollIntoViewIfNeeded();
       expect(await page.locator('.sidebar').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
       await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
-      await expect(page.getByRole('button',{name:'Close hosts',exact:true})).toBeInViewport();
+      await expect(page.getByRole('button',{name:'Return to terminal',exact:true})).toBeInViewport();
     }
     await live.evaluate(node=>{node.style.fontSize='';});
     await page.setViewportSize({width:393,height:852});
     await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
     await page.emulateMedia({forcedColors:'active',reducedMotion:'reduce'});
-    await expect(page.locator('.sidebar .brand')).toHaveCSS('backdrop-filter','none');
-    await expect(live.getByRole('button',{name:'Back to terminal',exact:true})).toBeVisible();
+    await expect(page.locator('.sidebar > .workspace-navigation-modes')).toHaveCSS('backdrop-filter','none');
+    await expect(page.getByRole('button',{name:'Return to terminal',exact:true})).toBeVisible();
     await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});
     const protocol=await page.context().newCDPSession(page);
     await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62,bottom:34}});
-    expect((await page.getByRole('button',{name:'Close hosts',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(62);
+    expect((await page.getByRole('button',{name:'Return to terminal',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(62);
     await expect(firstLiveAgent).toBeInViewport({ratio:0.75});
     await page.screenshot({path:testInfo.outputPath('agents-safe-area-393.png')});
     await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:0,bottom:0}});
@@ -353,7 +353,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.clock.runFor(5000);
   await expect(board.getByText('Refreshed work',{exact:true})).toBeVisible();
   await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
-  if(phone)await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
   else await modes.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(board).toBeHidden();
   const commands=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status','multiplexer_sessions','herdr_tree'].includes(command)));
@@ -408,13 +408,13 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;delete (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead;});
   if(phone){
-    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
     await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();
     await page.getByRole('dialog',{name:'Switch terminal session',exact:true}).locator('.session-choice').filter({has:page.getByText('Navigation host',{exact:true})}).click();
   }else await page.getByRole('tab',{name:'Navigation host',exact:true}).click();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
-  await expect(live.getByText('Changes focus for other connections.',{exact:true})).toBeVisible();
+  await expect(live.getByLabel('Changes focus for other connections.',{exact:true})).toBeVisible();
   await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead)).toBe('function');
   expect(await page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(false);
   await page.evaluate(()=>(window as unknown as {finishHerdrRead:()=>void}).finishHerdrRead());
@@ -471,7 +471,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
-  const closeHosts="button[aria-label='Close hosts']";
+  const closeHosts=nativeWorkspaceSource.match(/private fun endOwnedConnection[\s\S]*?val closeHosts = "([^"\n]+)"/)![1];
   await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
   if(phone){
     await page.getByRole('button',{name:'Open hosts',exact:true}).click();
@@ -533,7 +533,7 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     const more=page.getByRole('dialog',{name:'Workspace tools',exact:true});
     const sessionViews=more.getByRole('navigation',{name:'Session views',exact:true});
-    expect(await sessionViews.getByRole('button').allTextContents()).toEqual(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+    expect(await sessionViews.getByRole('button').allTextContents()).toEqual(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
     for(const button of await sessionViews.getByRole('button').all()){
       await button.scrollIntoViewIfNeeded();expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
@@ -564,8 +564,9 @@ test('mobile terminal keeps one compact header and reaches every session control
   }else{
     await page.screenshot({path:testInfo.outputPath('desktop-composer.png')});
     await composer.getByRole('button',{name:'Close composer',exact:true}).click();
-    await expect(header).toBeVisible();await expect(strip).toBeVisible();await expect(tabs).toBeVisible();await expect(restore).toBeVisible();
-    expect((await header.boundingBox())!.height).toBe(63);
+    await expect(header).toBeVisible();await expect(strip).toHaveCount(0);await expect(tabs).toBeVisible();await expect(restore).toBeVisible();
+    await expect(header.getByRole('button',{name:'Workspace tools',exact:true})).toBeVisible();
+    expect((await header.boundingBox())!.height).toBe(54);
   }
   if(phone){
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
@@ -603,7 +604,7 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
   await page.goto('/');
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
-  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   const agents=page.getByRole('button',{name:'Agents',exact:true});
   if(action==='dom')await agents.evaluate(node=>(node as HTMLElement).click());else await agents.click();
   const context='HERDR_'+'a'.repeat(32)+' / 1 / /tmp/lazysh-h-abcdef';
@@ -619,7 +620,8 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
     await expect.poll(()=>page.evaluate(({oracle,viewport,context})=>{
       const live=new Function('document','context',oracle+";return ownedLiveHerdrNavigation(document,'default',context);")(document,context);
       const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
-      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+      const group=card?.closest('section[aria-label]');
+      const labels=[card?.querySelector('strong'),group?.getAttribute('aria-label')===card?.querySelector(':scope > small')?.textContent?group?.querySelector(':scope > h4'):null,card?.querySelector('span > small')];
       if(!live||!card||labels.some(label=>!label))return false;
       const ranges=labels.map(label=>{const range=document.createRange();range.selectNodeContents(label!);return range;});
       return new Function('viewport','rectangles',viewport+';return ownedKeyboardViewportContains(viewport,rectangles);')(window.visualViewport,[card.getBoundingClientRect(),...ranges.map(range=>range.getBoundingClientRect())])&&
@@ -721,8 +723,8 @@ for(const shorter of [false,true])test(`Activity scroll returns to the same mobi
   if(phone)await page.setViewportSize({width:393,height:852});
   await page.evaluate(()=>{const state=(window as unknown as {workspaceNavigationState:{installed:boolean;agentCount:number;reportCount:number}}).workspaceNavigationState;state.installed=true;state.agentCount=80;state.reportCount=80;});
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await connectPasswordHost(page);if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await connectPasswordHost(page);await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await (await workspaceControl(page,'Agents' )).click();
   await selectAgentSection(page,'activity');
   const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
   const scroller=sidebar.locator('.workspace-navigation-scroll'),board=sidebar.getByRole('region',{name:'Agent activity',exact:true});
@@ -749,8 +751,8 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
   const canvas=page.locator('.terminal-canvas').first(),originalCanvas=await canvas.elementHandle();
-  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await (await workspaceControl(page,'Agents' )).click();
   const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
   const jumps=sidebar.getByRole('navigation',{name:'Agent sections',exact:true});
   const activity=sidebar.getByRole('group',{name:'Reported agent activity',exact:true,includeHidden:true});
@@ -765,7 +767,8 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   const jumpActivity=jumps.getByRole('button',{name:'Reported agent activity',exact:true});
   await expect(jumpActivity).toBeInViewport({ratio:0.9});
   if(phone)await jumpActivity.tap();else{await jumpActivity.focus();await page.keyboard.press('Enter');}
-  await expect(activity).toBeFocused();await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).toBeInViewport({ratio:0.9});
+  await expect(activity).toBeFocused();await expect(sidebar.getByRole('heading',{name:'Agents',exact:true})).toBeInViewport({ratio:0.9});
+  await expect(board.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeInViewport({ratio:0.9});
   expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
   await expect(board.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
   if(empty)await expect(board.getByRole('button',{name:'Agent hook setup',exact:true})).toHaveCount(1);
@@ -807,7 +810,7 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
   await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
   const primary=dialog.getByRole('navigation',{name:'Session views',exact:true});
-  await expect(primary.getByRole('button')).toHaveText(['Terminal','Agents','Files','Sessions','Usage','Attach']);
+  await expect(primary.getByRole('button')).toHaveText(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
   await expect(dialog.locator('details[open]')).toHaveCount(0);
   const metrics=await dialog.evaluate(node=>({height:node.getBoundingClientRect().height,content:node.scrollHeight,viewport:node.clientHeight}));
   expect(metrics.height).toBeLessThan(600);expect(metrics.content).toBeLessThanOrEqual(metrics.viewport+1);
@@ -885,9 +888,11 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   const setup=live.locator('.herdr-server-setup');
   await expect(setup).toBeHidden();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
-  const summary=live.getByText('Changes focus for other connections.',{exact:true});await expect(summary).toBeVisible();await summary.click();
+  const summary=live.getByLabel('Changes focus for other connections.',{exact:true});await expect(summary).toBeVisible();await summary.click();
   const warning=live.getByText('Shared focus changes focus for other connections to this server.',{exact:true});
   await expect(warning).toHaveCount(1);await expect(warning).toBeVisible();
+  await page.keyboard.press('Escape');await expect(warning).toBeHidden();await expect(summary).toBeFocused();
+  await summary.click();await expect(warning).toBeVisible();
   await live.getByRole('button',{name:'Herdr server',exact:true}).click();
   await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
   await expect(warning).toHaveCount(1);await live.getByRole('button',{name:'Back',exact:true}).click();
@@ -992,7 +997,7 @@ test('native companion action stays owned during installed and reused results',a
     }
     const button=page.getByRole('button',{name:action,exact:true});
     await expect(button).toBeEnabled();await button.scrollIntoViewIfNeeded();
-    records.push({action,observation:await page.evaluate(contract.expression),matches:await page.locator(contract.panel+' > .tool-bar > button').count()});
+    records.push({action,observation:await page.evaluate(contract.expression),matches:await page.locator(contract.panel+' > .tool-bar > button').count(),geometry:await button.evaluate(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {top:r.top,bottom:r.bottom,hit:hit?.tagName,hitClass:hit?.getAttribute('class'),hitIsTarget:!!hit&&node.contains(hit),hitIsNavigation:!!hit?.closest('.workspace-navigation-modes')};})});
     await button.click();await page.clock.runFor(200);
     await expect(page.locator('details[data-install-outcome]')).toHaveAttribute('data-install-outcome',after);
   }
@@ -1012,7 +1017,7 @@ test('native companion action stays owned during installed and reused results',a
 for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable at ${width}px with enlarged text`,async({page},testInfo)=>{
   await page.setViewportSize({width,height:852});await page.goto('/');
   for(const locale of ['en','pt-BR','es']) {
-    await page.locator('.preferences-button:visible').click();
+    await (await workspaceControl(page,await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('appPreferences');}))).click();
     if(locale==='en') {
       await openPreferenceCategory(page,'Appearance');
       await page.locator('[data-settings-page="appearance"]').evaluate(async node=>{await Promise.all(node.getAnimations().map(animation=>animation.finished));});
@@ -1143,7 +1148,7 @@ test('recorded Codex conversation stays readable in a constrained connected work
   await page.goto('/');if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);const originalTerminal=await page.locator('.terminal-canvas').elementHandle();
   if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();await openWorkspaceGroup(page,'more');}
-  await page.getByRole('button',{name:'Transcript',exact:true}).click();
+  await (await workspaceControl(page,'Transcript' )).click();
   await page.getByRole('combobox',{name:'Agent',exact:true}).selectOption('codex');
   await page.getByRole('combobox',{name:'View',exact:true}).selectOption('conversation');
   const region=page.getByRole('region',{name:'Conversation messages',exact:true});
@@ -1169,4 +1174,44 @@ test('recorded Codex conversation stays readable in a constrained connected work
   await expect(page.locator('.terminal-compose textarea')).toHaveValue('Recorded conversation draft remains unsubmitted');
   expect(await originalTerminal!.evaluate(e=>e.isConnected)).toBe(true);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['write_stdin','attach_multiplexer','herdr_chat'].includes(command)))).toEqual([]);
+});
+
+
+test('focused work destinations retain the terminal and expose every contextual tool without input',async({page},info)=>{
+  await installWorkspaceNavigation(page);await page.goto('/');
+  const phone=info.project.name==='phone';
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  const canvas=await page.locator('.terminal-canvas:visible').elementHandle();
+  await expect(page.getByRole('navigation',{name:'Session views',exact:true})).toHaveCount(0);
+  const tools=page.getByRole('button',{name:'Workspace tools',exact:true});await tools.click();
+  const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  await expect(dialog.locator('details.workspace-application-options')).toHaveJSProperty('open',false);
+  await (await workspaceControl(page,'Preferences')).click();
+  await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();
+  await page.keyboard.press('Escape');await expect(tools).toBeFocused();await tools.click();
+  await dialog.locator('details.workspace-more-tools > summary').click();
+  for(const name of ['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices']) {
+    const action=dialog.getByRole('button',{name,exact:true});await action.scrollIntoViewIfNeeded();await expect(action).toBeInViewport();
+    expect((await action.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(tools).toBeFocused();
+  await page.evaluate(()=>Object.assign((window as any).workspaceNavigationState,{installed:true,agentCount:6,visualStates:true,reportCount:20}));
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Agents',exact:true})).toBeVisible();
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  await expect(live.locator('[data-agent-status=blocked]')).toHaveCount(2);
+  await expect(live.locator('[data-agent-status=working]')).toHaveCount(2);
+  expect((await live.locator('[data-agent-status=blocked]').first().boundingBox())!.y).toBeLessThan((await live.locator('[data-agent-status=working]').first().boundingBox())!.y);
+  await selectAgentSection(page,'activity');
+  const back=page.locator('.workspace-destination-heading').getByRole('button',{name:'Return to terminal',exact:true});
+  await expect(page.getByRole('heading',{name:'Agents',exact:true})).toBeInViewport();await expect(back).toBeInViewport({ratio:1});
+  await expect(page.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeVisible();
+  await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=node.scrollHeight;});
+  await expect(back).toBeInViewport({ratio:1});await back.click();
+  await expect(phone?page.getByRole('button',{name:'Open hosts',exact:true}):page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Connections',exact:true})).toBeFocused();
+  expect(await page.locator('.terminal-canvas:visible').evaluate((node,original)=>node===original,canvas)).toBe(true);
+  const calls=await page.evaluate(()=>(window as any).workspaceNavigationCalls as string[]);
+  expect(calls.filter(name=>['write_stdin','disconnect','herdr_action','attach_multiplexer'].includes(name))).toEqual([]);
 });

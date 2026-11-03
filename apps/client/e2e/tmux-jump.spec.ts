@@ -97,7 +97,7 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   await page.evaluate(()=>{window.tmuxJumpFixture.defer=true;});
   await dialog.getByRole('button',{name:'1: compiler',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>typeof window.tmuxJumpFixture.finish)).toBe('function');
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
   else await page.getByRole('button',{name:'Connections',exact:true}).click();
   await page.getByRole('tab',{name:'Fixture',exact:true}).click();
   await page.evaluate(()=>window.tmuxJumpFixture.finish!());

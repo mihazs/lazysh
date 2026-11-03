@@ -1,4 +1,4 @@
-import {openPreferenceCategory} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 
 test('Preferences saves a thirteenth chord and snippet and retains their exact text after reload',async({page})=>{
@@ -8,7 +8,7 @@ test('Preferences saves a thirteenth chord and snippet and retains their exact t
     localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,chords:entries,snippets:entries}));
   });
   await page.reload();
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   for(const chord of [true,false]){
     await openPreferenceCategory(page,'Input');
     await page.getByText(chord?'Keyboard chords':'Text snippets',{exact:true}).click();
@@ -17,7 +17,7 @@ test('Preferences saves a thirteenth chord and snippet and retains their exact t
     await page.getByRole('button',{name:chord?'Add chord':'Add snippet',exact:true}).click();
   }
   await page.reload();
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   for(const kind of ['chord','snippet']){
     await openPreferenceCategory(page,'Input');
     await page.getByText(kind==='chord'?'Keyboard chords':'Text snippets',{exact:true}).click();

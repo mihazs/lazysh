@@ -6,3 +6,37 @@
 .herdr-navigation .herdr-shared-focus-note { margin-block: 4px 8px; }
 .herdr-shared-focus-note summary { min-height: 44px; display: list-item; padding-block: 8px; cursor: pointer; }
 .herdr-shared-focus-note p { margin: 4px 0 8px; }
+
+.sidebar:not([data-navigation=connections]) .herdr-navigation { margin: 0; padding: 0 2px 16px; }
+.sidebar:not([data-navigation=connections]) .herdr-navigation > header { min-height: 44px; margin-bottom: 4px; gap: 2px; }
+.sidebar:not([data-navigation=connections]) .herdr-navigation:not([data-setup-view]) > header h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.sidebar:not([data-navigation=connections]) .herdr-navigation > header > div { flex: 1; }
+.sidebar:not([data-navigation=connections]) .herdr-navigation > header small { color: var(--muted); font-size: 11px; }
+.sidebar:not([data-navigation=connections]) .herdr-navigation:not([data-setup-view]) .herdr-navigation-back { display: none; }
+.herdr-navigation[data-mode=agents] .herdr-agent-row { align-items: center; gap: 0; margin: 8px 0; border: 1px solid color-mix(in srgb, var(--theme-border) 30%, transparent); border-radius: 14px; background: var(--theme-control); overflow: hidden; }
+.herdr-navigation[data-mode=agents] .herdr-agent-row > .herdr-navigation-row { min-height: 64px; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; }
+.herdr-navigation[data-mode=agents] .herdr-navigation-row > span { position: relative; padding-left: 14px; }
+.herdr-navigation[data-mode=agents] .herdr-navigation-row > span::before { content: ''; position: absolute; left: 0; top: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.herdr-navigation [data-agent-status=working] > span::before { background: var(--accent); }
+.herdr-navigation [data-agent-status=blocked] > span::before { background: var(--theme-warning); }
+.herdr-navigation .herdr-navigation-row[data-current=true] { outline: 1px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: -1px; }
+.herdr-navigation[data-mode=agents] h4 { margin: 18px 2px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-tree { margin: 8px 0; }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-tree > li { margin-bottom: 16px; }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-heading { border-bottom: 1px solid color-mix(in srgb, var(--theme-border) 45%, transparent); }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-heading .herdr-navigation-row { background: transparent; border: 0; border-radius: 0; min-height: 48px; }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul { margin-top: 4px; margin-left: 8px; padding-left: 12px; border-color: color-mix(in srgb, var(--theme-border) 40%, transparent); }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul ul .herdr-navigation-row { background: transparent; border: 0; border-radius: 6px; min-height: 52px; }
+.herdr-navigation > header { position: relative; }
+.herdr-navigation > header .herdr-shared-focus-note { margin: 0; flex: 0 0 44px; }
+.herdr-navigation > header .herdr-shared-focus-note summary { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0; border-radius: 8px; list-style: none; }
+.herdr-navigation > header .herdr-shared-focus-note p { position: absolute; z-index: 4; top: 42px; right: 0; max-width: 100%; margin: 0; padding: 14px; border: 1px solid var(--theme-border); border-radius: 12px; background: var(--theme-panel); color: var(--theme-text); box-shadow: 0 8px 24px #0004; }
+.herdr-navigation > header .herdr-shared-focus-note summary:focus-visible { outline: 2px solid var(--accent); }
+.herdr-navigation[data-mode=agents] .herdr-navigation-row > span { flex: 1; }
+.herdr-navigation[data-mode=agents] .herdr-navigation-row > span > small { overflow-wrap: anywhere; }
+.herdr-navigation[data-mode=agents] [data-agent-status=working] > span::before { background: var(--accent); }
+.herdr-navigation[data-mode=agents] [data-agent-status=blocked] > span::before { background: var(--theme-warning); }
+.herdr-navigation[data-mode=agents] .herdr-navigation-row[data-current=true] { outline: 0; }
+.herdr-navigation[data-mode=agents] .herdr-agent-row:has([data-current=true]) { border-color: color-mix(in srgb, var(--accent) 65%, var(--theme-border)); }
+
+.herdr-navigation[data-mode=spaces] .herdr-navigation-heading .herdr-navigation-row[data-current=true] { outline: 0; }
