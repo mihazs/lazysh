@@ -1,8 +1,8 @@
 import {expect,test} from 'bun:test';
-import {chmod,lstat,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -154,6 +154,10 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
+},610_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_RECORDED!=='1')('actual Android recorded Codex and OpenCode conversations preserve their original SSH terminal',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,true);
 },610_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')('actual Android packaged D-pad pans one held native pointer and stops its original SSH receiver',async()=>{
@@ -480,3 +484,19 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
   expect(after.dev===image.dev && after.ino===image.ino && after.nlink===image.nlink && after.mode===image.mode && after.size===image.size && after.uid===image.uid).toBe(true);
   expect(createHash('sha256').update(await readFile(source)).digest('hex')===hash).toBe(true);
 },15_000);
+
+test('recorded companion source admission fails before constructing any SSH fixture',async()=>{
+  for(const path of [undefined,'','relative','/owned/\nprivate'])await expect(recordedCompanionBytes(path)).rejects.toThrow('Explicit current-source');
+});
+
+test('recorded source byte admission allows Cargo hardlinks but rejects links, writable and oversized inputs without execution',async()=>{
+  const directory=await mkdtemp('/tmp/lazysh-recorded-source-'),path=join(directory,'source'),alias=join(directory,'cargo-alias');
+  try {
+    const bytes=Buffer.from('owned byte-admission fixture only; never executed');
+    await writeFile(path,bytes,{mode:0o500});await link(path,alias);
+    expect((await stat(path)).nlink).toBe(2);expect(await recordedCompanionBytes(alias)).toEqual(bytes);
+    const symbolic=join(directory,'symbolic');await symlink(path,symbolic);await expect(recordedCompanionBytes(symbolic)).rejects.toThrow('Untrusted');
+    await chmod(path,0o777);await expect(recordedCompanionBytes(path)).rejects.toThrow('Untrusted');
+    await chmod(path,0o700);await truncate(path,256*1024*1024+1);await expect(recordedCompanionBytes(path)).rejects.toThrow('Untrusted');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});

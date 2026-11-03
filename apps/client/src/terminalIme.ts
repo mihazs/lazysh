@@ -18,7 +18,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   let composing = false, ending = false, hardware = false, sending = false, key229 = false;
   let generation = 0, deferred: KeyboardEvent | undefined, replaying = false;
   let completion: ReturnType<typeof setTimeout> | undefined;
-  let fallbackPending: {owner:number; previous:string; value:string} | undefined;
+  let fallbackPending: {owner:number; delta:string} | undefined;
   const cancelComposition = () => {
     // xterm 5.5 has no public API to cancel a retained asynchronous IME commit.
     helper._isComposing = false; helper._isSendingComposition = false;
@@ -67,9 +67,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (!pending) return;
     fallbackPending = undefined; clearTimeout(completion);
     if (pending.owner !== generation || !focused()) return;
-    const old = pending.previous, value = pending.value;
-    // Match xterm 5.5 CompositionHelper._handleAnyTextareaChanges, with an owned timer.
-    send(value.length > old.length ? value.replace(old, '') : value.length < old.length ? '\x7f' : value !== old ? value : '');
+    // This edit already passed the owned-prefix and ASCII-erasure checks.
+    send(pending.delta);
   };
   const output = terminal.onData(() => {
     if (userInput() && !sending && !composing && !ending) {
@@ -138,19 +137,20 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     commitFallback();
     if (hardware) {reset(); return;}
     const value = area.value;
-    const fallback = () => {
-      const blocked = key229, old = previous;
+    const fallback = (delta:string) => {
+      const blocked = key229, ownedStart = start;
       reset();
       if (blocked) {
+        start = ownedStart;
         event.stopImmediatePropagation();
         const owner = generation;
-        fallbackPending = {owner,previous:old,value};
+        fallbackPending = {owner,delta};
         completion = setTimeout(() => {if (generation === owner) commitFallback();}, 0);
       }
     };
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
-    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)) {fallback(); return;}
+    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)) {fallback(delta); return;}
     event.stopImmediatePropagation(); key229 = false; previous = value;
     send(delta);
   };

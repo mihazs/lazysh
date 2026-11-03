@@ -1,3 +1,6 @@
+#[path = "support/recorded_conversations.rs"]
+mod recorded_conversations;
+
 use lazysh_agent::transcript::{conversation, discover, TranscriptAgent};
 use serde_json::{json, Value};
 use std::{fs, process::Command};
@@ -743,4 +746,36 @@ fn codex_item_ids_are_scoped_to_their_turn_for_client_row_identity() {
             .len(),
         2
     );
+}
+
+#[test]
+fn shared_synthetic_android_codex_conversation_matches_original_messages() {
+    let specification = recorded_conversations::specification();
+    let expected = recorded_conversations::messages(&specification, "codex");
+    let mut records = vec![
+        codex_meta(
+            specification["codexThreadId"].as_str().unwrap(),
+            "paginated",
+        ),
+        codex_turn("owned"),
+    ];
+    for message in &expected {
+        records.push(codex_item(
+            "owned",
+            if message["role"] == "user" {
+                "UserMessage"
+            } else {
+                "AgentMessage"
+            },
+            message["id"].as_str().unwrap(),
+            message["text"].as_str().unwrap(),
+        ));
+    }
+    let (_directory, path) = codex_file(&paginated(records, 0));
+    let page = conversation(&path, TranscriptAgent::Codex, 50).unwrap();
+    assert_eq!(
+        page.branch_id.as_deref(),
+        specification["codexThreadId"].as_str()
+    );
+    recorded_conversations::assert_messages(&page.messages, &expected);
 }

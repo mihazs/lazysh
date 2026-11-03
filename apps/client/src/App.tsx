@@ -71,6 +71,7 @@ import {
   type HerdrNavigationTarget,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import {installMoshResize} from "./moshResize";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
@@ -105,7 +106,7 @@ const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
 
 function disposeTerminal(session?: LiveSession) {
   if (!session || session.disposed) return;
-  session.disposed = true; session.connected = false; forgetSession(session.id); session.terminal.dispose();
+  session.disposed = true; session.connected = false; forgetSession(session.id); session.moshResize?.dispose(); session.terminal.dispose();
 }
 
 async function prepareSession(
@@ -125,6 +126,20 @@ async function prepareSession(
     connected: true,
   };
   let pendingBytes = 0;
+  let displayFailed = false, transportClosed = false;
+  const failDisplay = () => {
+    if (session.disposed || displayFailed) return;
+    displayFailed = true; session.connected = false;
+    session.message = t("appConnectionClosed");
+    window.dispatchEvent(new Event("lazysh-session-change"));
+    // Before establishment the existing pending-session catch owns teardown.
+    // Never replace this session's lease to obtain disconnect authority.
+    if (session.id && !transportClosed) void bindProtectedApi(nativeApi, lease)
+      .disconnect(session.id).catch(error => {
+        if (!session.disposed) window.dispatchEvent(new CustomEvent("lazysh-error", {detail: errorMessage(error)}));
+      });
+    void session.moshResize?.close();
+  };
   const acknowledge = (bytes: number) => {
     if (!session.connected) return;
     if (!session.id) {
@@ -142,11 +157,16 @@ async function prepareSession(
   const onEvent = (event: SshEvent) => {
     if (session.disposed) return;
     if (event.type === "data")
-      session.terminal.write(new Uint8Array(event.data), () =>
-        acknowledge(event.data.length),
-      );
+      session.terminal.write(new Uint8Array(event.data), () => {
+        acknowledge(event.data.length);
+        if (session.moshResize?.failure) failDisplay();
+      });
     else {
+      transportClosed = true;
       session.connected = false;
+      void session.moshResize?.close().then(() => {
+        if (session.moshResize?.failure) failDisplay();
+      });
       session.message = event.message || t("appConnectionClosed");
       window.dispatchEvent(new Event("lazysh-session-change"));
     }
@@ -194,6 +214,10 @@ async function selectTransport(
     const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
     try {
       ensureAlive();
+      if (kind === 'mosh') {
+        try { child.session.moshResize = installMoshResize(child.session.terminal); }
+        catch { throw {kind: 'mosh_unsupported', message: t('appUnavailableInThisAppBuild')}; }
+      }
       const result = kind==='ssh' && entry
         ? entry.createIfMissing
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)

@@ -1,3 +1,6 @@
+#[path = "support/recorded_conversations.rs"]
+mod recorded_conversations;
+
 use lazysh_agent::transcript::opencode_conversation;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -14,18 +17,13 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("opencode.db");
         let db = Connection::open(&path).unwrap();
-        db.execute_batch(if v2 {
-            "CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,revert TEXT,time_updated INTEGER);
-             CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT,time_created INTEGER);
-             CREATE TABLE session_part(message_id TEXT,session_id TEXT,ordinal INTEGER,data TEXT);
-             CREATE TABLE session_inbox(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,delivery TEXT);
-             INSERT INTO session_v2 VALUES('selected','work',NULL,1000);"
-        } else {
-            "CREATE TABLE session(id TEXT PRIMARY KEY,title TEXT,revert TEXT,time_updated INTEGER);
-             CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,data TEXT,time_created INTEGER);
-             CREATE TABLE part(id TEXT PRIMARY KEY,message_id TEXT,session_id TEXT,data TEXT);
-             INSERT INTO session VALUES('selected','work',NULL,1000);"
-        }).unwrap();
+        let specification = recorded_conversations::specification();
+        db.execute_batch(
+            specification["opencodeSchemas"][if v2 { "v2" } else { "v1" }]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         Self {
             _dir: dir,
             path,
@@ -335,5 +333,54 @@ fn malformed_tool_inputs_cannot_silently_hide_invocations() {
         f.message("msg_a", 1, "assistant", json!({"content":[content]}));
         assert!(opencode_conversation(&f.path, "selected", 50).is_err());
         assert!(opencode_conversation(&f.path, "selected\n", 50).is_err());
+    }
+}
+
+#[test]
+fn shared_synthetic_android_conversation_matches_both_database_formats() {
+    let specification = recorded_conversations::specification();
+    for v2 in [false, true] {
+        let fixture = Fixture::new(v2);
+        let kind = if v2 { "v2" } else { "v1" };
+        let expected = recorded_conversations::messages(&specification, kind);
+        for (index, message) in expected.iter().enumerate() {
+            let id = message["id"].as_str().unwrap();
+            fixture.message(
+                id,
+                index as i64,
+                message["role"].as_str().unwrap(),
+                json!({"text":message["text"]}),
+            );
+            fixture.part(
+                id,
+                index as i64,
+                json!({"type":"text","text":message["text"]}),
+            );
+        }
+        let session = specification["opencodeSessions"][kind].as_str().unwrap();
+        fixture
+            .db
+            .execute(
+                &format!(
+                    "UPDATE {} SET id=?1",
+                    if v2 { "session_v2" } else { "session" }
+                ),
+                [session],
+            )
+            .unwrap();
+        for table in if v2 {
+            ["session_message", "session_part"]
+        } else {
+            ["message", "part"]
+        } {
+            fixture
+                .db
+                .execute(&format!("UPDATE {table} SET session_id=?1"), [session])
+                .unwrap();
+        }
+        let page = serde_json::to_value(opencode_conversation(&fixture.path, session, 50).unwrap())
+            .unwrap();
+        assert_eq!(page["branchId"], session);
+        recorded_conversations::assert_messages(page["messages"].as_array().unwrap(), &expected);
     }
 }

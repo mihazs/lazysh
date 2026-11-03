@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "provenance": "Independently authored synthetic test data, not an official CLI capture. Official-corpus compatibility is qualified separately.",
+  "codexThreadId": "11111111-1111-4111-8111-111111111111",
+  "opencodeSessionId": "selected",
+  "opencodeSchemas": {
+    "v1": "CREATE TABLE session(id TEXT PRIMARY KEY,title TEXT,revert TEXT,time_updated INTEGER);\n             CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,data TEXT,time_created INTEGER);\n             CREATE TABLE part(id TEXT PRIMARY KEY,message_id TEXT,session_id TEXT,data TEXT);\n             INSERT INTO session VALUES('selected','work',NULL,1000);",
+    "v2": "CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,revert TEXT,time_updated INTEGER);\n             CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT,time_created INTEGER);\n             CREATE TABLE session_part(message_id TEXT,session_id TEXT,ordinal INTEGER,data TEXT);\n             CREATE TABLE session_inbox(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,delivery TEXT);\n             INSERT INTO session_v2 VALUES('selected','work',NULL,1000);"
+  },
+  "messages": [
+    {
+      "id": "owned-user",
+      "role": "user",
+      "text": "This is an independently authored synthetic recorded question for the Android reader. The harbor clock marks a quiet morning while the paper map lies open beside the lamp. Read this entire paragraph as recorded text, without interpreting it as instructions or sending anything to the terminal. The small observatory above the town has green shutters, a brass telescope, and a shelf of numbered notebooks. A patient visitor studies the coastal paths and keeps the original map flat on the table. Every sentence belongs to the same captured message so missing or shortened text remains observable."
+    },
+    {
+      "id": "owned-assistant",
+      "role": "assistant",
+      "text": "This is an independently authored synthetic recorded answer, not a provider response. The path continues past the old lighthouse toward a stone bridge and a garden of silver leaves. A wooden sign describes the museum opening hours, and several benches face the water. Preserve this complete answer alongside the question while navigating the recorded conversation. Refreshing the reader should preserve its position and the unsent draft rather than replacing the terminal. This paragraph is intentionally long enough to exercise natural reader overflow on a phone, while keeping every expected character in a small public test fixture."
+    }
+  ],
+  "labels": {
+    "codex": "Synthetic Codex",
+    "v1": "Synthetic OpenCode V1",
+    "v2": "Synthetic OpenCode V2"
+  },
+  "opencodeSessions": {
+    "v1": "synthetic-v1",
+    "v2": "synthetic-v2"
+  }
+}

@@ -11,7 +11,7 @@ import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixt
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1195,7 +1195,7 @@ test('owned attachment readback detects changed content, inode, size and timesta
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
   const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_RECORDED=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
   const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
   expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
@@ -1518,7 +1518,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
   expect(start>0 && end>start).toBe(true);
   const body=source.slice(start+'  } catch(error) {'.length,end);
-  const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
@@ -1527,7 +1527,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
     for(const mode of ['available','missing','write-failure','observer-failure','non-ime']) {
       const root=join(directory,mode),failure=new Error('private-primary'),ime=mode!=='non-ime';let observations=0;
-      const context={root,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
+      const context={root,recorded:false,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
         observeImeReceiverWire:async(path:string,value:string)=>{observations++;if(mode==='observer-failure')throw new Error('private-observer');return observeImeReceiverWire(path,value);},
         hostAdbServerIdentity:async()=>({}),packageExitInfo:async()=>({}),emulatorContinuity:async()=>({}),
         timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
@@ -1574,7 +1574,7 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   expect(support).toContain("ime?'ownedSshImeTransactionsThroughRealUi'");
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/ssh-ime-ui');
-  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance"');
+  expect(gradle).toContain('"lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance"');
   const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
   for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
@@ -2238,6 +2238,50 @@ test('paired D-pad native source wiring rejects changed epochs, missing identity
   for(const mutated of [source.replace('event.downTime == epoch','true'),source.replace('SystemClock.uptimeMillis() - epoch','0'),source.replace('window.decorView === root','true'),source.replace('attempts++ >= 32','false'),source.replace('return original.dispatchTouchEvent(event)','original.dispatchTouchEvent(event); return original.dispatchTouchEvent(event)'),source.replace('if (window.callback === this) { window.callback = original','if (true) { window.callback = original')])expect(wired(mutated)).toBe(false);
 });
 
+test('the shared Mosh history asset observes rendered overflow with closed rounding and unavailable states',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-mosh-history.js'),'utf8');
+  expect(Buffer.byteLength(source)).toBeLessThanOrEqual(4096);
+  const state={dpr:2.625,rows:12,height:'219px',row:'18.25px',scroll:'387px',visible:true,connected:true,rects:true};
+  const root={get isConnected(){return state.connected;},getClientRects:()=>state.rects?[{}]:[],
+    querySelector:(selector:string)=>({'.xterm-viewport':{offsetHeight:240},'.xterm-scroll-area':{style:{height:state.scroll}},'.xterm-screen':{style:{height:state.height}}})[selector],
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.xterm-rows > div');return Array.from({length:state.rows},()=>({style:{height:state.row}}));}};
+  Object.defineProperties(root,{textContent:{get(){throw new Error('private text read');}},id:{get(){throw new Error('private id read');}}});
+  const project=(element:unknown=root)=>new Function('root','window','getComputedStyle',source+';return ownedMoshHistory(root);')(element,{devicePixelRatio:state.dpr},()=>({visibility:state.visible?'visible':'hidden'}));
+  const unavailable={valid:false,rows:null,historyRows:null};
+  expect(project()).toEqual({valid:true,rows:12,historyRows:8});
+  Object.assign(state,{rows:6,height:'110px',row:'18.333333px',scroll:'496px'});expect(project()).toEqual({valid:true,rows:6,historyRows:14});
+  state.scroll='386px';expect(project()).toEqual({valid:true,rows:6,historyRows:8});
+  state.scroll='385px';expect(project()).toEqual(unavailable);
+  for(const key of ['visible','connected','rects'] as const){state[key]=false;expect(project()).toEqual(unavailable);state[key]=true;}
+  for(const dpr of [0,NaN,Infinity,9]){state.dpr=dpr;expect(project()).toEqual(unavailable);}
+  Object.assign(state,{dpr:3,rows:1,height:'20px',row:'20px',scroll:'400px'});expect(project()).toEqual(unavailable);
+  expect(project(null)).toEqual(unavailable);state.row='private-value';expect(project()).toEqual(unavailable);
+  expect(JSON.stringify(project())).not.toContain('private');
+});
+
+test('Mosh-only static startup paint fills numbered rows without input or a receiver protocol',async()=>{
+  const {ownedMoshResizePaint}=await import('./support/androidHerdr');
+  const paint=await new OwnedProcess('/bin/sh',['-c',ownedMoshResizePaint()]).finish('static owned Mosh paint',1000);
+  expect(paint).toBe(Array.from({length:512},(_,i)=>`OWNED_MOSH_ROW_${String(i).padStart(3,'0')}`).join('\r\n'));
+  const source=await readFile(join(import.meta.dir,'support/androidHerdr.ts'),'utf8');
+  expect(source).toContain("navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():''");
+  const receiver=await readFile(join(import.meta.dir,'../apps/agent/examples/owned_terminal_receiver.rs'),'utf8');
+  expect(receiver).toContain('output.write_all(part)?');expect(receiver).toContain('private_create_new().open');
+  expect(source).toContain("expected.length+1");expect(source).toContain("received.equals(expected)");expect(source).toContain('receiverAlive(receiver)');
+});
+
+test('native Mosh resize observation never reads a replaced terminal owner',async()=>{
+  const directory=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest');
+  const native=await readFile(join(directory,'java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const helper=native.split('private fun verifyMoshResize(')[1].split('private fun verifyGuardedHerdrChat(')[0];
+  const asset=await readFile(join(directory,'assets/owned-mosh-history.js'),'utf8');
+  const expression=helper.match(/val observation = """([\s\S]*?)"""/)![1].replace('$asset',asset).replaceAll('$key',JSON.stringify('owned')).replaceAll('$selector',JSON.stringify('owned-canvas'));
+  const root={querySelectorAll(){throw new Error('private terminal rows read');},querySelector(){throw new Error('private terminal editor read');}};
+  const pane={querySelector(){throw new Error('private replaced pane read');}},tab={};
+  const document={querySelector:(selector:string)=>selector==='owned-canvas'?pane:tab};
+  const window={owned:{document,pane:{},root,tab}};
+  expect(new Function('window','document',`return (${expression});`)(window,document)).toEqual({valid:false,rows:null,historyRows:null,owned:false,cursorRow:null,painted:false,editable:false,centerOwned:false});
+});
 
 test('native toolbar paint observation distinguishes latched Shift from released momentary keys without fixed theme colors',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
@@ -2261,4 +2305,88 @@ test('native toolbar paint observation distinguishes latched Shift from released
   button.matches=()=>false;expect(observe('enter')).toMatchObject({pressed:null,active:false});
   document.querySelectorAll=()=>[button,button];expect(()=>observe('enter')).toThrow('unique');
   document.querySelectorAll=()=>[];expect(()=>observe('enter')).toThrow('unique');
+});
+
+test('recorded Android routing preserves the ordinary owner and uses its own report and default exclusion',async()=>{
+  const root=join(import.meta.dir,'..'),script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(script['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_RECORDED=1');
+  expect(script['test:android']).toContain('NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi');
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
+  expect(gradle).toContain('outputs/androidTest-results/recorded-conversation-ui');
+  expect(gradle).toContain('"lazyshRecordedConversationAcceptance"');
+  const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
+  expect(specification.provenance).toContain('not an official CLI capture');
+  expect(specification.messages.map((message:{role:string})=>message.role)).toEqual(['user','assistant']);
+  expect(specification.opencodeSchemas.v1).toContain('CREATE TABLE session(');
+  expect(specification.opencodeSchemas.v2).toContain('CREATE TABLE session_v2(');
+  expect(new Set(Object.values(specification.labels)).size).toBe(3);
+  expect(new Set([specification.codexThreadId,...Object.values(specification.opencodeSessions)]).size).toBe(3);
+  const texts=Object.values(specification.labels).map(label=>specification.messages.map((message:{text:string})=>`${label}: ${message.text}`));
+  for(let i=0;i<texts.length;i++)for(let j=0;j<i;j++)for(let message=0;message<2;message++)expect(texts[i][message]).not.toBe(texts[j][message]);
+  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('fun verifyRecordedConversations()')[1].split('fun verifyCompanionInstallation()')[0];
+  const expression=body.match(/fun exactMessages\(\): String = """([\s\S]+?)"""/)![1];
+  const {english:en}=await import('../apps/client/src/i18n/en');
+  const check=(expected:string[],actual:string[],paragraphs=1,firstRole=en.chatRoleUser)=>{
+    const source=expression.replace('$messages',JSON.stringify(expected.map((text,index)=>({role:index?'assistant':'user',text}))));
+    const cards=actual.map((text,index)=>({querySelectorAll:()=>Array.from({length:paragraphs},()=>({})),querySelector:(selector:string)=>({textContent:selector==='h4'?(index?en.chatRoleAssistant:firstRole):text})}));
+    return Function('document',`return (${source});`)({querySelectorAll:()=>cards});
+  };
+  for(let i=0;i<texts.length;i++){
+    expect(check(texts[i],texts[i])).toBe(true);
+    for(let j=0;j<texts.length;j++)if(i!==j)expect(check(texts[i],texts[j])).toBe(false);
+    expect(check(texts[i],texts[i],2)).toBe(false);
+    expect(check(texts[i],texts[i].slice(1))).toBe(false);
+    expect(check(texts[i],[texts[i][0]+' changed',texts[i][1]])).toBe(false);
+    expect(check(texts[i],texts[i],1,'Tool')).toBe(false);
+  }
+
+});
+
+test('recorded native report requires the exact one executed case and rejects failure, skip, stale identity and foreign cases',()=>{
+  const report='<testsuites tests="1" failures="0" errors="0" skipped="0"><testcase classname="app.lazysh.client.NativeWorkspaceTest" name="ownedRecordedConversationsThroughRealUi" /></testsuites>';
+  expect(validateRecordedConversationReport(report)).toEqual({nativeCase:'ownedRecordedConversationsThroughRealUi',passed:1,failed:0,skipped:0});
+  for(const bad of [report.replace('tests="1"','tests="0"'),report.replace('skipped="0"','skipped="1"'),report.replace('/>','><skipped /></testcase>'),report.replace('/>','><failure /></testcase>'),report.replace('ownedRecordedConversationsThroughRealUi','ownedOpenSshConnectsThroughRealUi'),report.replace('NativeWorkspaceTest','ForeignTest'),report.replace('</testsuites>','')])
+    expect(()=>validateRecordedConversationReport(bad)).toThrow('did not pass exactly once');
+});
+
+test('recorded Refresh observes completed disabled transitions and rejects old cards, stuck reads, errors and foreign ownership',async()=>{
+  const {createRequire}=await import('node:module'),{JSDOM}=createRequire(import.meta.url)('jsdom');
+  const native=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=native.split('fun verifyRecordedConversations()')[1].split('fun verifyCompanionInstallation()')[0];
+  const expression=(name:string)=>body.match(new RegExp(`val ${name} = """([\\s\\S]*?)"""`))![1].replaceAll('$key',JSON.stringify('owned')).replaceAll('$token',JSON.stringify('token'));
+  const cleanup=body.match(/"(\(\(\)=>\{const owned=window\[\$key\];if\(!owned\)return true;[^\n]+?)"/)![1].replaceAll('$key',JSON.stringify('owned')).replaceAll('$token',JSON.stringify('token'));
+  for(const mode of ['noop','stuck','completed','batched','error','foreign']){
+    const dom=new JSDOM('<div class="chat-panel"><button>Refresh new messages</button></div><div class="terminal-canvas"><div class="xterm-screen"></div></div><button role="tab"></button>');
+    const window=dom.window,document=window.document,button=document.querySelector('.chat-panel button');
+    const owned={token:'token',document,screen:document.querySelector('.xterm-screen'),tab:document.querySelector('[role=tab]'),refresh:undefined as any};
+    window.owned=owned;
+    const run=(source:string)=>Function('window','document','MutationObserver',`return (${source});`)(window,document,window.MutationObserver);
+    const flush=()=>new Promise<void>(resolve=>window.queueMicrotask(resolve));
+    let observer:any;
+    try {
+      expect(run(expression('observeRefresh'))).toBe(true);observer=owned.refresh.observer;
+      expect(run(expression('refreshCompleted'))).toBe(false);
+      if(mode!=='noop'){
+        button.disabled=true;
+        if(mode==='batched')button.disabled=false;
+        await flush();
+        if(mode!=='batched'){
+          expect(owned.refresh.started).toBe(true);expect(run(expression('refreshCompleted'))).toBe(false);
+          if(mode!=='stuck'){button.disabled=false;await flush();}
+        }
+      }
+      if(mode==='error'){const alert=document.createElement('div');alert.setAttribute('role','alert');document.querySelector('.chat-panel').append(alert);}
+      if(mode==='foreign'){
+        const foreign={token:'other',get refresh(){throw new Error('private foreign observer read');}};
+        window.owned=foreign;expect(run(expression('refreshCompleted'))).toBe(false);
+        expect(run(cleanup)).toBe(false);expect(window.owned).toBe(foreign);
+        expect(run(expression('observeRefresh'))).toBe(false);
+      }else{
+        expect(run(expression('refreshCompleted'))).toBe(['completed','batched'].includes(mode));
+        const disconnect=spyOn(observer,'disconnect');
+        expect(run(cleanup)).toBe(true);expect(disconnect).toHaveBeenCalledTimes(1);expect(Object.hasOwn(window,'owned')).toBe(false);disconnect.mockRestore();
+      }
+    }finally{observer?.disconnect();window.close();}
+  }
 });
