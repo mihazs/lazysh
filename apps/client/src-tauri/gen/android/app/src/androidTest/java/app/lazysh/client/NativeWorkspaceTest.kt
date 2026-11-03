@@ -1436,6 +1436,9 @@ class NativeWorkspaceTest {
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR,
+                ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"))
+                .perform(webScrollIntoView()).perform(webClick())
             val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
             val expanded = evaluate(scenario, """
                 (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
@@ -2351,6 +2354,8 @@ class NativeWorkspaceTest {
                         !panel.querySelector('input[readonly]') &&
                         !Array.from(panel.querySelectorAll('[role=status]')).some(x=>x.textContent==='Uploaded to this host. Copy its path or edit the prompt below.');})()
                 """)
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".attachment-options > summary"))
+                    .perform(webScrollIntoView()).perform(webClick())
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".attachment-panel input[type=checkbox]"))
                     .perform(webScrollIntoView()).perform(webClick())
                 awaitDocument(scenario, "native $extension clipboard image preview", """
@@ -2878,7 +2883,10 @@ class NativeWorkspaceTest {
             }
             terminalProof(false)
             sessionView(scenario, "Agents")
-            val panel = "details.companion-install[data-install-outcome]"
+            val companionActivity = ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, companionActivity))
+                .perform(webScrollIntoView()).perform(webClick())
+            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")

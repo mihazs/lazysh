@@ -205,7 +205,7 @@ describe('expanded D-pad pointer ownership',()=>{
   });
   it.each(['pending','repeating'] as const)('cancels every %s gesture at each input boundary',phase=>{
     // Each boundary starts with a fresh lease and gesture; no canceled timer may resume.
-    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','keys','modal','dispose']){
+    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','compose','keys','modal','dispose']){
       const pad=dpadFixture();pad.down();if(phase==='repeating')pad.advance(400);
       const sent=pad.bytes().length;let hidden:ReturnType<typeof vi.spyOn>|undefined,dialog:HTMLElement|undefined;
       if(boundary==='cancel')fireEvent.pointerCancel(pad.pad,pad.point);
@@ -218,6 +218,7 @@ describe('expanded D-pad pointer ownership',()=>{
         pad.view.rerender(<TerminalPane session={session} active={boundary!=='inactive'} reportError={pad.reportError} />);
       }
       if(boundary==='close')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+      if(boundary==='compose')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
       if(boundary==='keys')fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
       if(boundary==='modal'){dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');document.body.append(dialog);}
       if(boundary==='dispose')pad.view.unmount();
@@ -228,6 +229,19 @@ describe('expanded D-pad pointer ownership',()=>{
       pad.advance(1000);expect(pad.bytes(),`trailing ${phase}/${boundary}`).toHaveLength(sent);
       cleanup();act(()=>access());mocks.write.mockClear();
     }
+  });
+  it('switches expanded input tools without losing an unsent draft or sending bytes',()=>{
+    const pad=dpadFixture();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect(screen.queryByRole('button',{name:'D-pad up'})).toBeNull();
+    expect(screen.getByRole('button',{name:'dpad'}).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'Unsent draft'}});
+    fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+    expect(screen.queryByLabelText('Compose text')).toBeNull();
+    expect(screen.getByRole('button',{name:'D-pad up'})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect((screen.getByLabelText('Compose text') as HTMLTextAreaElement).value).toBe('Unsent draft');
+    expect(pad.bytes()).toEqual([]);
   });
   it('keeps the same live input owner across metadata replacement but retires a replaced terminal',()=>{
     const pad=dpadFixture();pad.down();pad.advance(400);
