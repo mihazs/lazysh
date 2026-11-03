@@ -32,11 +32,18 @@ mod owned {
     fn certificates(directory: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
         let issuer_key = rcgen::KeyPair::generate()?;
         let mut issuer_params = rcgen::CertificateParams::new(Vec::<String>::new())?;
+        issuer_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "lazysh owned Gotify CA");
         issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         issuer_params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
         let issuer = issuer_params.self_signed(&issuer_key)?;
         let server_key = rcgen::KeyPair::generate()?;
-        let server = rcgen::CertificateParams::new(vec![String::from("localhost")])?.signed_by(
+        let mut server_params = rcgen::CertificateParams::new(vec![String::from("localhost")])?;
+        server_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "localhost");
+        let server = server_params.signed_by(
             &server_key,
             &rcgen::Issuer::from_params(&issuer_params, &issuer_key),
         )?;
@@ -133,6 +140,56 @@ mod owned {
         lazysh_notifications::serve(listener, service, shutdown).await?;
         phase(&nonce, "stopped", None);
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn owned_directory() -> tempfile::TempDir {
+            let directory = tempfile::tempdir().unwrap();
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            directory
+        }
+
+        fn verifies(directory: &std::path::Path, ca: &std::path::Path, hostname: &str) -> bool {
+            std::process::Command::new("openssl")
+                .arg("verify")
+                .arg("-CAfile")
+                .arg(ca)
+                .args(["-purpose", "sslserver", "-verify_hostname", hostname])
+                .arg(directory.join("server.pem"))
+                .output()
+                .expect("owned TLS regression requires OpenSSL")
+                .status
+                .success()
+        }
+
+        #[test]
+        fn generated_chain_requires_its_owned_ca_and_localhost() {
+            let directory = owned_directory();
+            certificates(directory.path()).unwrap();
+            let ca = directory.path().join("ca.pem");
+            assert!(
+                verifies(directory.path(), &ca, "localhost"),
+                "the owned server chain must verify for localhost"
+            );
+            assert!(
+                !verifies(directory.path(), &ca, "other.invalid"),
+                "an unrelated hostname must remain rejected"
+            );
+            let foreign = owned_directory();
+            certificates(foreign.path()).unwrap();
+            assert!(
+                !verifies(
+                    directory.path(),
+                    &foreign.path().join("ca.pem"),
+                    "localhost"
+                ),
+                "an unrelated CA must remain rejected"
+            );
+        }
     }
 }
 
