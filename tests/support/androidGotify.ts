@@ -12,13 +12,14 @@ const rejection=()=>new Error('Owned Gotify acceptance rejected');
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
 export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
+const gotifyNativeFailures=['admission','login','notification-permission','alarm-permission','background','message-0','message-1','message-2','history'] as const;
 const gotifyNativePhases=['android-native-stage-0','android-native-stage-1','android-native-stage-2','android-native-stage-3','android-native-stage-4'] as const;
 const gotifyFixturePhases=['admission','clean source checkout','tracked fixture source','official Gotify artifact',
   'official Gotify APK signature','official Gotify package','official Gotify server extraction','current test-support relay build','source checkout',
   'relay-certificates','server-health','server-credentials','relay-ready','relay-enrollment','relay-events','server-messages','relay-shutdown',
   'android-device-admission','android-package-admission','android-reverse','android-gotify-install','android-client-install',
   'android-package-identity','android-certificate-transfer','android-private-handoff','android-instrumentation',
-  'android-installed-artifacts','android-event-input','android-final-identity','android-instrumentation-result','android-native-stage',...gotifyNativePhases] as const;
+  'android-installed-artifacts','android-event-input','android-final-identity','android-instrumentation-result','android-native-stage','android-native-exit',...gotifyNativePhases,...gotifyNativeFailures.map(phase=>`android-native-${phase}` as const)] as const;
 type GotifyFixturePhase=typeof gotifyFixturePhases[number];
 export function gotifyFailurePhase(error:unknown):GotifyFixturePhase|'fixture' {
   try {
@@ -56,13 +57,30 @@ export function gotifyStage(text:string,nonce:string,step:number,messageId?:numb
   if(keys.length!==Object.keys(expected).length||new Set(keys).size!==keys.length)throw rejection();
   return {step,verified:true as const};
 }
-export function gotifyNativeReport(xml:string) {
-  const {cases,failed}=nativeReportCases(xml);
-  const suite=/<testsuites?\b[^>]*>/.exec(xml)?.[0]??'';
-  if(!['tests="1"','failures="0"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item))||failed||cases.length!==1||cases[0].className!=='app.lazysh.client.GotifyAndroidTest'||cases[0].name!==gotifyCase||
+function gotifyReport(xml:string) {
+  if(Buffer.byteLength(xml)>262144)throw rejection();
+  const {cases,failed}=nativeReportCases(xml),suite=/<testsuites?\b[^>]*>/.exec(xml)?.[0]??'';
+  if(cases.length!==1||cases[0].className!=='app.lazysh.client.GotifyAndroidTest'||cases[0].name!==gotifyCase||
     !/<\/testsuite(?:s)?>\s*$/.test(xml))throw rejection();
+  return {suite,failed};
+}
+export function gotifyNativeReport(xml:string) {
+  const {suite,failed}=gotifyReport(xml);
+  if(!['tests="1"','failures="0"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item))||failed)throw rejection();
   return {passed:1,failed:0,skipped:0};
 }
+export function gotifyNativeFailure(xml:string):GotifyFixturePhase|undefined {
+  try {
+    const {suite,failed}=gotifyReport(xml);
+    if(!failed||!['tests="1"','failures="1"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item)))return;
+    const failures=[...xml.replace(/<!--[\s\S]*?-->/g,'').matchAll(/<failure\b[^>]*>([\s\S]*?)<\/failure>/g)];
+    if(failures.length!==1)return;
+    const phase=/^\s*(?:<!\[CDATA\[)?java\.lang\.AssertionError: Owned Gotify acceptance failed: ([a-z0-9-]+)(?:\r?\n|$)/.exec(failures[0][1])?.[1];
+    const known=gotifyNativeFailures.find(value=>value===phase);
+    return known?`android-native-${known}`:undefined;
+  }catch{return;}
+}
+
 export function gotifyMessage(nonce:string,step:number,messageId:number) {
   nonceCheck(nonce);
   if(!Number.isInteger(step)||step<0||step>2||!Number.isInteger(messageId)||messageId<1||messageId>2147483647)throw rejection();
@@ -243,6 +261,8 @@ async function runGotifyAndroid(root:string) {
   if(process.env.LAZYSH_ANDROID_GOTIFY!=='1'||process.env.GITHUB_ACTIONS!=='true'||process.platform!=='linux'||process.arch!=='x64')throw rejection();
   const ownership=await attestQrCamera(process.env,root),sdk=process.env.ANDROID_HOME!,serial=process.env.ANDROID_SERIAL!;
   const adb=join(sdk,'platform-tools/adb'),android=join(root,'apps/client/src-tauri/gen/android');
+  const reports=join(android,'app/build/outputs/androidTest-results/connected');
+  let native:OwnedProcess|undefined;
   const directory=await mkdtemp(join(tmpdir(),'.lazysh-gotify-'));await chmod(directory,0o700);
   const nonce=randomUUID().replaceAll('-',''),alias=`owned-gotify-${nonce.slice(0,12)}`,caName=`lazysh-gotify-${nonce}.crt`;
   const processes:OwnedProcess[]=[];
@@ -338,11 +358,10 @@ async function runGotifyAndroid(root:string) {
     caPushed=true;await shell(['push',join(directory,'ca.pem'),`/sdcard/Download/${caName}`]);
     if((await shell(['shell','sha256sum',`/sdcard/Download/${caName}`])).split(/\s+/)[0]!==digest(ca))throw rejection();
     phase='android-private-handoff';await input('.json',{schemaVersion:1,nonce,origin,username:'admin',password,caName,alias,applicationId:application.id,gotifyUid:uid});
-    const reports=join(android,'app/build/outputs/androidTest-results/connected');
     // Reject stale reports instead of accepting a prior successful case.
     if(await lstat(reports).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))throw rejection();
     await installed.admitGradle();
-    phase='android-instrumentation';await continuous();const native=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon','--max-workers=2',
+    phase='android-instrumentation';await continuous();native=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon','--max-workers=2',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug','-x',':app:rustBuildUniversalDebug',
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',`-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.GotifyAndroidTest#${gotifyCase}`,
       '-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyAcceptance=true',`-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyNonce=${nonce}`],root);
@@ -352,7 +371,7 @@ async function runGotifyAndroid(root:string) {
       return wait(until,async()=>{
       const path=`files/.lazysh-gotify-${nonce}.stage-${step}.json`;
       const raw=await shell(['shell','run-as','app.lazysh.client','sh','-c',`'if [ ! -e ${path} ] && [ ! -L ${path} ]; then echo pending; else [ ! -L ${path} ] && stat -c "%u %a %h %s %d %i %f" ${path} && cat ${path} && echo && stat -c "%u %a %h %s %d %i %f" ${path}; fi'`]);
-      if(raw==='pending\n'&&(native.child.exitCode!==null||native.child.signalCode!==null))throw rejection();
+      if(raw==='pending\n'&&(native!.child.exitCode!==null||native!.child.signalCode!==null))throw rejection();
       return gotifyPrivateStage(raw,nonce,step,targetUid,id);
       });
     };
@@ -390,7 +409,17 @@ async function runGotifyAndroid(root:string) {
     receipt={schemaVersion:1,scope:'official-gotify-awake-background',head,source,serverExecutableSha256:pins.server.executableSha256,caSha256:digest(ca),officialApkSha256:pins.android.sha256,initialInputApkSha256:nativeHash,installedAppApkSha256:executedApp.sha256,installedTestApkSha256:executedTest.sha256,installedApksStable:true,
       relayAccepted:3,serverMessages:ids.length,osRecords:3,visibleCards:3,history:true,native:result};
     phase='relay-shutdown';relay.child.stdin!.end();await relay.finish('relay worker shutdown',10000);
-  }catch{primary=true;throw new Error(`Owned Gotify acceptance failed: ${phase}`);}
+  }catch{
+    primary=true;
+    if(phase.startsWith('android-native-stage')&&native&&native.child.exitCode!==null) {
+      phase='android-native-exit';
+      try {
+        const files=(await readdir(reports,{recursive:true})).filter(name=>name.endsWith('.xml'));
+        if(files.length===1)phase=gotifyNativeFailure((await readQrMetadata(join(reports,files[0]),262144)).toString())??phase;
+      }catch{/* Missing or malformed reports retain the closed host failure phase. */}
+    }
+    throw new Error(`Owned Gotify acceptance failed: ${phase}`);
+  }
   finally {
     for(const process of processes.reverse())try{await process.stop();}catch{cleanupFailed=true;}
     if((await installed.cleanup()).length)cleanupFailed=true;

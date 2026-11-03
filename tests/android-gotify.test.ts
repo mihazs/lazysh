@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase,gotifyNativeFailure} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -45,6 +45,21 @@ test('installed UID and exact native XML cannot be replaced by HTTP or a skipped
   expect(gotifyNativeReport(xml)).toEqual({passed:1,failed:0,skipped:0});
   for(const changed of [xml.replace('/>','><skipped/></testcase>'),xml.replace('tests="1"','tests="0"'),xml.replace('GotifyAndroidTest','OtherTest'),
     xml.replace('</testsuite>',testCase+'</testsuite>'),'HTTP200',xml.replace('/>','><failure/></testcase>')])expect(()=>gotifyNativeReport(changed)).toThrow();
+});
+test('failed owned native reports expose only a closed failure phase and cannot claim delivery',()=>{
+  const report=(content:string)=>`<testsuite tests="1" failures="1" errors="0" skipped="0"><testcase name="${gotifyCase}" classname="app.lazysh.client.GotifyAndroidTest"><failure>${content}</failure></testcase></testsuite>`;
+  const failure='java.lang.AssertionError: Owned Gotify acceptance failed: login\nprivate-token\n';
+  const xml=report(failure);
+  expect(gotifyNativeFailure(xml)).toBe('android-native-login');
+  expect(gotifyNativeFailure(report('<![CDATA['+failure+']]>'))).toBe('android-native-login');
+  expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${gotifyNativeFailure(xml)}`))).toBe('android-native-login');
+  expect(()=>gotifyNativeReport(xml)).toThrow();
+  for(const bad of [report('private-token'),report(failure.replace('login','unknown')),
+    report(failure.replace('login','login-private-token')),xml.replace('GotifyAndroidTest','ForeignTest'),
+    xml.replace('tests="1"','tests="2"'),xml.replace('failures="1"','failures="0"'),
+    xml.replace('errors="0"','errors="1"'),xml.replace('</testsuite>',''),xml+' '.repeat(262144),
+    report('<!--'+failure+'-->'),xml.replace('</testcase>','<failure>'+failure+'</failure></testcase>')])
+    expect(gotifyNativeFailure(bad)).toBeUndefined();
 });
 test('private stage rejects changed ownership, partial bodies and mutable final links',()=>{
   const body=JSON.stringify(background),metadata=`10235 600 1 ${Buffer.byteLength(body)} 8 1234 8180`;
