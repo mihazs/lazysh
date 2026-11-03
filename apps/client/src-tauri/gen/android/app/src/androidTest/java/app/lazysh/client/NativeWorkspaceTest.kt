@@ -1879,6 +1879,28 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun observedShortHistoryBaseline(row: Int, newest: Boolean): Int {
+        require(row in 0..511 || (row == -1 && newest)) { "Owned short-drag baseline unavailable" }
+        return if (row == -1) 512 else row
+    }
+
+    private fun completedShortHistoryProgress(before: Int, row: Int): Boolean =
+        before in 0..512 && row in 0..511 && row < before
+
+    @Test fun shortHerdrGroupsRequireProgressFromTheirObservedBaseline() {
+        val before = observedShortHistoryBaseline(511, true)
+        assertFalse("An unchanged OLD511 is not progress", completedShortHistoryProgress(before, 511))
+        assertTrue("Older rows can progress while the newest row remains visible", completedShortHistoryProgress(before, 508))
+        assertEquals(511, observedShortHistoryBaseline(511, false))
+        assertEquals(512, observedShortHistoryBaseline(-1, true))
+        assertTrue(completedShortHistoryProgress(observedShortHistoryBaseline(-1, true), 511))
+        for (row in listOf(-2, 512, 513, Int.MIN_VALUE, Int.MAX_VALUE))
+            for (newest in listOf(false, true)) assertTrue(runCatching { observedShortHistoryBaseline(row, newest) }.isFailure)
+        assertTrue(runCatching { observedShortHistoryBaseline(-1, false) }.isFailure)
+        for ((baseline, row) in listOf(511 to 512, 511 to -1, 0 to 0, -1 to 0, 513 to 511))
+            assertFalse(completedShortHistoryProgress(baseline, row))
+    }
+
     private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String, alreadyAttached: Boolean = false) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
@@ -2117,7 +2139,7 @@ class NativeWorkspaceTest {
                         event.getString("type") == "touchend" && event.getBoolean("trusted") && event.getBoolean("identityMatches")
                     } == 1
                     if (ended) {
-                        val progressed = before == null || (sample.getInt("row") in 0..511 && sample.getInt("row") < before && !sample.getBoolean("newest"))
+                        val progressed = before == null || completedShortHistoryProgress(before, sample.getInt("row"))
                         if (touchStarts == 1 && endedOnce && !sample.getBoolean("active") && progressed && System.nanoTime() < fingerDeadline) return sample
                     } else {
                         assertTrue("Short drag cancelled or restarted before UP: sample=$sample", sample.getBoolean("active"))
@@ -2190,11 +2212,15 @@ class NativeWorkspaceTest {
             // Only completed groups wait for remote redraw; the first short drag may legitimately emit no wheel report.
             val groupComplete = index == 1 || index == 4
             val sample = nativeFingerGesture(true, shortRow, groupComplete)
+            if (index == 0) {
+                val baseline = sample.getJSONObject("baseline")
+                shortRow = observedShortHistoryBaseline(baseline.getInt("row"), baseline.getBoolean("newest"))
+            }
             val row = sample.getInt("row")
             val newest = sample.getBoolean("newest")
             shortSamples.put(JSONObject().put("row", row).put("newest", newest))
             if (groupComplete) {
-                assertTrue("Completed short-drag group must reveal older receiver history: samples=$shortSamples", row in 0..511 && row < shortRow && !newest)
+                assertTrue("Completed short-drag group must reveal older receiver history: samples=$shortSamples", completedShortHistoryProgress(shortRow, row))
                 completedProgress++; shortRow = row
             }
         }
