@@ -72,6 +72,12 @@ jobs:
         with:
           name: fdroid-candidate
           path: ${{ runner.temp }}/fdroid-release
+      - name: Reclaim unused host toolchains for container build
+        run: |
+          df -h /
+          # The pinned container supplies build toolchains; these host SDKs only consume disk.
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
+          df -h /
       - name: Provision owned official buildserver container
         run: |
           docker run --detach --name "$BUILD_CONTAINER" --user vagrant \
