@@ -6,6 +6,10 @@
 
 - Compact the terminal draft editor, prioritize uploaded attachment paths and explicit use, and guide push setup through relay enrollment. Agents opens Live by default; recorded Activity and setup stay available separately, with pending approvals reachable in both views. Connected sessions, drafts, upload protections and notification consent remain intact.
 
+- Keep recorded Conversation messages readable in constrained workspaces instead of letting the reading region collapse behind its controls.
+
+- Add an explicit recorded Codex Conversation view with turn rollback, canonical item updates and protected fork/revert prefixes; Records remains the default and recorded history does not grant live-agent or approval authority.
+
 - Prevent the browser touch default on owned expanded D-pad direction gestures; ordinary clicks, corner shortcuts and accessibility controls remain available.
 - Change toolbar Shift to one-shot: it clears after the next completed key, while a held arrow or D-pad gesture keeps its initial Shift for that hold. Tapping Shift again turns it off without sending pending IME text. Explicit Control and Alt locks are unchanged.
 

@@ -1079,6 +1079,7 @@ export const english = {
   chatRecordedUnsupported: "The companion did not return a supported recorded-file response. Update it or use manual Records.",
   chatRecordedChanged: "Recorded-file continuity could not be verified. Reads are paused; starting a new view requires your explicit action.",
   chatFollow: "Follow selected Claude branch",
+  chatCodexFollow: "Follow recorded Codex conversation",
   chatFollowExplanation: "Refresh two seconds after each read completes. Hidden pages pause following. Errors stop it; enable it again to resume.",
   chatFollowing: "Following selected branch.",
   chatFollowPaused: "Following paused while this page is hidden.",

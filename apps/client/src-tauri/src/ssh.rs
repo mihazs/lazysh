@@ -2846,7 +2846,7 @@ fn transcript_view_command(
     let mut command = transcript_command(agent, path, offset, checkpoint)?;
     match view {
         None | Some("records") => {}
-        Some("conversation") if matches!(agent, "claude" | "grok-acp") && offset == 0 => {
+        Some("conversation") if matches!(agent, "claude" | "grok-acp" | "codex") && offset == 0 => {
             command.push_str(" --view conversation")
         }
         _ => {
@@ -3898,7 +3898,9 @@ mod tests {
             ("claude", 0, Some("conversation"), true),
             ("grok-acp", 1, Some("conversation"), false),
             ("claude", 1, Some("conversation"), false),
-            ("codex", 0, Some("conversation"), false),
+            ("codex", 0, Some("conversation"), true),
+            ("codex", 1, Some("conversation"), false),
+            ("codex", 0, Some("conversation; execute"), false),
             ("antigravity-jsonl", 0, Some("conversation"), false),
             ("grok-acp", 0, Some("conversation; execute"), false),
             ("grok-acp", 7, Some("records"), true),

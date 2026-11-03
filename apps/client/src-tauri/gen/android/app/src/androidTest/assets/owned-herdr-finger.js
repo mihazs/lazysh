@@ -44,14 +44,34 @@ function ownedHerdrObserveFinger(window, key, screens) {
   const terminal=screen.parentElement,surface=terminal?.querySelector('.xterm-viewport'),textarea=terminal?.querySelector('.xterm-helper-textarea');
   const globalEvents=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture','touchstart','touchmove','touchend','touchcancel'];
   const trace=[],began=performance.now();
+  let landing=null;
   let traceAvailable=true,overflow=false,pointerIdentity=null,touchIdentity=null;
   const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
   const targetKind=target=>target==null?'none':target===textarea?'textarea':target===surface?'viewport':
     target===screen || screen.contains?.(target)?'screen':target===canvas?'canvas':target===terminal?'terminal':'other';
+  const observeLanding=(target,point)=>{
+    const unavailable={state:'unavailable',screenConnected:null,canvasConnected:null,screenRect:null,canvasRect:null,
+      point:null,target:'unknown',targetOwned:null,hit:'unknown',hitOwned:null};
+    try {
+      const rect=node=>{
+        const value=node.getBoundingClientRect(),coordinates=[value.left,value.top,value.right,value.bottom];
+        if(!coordinates.every(Number.isFinite))throw Error('unavailable');
+        return coordinates.map(bounded);
+      };
+      const screenConnected=screen.isConnected,canvasConnected=canvas.isConnected,x=point.clientX,y=point.clientY,document=screen.ownerDocument;
+      if(typeof screenConnected!=='boolean'||typeof canvasConnected!=='boolean'||
+        !Number.isFinite(x)||!Number.isFinite(y)||typeof document?.elementFromPoint!=='function')return unavailable;
+      const screenRect=rect(screen),canvasRect=rect(canvas),hit=document.elementFromPoint(x,y),targetOwned=canvas.contains(target),hitOwned=canvas.contains(hit);
+      if(typeof targetOwned!=='boolean'||typeof hitOwned!=='boolean')return unavailable;
+      return {state:'observed',screenConnected,canvasConnected,screenRect,canvasRect,
+        point:[bounded(x),bounded(y)],target:targetKind(target),targetOwned,hit:targetKind(hit),hitOwned};
+    } catch {return unavailable;}
+  };
   const globalRecord=event=>{
     try {
       if(trace.length===24){overflow=true;return;}
       const touch=event.type.startsWith('touch'),point=touch?(event.changedTouches?.[0]??event.touches?.[0]):event;
+      if(landing===null&&event.isTrusted===true&&(event.type==='pointerdown'||event.type==='touchstart'))landing=observeLanding(event.target,point);
       if(event.type==='pointerdown' && canvas.contains(event.target))pointerIdentity=event.pointerId;
       if(event.type==='touchstart' && canvas.contains(event.target))touchIdentity=point?.identifier;
       trace.push({type:globalEvents.includes(event.type)?event.type:'other',target:targetKind(event.target),trusted:event.isTrusted===true,
@@ -107,7 +127,7 @@ function ownedHerdrObserveFinger(window, key, screens) {
     sample:()=>{
       return {...reading(),baseline,visual:visual(),wheelRecords:wheelRecords.slice(),wheelRecordsOverflow,
         active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
-        held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice()}};
+        held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice(),landing}};
     },dispose:()=>{events.forEach(type=>canvas.removeEventListener(type,record,true));canvas.removeEventListener('wheel',wheel,true);globalEvents.forEach(type=>window.removeEventListener(type,globalRecord,true));}}});
   return true;
 }
