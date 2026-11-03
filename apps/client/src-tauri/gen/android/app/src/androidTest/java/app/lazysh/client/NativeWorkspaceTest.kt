@@ -4429,24 +4429,74 @@ class NativeWorkspaceTest {
             raw.original()
         }
 
+        val toolbarOrder = """
+            JSON.stringify(Array.from(document.querySelectorAll('[data-settings-page="preferencesToolbarKeysAndOrder"] button[aria-label^="Remove "]'),button=>button.getAttribute('aria-label')))
+        """
+        val toolbarState = """
+            name=>{const matches=Array.from(document.querySelectorAll('.terminal-keys button')).filter(button=>button.textContent.trim()===name);
+              if(matches.length!==1)throw Error('Owned toolbar button must be unique');
+              const button=matches[0],style=getComputedStyle(button);
+              return {pressed:button.getAttribute('aria-pressed'),active:button.matches(':active'),disabled:button.disabled,
+                paint:[style.backgroundColor,style.color,style.borderTopColor,style.boxShadow]};}
+        """
+        fun toolbarSnapshot(name:String)=JSONObject(evaluate(scenario,"($toolbarState)(${JSONObject.quote(name)})"))
+        fun toolbarPreferences() {
+            if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
+            else workspaceMenuAction(scenario,"Preferences")
+            preferencesCategory(scenario,"input")
+            preferencesCategory(scenario,"preferencesToolbarKeysAndOrder")
+        }
+        val addedToolbarKeys=mutableListOf<String>()
+        var originalToolbarOrder:String?=null
+        fun tapAt(bounds:JSONArray) {
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val location = IntArray(2); view.getLocationOnScreen(location)
+                val scale = view.width / bounds.getDouble(2)
+                val x = bounds.getDouble(0) * scale; val y = bounds.getDouble(1) * scale
+                require(x>0 && x<view.width && y>0 && y<view.height) { "Owned tap outside WebView" }
+                floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
+            }, Press.FINGER))
+        }
+        fun tapToolbar(name:String) {
+            raw.original()
+            onWebView().withElement(findElement(Locator.XPATH,"//*[contains(concat(' ',normalize-space(@class),' '),' terminal-keys ')]//button[normalize-space(.)='$name']")).perform(webScrollIntoView())
+            val bounds=JSONArray(evaluate(scenario,"""
+                (()=>{const matches=Array.from(document.querySelectorAll('.terminal-keys button')).filter(button=>button.textContent.trim()===${JSONObject.quote(name)});
+                  if(matches.length!==1||matches[0].disabled)throw Error('Owned enabled toolbar button required');
+                  const rect=matches[0].getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+                  if(document.elementFromPoint(x,y)?.closest('button')!==matches[0])throw Error('Owned toolbar hit target required');
+                  return [x,y,innerWidth];})()
+            """))
+            tapAt(bounds)
+            raw.original()
+        }
+        fun assertToolbarReleased(name:String,baseline:JSONObject) {
+            awaitDocument(scenario,"released toolbar button", """
+                (()=>{const state=($toolbarState)(${JSONObject.quote(name)});
+                  return !state.active&&!state.disabled&&state.pressed===${if(name=="Shift")JSONObject.quote("false") else "null"}&&JSON.stringify(state.paint)===${JSONObject.quote(baseline.getJSONArray("paint").toString())};})()
+            """,deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2))
+        }
         fun tapTerminal() {
             val bounds = JSONArray(evaluate(scenario, """
                 (()=>{const rect=document.querySelector('.terminal-canvas .xterm-screen').getBoundingClientRect();
                   return [rect.left+rect.width/2,rect.top+Math.min(rect.height/2,40),innerWidth];})()
             """))
             imeOrderMark("beforeTap")
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val location = IntArray(2); view.getLocationOnScreen(location)
-                val scale = view.width / bounds.getDouble(2)
-                val x = bounds.getDouble(0) * scale; val y = bounds.getDouble(1) * scale
-                require(x>0 && x<view.width && y>0 && y<view.height) { "Owned terminal tap outside WebView" }
-                floatArrayOf((location[0]+x).toFloat(), (location[1]+y).toFloat())
-            }, Press.FINGER))
+            tapAt(bounds)
             imeOrderMark("afterTap")
             terminalEditor()
         }
         var primary: Throwable? = null
         try {
+            toolbarPreferences()
+            originalToolbarOrder=evaluate(scenario,toolbarOrder)
+            for ((key,title) in listOf("shift" to "Shift","enter" to "enter")) {
+                if (evaluate(scenario,"""document.querySelector('[data-settings-page=preferencesToolbarKeysAndOrder] button[aria-label="Remove $key"]')!==null""")!="true") {
+                    addedToolbarKeys.add(key)
+                    onWebView().withElement(findElement(Locator.XPATH,"//section[@data-settings-page='preferencesToolbarKeysAndOrder']//button[normalize-space(.)='Add $title']")).perform(webScrollIntoView()).perform(webClick())
+                }
+            }
+            raw.clickIcon("Close Preferences")
             imeOrderInstalled=runCatching {evaluate(scenario,imeOrderInstall,1_000)=="true"}.getOrDefault(false)
             ime.arm(); imeOrderMark("beforeSelect"); ime.select(); imeOrderMark("afterSelect"); tapTerminal()
             finishImeOrder()
@@ -4474,6 +4524,27 @@ class NativeWorkspaceTest {
                 it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("distinct") && it.getLong("generation")>first.getLong("generation")
             }
             ime.editor(second); terminalEditor()
+            val shiftBaseline=toolbarSnapshot("Shift")
+            val enterBaseline=toolbarSnapshot("enter")
+            assertEquals("Shift starts unlatched", "false",shiftBaseline.getString("pressed"))
+            assertTrue("Momentary Enter has no toggle state",enterBaseline.isNull("pressed"))
+            tapToolbar("Shift")
+            assertTrue("Native Shift tap arms one shot",toolbarSnapshot("Shift").getBoolean("pressed"))
+            tapToolbar("enter")
+            assertToolbarReleased("Shift",shiftBaseline)
+            assertToolbarReleased("enter",enterBaseline)
+            tapToolbar("enter")
+            assertToolbarReleased("enter",enterBaseline)
+            terminalEditor()
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_ENTER).withShiftPressed(true).build()))
+            tapToolbar("Shift")
+            assertTrue("Shift can be armed again",toolbarSnapshot("Shift").getBoolean("pressed"))
+            val preedit=ime.call("preedit")
+            assertTrue("Actual native pending composition accepted",preedit.getBoolean("accepted"))
+            tapToolbar("Shift")
+            assertToolbarReleased("Shift",shiftBaseline)
+            assertEquals("Turning Shift off preserves pending native composition", "true",evaluate(scenario,
+                "document.querySelector('.terminal-canvas .xterm-helper-textarea')?.value===${JSONObject.quote("owned-preedit-$nonce")}"))
             val current = ime.call("current")
             assertTrue("Current actual connection accepts fixed marker", current.getBoolean("accepted"))
             assertTrue("Current actual connection readback confirms fixed marker", current.getBoolean("readMatched"))
@@ -4483,9 +4554,17 @@ class NativeWorkspaceTest {
         } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
             finishImeOrder(primary)
-            try { ime.restore() } catch (cleanup: Throwable) {
-                if (primary != null) primary!!.addSuppressed(cleanup) else throw cleanup
-            }
+            var cleanupFailure:Throwable?=null
+            try { ime.restore() } catch (cleanup: Throwable) {cleanupFailure=cleanup}
+            try {
+                if (originalToolbarOrder!=null) {
+                    toolbarPreferences()
+                    for(key in addedToolbarKeys) raw.clickIcon("Remove $key")
+                    assertEquals("Original toolbar order restored exactly",originalToolbarOrder,evaluate(scenario,toolbarOrder))
+                    raw.clickIcon("Close Preferences")
+                }
+            } catch(cleanup:Throwable) {if(cleanupFailure!=null)cleanupFailure!!.addSuppressed(cleanup) else cleanupFailure=cleanup}
+            cleanupFailure?.let {if(primary!=null)primary!!.addSuppressed(it) else throw it}
         }
     }
 
