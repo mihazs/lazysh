@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
   createTerminal: vi.fn(),
+  installMoshResize: vi.fn(),
   invoke: vi.fn(),
   accountUsageSession: vi.fn(),
   accountUsageRefresh: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock('@tauri-apps/api/app',async original=>({...await original<typeof import(
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
+vi.mock("./moshResize", () => ({installMoshResize: (...args:unknown[])=>mocks.installMoshResize(...args)}));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
     mocks.terminalPaneProps(props);
@@ -128,6 +130,7 @@ beforeEach(() => {
     length: 0,
   });
   mocks.createTerminal.mockImplementation(()=>{if(mocks.prepareError)throw mocks.prepareError;return mocks.terminal;});
+  mocks.installMoshResize.mockImplementation(()=>({failure:null as null|'invalid-frame'|'partial-frame',close:vi.fn().mockResolvedValue(undefined),dispose:vi.fn()}));
   mocks.api.listHosts.mockResolvedValue([host]);
   mocks.invoke.mockResolvedValue(false);
   mocks.api.disconnect.mockResolvedValue(undefined);
@@ -2233,4 +2236,64 @@ it('uses the existing guarded dialog shell for long mobile tasks and keeps choic
   expect(connection.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
   await user.click(within(connection).getByRole('button',{name:'Close Connect to Home'}));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+
+it('installs canonical Mosh rendering before early output and preserves exact pending byte acknowledgements',async()=>{
+  verifiedMoshControl();
+  const terminals=Array.from({length:2},()=>({write:vi.fn((_data:Uint8Array,done?:()=>void)=>done?.()),dispose:vi.fn()}));
+  let index=0;mocks.createTerminal.mockImplementation(()=>terminals[index++]);
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{
+    expect(mocks.installMoshResize).toHaveBeenCalledExactlyOnceWith(terminals[1]);
+    onEvent({type:'data',data:[1,2,3]});return {sessionId:'early-mosh'};
+  });
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.ackOutput).toHaveBeenCalledExactlyOnceWith('early-mosh',3);
+  expect(terminals[1].write).toHaveBeenCalledExactlyOnceWith(new Uint8Array([1,2,3]),expect.any(Function));
+  expect(terminals[0].dispose).toHaveBeenCalledOnce();
+  const controller=mocks.installMoshResize.mock.results[0].value;
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
+  expect(controller.dispose).toHaveBeenCalledOnce();expect(terminals[1].dispose).toHaveBeenCalledOnce();
+  expect(controller.dispose.mock.invocationCallOrder[0]).toBeLessThan(terminals[1].dispose.mock.invocationCallOrder[0]);
+});
+
+it.each(['closed','invalid'] as const)('keeps Mosh parser drain separate from terminal disposal on %s output',async branch=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'drained-mosh'};});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const session=mocks.terminalPaneProps.mock.lastCall?.[0].session,controller=mocks.installMoshResize.mock.results[0].value;
+  if(branch==='invalid')controller.failure='invalid-frame';
+  await act(async()=>{receive(branch==='closed'?{type:'closed'}:{type:'data',data:[4,5]});});
+  expect(session.connected).toBe(false);expect(controller.close).toHaveBeenCalledOnce();expect(controller.dispose).not.toHaveBeenCalled();
+  if(branch==='invalid'){
+    expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(1);
+    await act(async()=>receive({type:'data',data:[6]}));
+    expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(1);
+  } else expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='drained-mosh')).toHaveLength(0);
+});
+
+it('rejects unsupported canonical rendering before starting forced Mosh',async()=>{
+  verifiedMoshControl();mocks.installMoshResize.mockImplementation(()=>{throw new Error('unsupported owned ABI');});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.terminal.dispose).toHaveBeenCalled());expect(mocks.api.connectMosh).not.toHaveBeenCalled();
+  expect(screen.queryByText('Live SSH terminal')).toBeNull();expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'ssh-control'});
+});
+
+
+it('Auto uses its existing fallback when the local canonical Mosh renderer is unsupported',async()=>{
+  enableTransports();mocks.installMoshResize.mockImplementation(()=>{throw new Error('owned unavailable ABI');});mocks.api.connectEt.mockResolvedValue({sessionId:'renderer-fallback-et'});
+  await connectAuto();await screen.findByText(/Auto selected Eternal Terminal/);
+  expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).toHaveBeenCalledExactlyOnceWith('verified-control',autoOptions.et,expect.any(Function));
+});
+
+it('does not renew revoked access to disconnect a locally failed Mosh display',async()=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'revoked-display'};});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const controller=mocks.installMoshResize.mock.results[0].value;
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked:true,generation:String(generationBase+2),reason:''});controller.failure='invalid-frame';
+  await act(async()=>receive({type:'data',data:[9]}));
+  expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='revoked-display')).toHaveLength(0);
+  expect(controller.close).toHaveBeenCalledOnce();
 });

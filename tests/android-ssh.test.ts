@@ -2218,3 +2218,48 @@ test('paired D-pad native source wiring rejects changed epochs, missing identity
   expect(wired(source)).toBe(true);
   for(const mutated of [source.replace('event.downTime == epoch','true'),source.replace('SystemClock.uptimeMillis() - epoch','0'),source.replace('window.decorView === root','true'),source.replace('attempts++ >= 32','false'),source.replace('return original.dispatchTouchEvent(event)','original.dispatchTouchEvent(event); return original.dispatchTouchEvent(event)'),source.replace('if (window.callback === this) { window.callback = original','if (true) { window.callback = original')])expect(wired(mutated)).toBe(false);
 });
+
+test('the shared Mosh history asset observes rendered overflow with closed rounding and unavailable states',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-mosh-history.js'),'utf8');
+  expect(Buffer.byteLength(source)).toBeLessThanOrEqual(4096);
+  const state={dpr:2.625,rows:12,height:'219px',row:'18.25px',scroll:'387px',visible:true,connected:true,rects:true};
+  const root={get isConnected(){return state.connected;},getClientRects:()=>state.rects?[{}]:[],
+    querySelector:(selector:string)=>({'.xterm-viewport':{offsetHeight:240},'.xterm-scroll-area':{style:{height:state.scroll}},'.xterm-screen':{style:{height:state.height}}})[selector],
+    querySelectorAll:(selector:string)=>{expect(selector).toBe('.xterm-rows > div');return Array.from({length:state.rows},()=>({style:{height:state.row}}));}};
+  Object.defineProperties(root,{textContent:{get(){throw new Error('private text read');}},id:{get(){throw new Error('private id read');}}});
+  const project=(element:unknown=root)=>new Function('root','window','getComputedStyle',source+';return ownedMoshHistory(root);')(element,{devicePixelRatio:state.dpr},()=>({visibility:state.visible?'visible':'hidden'}));
+  const unavailable={valid:false,rows:null,historyRows:null};
+  expect(project()).toEqual({valid:true,rows:12,historyRows:8});
+  Object.assign(state,{rows:6,height:'110px',row:'18.333333px',scroll:'496px'});expect(project()).toEqual({valid:true,rows:6,historyRows:14});
+  state.scroll='386px';expect(project()).toEqual({valid:true,rows:6,historyRows:8});
+  state.scroll='385px';expect(project()).toEqual(unavailable);
+  for(const key of ['visible','connected','rects'] as const){state[key]=false;expect(project()).toEqual(unavailable);state[key]=true;}
+  for(const dpr of [0,NaN,Infinity,9]){state.dpr=dpr;expect(project()).toEqual(unavailable);}
+  Object.assign(state,{dpr:3,rows:1,height:'20px',row:'20px',scroll:'400px'});expect(project()).toEqual(unavailable);
+  expect(project(null)).toEqual(unavailable);state.row='private-value';expect(project()).toEqual(unavailable);
+  expect(JSON.stringify(project())).not.toContain('private');
+});
+
+test('Mosh-only static startup paint fills numbered rows without input or a receiver protocol',async()=>{
+  const {ownedMoshResizePaint}=await import('./support/androidHerdr');
+  const paint=await new OwnedProcess('/bin/sh',['-c',ownedMoshResizePaint()]).finish('static owned Mosh paint',1000);
+  expect(paint).toBe(Array.from({length:512},(_,i)=>`OWNED_MOSH_ROW_${String(i).padStart(3,'0')}`).join('\r\n'));
+  const source=await readFile(join(import.meta.dir,'support/androidHerdr.ts'),'utf8');
+  expect(source).toContain("navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():''");
+  const receiver=await readFile(join(import.meta.dir,'../apps/agent/examples/owned_terminal_receiver.rs'),'utf8');
+  expect(receiver).toContain('output.write_all(part)?');expect(receiver).toContain('private_create_new().open');
+  expect(source).toContain("expected.length+1");expect(source).toContain("received.equals(expected)");expect(source).toContain('receiverAlive(receiver)');
+});
+
+test('native Mosh resize observation never reads a replaced terminal owner',async()=>{
+  const directory=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest');
+  const native=await readFile(join(directory,'java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const helper=native.split('private fun verifyMoshResize(')[1].split('private fun verifyGuardedHerdrChat(')[0];
+  const asset=await readFile(join(directory,'assets/owned-mosh-history.js'),'utf8');
+  const expression=helper.match(/val observation = """([\s\S]*?)"""/)![1].replace('$asset',asset).replaceAll('$key',JSON.stringify('owned')).replaceAll('$selector',JSON.stringify('owned-canvas'));
+  const root={querySelectorAll(){throw new Error('private terminal rows read');},querySelector(){throw new Error('private terminal editor read');}};
+  const pane={querySelector(){throw new Error('private replaced pane read');}},tab={};
+  const document={querySelector:(selector:string)=>selector==='owned-canvas'?pane:tab};
+  const window={owned:{document,pane:{},root,tab}};
+  expect(new Function('window','document',`return (${expression});`)(window,document)).toEqual({valid:false,rows:null,historyRows:null,owned:false,cursorRow:null,painted:false,editable:false,centerOwned:false});
+});

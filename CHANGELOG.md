@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep Mosh repaint geometry synchronized with complete server frames during keyboard, composer and viewport resizes, avoiding duplicated screen rows in scrollback. Existing history cells retain their original width and can be clipped in narrower views until widened.
+
 - Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.
 
 

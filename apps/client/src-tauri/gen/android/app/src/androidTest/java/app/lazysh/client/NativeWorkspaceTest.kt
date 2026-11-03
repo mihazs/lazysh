@@ -1752,6 +1752,133 @@ class NativeWorkspaceTest {
         return { remaining -> evaluateIfPresent(scenario, expression, remaining) ?: "unavailable" }
     }
 
+    private fun verifyMoshResize(scenario: ActivityScenario<MainActivity>, name: String, nonce: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val device = UiDevice.getInstance(instrumentation)
+        fun imeSettings() = listOf("default_input_method", "enabled_input_methods").map { key ->
+            device.executeShellCommand("settings get secure $key").trim().also { require(it.length <= 4096) }
+        }
+        val originalIme = imeSettings()
+        require(originalIme[0] in listOf("com.android.inputmethod.latin/.LatinIME", "com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME")) {
+            "Mosh resize requires the admitted ordinary AOSP keyboard"
+        }
+        val asset = instrumentation.context.assets.open("owned-mosh-history.js").use { it.readNBytes(4097) }
+            .also { require(it.size <= 4096) { "Mosh history oracle bound" } }.toString(Charsets.UTF_8)
+        lateinit var activity: MainActivity
+        lateinit var web: WebView
+        scenario.onActivity { activity = it; web = checkNotNull(webView(it.window.decorView)) }
+        val window = activity.window
+        val decor = window.decorView
+        val orientation = activity.requestedOrientation
+        val configuration = activity.resources.configuration.orientation
+        require(configuration == Configuration.ORIENTATION_PORTRAIT) { "Owned Mosh resize starts in portrait" }
+        val key = JSONObject.quote("__lazyshOwnedMoshResize_$nonce")
+        val selector = JSONObject.quote(".terminal-canvas[aria-label='Terminal for $name']")
+        var installed = false
+        var primary: Throwable? = null
+        var history = -1
+        val observation = """
+            (()=>{
+              $asset
+              const saved=window[$key],pane=document.querySelector($selector),tab=document.querySelector('[role=tab][aria-selected=true]');
+              const owned=Boolean(saved&&saved.document===document&&saved.pane===pane&&saved.tab===tab&&
+                saved.root===pane.querySelector('.xterm')&&!tab.querySelector('.status-idle')&&pane.getClientRects().length>0);
+              const root=owned?saved.root:null;
+              const result=ownedMoshHistory(root),rows=owned?Array.from(root.querySelectorAll('.xterm-rows > div')):[];
+              const cursor=rows.findIndex(row=>row.querySelector('.xterm-cursor'));
+              const editor=owned?root.querySelector('.xterm-helper-textarea'):null,viewport=window.visualViewport;
+              return {...result,owned,cursorRow:cursor<0?null:cursor,
+                painted:rows.some(row=>/OWNED_MOSH_ROW_[0-9]{3}/.test(row.textContent)),
+                editable:Boolean(editor&&!editor.readOnly&&!editor.disabled),
+                centerOwned:Boolean(owned&&viewport?.scale===1&&viewport.offsetLeft===0&&viewport.offsetTop===0&&
+                  root.contains(document.elementFromPoint(innerWidth/2,innerHeight/2)))};
+            })()
+        """.trimIndent()
+        fun awaitPhase(stage: String, keyboard: Boolean?, accept: (JSONObject) -> Boolean): JSONObject {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            var last = "unavailable"
+            while (true) {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                assertTrue("Owned Mosh resize phase $stage did not settle: $last", remaining > 0)
+                var ready = false
+                var imeVisible: Boolean? = null
+                scenario.onActivity { current ->
+                    assertSame("Mosh resize retains its Activity", activity, current)
+                    assertSame("Mosh resize retains its Window", window, current.window)
+                    assertSame("Mosh resize retains its WebView", web, webView(current.window.decorView))
+                    imeVisible = ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime())
+                    ready = scenario.state == androidx.lifecycle.Lifecycle.State.RESUMED && web.isAttachedToWindow && web.isShown && web.hasWindowFocus() &&
+                        imeVisible != null && (keyboard == null || imeVisible == keyboard)
+                }
+                val state = JSONObject(evaluate(scenario, observation, remaining.coerceAtMost(1000)))
+                require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "painted", "editable", "centerOwned"))
+                last = state.toString().also { require(it.length <= 256) }
+                if (ready && state.getBoolean("owned") && state.getBoolean("valid") && state.getBoolean("painted") &&
+                    (history < 0 || state.getInt("historyRows") == history) && accept(state) && System.nanoTime() < deadline) {
+                    println("lazysh Mosh resize: phase=$stage rows=${state.getInt("rows")} history=${state.getInt("historyRows")} keyboard=$imeVisible")
+                    return state
+                }
+                val pause = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtMost(50)
+                if (pause > 0) Thread.sleep(pause)
+            }
+        }
+        fun button(label: String) = onWebView().withElement(findElement(Locator.XPATH, "//button[@aria-label='$label' or (not(@aria-label) and normalize-space(.)='$label')]"))
+            .perform(webClick())
+        try {
+            installed = evaluate(scenario, """
+                (()=>{const pane=document.querySelector($selector),root=pane?.querySelector('.xterm'),tab=document.querySelector('[role=tab][aria-selected=true]');
+                  if(!root||!tab||Object.prototype.hasOwnProperty.call(window,$key))return false;
+                  Object.defineProperty(window,$key,{value:{document,pane,root,tab},configurable:true});return true;})()
+            """) == "true"
+            assertTrue("Mosh resize owns only its original document and terminal", installed)
+            if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
+            val baseline = awaitPhase("baseline", false) { it.getBoolean("editable") && it.getBoolean("centerOwned") && !it.isNull("cursorRow") }
+            history = baseline.getInt("historyRows")
+            // Espresso's ordinary native center tap is admitted only when the
+            // current document proves that center belongs to its original xterm.
+            onView(isAssignableFrom(WebView::class.java)).perform(click())
+            val keyboard = awaitPhase("keyboard-shrink", true) { it.getInt("rows") < baseline.getInt("rows") && it.getInt("rows") <= baseline.getInt("cursorRow") }
+            device.pressBack()
+            val expanded = awaitPhase("keyboard-grow", false) { it.getInt("rows") > keyboard.getInt("rows") }
+            button("Compose")
+            val composed = awaitPhase("compose-shrink", true) { it.getInt("rows") < expanded.getInt("rows") }
+            button("Close composer")
+            awaitPhase("compose-grow", null) { it.getInt("rows") > composed.getInt("rows") }
+            if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
+            val portrait = awaitPhase("portrait", false) { true }
+            scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+            val landscape = awaitPhase("orientation-shrink", false) { activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && it.getInt("rows") < portrait.getInt("rows") }
+            scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+            awaitPhase("orientation-grow", false) { activity.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT && it.getInt("rows") > landscape.getInt("rows") }
+            // The same append-only receiver's existing final exact chat ledger
+            // excludes extra passive bytes posthoc; this is not a per-phase read.
+            println("lazysh Mosh resize: firstKeyboardCrossed=true ordinaryAosp=true receiverLedger=pending-host-final")
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            var cleanup: Throwable? = null
+            for (action in listOf<() -> Unit>(
+                { if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack() },
+                {
+                    scenario.onActivity { it.requestedOrientation = orientation }
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    var restored = false
+                    while (!restored) {
+                        scenario.onActivity { restored = it.resources.configuration.orientation == configuration }
+                        assertTrue("Mosh resize restores its original orientation", System.nanoTime() < deadline)
+                        if (!restored) Thread.sleep(50)
+                    }
+                },
+                { assertTrue("Mosh resize preserves the original IME configuration", imeSettings() == originalIme) },
+                { if (installed) assertEquals("Mosh resize removes its passive document guard", "true", evaluate(scenario,
+                    "(()=>{const saved=window[$key];if(!saved||saved.document!==document)return false;return delete window[$key];})()")) }
+            )) try { action() } catch (failure: Throwable) {
+                val first = primary ?: cleanup
+                if (first == null) cleanup = failure else first.addSuppressed(AssertionError("Owned Mosh resize cleanup also failed", failure))
+            }
+            cleanup?.let { throw it }
+        }
+    }
+
     private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String, alreadyAttached: Boolean = false) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
@@ -3031,6 +3158,7 @@ class NativeWorkspaceTest {
                     document.querySelector('.workspace-footer')?.textContent.includes('Mosh') &&
                     Boolean(document.querySelector('.terminal-canvas .xterm-screen'))
                 """)
+                verifyMoshResize(scenario, connectedName, nonce)
                 verifyBoardKeepAwake(scenario, fixture.getJSONObject("herdr"))
                 verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label, true)
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,

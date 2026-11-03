@@ -21,6 +21,7 @@ export type LiveSession = {
   connected: boolean;
   disposed?: true;
   local?: true;
+  moshResize?: import('./moshResize').MoshResizeController;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};
   auto?: import('./bridge').AutoOptions;

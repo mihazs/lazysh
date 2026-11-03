@@ -48,7 +48,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
-  const fit = useRef<FitAddon | null>(null);
+  const fit = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
   const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
@@ -353,7 +353,6 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (!element) return;
     const terminal = session.terminal;
     const addon = new FitAddon();
-    fit.current = addon;
     terminal.loadAddon(addon);
     const links = new WebLinksAddon((_event, uri) => {
       const url = terminalWebUrl(uri);
@@ -424,9 +423,12 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output;
     setModifierInput(output.available);
-    const size = terminal.onResize(({ cols, rows }) => {
-      if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
-    });
+    const resizeRemote = ({cols, rows}: {cols: number; rows: number}) => {
+      if (session.connected && !owner.disposed && inputOwner.current === owner && mounted.current && access.current())
+        void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
+    };
+    // Authoritative Mosh parser resizes never echo back to the server.
+    const size = session.moshResize ? session.moshResize.onResizeIntent(resizeRemote) : terminal.onResize(resizeRemote);
     const screen = element.querySelector<HTMLElement>(".xterm-screen");
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
@@ -435,12 +437,23 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         const minimum = `${rowHeight}px`;
         if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
       }
-      if (activeRef.current && element.clientWidth > 0) addon.fit();
+      if (!activeRef.current || element.clientWidth <= 0) return;
+      // A closed Mosh screen retains its final canonical rows. A later stock
+      // fit could discard its bottom rows when the final cursor is above them.
+      if (session.moshResize) {
+        if (!session.connected) return;
+        const proposed = addon.proposeDimensions();
+        if (proposed) {
+          try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
+          catch {reportError(t('appUnavailableInThisAppBuild'));}
+        }
+      } else addon.fit();
     };
+    fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);
     resize.observe(element);
     if (screen) resize.observe(screen);
-    addon.fit();
+    fitTerminal();
     focusTerminal();
     return () => {
       owner.disposed = true;
@@ -456,11 +469,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
 
   useEffect(() => {
     try {applyTerminalTheme(session.terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
-    if (active) requestAnimationFrame(() => fit.current?.fit());
+    if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active]);
 
   useEffect(() => {
-    if (active) requestAnimationFrame(() => { fit.current?.fit(); if (composing) focusTerminal(composerInput.current); else focusTerminal(); });
+    if (active) requestAnimationFrame(() => { fit.current?.(); if (composing) focusTerminal(composerInput.current); else focusTerminal(); });
   }, [active, session, composing]);
 
   function focusTerminal(target?: HTMLElement | null) {
