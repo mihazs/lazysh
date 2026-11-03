@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.10.2
+
+### Patch Changes
+
+- a706336: Preserve validated owned ASCII edits across Android IME fallback transactions without replaying the previous text or losing multi-character deletion. Retain input ownership, cancellation and unsupported-edit review.
+- 20fa847: Keep Mosh repaint geometry synchronized with each complete server frame so keyboard, composer and viewport resizes do not duplicate the screen into local scrollback. Preserve existing history cells without reflow; narrow views can clip old history until widened.
+- @lazysh/account-usage@1.10.2
+  - @lazysh/common@1.10.2
+  - @lazysh/display-idle@1.10.2
+  - @lazysh/et-transport@1.10.2
+  - @lazysh/mosh-transport@1.10.2
+
 ## 1.10.1
 
 ### Patch Changes
