@@ -1071,3 +1071,46 @@ test('Workspaces keeps three long app sessions compact while mobile pane choices
   if(phone)await expect(page.locator('.workspace-session-summary')).toHaveAttribute('aria-expanded','true');
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['disconnect','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
 });
+
+test('recorded Codex conversation stays readable in a constrained connected workspace and preserves its draft on refresh',async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';await page.setViewportSize(phone?{width:393,height:852}:{width:1200,height:800});
+  await installWorkspaceNavigation(page);await page.clock.resume();
+  await page.addInitScript(()=>{
+    const original=window.nativeFixtureInvoke;
+    window.nativeFixtureInvoke=async(command,args,options)=>{
+      if(command!=='agent_transcript')return original(command,args,options);
+      if(args.sessionId!=='owned-navigation-ssh'||args.agent!=='codex'||args.view!=='conversation'||args.offset!==0)throw new Error('Wrong recorded conversation source');
+      const count=String(args.path).includes('fork')?6:4;
+      return {schemaVersion:1,agent:'codex',view:'active_branch',hasMore:false,nextOffset:100,messages:Array.from({length:count},(_,i)=>({id:`recorded-${i}`,role:i%2?'assistant':'user',blocks:[{type:'text',text:`Recorded synthetic turn ${i+1}.`}]}))};
+    };
+  });
+  await page.goto('/');if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);const originalTerminal=await page.locator('.terminal-canvas').elementHandle();
+  if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();await openWorkspaceGroup(page,'more');}
+  await page.getByRole('button',{name:'Transcript',exact:true}).click();
+  await page.getByRole('combobox',{name:'Agent',exact:true}).selectOption('codex');
+  await page.getByRole('combobox',{name:'View',exact:true}).selectOption('conversation');
+  const region=page.getByRole('region',{name:'Conversation messages',exact:true});
+  for(const [path,count]of [['/fixture/parent.jsonl',4],['/fixture/fork.jsonl',6]] as const){
+    await page.getByLabel('Transcript path',{exact:true}).fill(path);await page.getByRole('button',{name:'Open transcript',exact:true}).click();
+    await expect(region.locator('.chat-message')).toHaveCount(count);
+    await expect(region.locator('.chat-message p')).toHaveText(Array.from({length:count},(_,i)=>`Recorded synthetic turn ${i+1}.`));
+    expect(await region.locator('h4').evaluateAll(elements=>elements.map(e=>(e as HTMLElement).innerText))).toEqual(Array.from({length:count},(_,i)=>i%2?'Assistant':'User'));
+    const geometry=await region.evaluate(e=>({width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight}));
+    await testInfo.attach(`conversation-${count}-geometry`,{body:JSON.stringify(geometry),contentType:'application/json'});
+    await page.screenshot({path:testInfo.outputPath(`conversation-${count}.png`)});
+    expect(geometry.height).toBeGreaterThan(0);expect(geometry.clientHeight).toBeGreaterThan(0);
+    await region.scrollIntoViewIfNeeded();await region.evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
+    await expect(region.locator('.chat-message').first()).toBeInViewport();
+    await page.screenshot({path:testInfo.outputPath(`conversation-${count}-readable.png`)});
+  }
+  const draft=page.getByRole('textbox',{name:'Draft for this terminal',exact:true});await draft.fill('Recorded conversation draft remains unsubmitted');
+  await region.evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
+  await page.getByRole('button',{name:'Refresh new messages',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Refresh new messages',exact:true})).toBeEnabled();
+  expect(await region.evaluate(e=>e.scrollTop)).toBe(0);await expect(draft).toHaveValue('Recorded conversation draft remains unsubmitted');
+  await page.getByRole('button',{name:'Stage in terminal',exact:true}).click();
+  await expect(page.locator('.terminal-compose textarea')).toHaveValue('Recorded conversation draft remains unsubmitted');
+  expect(await originalTerminal!.evaluate(e=>e.isConnected)).toBe(true);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['write_stdin','attach_multiplexer','herdr_chat'].includes(command)))).toEqual([]);
+});

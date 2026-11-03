@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,lstat,mkdir,readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
@@ -29,6 +29,106 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   const {terminal,owner}=await openOwnedSsh(gui,ssh);
   fixture.captureSafe=true;
   await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await disconnectOwnedSsh(gui,terminal);
+});
+
+// Ordinary CI without these actual, privately captured CLI records does not qualify this flow.
+it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual owned Codex parent and fork conversations through native SSH without replacing its terminal',async()=>{
+  fixture.captureSafe=false;
+  const productSource=process.env.LAZYSH_NATIVE_CODEX_SOURCE??'';
+  expect(productSource).toMatch(/^[a-f0-9]{40}$/);
+  const digest=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
+  const protectedInput=async(path:string,limit:number)=>{
+    expect(path.startsWith('/')).toBe(true);
+    const info=await lstat(path);
+    expect(info.isFile()&&!info.isSymbolicLink()&&info.uid===process.getuid!()&&info.nlink===1&&(info.mode&0o022)===0&&info.size>0&&info.size<=limit).toBe(true);
+    const bytes=await readFile(path),after=await lstat(path);
+    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs}).toEqual({dev:info.dev,ino:info.ino,size:info.size,mtime:info.mtimeMs});
+    expect(bytes.length).toBe(info.size);return bytes;
+  };
+  const input:unknown=JSON.parse((await protectedInput(process.env.LAZYSH_NATIVE_CODEX_MANIFEST!,16384)).toString('utf8'));
+  expect(input!==null&&typeof input==='object').toBe(true);
+  const manifest=input as {source:string;clientSha256:string;companion:{path:string;sha256:string};rollouts:{path:string;sha256:string;name:string;threadId:string}[]};
+  expect(manifest.source).toBe(productSource);expect(manifest.clientSha256).toMatch(/^[a-f0-9]{64}$/);expect(manifest.rollouts).toHaveLength(2);
+  const companion=await protectedInput(manifest.companion.path,64*1024*1024);expect(digest(companion)).toBe(manifest.companion.sha256);
+  const originals=await Promise.all(manifest.rollouts.map(async(record,index)=>{
+    const expected=index===0?'01a1a04c-2f93-7231-83d2-c493c0427c27':'01a1a04c-5790-7913-9f46-63227794a710';
+    expect(record.threadId).toBe(expected);expect(record.name).toMatch(new RegExp(`^rollout-2026-11-03T[0-9-]+-${expected}\\.jsonl$`));
+    const bytes=await protectedInput(record.path,1024*1024);expect(digest(bytes)).toBe(record.sha256);
+    const metadata=JSON.parse(bytes.toString('utf8').split('\n')[0]);expect(metadata.type).toBe('session_meta');expect(metadata.payload.id).toBe(expected);
+    return bytes;
+  }));
+  expect(digest(await readFile(join(import.meta.dirname,'../../../target/release/lazysh')))).toBe(manifest.clientSha256);
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  const image=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
+  await mkdir(join(ssh.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});
+  await writeFile(image,companion,{flag:'wx',mode:0o700});await chmod(image,0o700);
+  const rolloutDirectory=join(ssh.directory,'.codex/sessions/2026/11/03');await mkdir(rolloutDirectory,{recursive:true,mode:0o700});
+  const copies=manifest.rollouts.map(record=>join(rolloutDirectory,record.name));
+  for(const [index,path]of copies.entries())await writeFile(path,originals[index],{flag:'wx',mode:0o600});
+  const before=await Promise.all(copies.map(async path=>({info:await stat(path),hash:digest(await readFile(path))})));
+  const remote=await ssh.client(true,`'${image}' --version`);
+  expect((await remote.finish('owned source-bound companion version',5000)).trim()).toBe('lazysh-agent 1.9.10');
+  const imageInfo=await stat(image);expect(imageInfo.uid===process.getuid!()&&imageInfo.nlink===1&&(imageInfo.mode&0o777)===0o700).toBe(true);
+  const parent=['Owned first prompt; reply without tools.','Owned isolated Codex answer 1.','Owned resumed prompt; reply without tools.','Owned isolated Codex answer 2.'];
+  const branch=[...parent,'Owned forked prompt; reply without tools.','Owned isolated Codex answer 3.'];
+  for(const [index,expected]of [parent,branch].entries()){
+    const control=await ssh.client(true,`'${image}' transcript --agent codex --path '${copies[index]}' --offset 0 --limit 50 --view conversation`);
+    const output=await control.finish('owned actual Codex companion conversation',5000),page=JSON.parse(output);
+    const projected=Array.isArray(page.messages)?page.messages.map((message:{role:string;blocks:{type:string;text?:string}[]})=>({role:message.role,text:message.blocks.filter(block=>block.type==='text').map(block=>block.text??'').join('\n')})):null;
+    const expectedMessages=expected.map((text,i)=>({role:i%2?'assistant':'user',text}));
+    console.info('Owned Codex SSH reader observation',JSON.stringify({source:productSource,index,agent:page.agent==='codex'?'codex':'unexpected',view:page.view==='active_branch'?'active_branch':'unexpected',schemaVersionMatches:page.schemaVersion===1,branchMatches:page.branchId===manifest.rollouts[index].threadId,messages:Array.isArray(page.messages)?page.messages.length:null,exactMatches:JSON.stringify(projected)===JSON.stringify(expectedMessages),pageSha256:digest(Buffer.from(output)),sourceSha256:before[index].hash,companionSha256:manifest.companion.sha256}));
+    expect(page.schemaVersion).toBe(1);expect(page.agent).toBe('codex');expect(page.view).toBe('active_branch');expect(page.branchId===manifest.rollouts[index].threadId).toBe(true);expect(projected?.length).toBe(expectedMessages.length);expect(JSON.stringify(projected)===JSON.stringify(expectedMessages)).toBe(true);
+  }
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
+  await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
+  gui.stage='owned actual Codex Conversation';await (await browser.$('button=Transcript')).click();
+  await (await browser.$('//label[normalize-space(text())="Agent"]/select')).selectByAttribute('value','codex');
+  await (await browser.$('//label[normalize-space(text())="View"]/select')).selectByAttribute('value','conversation');
+  const pathInput=await browser.$('input[placeholder="Absolute host path to session.jsonl"]');
+  const readMessages=async()=>{
+    const articles=await browser.$$('.chat-conversation-messages .chat-message');
+    return Promise.all(Array.from(articles).map(async article=>({role:await article.$('h4').getText(),text:await article.$('p').getText()})));
+  };
+  for(const [index,expected]of [parent,branch].entries()){
+    await pathInput.setValue(copies[index]);await (await browser.$('button=Open transcript')).click();
+    try{
+    await browser.waitUntil(async()=>JSON.stringify(await readMessages())===JSON.stringify(expected.map((text,i)=>({role:i%2?'Assistant':'User',text}))),{timeout:20_000,timeoutMsg:'Actual Codex conversation did not match its captured branch'});
+    }catch(primary){
+      try{console.info('Owned Codex native DOM observation',JSON.stringify(await browser.execute(expected=>{
+        const panel=document.querySelector('.chat-panel'),regions=panel?.querySelectorAll('.chat-conversation-messages'),cards=Array.from(panel?.querySelectorAll('.chat-conversation-messages .chat-message')??[]);
+        const visible=(element:Element)=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(element).visibility!=='hidden';};
+        return {state:!panel?'missing-panel':!regions?.length?'missing-region':cards.length===0?'empty':cards.length===expected.length?'expected-count':'different-count',regions:regions?.length??0,cards:cards.length,visibleCards:cards.filter(visible).length,regionVisible:!!regions?.[0]&&visible(regions[0]),errorPresent:!!panel?.querySelector('[role="alert"]'),pending:!!Array.from(panel?.querySelectorAll('button')??[]).find(button=>button.textContent==='Reading…'),exactMatches:JSON.stringify(cards.map(card=>({role:card.querySelector('h4')?.textContent,text:card.querySelector('p')?.textContent})))===JSON.stringify(expected)};
+      },expected.map((text,i)=>({role:i%2?'assistant':'user',text})))));}catch{/* Preserve the exact primary failure if observation is unavailable. */}
+      throw primary;
+    }
+    expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  }
+  const region=await browser.$('.chat-conversation-messages');await region.click();await browser.keys('Home');
+  const position=await browser.execute(()=>{const element=document.querySelector('.chat-conversation-messages')!;return {top:element.scrollTop,height:element.clientHeight,total:element.scrollHeight};});
+  const readingOverflow=position.total>position.height;
+  if(readingOverflow)expect(position.top).toBe(0);
+  await region.scrollIntoView({block:'start'});
+  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-readable-conversation.png'));
+  const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';
+  await draft.setValue(text);await (await browser.$('button=Refresh new messages')).click();
+  await browser.waitUntil(async()=>await browser.$('button=Refresh new messages').isEnabled(),{timeout:20_000});
+  expect(await readMessages()).toEqual(branch.map((value,i)=>({role:i%2?'Assistant':'User',text:value})));expect(await draft.getValue()).toBe(text);
+  if(readingOverflow)expect(await browser.execute(()=>document.querySelector('.chat-conversation-messages')!.scrollTop)).toBe(position.top);
+  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-fork-conversation.png'));
+  await (await browser.$('button=Stage in terminal')).click();await terminal.waitForDisplayed();
+  expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
+  const staged=await browser.$('.terminal-compose textarea');await staged.waitForDisplayed();expect(await staged.getValue()).toBe(text);expect(await terminal.getText()).not.toContain(text);
+  await (await browser.$('button[aria-label="Close composer"]')).click();await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_WORKSPACES');
+  expect(await browser.getWindowHandles()).toHaveLength(1);
+  for(const [index,path]of copies.entries()){
+    const after=await stat(path),prior=before[index].info;
+    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs,mode:after.mode,nlink:after.nlink}).toEqual({dev:prior.dev,ino:prior.ino,size:prior.size,mtime:prior.mtimeMs,mode:prior.mode,nlink:prior.nlink});
+    expect(digest(await readFile(path))).toBe(before[index].hash);expect(digest(await protectedInput(manifest.rollouts[index].path,1024*1024))).toBe(manifest.rollouts[index].sha256);
+  }
+  expect(digest(await readFile(image))).toBe(manifest.companion.sha256);
+  console.info('Owned Codex native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,parentMessages:parent.length,forkMessages:branch.length,readingPosition:{...position,overflowQualified:readingOverflow},rolloutHashes:before.map(value=>value.hash)}));
   await disconnectOwnedSsh(gui,terminal);
 });
 
