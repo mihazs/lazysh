@@ -68,3 +68,17 @@ describe('bounded reviewed theme documents',()=>{
     }
   });
 });
+
+it('keeps custom glass contrast on both worst-case opaque underlays without replacing its selected text',()=>{
+  for(const background of ['#000000','#ffffff','#757575','#767676','#777777','#808080','#123456','#ffee88'])for(const foreground of ['#000000','#ffffff','#77f3ec','#ff0099']){
+    const tokens=chromeColors(importedTheme({...theme,colors:{background,foreground}}));const alpha=parseFloat(tokens['--theme-glass-opacity-floor'])/100;
+    expect(alpha).toBeGreaterThanOrEqual(.78);expect(alpha).toBeLessThanOrEqual(1);
+    const panel=tokens['--theme-panel'];
+    for(const underlay of [0,255]){
+      const mixed='#'+[1,3,5].map(i=>Math.round(parseInt(panel.slice(i,i+2),16)*alpha+underlay*(1-alpha)).toString(16).padStart(2,'0')).join('');
+      for(const key of ['text','muted','accent','danger','warning','blue','purple'])expect(contrast(tokens['--theme-'+key],mixed)).toBeGreaterThanOrEqual(4.5);
+    }
+    if(background==='#767676')expect(tokens['--theme-text']).toBe('#000000');
+    if(background==='#000000'||background==='#ffffff')expect(alpha).toBeLessThan(1);
+  }
+});
