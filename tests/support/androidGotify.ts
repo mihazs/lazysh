@@ -12,6 +12,24 @@ const rejection=()=>new Error('Owned Gotify acceptance rejected');
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
 export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
+const gotifyNativePhases=['android-native-stage-0','android-native-stage-1','android-native-stage-2','android-native-stage-3','android-native-stage-4'] as const;
+const gotifyFixturePhases=['admission','clean source checkout','tracked fixture source','official Gotify artifact',
+  'official Gotify APK signature','official Gotify package','official Gotify server extraction','current test-support relay build','source checkout',
+  'relay-certificates','server-health','server-credentials','relay-ready','relay-enrollment','relay-events','server-messages','relay-shutdown',
+  'android-device-admission','android-package-admission','android-reverse','android-gotify-install','android-client-install',
+  'android-package-identity','android-certificate-transfer','android-private-handoff','android-instrumentation',
+  'android-installed-artifacts','android-event-input','android-final-identity','android-instrumentation-result','android-native-stage',...gotifyNativePhases] as const;
+type GotifyFixturePhase=typeof gotifyFixturePhases[number];
+export function gotifyFailurePhase(error:unknown):GotifyFixturePhase|'fixture' {
+  try {
+    if(error instanceof Error) {
+      const message=error.message;
+      if(typeof message==='string'&&message.length<=128)
+        return gotifyFixturePhases.find(phase=>message===`Owned Gotify acceptance failed: ${phase}`)??'fixture';
+    }
+  }catch{/* Unknown exceptions never become public diagnostics. */}
+  return 'fixture';
+}
 const nonceCheck=(nonce:string)=>{if(!/^[a-f0-9]{32}$/.test(nonce))throw rejection();};
 export function gotifyPrivateCommand(nonce:string,suffix='.json') {
   nonceCheck(nonce);
@@ -229,12 +247,13 @@ async function runGotifyAndroid(root:string) {
   const nonce=randomUUID().replaceAll('-',''),alias=`owned-gotify-${nonce.slice(0,12)}`,caName=`lazysh-gotify-${nonce}.crt`;
   const processes:OwnedProcess[]=[];
   let reverse:GotifyReverse|undefined;
-  let primary=false,cleanupFailed=false,caPushed=false,phase='admission';
+  let primary=false,cleanupFailed=false,caPushed=false;
+  let phase:GotifyFixturePhase='admission';
   let receipt:Record<string,unknown>|undefined;
-  const run=async(label:string,program:string,args:string[],milliseconds=10000,env=process.env)=>{
+  const run=async(label:GotifyFixturePhase,program:string,args:string[],milliseconds=10000,env=process.env)=>{
     phase=label;await ownership.check();const child=new OwnedProcess(program,args,root,env);processes.push(child);return child.finish(label,milliseconds);
   };
-  const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run('owned Android operation',adb,['-s',serial,...args]));
+  const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args]));
   const guest=()=>emulatorContinuity(adb,serial,undefined,0);
   let original:{server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof guest>>}|undefined;
   const continuous=async()=>{await ownership.check();if(!original||!sameNtfyClockOwner(original,{server:await hostAdbServerIdentity(adb),guest:await guest()}))throw rejection();};
@@ -256,7 +275,9 @@ async function runGotifyAndroid(root:string) {
     await run('tracked fixture source','git',['ls-files','--error-unmatch','tests/android-gotify.test.ts','tests/support/androidGotify.ts',
       'apps/client/src-tauri/fixtures/gotify-provenance.json','apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/GotifyAndroidTest.kt',
       'apps/notification-service/examples/owned_gotify_android.rs']);
+    phase='android-device-admission';
     if(await shell(['shell','getprop','ro.build.version.sdk'])!=='36\n')throw rejection();
+    phase='android-package-admission';
     for(const name of ['com.github.gotify','app.lazysh.client','app.lazysh.client.test'])
       if((await shell(['shell','pm','list','packages',name])).trim())throw rejection();
     const pins=JSON.parse(await readFile(join(root,'apps/client/src-tauri/fixtures/gotify-provenance.json'),'utf8'));
@@ -282,14 +303,15 @@ async function runGotifyAndroid(root:string) {
       if(records.some(record=>record.schemaVersion!==1||record.nonce!==nonce||!['certificates-ready','relay-ready','stopped'].includes(record.phase)))throw rejection();
       return records.find(record=>record.phase===name);
     };
-    await wait(performance.now()+10000,async()=>relayPhase('certificates-ready'));
+    phase='relay-certificates';await wait(performance.now()+10000,async()=>relayPhase('certificates-ready'));
     const ca=await privateFile(join(directory,'ca.pem'),16384),port=await freePort(),origin=`https://localhost:${port}`;
     const password=randomUUID(),admin=randomBytes(32).toString('hex'),sourceToken=randomBytes(32).toString('hex');
     const server=new OwnedProcess(binary,[],directory,{PATH:process.env.PATH,GOMAXPROCS:'2',GOTIFY_CONFIG_FILE:'/dev/null',
       GOTIFY_SERVER_LISTENADDR:'127.0.0.1',GOTIFY_SERVER_PORT:'0',GOTIFY_SERVER_SSL_ENABLED:'true',GOTIFY_SERVER_SSL_REDIRECTTOHTTPS:'false',
       GOTIFY_SERVER_SSL_LISTENADDR:'127.0.0.1',GOTIFY_SERVER_SSL_PORT:String(port),GOTIFY_SERVER_SSL_CERTFILE:join(directory,'server.pem'),
       GOTIFY_SERVER_SSL_CERTKEY:join(directory,'server-key.pem'),GOTIFY_DEFAULTUSER_PASS:password});processes.push(server);
-    await wait(performance.now()+10000,async()=>{try{return await gotifyJsonRequest(origin,'/health','GET',undefined,undefined,ca);}catch{return undefined;}});
+    phase='server-health';await wait(performance.now()+10000,async()=>{try{return await gotifyJsonRequest(origin,'/health','GET',undefined,undefined,ca);}catch{return undefined;}});
+    phase='server-credentials';
     const basic=`Basic ${Buffer.from(`admin:${password}`).toString('base64')}`;
     const application=await gotifyJsonRequest(origin,'/application','POST',basic,{name:'owned-lazysh'},ca);
     const reader=await gotifyJsonRequest(origin,'/client','POST',basic,{name:'owned-readback'},ca);
@@ -297,63 +319,68 @@ async function runGotifyAndroid(root:string) {
     // Fresh private directory, one cooperating publisher: reveal only a fully closed file.
     await writeFile(join(directory,'relay.pending'),JSON.stringify({schemaVersion:1,nonce,origin,applicationToken:application.token,admin}),{mode:0o600,flag:'wx'});
     await rename(join(directory,'relay.pending'),join(directory,'relay.json'));
-    const ready=await wait(performance.now()+10000,async()=>relayPhase('relay-ready'));
+    phase='relay-ready';const ready=await wait(performance.now()+10000,async()=>relayPhase('relay-ready'));
     if(!Number.isInteger(ready.port)||ready.port<1||ready.port>65535)throw rejection();
     const relayOrigin=`http://127.0.0.1:${ready.port}`,bearer=`Bearer ${admin}`;
-    const account=await gotifyJsonRequest(relayOrigin,'/v1/admin/status','GET',bearer,undefined);
+    phase='relay-enrollment';const account=await gotifyJsonRequest(relayOrigin,'/v1/admin/status','GET',bearer,undefined);
     await gotifyJsonRequest(relayOrigin,'/v1/admin/sources','POST',bearer,{accountId:account.accountId,id:randomUUID(),alias,tokenHash:[...createHash('sha256').update(sourceToken).digest()]});
     await gotifyJsonRequest(relayOrigin,'/v1/admin/destination/enable','POST',bearer,null);
-    reverse=new GotifyReverse(port,shell);await reverse.create();
+    phase='android-reverse';reverse=new GotifyReverse(port,shell);await reverse.create();
     const nativeApk=join(android,'app/build/outputs/apk/universal/debug/app-universal-debug.apk');
     const nativeHash=digest(await readQrMetadata(nativeApk,536870912));
-    await installed.install('com.github.gotify',apk,pins.android.sha256);
-    await installed.install('app.lazysh.client',nativeApk,nativeHash);
+    phase='android-gotify-install';await installed.install('com.github.gotify',apk,pins.android.sha256);
+    phase='android-client-install';await installed.install('app.lazysh.client',nativeApk,nativeHash);
+    phase='android-package-identity';
     const uid=gotifyUid(await shell(['shell','cmd','package','list','packages','-U','com.github.gotify']));
     const targetUid=Number((await shell(['shell','run-as','app.lazysh.client','id','-u'])).trim());
     if(!Number.isSafeInteger(targetUid)||targetUid<10000)throw rejection();
-    await shell(['shell','sh','-c',`'[ ! -e /sdcard/Download/${caName} ] && [ ! -L /sdcard/Download/${caName} ]'`]);
+    phase='android-certificate-transfer';await shell(['shell','sh','-c',`'[ ! -e /sdcard/Download/${caName} ] && [ ! -L /sdcard/Download/${caName} ]'`]);
     caPushed=true;await shell(['push',join(directory,'ca.pem'),`/sdcard/Download/${caName}`]);
     if((await shell(['shell','sha256sum',`/sdcard/Download/${caName}`])).split(/\s+/)[0]!==digest(ca))throw rejection();
-    await input('.json',{schemaVersion:1,nonce,origin,username:'admin',password,caName,alias,applicationId:application.id,gotifyUid:uid});
+    phase='android-private-handoff';await input('.json',{schemaVersion:1,nonce,origin,username:'admin',password,caName,alias,applicationId:application.id,gotifyUid:uid});
     const reports=join(android,'app/build/outputs/androidTest-results/connected');
     // Reject stale reports instead of accepting a prior successful case.
     if(await lstat(reports).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))throw rejection();
     await installed.admitGradle();
-    await continuous();const native=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon','--max-workers=2',
+    phase='android-instrumentation';await continuous();const native=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon','--max-workers=2',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug','-x',':app:rustBuildUniversalDebug',
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',`-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.GotifyAndroidTest#${gotifyCase}`,
       '-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyAcceptance=true',`-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyNonce=${nonce}`],root);
     processes.push(native);void native.done.catch(()=>{});const until=performance.now()+180000;
-    const stage=async(step:number,id?:number)=>wait(until,async()=>{
+    const stage=async(step:number,id?:number)=>{
+      phase=gotifyNativePhases[step]??'android-native-stage';
+      return wait(until,async()=>{
       const path=`files/.lazysh-gotify-${nonce}.stage-${step}.json`;
       const raw=await shell(['shell','run-as','app.lazysh.client','sh','-c',`'if [ ! -e ${path} ] && [ ! -L ${path} ]; then echo pending; else [ ! -L ${path} ] && stat -c "%u %a %h %s %d %i %f" ${path} && cat ${path} && echo && stat -c "%u %a %h %s %d %i %f" ${path}; fi'`]);
       if(raw==='pending\n'&&(native.child.exitCode!==null||native.child.signalCode!==null))throw rejection();
       return gotifyPrivateStage(raw,nonce,step,targetUid,id);
-    });
+      });
+    };
     await stage(0);
     const testApks=(await readdir(join(android,'app/build/outputs/apk/androidTest'),{recursive:true})).filter(path=>path.endsWith('.apk'));
     if(testApks.length!==1)throw rejection();
     const testApk=join(android,'app/build/outputs/apk/androidTest',testApks[0]),testHash=digest(await readQrMetadata(testApk,536870912));
-    const executed=await installed.bindRunningArtifacts(testHash),executedApp=executed.app,executedTest=executed.test;
+    phase='android-installed-artifacts';const executed=await installed.bindRunningArtifacts(testHash),executedApp=executed.app,executedTest=executed.test;
     if(executedApp.uid!==targetUid)throw rejection();
     const ids:number[]=[];
     for(let index=0;index<3;index++) {
+      phase='relay-events';
       const eventId=randomUUID(),event=await gotifyJsonRequest(relayOrigin,'/v1/events','POST',`Bearer ${sourceToken}`,{eventId,kind:gotifyStates[index]});
       await wait(until,async()=>{const status=await gotifyJsonRequest(relayOrigin,`/v1/receipts/${event.receiptId}`,'GET',`Bearer ${sourceToken}`,undefined);
         if(status.eventId!==eventId||status.kind!==gotifyStates[index]||status.alias!==alias)throw rejection();if(status.state==='accepted')return true;});
-      const message=await wait(until,async()=>{
+      phase='server-messages';const message=await wait(until,async()=>{
         const result=await gotifyJsonRequest(origin,'/message?limit=100','GET',undefined,undefined,ca,{'X-Gotify-Key':reader.token});
         const matching=result.messages?.filter((item:any)=>item.appid===application.id&&item.title==='lazysh'&&item.message===`${alias}: ${gotifyStates[index]}`&&item.priority===(index===1?5:2));
         if(!Array.isArray(matching)||matching.length>1)throw rejection();return matching[0];
       });
       if(ids.includes(message.id))throw rejection();ids.push(message.id);
-      await input(`.message-${index}.tmp`,gotifyMessage(nonce,index,message.id));await stage(index+1,message.id);
+      phase='android-event-input';await input(`.message-${index}.tmp`,gotifyMessage(nonce,index,message.id));await stage(index+1,message.id);
     }
-    await stage(4);await native.finish('actual official Gotify Android acceptance',Math.max(1,until-performance.now()+60000));
+    await stage(4);phase='android-instrumentation-result';await native.finish('actual official Gotify Android acceptance',Math.max(1,until-performance.now()+60000));
     const files=(await readdir(reports,{recursive:true})).filter(name=>name.endsWith('.xml'));
     if(files.length!==1)throw rejection();const result=gotifyNativeReport((await readQrMetadata(join(reports,files[0]),262144)).toString());
     if(digest(await readQrMetadata(nativeApk,536870912))!==nativeHash||digest(await readQrMetadata(testApk,536870912))!==testHash)throw rejection();
-    for(const [name,bound] of [['app.lazysh.client',executedApp],['app.lazysh.client.test',executedTest]] as const)
+    phase='android-final-identity';for(const [name,bound] of [['app.lazysh.client',executedApp],['app.lazysh.client.test',executedTest]] as const)
       if((await gotifyInstalledApk(shell,name,bound.sha256,bound.uid)).identity!==bound.identity)throw rejection();
     const head=(await run('source checkout','git',['rev-parse','HEAD'])).trim();if(!/^[a-f0-9]{40}$/.test(head))throw rejection();
     const source:Record<string,string>={};
@@ -362,7 +389,7 @@ async function runGotifyAndroid(root:string) {
       source[path]=digest(await readQrMetadata(join(root,path),131072));
     receipt={schemaVersion:1,scope:'official-gotify-awake-background',head,source,serverExecutableSha256:pins.server.executableSha256,caSha256:digest(ca),officialApkSha256:pins.android.sha256,initialInputApkSha256:nativeHash,installedAppApkSha256:executedApp.sha256,installedTestApkSha256:executedTest.sha256,installedApksStable:true,
       relayAccepted:3,serverMessages:ids.length,osRecords:3,visibleCards:3,history:true,native:result};
-    relay.child.stdin!.end();await relay.finish('relay worker shutdown',10000);
+    phase='relay-shutdown';relay.child.stdin!.end();await relay.finish('relay worker shutdown',10000);
   }catch{primary=true;throw new Error(`Owned Gotify acceptance failed: ${phase}`);}
   finally {
     for(const process of processes.reverse())try{await process.stop();}catch{cleanupFailed=true;}
@@ -390,7 +417,7 @@ export async function ownedGotifyAndroid(root:string) {
     const receipt=await runGotifyAndroid(root);
     await retain('receipt',receipt);return receipt;
   }catch(error) {
-    try{await retain('failure',{schemaVersion:1,scope:'official-gotify-awake-background',phase:'fixture',runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});}
+    try{await retain('failure',{schemaVersion:1,scope:'official-gotify-awake-background',phase:gotifyFailurePhase(error),runtimePassed:false,notificationDelivery:false,cleanup:'unverified'});}
     catch{console.error('Finite Gotify failure receipt could not be retained');}
     throw error;
   }

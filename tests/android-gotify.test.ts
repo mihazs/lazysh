@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyFailurePhase} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const background={schemaVersion:1,nonce,step:0,background:true};
@@ -252,6 +252,20 @@ test('Gotify CI routes the current app build to one isolated owned API36 case an
   const turbo=JSON.parse(await readFile(join(root,'turbo.json'),'utf8')).tasks;
   expect(turbo['test:android-gotify']).toMatchObject({cache:false,dependsOn:['build:android:emulator']});
   for(const key of ['GITHUB_ACTIONS','ANDROID_SERIAL','LAZYSH_ANDROID_QR_EMULATOR_PID_FILE'])expect(turbo['test:android-gotify'].passThroughEnv).toContain(key);
+});
+
+test('Gotify failure phases retain only fixed stages and never arbitrary exception data',()=>{
+  const failure=new Error('Owned Gotify acceptance failed: android-client-install');
+  expect(gotifyFailurePhase(failure)).toBe('android-client-install');
+  expect(failure.message).toBe('Owned Gotify acceptance failed: android-client-install');
+  expect(gotifyFailurePhase(new Error('Owned Gotify acceptance failed: android-native-stage-4'))).toBe('android-native-stage-4');
+  const hostile=Object.defineProperty(new Error(),'message',{get(){throw new Error('private-value');}});
+  for(const value of [null,{},'android-client-install',hostile,new Error('private-value'),
+    new Error('Owned Gotify acceptance failed: https://fixture.invalid/private-token'),
+    new Error('Owned Gotify acceptance failed: android-client-install\nprivate-value'),
+    new Error('Owned Gotify acceptance failed: android-native-stage-5'),new Error('x'.repeat(1024)),
+    {message:failure.message},Object.defineProperty(new Error(),'message',{value:{private:'value'}})])
+    expect(gotifyFailurePhase(value)).toBe('fixture');
 });
 
 test('proxy admission failure retains only a finite failure artifact without target access',async()=>{
