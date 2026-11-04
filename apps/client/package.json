@@ -32,7 +32,7 @@
     "test:local": "cargo test --manifest-path src-tauri/Cargo.toml --locked local:: -- --nocapture",
     "test:mosh": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_mosh_bootstrap_and_control_interoperability -- --ignored",
     "test:et": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_et_bootstrap_and_control_interoperability -- --ignored",
-    "test:multiplexers": "cargo test --manifest-path src-tauri/Cargo.toml --locked ::tests::real_ -- --ignored",
+    "test:multiplexers": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --ignored multiplexer::tests::real_ herdr::tests::real_ zellij::tests::real_",
     "test:tmux": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::real_tmux_jump_ -- --ignored --nocapture",
     "test:voice": "cargo test --manifest-path src-tauri/Cargo.toml --locked local_whisper_ -- --ignored",
     "test:parakeet-product": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib voice::parakeet::local::tests::real_manager_installs_once_reuses_warm_model_twice_and_removes_owned_files -- --ignored --exact --nocapture",
