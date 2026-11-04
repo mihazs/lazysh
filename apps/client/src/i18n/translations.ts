@@ -1083,6 +1083,8 @@ const translations = {
   chatOpen: ["Abrir transcrição", "Abrir transcripción"],
   chatRecent: ["Transcrições recentes", "Transcripciones recientes"],
   chatSelect: ["Selecione uma transcrição", "Selecciona una transcripción"],
+  chatOpencodeConversation: ["Histórico registrado do OpenCode. Os anexos permanecem no terminal do host.", "Historial registrado de OpenCode. Los adjuntos permanecen en el terminal del host."],
+  chatOpencodeFollow: ["Acompanhar conversa OpenCode", "Seguir conversación de OpenCode"],
   chatGrokConversation: ["Apenas a conversa registrada; sem vínculo com sessão ao vivo nem contexto compactado do modelo. Controles não suportados ou retrocessos ambíguos não podem ser reconstruídos; selecione Mensagens registradas para inspecionar os registros originais.", "Solo la conversación registrada; sin vínculo con una sesión en vivo ni contexto compactado del modelo. Los controles no compatibles o retrocesos ambiguos no se pueden reconstruir; selecciona Mensajes registrados para inspeccionar los registros originales."],
   chatBranchLimit: ["50 mensagens mais recentes da ramificação selecionada", "50 mensajes más recientes de la rama seleccionada"],
   chatStepLimit: ["exibindo até 500 registros de etapas", "mostrando hasta 500 registros de pasos"],

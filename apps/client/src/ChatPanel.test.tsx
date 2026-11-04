@@ -449,6 +449,46 @@ it.each(['en','pt-BR','es'])('explains reported provenance and explicit Open in 
   } finally {await uiI18n.changeLanguage('en');}
 });
 
+it.each(['chosen','foreign'])('publishes only the selected OpenCode conversation (returned session=%s)', async branchId=>{
+  const response={...page,agent:'opencode',view:'active_branch',nextOffset:0,branchId,truncated:false};
+  vi.mocked(invoke).mockResolvedValueOnce({...response,messages:[{...message,blocks:[{type:'text',text:'Before rewind'}]}]});
+  if(branchId==='chosen')vi.mocked(invoke).mockResolvedValueOnce({...response,messages:[{...message,id:'new',blocks:[{type:'tool_result',id:'tool',text:'Current tool failure',status:'failed',isError:true}]}]});
+  render(<ChatPanel sessionId="opencode-host"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'opencode'}});
+  expect(screen.getByLabelText('View')).toHaveProperty('value','records');
+  fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/owned/opencode.db'}});
+  fireEvent.change(screen.getByLabelText(t('chatSessionId')),{target:{value:'chosen'}});
+  expect(invoke).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  if(branchId!=='chosen') {
+    await screen.findByRole('alert');
+    expect(screen.queryByText('Before rewind')).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.every(([command])=>command==='agent_transcript')).toBe(true);
+    return;
+  }
+  await screen.findByText('Before rewind');
+  expect(screen.getByRole('checkbox',{name:t('chatOpencodeFollow')})).toBeTruthy();
+  expect(screen.queryByLabelText(t('chatFollow'))).toBeNull();
+  expect(screen.queryByLabelText(t('chatImageInclude'))).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh new messages'}));await screen.findByText('Current tool failure');
+  expect(screen.queryByText('Before rewind')).toBeNull();
+  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'opencode-host',agent:'opencode',path:'/owned/opencode.db',transcriptSessionId:'chosen',view:'conversation',offset:0},{headers:{'X-Lazysh-Access':expect.any(String)}});
+  expect(vi.mocked(invoke).mock.calls.every(([command])=>command==='agent_transcript')).toBe(true);
+});
+
+it('requires bounded OpenCode projection metadata and valid error-result blocks',()=>{
+  const response={...page,agent:'opencode',view:'active_branch',branchId:'selected',nextOffset:0,truncated:false,
+    messages:[{...message,blocks:[{type:'image',text:'Host attachment',id:'call',status:'failed'},
+      {type:'tool_result',text:'Tool failed',id:'call',status:'failed',isError:true}]}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const invalid of [{branchId:''},{branchId:'selected\n'},{branchId:'x'.repeat(257)},
+    {branchId:undefined},{truncated:undefined},{hasMore:true},{nextOffset:1}]) {
+    expect(()=>parseTranscript({...response,...invalid})).toThrow();
+  }
+  expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{type:'image',text:'File',isError:true}]}]})).toThrow('Invalid recorded tool error');
+});
+
 it.each(['en','pt-BR','es'])('labels explicit Codex recorded follow accurately in %s',async locale=>{
   try {
   await uiI18n.changeLanguage(locale);

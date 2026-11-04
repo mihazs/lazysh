@@ -354,3 +354,9 @@ The existing Linux namespaced-SSH CI selector includes this host control. Its so
 image may retain Cargo executable permissions: admission requires an owned regular
 non-link file (including Cargo hardlinks), owner execute and no group/other write. The actual
 private execution copy remains single-link mode0500 with byte equality and ancestry checks.
+
+### Recorded Conversation through owned SSH
+
+The existing uncached `test:android-ssh` owner selects `ownedRecordedConversationsThroughRealUi` in its separate `recorded-conversation-ui` report namespace. It uses the current source-built host companion from `LAZYSH_TEST_AGENT_BIN`, ordinary packaged-app SSH authentication and small shared synthetic Codex/OpenCode V1/V2 records. The public specification is reused by the Rust reader tests; it is not an official CLI capture. Private official-corpus compatibility evidence is kept separately.
+
+The case requires exact selected messages, real reader overflow, Home/Refresh reading position and draft retention, return to the original terminal, explicit Stage without Send, and a fresh non-echo SSH challenge. Host checks retain the readonly corpus and companion hashes and original cleanup. Ordinary Android tests exclude this fixture-requiring method; its guarded host owner supplies the fixture and requires the exact executed JUnit case without skips. Compilation alone does not qualify this native flow, Android/vendor keyboards, or full platform parity.

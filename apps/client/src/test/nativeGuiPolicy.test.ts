@@ -1,3 +1,7 @@
+import {createRequire} from 'node:module';
+import {createElement} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import Markdown from 'react-markdown';
 import {chmod,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {executable} from '../../native-e2e/tools';
@@ -70,4 +74,41 @@ it('requires an explicit protected prepared Secret Service image without executi
     await chmod(image,0o500);
     await expect(executable(image,'disposable Secret Service','other-daemon')).rejects.toThrow('Untrusted');
   }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+it('rejects provided OpenCode manifests before target setup unless both actual captures and source bind exactly',async()=>{
+  const {nativeOpenCodeManifest,openCodeNativeCapturePins}=await import('../../native-e2e/policy');
+  const source='a'.repeat(40),version='1.10.0';
+  const valid={schemaVersion:1,source,clientSha256:'b'.repeat(64),companion:{path:'/owned/companion',sha256:'c'.repeat(64),version},captures:openCodeNativeCapturePins.map(pin=>({version:pin.version,sessionId:String(pin.sessionId),database:{path:`/owned/${pin.version}/opencode.db`,sha256:String(pin.databaseSha256)},groundTruth:{path:`/owned/${pin.version}/conversation.json`,sha256:String(pin.groundTruthSha256)}}))};
+  expect(nativeOpenCodeManifest(valid,source,version)).toBe(valid);
+  const changed=()=>structuredClone(valid);
+  const badSource=changed();badSource.source='d'.repeat(40);
+  const badVersion=changed();badVersion.companion.version='1.9.10';
+  const wrongHash=changed();wrongHash.captures[0].database.sha256='e'.repeat(64);
+  const inventedTruth=changed();inventedTruth.captures[1].groundTruth.sha256='f'.repeat(64);
+  const wrongSession=changed();wrongSession.captures[1].sessionId='ses_foreign';
+  const relative=changed();relative.companion.path='relative';
+  const normalized=changed();normalized.captures[0].database.path='/owned/../foreign/opencode.db';
+  const control=changed();control.captures[0].groundTruth.path='/owned/\nprivate';
+  for(const input of [undefined,null,'',{},badSource,badVersion,wrongHash,inventedTruth,wrongSession,relative,normalized,control,
+    {...valid,extra:'private'},{...valid,captures:[valid.captures[0]]},{...valid,captures:[...valid.captures].reverse()},
+    {...valid,clientSha256:'x'.repeat(65536)},Object.defineProperty({...valid},'captures',{enumerable:true,get(){throw Error('private');}})])
+    expect(()=>nativeOpenCodeManifest(input,source,version)).toThrow('Invalid owned OpenCode native manifest');
+  expect(()=>nativeOpenCodeManifest(valid,'',version)).toThrow();
+});
+
+it('compares fixed plain-paragraph OpenCode captures with rendered Markdown while retaining all interior text',async()=>{
+  const {nativeOpenCodeParagraphText}=await import('../../native-e2e/policy');
+  const paragraph=(raw:string)=>{
+    const {JSDOM}=createRequire(import.meta.url)('jsdom');
+    const document:Document=new JSDOM(renderToStaticMarkup(createElement(Markdown,null,raw))).window.document;
+    expect(document.body.children).toHaveLength(1);expect(document.querySelectorAll('p')).toHaveLength(1);
+    return document.querySelector('p')!.textContent;
+  };
+  for(const raw of ['Owned prompt.','Owned reply.','Owned line one\nOwned line two\n'])
+    expect(paragraph(raw)).toBe(nativeOpenCodeParagraphText(raw));
+  const original='Owned line one\nOwned line two\n',rendered=paragraph(original);
+  expect(nativeOpenCodeParagraphText(original)).toBe('Owned line one\nOwned line two');
+  for(const changed of [original.replace('one','other'),original+'\n',original.replace('\n',' '),original+' '])
+    expect(nativeOpenCodeParagraphText(changed)).not.toBe(rendered);
 });

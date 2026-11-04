@@ -619,6 +619,14 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun replaceNativeText(scenario: ActivityScenario<MainActivity>, selector: String, value: String) {
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        onView(isAssignableFrom(WebView::class.java)).perform(
+            pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
+            pressKey(KeyEvent.KEYCODE_DEL))
+        typeInto(scenario, selector, value)
+    }
+
     private fun typeInto(scenario: ActivityScenario<MainActivity>, selector: String, text: String) {
         // Grant native View focus before selecting the DOM input: requesting
         // native focus afterward can restore or blur a different DOM focus target.
@@ -1921,11 +1929,7 @@ class NativeWorkspaceTest {
         val region = "section[aria-label='Terminal input']"
         val path = "input[placeholder='Absolute host path to session.jsonl']"
         fun replace(selector: String, value: String) {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
-            onView(isAssignableFrom(WebView::class.java)).perform(
-                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
-                pressKey(KeyEvent.KEYCODE_DEL))
-            typeInto(scenario, selector, value)
+            replaceNativeText(scenario, selector, value)
             closeSoftKeyboard()
         }
         if (!alreadyAttached) {
@@ -2472,6 +2476,7 @@ class NativeWorkspaceTest {
     }
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
+    @Test fun ownedRecordedConversationsThroughRealUi() = ownedSshUi(false, requireRecorded = true)
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedSshDpadPanThroughRealUi() = ownedSshUi(false, requireDpad = true)
     @Test fun ownedSshImeTransactionsThroughRealUi() = ownedSshUi(false, requireIme = true)
@@ -2868,7 +2873,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false) {
+        require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
         require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
         require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
@@ -2898,6 +2904,7 @@ class NativeWorkspaceTest {
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
+        require(requireRecorded == fixture.has("recorded")) { "Recorded fixture mode mismatch" }
         require(requireDpad == fixture.has("dpad")) { "Owned D-pad fixture mode mismatch" }
         require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
@@ -2931,7 +2938,7 @@ class NativeWorkspaceTest {
                 "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun selectOwnedOption(selector: String, value: String) {
+        fun selectOwnedOption(selector: String, value: String, recordedSourceIndex: Int? = null) {
             closeSoftKeyboard()
             assertEquals("Owned select control must be unique", "1", evaluate(scenario,
                 "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
@@ -2941,12 +2948,32 @@ class NativeWorkspaceTest {
             val geometry = JSONArray(evaluate(scenario, """(() => {
               const target=document.querySelector(${JSONObject.quote(selector)});
               const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
-              return [x,y,innerWidth,innerHeight,r.width,r.height,document.elementFromPoint(x,y)===target];
+              const hit=document.elementFromPoint(x,y), tag=hit?.tagName;
+              const name=typeof tag==='string'?tag.toUpperCase():'';
+              const allowed=new Set(['SELECT','OPTION','DIV','BUTTON','INPUT','TEXTAREA','LABEL','SPAN','HEADER','NAV','SECTION','P','FORM','HTML','BODY','SVG','PATH']);
+              return [x,y,innerWidth,innerHeight,r.width,r.height,hit===target,hit?(allowed.has(name)?name:'OTHER'):'NONE'];
             })()"""))
             val values = (0..5).map { geometry.getDouble(it) }
-            assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
-                values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
-                values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            try {
+                assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
+                    values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
+                    values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            } catch (failure: Throwable) {
+                runCatching {
+                    val cached = JSONObject().put("finite", values.all { it.isFinite() })
+                        .put("positiveViewport", values[2] > 0 && values[3] > 0)
+                        .put("nonzeroControl", values[4] > 0 && values[5] > 0)
+                        .put("centerInside", values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3])
+                        .put("hitOwned", geometry.getBoolean(6))
+                        .put("recordedSourceIndex", recordedSourceIndex?.takeIf { it in 0..2 } ?: "unavailable")
+                    if (recordedSourceIndex != null && recordedSourceIndex in 0..2) {
+                        cached.put("hitTag", geometry.getString(7))
+                            .put("bounds", JSONArray(values.map { it.toInt().coerceIn(-8192, 8192) }))
+                    }
+                    failure.addSuppressed(AssertionError("Owned select cached geometry: $cached"))
+                }
+                throw failure
+            }
             val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
                 .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
             val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
@@ -2983,7 +3010,11 @@ class NativeWorkspaceTest {
                     val labels = JSONArray(evaluate(scenario,
                         "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
                     moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
-                } else if (value == "herdr") "Herdr" else "SSH"
+                } else if (value == "herdr") "Herdr" else if (value in setOf("codex", "opencode", "conversation")) {
+                    val labels = JSONArray(evaluate(scenario, "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value='$value']")})).map(x=>x.label)"))
+                    require(labels.length() == 1 && labels.getString(0).length in 1..128)
+                    labels.getString(0)
+                } else "SSH"
                 val option = onView(withText(transportLabel)).inRoot(isDialog())
                 option.check(matches(isDisplayed()))
                 println("lazysh SSH UI: native transport chooser ready")
@@ -3013,6 +3044,131 @@ class NativeWorkspaceTest {
             }
         }
         fun selectTransport() = selectOwnedOption("[role=dialog] select:has(option[value='ssh'])", if (useMosh) "mosh" else "ssh")
+        fun terminalProof(after: Boolean) {
+            val part = if (after) "after" else "before"
+            val proof = "COMPANION_${nonce}_${part}_END"
+            val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
+            assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
+            if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
+            typeInto(scenario, ".terminal-compose textarea", command)
+            closeSoftKeyboard()
+            clickButton("Paste draft")
+            closeSoftKeyboard()
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+            awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
+                " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
+            assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
+                "document.querySelectorAll('[role=tab]').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
+        }
+        fun verifyRecordedConversations() {
+            val recorded = fixture.getJSONObject("recorded")
+            require(recorded.getString("provenance") == "synthetic")
+            val sources = recorded.getJSONArray("sources")
+            require(sources.length() == 3)
+            var messages = sources.getJSONObject(0).getJSONArray("messages")
+            require(messages.length() == 2)
+            val key = JSONObject.quote("__ownedRecorded_$nonce")
+            val token = JSONObject.quote(java.util.UUID.randomUUID().toString())
+            val originalProcess = android.os.Process.myPid()
+            lateinit var originalWeb: WebView
+            scenario.onActivity { current -> originalWeb = requireNotNull(webView(current.window.decorView)) }
+            assertEquals("Retain only the original owned terminal and document", "true", evaluate(scenario, """
+                (()=>{const screen=document.querySelector('.terminal-canvas .xterm-screen');
+                  if(!screen || Object.prototype.hasOwnProperty.call(window,$key))return false;
+                  window[$key]={token:$token,screen,document,tab:document.querySelector('[role=tab]')};return true;})()
+            """))
+            fun owner() {
+                assertEquals(originalProcess, android.os.Process.myPid())
+                scenario.onActivity { current ->
+                    assertEquals(androidx.lifecycle.Lifecycle.State.RESUMED, current.lifecycle.currentState)
+                    assertTrue(current.hasWindowFocus())
+                    assertTrue(webView(current.window.decorView) === originalWeb && originalWeb.isAttachedToWindow)
+                }
+                assertEquals("Recorded reads retain the original document, tab and terminal", "true", evaluate(scenario, """
+                    (()=>{const owned=window[$key];return !!owned && owned.token===$token && owned.document===document && owned.screen.isConnected &&
+                      owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && owned.tab===document.querySelector('[role=tab]') && document.querySelectorAll('[role=tab]').length===1;})()
+                """))
+            }
+            fun exactMessages(): String = """
+                (()=>{const expected=$messages,cards=Array.from(document.querySelectorAll('.chat-conversation-messages .chat-message'));
+                  return cards.length===expected.length && cards.every((card,i)=>card.querySelectorAll('p').length===1 &&
+                    card.querySelector('h4')?.textContent===expected[i].role && card.querySelector('p')?.textContent===expected[i].text);})()
+            """
+            var primary: Throwable? = null
+            try {
+                terminalProof(false)
+                sessionView(scenario, "Transcript")
+                val path = "input[placeholder='Absolute host path to session.jsonl']"
+                for (index in 0 until sources.length()) {
+                    val source = sources.getJSONObject(index)
+                    messages = source.getJSONArray("messages")
+                    require(messages.length() == 2)
+                    require(source.getString("agent") == if (index == 0) "codex" else "opencode")
+                    require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/recorded-conversations/(recorded[.]jsonl|opencode-v[12][.]db)").matches(source.getString("path")))
+                    selectOwnedOption(".chat-panel select:has(option[value='codex'])", source.getString("agent"), recordedSourceIndex = index)
+                    selectOwnedOption(".chat-panel select:has(option[value='conversation'])", "conversation", recordedSourceIndex = index)
+                    val fields = listOfNotNull(path to source.getString("path"),
+                        if (index > 0) ".chat-panel input[required]:not([placeholder])" to source.getString("sessionId") else null)
+                    for ((selector, value) in fields) replaceNativeText(scenario, selector, value)
+                    closeSoftKeyboard();clickButton("Open transcript")
+                    awaitDocument(scenario, "exact synthetic recorded source $index", exactMessages())
+                    owner()
+                }
+                val draft = "Owned unsent Android recorded Conversation draft"
+                pasteOwnedText(scenario, "form.chat-composer textarea", draft, label);closeSoftKeyboard()
+                val region = ".chat-conversation-messages"
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, region)).perform(webScrollIntoView()).perform(webClick())
+                onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_MOVE_HOME))
+                val home = "(()=>{const r=document.querySelector('$region');return !!r&&document.activeElement===r&&r.scrollHeight>r.clientHeight&&r.scrollTop===0;})()"
+                awaitDocument(scenario, "overflowing recorded reader at Home", home)
+                val observeRefresh = """
+                    (()=>{const owned=window[$key];
+                      if(!owned || owned.token!==$token || owned.document!==document || owned.refresh)return false;
+                      const panel=document.querySelector('.chat-panel');
+                      const buttons=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent==='Refresh new messages');
+                      if(buttons.length!==1 || buttons[0].disabled!==false)return false;
+                      const button=buttons[0],state={button,panel,started:false,settled:false,observer:null};
+                      const observer=new MutationObserver(records=>{
+                        if(window[$key]!==owned || owned.token!==$token || owned.document!==document){observer.disconnect();return;}
+                        const changes=records.filter(record=>record.target===button&&record.attributeName==='disabled');
+                        for(let i=0;i<changes.length;i++){
+                          const disabled=i+1<changes.length?changes[i+1].oldValue!==null:button.disabled;
+                          if(disabled===true)state.started=true;else if(disabled===false&&state.started)state.settled=true;
+                        }
+                      });
+                      state.observer=observer;owned.refresh=state;
+                      observer.observe(button,{attributes:true,attributeFilter:['disabled'],attributeOldValue:true});return true;})()
+                """
+                val refreshCompleted = """
+                    (()=>{const owned=window[$key];
+                      if(!owned || owned.token!==$token || owned.document!==document)return false;
+                      const state=owned.refresh;
+                      return owned.screen.isConnected &&
+                        owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && owned.tab===document.querySelector('[role=tab]') &&
+                        !!state && state.started===true && state.settled===true && state.button.isConnected && state.button.disabled===false &&
+                        state.panel===document.querySelector('.chat-panel') && state.panel.contains(state.button) && !state.panel.querySelector('[role=alert]');})()
+                """
+                assertEquals("Observe only the original enabled Refresh button", "true", evaluate(scenario, observeRefresh))
+                clickButton("Refresh new messages")
+                awaitDocument(scenario, "recorded Refresh preserves exact messages, reading position and draft", refreshCompleted + " && " + exactMessages() +
+                    " && document.querySelector('$region')?.scrollTop===0 && document.querySelector('form.chat-composer textarea')?.value===" + JSONObject.quote(draft))
+                sessionView(scenario, "Terminal");owner();sessionView(scenario, "Transcript")
+                awaitDocument(scenario, "recorded reader return preserves the unsent draft", exactMessages() +
+                    " && document.querySelector('$region')?.scrollTop===0 && document.querySelector('form.chat-composer textarea')?.value===" + JSONObject.quote(draft))
+                assertEquals("Recorded history does not grant Send", "false", evaluate(scenario,
+                    "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+                clickButton("Stage in terminal")
+                awaitDocument(scenario, "recorded draft staged without Send", "document.querySelector('.terminal-compose textarea')?.value===" + JSONObject.quote(draft))
+                assertEquals("Stage does not send the draft", "false", evaluate(scenario, screenContains(draft)))
+                owner();clickButton("Close composer");terminalProof(true);owner()
+                println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage and fresh original SSH proof completed")
+            } catch (failure: Throwable) {primary = failure;throw failure}
+            finally {
+                try {assertEquals("Remove only the owned recorded observation", "true", evaluate(scenario,
+                    "(()=>{const owned=window[$key];if(!owned)return true;if(owned.token!==$token)return false;owned.refresh?.observer.disconnect();delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))}
+                catch (cleanup: Throwable) {if(primary != null)primary!!.addSuppressed(cleanup) else throw cleanup}
+            }
+        }
         fun verifyCompanionInstallation() {
             val companion = fixture.getJSONObject("companion")
             val version = companion.getString("version")
@@ -3020,22 +3176,6 @@ class NativeWorkspaceTest {
             require(Regex("(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)").matches(version) && version.length <= 64)
             require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/data/lazysh/companion/lazysh-agent").matches(destination))
             val originalProcess = android.os.Process.myPid()
-            fun terminalProof(after: Boolean) {
-                val part = if (after) "after" else "before"
-                val proof = "COMPANION_${nonce}_${part}_END"
-                val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
-                assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
-                if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
-                typeInto(scenario, ".terminal-compose textarea", command)
-                closeSoftKeyboard()
-                clickButton("Paste draft")
-                closeSoftKeyboard()
-                onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
-                awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
-                    " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
-                assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
-                    "document.querySelectorAll('[role=tab]').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
-            }
             terminalProof(false)
             sessionView(scenario, "Agents")
             val companionActivity = ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"
@@ -3187,7 +3327,7 @@ class NativeWorkspaceTest {
             } else if (!requireHerdrMosh && !requireAttachments) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
-            if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
+            if (requireRecorded) verifyRecordedConversations() else if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
                 awaitDocument(scenario, "saved default Herdr entered through Mosh", """
                     document.querySelectorAll('[role=tab]').length===1 &&
                     document.querySelector('[role=tab]')?.textContent.includes(${JSONObject.quote(connectedName)}) &&

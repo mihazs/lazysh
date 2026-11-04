@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-fn open_database(path: &Path) -> Result<Connection> {
+pub(super) fn open_database(path: &Path) -> Result<Connection> {
     let _file = open_transcript(path)?;
     let mut connection = Connection::open_with_flags(
         path,
@@ -58,6 +58,12 @@ pub fn read_database_page(
         return Err(Error::InvalidArgument);
     }
     let connection = open_database(path)?;
+    if matches!(agent, TranscriptAgent::Opencode)
+        && super::opencode_conversation::schema(&connection, session_id)
+            .is_ok_and(|kind| kind == super::opencode_conversation::Schema::V1)
+    {
+        return super::opencode_conversation::records(&connection, session_id, offset, limit);
+    }
     let sql=match agent {
         TranscriptAgent::Hermes=>"SELECT id,role,content,tool_call_id,tool_calls,tool_name,timestamp FROM messages WHERE session_id=?1 AND id>=?2 AND active=1 AND compacted=0 ORDER BY id LIMIT 201",
         TranscriptAgent::Opencode=>"SELECT seq,id,type,data,time_created FROM session_message WHERE session_id=?1 AND seq>=?2 ORDER BY seq LIMIT 201",
@@ -227,6 +233,11 @@ fn opencode_message(row: &rusqlite::Row<'_>) -> Result<Option<Value>> {
         return Ok(None);
     }
     let mut message = json!({"id":row.get::<_,String>(1)?,"role":role,"blocks":blocks,"timestamp":timestamp(row.get::<_,i64>(4)? as f64/1000.0)?});
+    opencode_usage(&mut message, &data);
+    Ok(Some(message))
+}
+
+pub(super) fn opencode_usage(message: &mut Value, data: &Value) {
     let mut usage = serde_json::Map::new();
     for (pointer, key) in [
         ("/tokens/input", "inputTokens"),
@@ -241,7 +252,6 @@ fn opencode_message(row: &rusqlite::Row<'_>) -> Result<Option<Value>> {
     if !usage.is_empty() {
         message["usage"] = json!(usage);
     }
-    Ok(Some(message))
 }
 
 pub(super) fn discover_database(
@@ -302,9 +312,21 @@ pub(super) fn discover_database(
         .filter(|text| text.len() <= 4096)
         .ok_or(Error::InvalidArgument)?;
     let connection = open_database(&path)?;
+    let opencode_sql = if matches!(agent, TranscriptAgent::Opencode) {
+        let v1 = super::opencode_conversation::table(&connection, "session")?;
+        let v2 = super::opencode_conversation::table(&connection, "session_v2")?;
+        match (v1, v2) {
+            (true, true) => "SELECT id,substr(COALESCE(title,id),1,512),time_updated/1000.0 FROM (SELECT id,title,time_updated FROM session_v2 UNION ALL SELECT id,title,time_updated FROM session WHERE NOT EXISTS(SELECT 1 FROM session_v2 WHERE session_v2.id=session.id)) ORDER BY time_updated DESC LIMIT ?1",
+            (true, false) => "SELECT id,substr(COALESCE(title,id),1,512),time_updated/1000.0 FROM session ORDER BY time_updated DESC LIMIT ?1",
+            (false, true) => "SELECT id,substr(COALESCE(title,id),1,512),time_updated/1000.0 FROM session_v2 ORDER BY time_updated DESC LIMIT ?1",
+            _ => return Err(Error::InvalidEvent),
+        }
+    } else {
+        ""
+    };
     let sql=match agent {
         TranscriptAgent::Hermes=>"SELECT id,substr(COALESCE(title,id),1,512),COALESCE(last_activity_at,started_at) FROM sessions WHERE hidden=0 ORDER BY COALESCE(last_activity_at,started_at) DESC LIMIT ?1",
-        TranscriptAgent::Opencode=>"SELECT id,substr(COALESCE(title,id),1,512),time_updated/1000.0 FROM session_v2 ORDER BY time_updated DESC LIMIT ?1",
+        TranscriptAgent::Opencode=>opencode_sql,
         _=>return Err(Error::InvalidArgument),
     };
     let mut statement = connection.prepare(sql)?;

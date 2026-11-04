@@ -1,8 +1,8 @@
 import {expect,test} from 'bun:test';
-import {chmod,lstat,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -154,6 +154,29 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
+},610_000);
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_AGENT_BIN)('owned namespaced SSH preflights synthetic recorded Codex and OpenCode conversations',async()=>{
+  const root=join(import.meta.dir,'..'),source=process.env.LAZYSH_TEST_AGENT_BIN;
+  const bytes=await recordedCompanionBytes(source),fixture=await SshFixture.start(undefined,{companion:true});
+  let recorded:Awaited<ReturnType<typeof prepareRecordedConversation>>|undefined,primary=false;
+  try {
+    recorded=await prepareRecordedConversation(fixture,root,bytes);
+    const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
+    expect(recorded.metadata.provenance).toBe('synthetic');
+    expect(recorded.metadata.sources.map(item=>item.agent).join(',')).toBe('codex,opencode,opencode');
+    expect(JSON.stringify(recorded.metadata.sources.map(item=>item.sessionId))===JSON.stringify([specification.codexThreadId,specification.opencodeSessions.v1,specification.opencodeSessions.v2])).toBe(true);
+    expect((await recordedCompanionBytes(source)).equals(bytes)).toBe(true);
+  } catch(error){primary=true;throw error;}
+  finally {
+    await androidSshCleanup(primary,[['fixture-file',async()=>{await recorded?.verify();}],['SSH',()=>fixture.stop()]]);
+  }
+  expect(await listening(fixture.port)).toBe(false);
+  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+},65_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_RECORDED!=='1')('actual Android recorded Codex and OpenCode conversations preserve their original SSH terminal',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,true);
 },610_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')('actual Android packaged D-pad pans one held native pointer and stops its original SSH receiver',async()=>{
@@ -480,3 +503,19 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
   expect(after.dev===image.dev && after.ino===image.ino && after.nlink===image.nlink && after.mode===image.mode && after.size===image.size && after.uid===image.uid).toBe(true);
   expect(createHash('sha256').update(await readFile(source)).digest('hex')===hash).toBe(true);
 },15_000);
+
+test('recorded companion source admission fails before constructing any SSH fixture',async()=>{
+  for(const path of [undefined,'','relative','/owned/\nprivate'])await expect(recordedCompanionBytes(path)).rejects.toThrow('Explicit current-source');
+});
+
+test('recorded source byte admission allows Cargo hardlinks but rejects links, writable and oversized inputs without execution',async()=>{
+  const directory=await mkdtemp('/tmp/lazysh-recorded-source-'),path=join(directory,'source'),alias=join(directory,'cargo-alias');
+  try {
+    const bytes=Buffer.from('owned byte-admission fixture only; never executed');
+    await writeFile(path,bytes,{mode:0o500});await link(path,alias);
+    expect((await stat(path)).nlink).toBe(2);expect(await recordedCompanionBytes(alias)).toEqual(bytes);
+    const symbolic=join(directory,'symbolic');await symlink(path,symbolic);await expect(recordedCompanionBytes(symbolic)).rejects.toThrow('Untrusted');
+    await chmod(path,0o777);await expect(recordedCompanionBytes(path)).rejects.toThrow('Untrusted');
+    await chmod(path,0o700);await truncate(path,256*1024*1024+1);await expect(recordedCompanionBytes(path)).rejects.toThrow('Untrusted');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});

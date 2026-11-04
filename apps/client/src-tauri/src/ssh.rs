@@ -2846,7 +2846,9 @@ fn transcript_view_command(
     let mut command = transcript_command(agent, path, offset, checkpoint)?;
     match view {
         None | Some("records") => {}
-        Some("conversation") if matches!(agent, "claude" | "grok-acp" | "codex") && offset == 0 => {
+        Some("conversation")
+            if matches!(agent, "claude" | "grok-acp" | "opencode" | "codex") && offset == 0 =>
+        {
             command.push_str(" --view conversation")
         }
         _ => {
@@ -2875,6 +2877,16 @@ fn transcript_request_command(
     transcript_session_id: Option<&str>,
     flags: TranscriptFlags,
 ) -> Result<String> {
+    if agent == "opencode"
+        && view == Some("conversation")
+        && transcript_session_id
+            .is_none_or(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+    {
+        return Err(SshError::new(
+            "invalid_input",
+            "Select an OpenCode database session",
+        ));
+    }
     if !flags.checkpointed && !flags.inline_images {
         return transcript_view_command(agent, path, offset, checkpoint, view);
     }
@@ -3896,6 +3908,8 @@ mod tests {
         for (agent, offset, view, accepted) in [
             ("grok-acp", 0, Some("conversation"), true),
             ("claude", 0, Some("conversation"), true),
+            ("opencode", 0, Some("conversation"), true),
+            ("opencode", 1, Some("conversation"), false),
             ("grok-acp", 1, Some("conversation"), false),
             ("claude", 1, Some("conversation"), false),
             ("codex", 0, Some("conversation"), true),
@@ -3922,6 +3936,29 @@ mod tests {
                     assert_eq!(error.message, "Unsupported transcript view");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn opencode_conversation_requires_literal_bounded_session_selection() {
+        let long = "s".repeat(257);
+        for (selector, accepted) in [
+            (None, false),
+            (Some(""), false),
+            (Some("selected\n"), false),
+            (Some(long.as_str()), false),
+            (Some(" selected "), true),
+        ] {
+            let command = transcript_request_command(
+                "opencode",
+                "/owned/opencode.db",
+                0,
+                None,
+                Some("conversation"),
+                selector,
+                TranscriptFlags::default(),
+            );
+            assert_eq!(command.is_ok(), accepted, "selector={selector:?}");
         }
     }
 

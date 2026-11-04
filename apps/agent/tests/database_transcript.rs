@@ -201,3 +201,46 @@ fn hostile_recursive_database_views_are_interrupted_by_query_budget() {
     assert!(read_database_page(&path, TranscriptAgent::Hermes, "s1", 0, 50).is_err());
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
 }
+
+#[test]
+fn opencode_v1_discovery_and_records_are_additive_to_migrated_v2_sessions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("opencode.db");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE session(id TEXT PRIMARY KEY,title TEXT,time_updated INTEGER);
+        CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,data TEXT,time_created INTEGER);
+        CREATE TABLE part(id TEXT PRIMARY KEY,message_id TEXT,session_id TEXT,data TEXT);
+        INSERT INTO session VALUES('legacy','Legacy',1000);
+        INSERT INTO message VALUES('msg_a','legacy','{\"role\":\"user\"}',1000);
+        INSERT INTO message VALUES('msg_b','legacy','{\"role\":\"assistant\"}',1001);
+        INSERT INTO part VALUES('part_a','msg_a','legacy','{\"type\":\"text\",\"text\":\"question\"}');
+        INSERT INTO part VALUES('part_b','msg_b','legacy','{\"type\":\"text\",\"text\":\"answer\"}');").unwrap();
+    let list = serde_json::to_value(discover(TranscriptAgent::Opencode, Some(&path), 50).unwrap())
+        .unwrap();
+    assert_eq!(list["sessions"][0]["sessionId"], "legacy");
+    let first = read_database_page(&path, TranscriptAgent::Opencode, "legacy", 0, 1).unwrap();
+    assert_eq!(first.messages[0]["blocks"][0]["text"], "question");
+    assert_eq!(first.next_offset, 2);
+    assert!(first.has_more);
+    let second = read_database_page(
+        &path,
+        TranscriptAgent::Opencode,
+        "legacy",
+        first.next_offset,
+        50,
+    )
+    .unwrap();
+    assert_eq!(second.messages[0]["blocks"][0]["text"], "answer");
+    assert!(!second.has_more);
+    db.execute_batch("CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,time_updated INTEGER);
+        CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT,time_created INTEGER);
+        INSERT INTO session_v2 VALUES('legacy','Migrated',2000);
+        INSERT INTO session_message VALUES('msg_new','legacy','user',10,'{\"text\":\"current V2\"}',2000);").unwrap();
+    let list = serde_json::to_value(discover(TranscriptAgent::Opencode, Some(&path), 50).unwrap())
+        .unwrap();
+    assert_eq!(list["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(list["sessions"][0]["name"], "Migrated");
+    let page = read_database_page(&path, TranscriptAgent::Opencode, "legacy", 0, 50).unwrap();
+    assert_eq!(page.messages[0]["blocks"][0]["text"], "current V2");
+    assert_eq!(page.next_offset, 11);
+}

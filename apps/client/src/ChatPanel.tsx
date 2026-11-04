@@ -39,6 +39,7 @@ type Page = {
   view?: string;
   truncated?: boolean;
   checkpoint?: string;
+  branchId?: string;
 };
 
 
@@ -59,6 +60,11 @@ export function parseTranscript(value: unknown): Page {
     typeof page.hasMore !== "boolean"
   )
     throw new LocalUiError('chatUnsupportedResponse');
+  if (page.agent === 'opencode' && page.view === 'active_branch' && (
+    page.nextOffset !== 0 || page.hasMore || typeof page.truncated !== 'boolean'
+    || typeof page.branchId !== 'string' || !page.branchId || /[\x00-\x1f\x7f-\x9f]/.test(page.branchId)
+    || new TextEncoder().encode(page.branchId).length > 256
+  )) throw new LocalUiError('chatUnsupportedResponse');
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -104,12 +110,12 @@ export function parseTranscript(value: unknown): Page {
           (typeof block[field] !== "string" || block[field].length > 262144)
         )
           throw new LocalUiError('chatInvalidContent');
-      if (block.status !== undefined && (page.agent !== 'grok-acp'
+      if (block.status !== undefined && (!['grok-acp','opencode'].includes(page.agent)
         || !['tool_use','tool_result','image'].includes(block.type)
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new LocalUiError('chatInvalidToolStatus');
-      if (block.isError !== undefined && ((page.agent !== 'claude' && !(page.agent==='codex' && page.view==='active_branch')
+      if (block.isError !== undefined && ((page.agent !== 'claude' && page.agent !== 'opencode' && !(page.agent==='codex' && page.view==='active_branch')
         && !(page.agent === 'pi' && page.view === 'record_stream' && message.role === 'tool'))
         || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
         throw new LocalUiError('chatInvalidToolError');
@@ -193,7 +199,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
-  const conversation = ['claude','codex'].includes(opened?.agent??'') && opened?.view === 'conversation';
+  const conversation = ['claude','opencode','codex'].includes(opened?.agent??'') && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
@@ -280,7 +286,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
-          ...(view === "conversation" && ["claude", "grok-acp", "codex"].includes(agent) ? { view } : {}),
+          ...(view === "conversation" && ["claude", "grok-acp", "opencode", "codex"].includes(agent) ? { view } : {}),
         }
       : opened;
     if (!source) return;
@@ -307,6 +313,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
       if (source.view === "conversation" && page.view !== "active_branch")
         throw new LocalUiError('chatUpdateCompanion');
+      if (source.agent === 'opencode' && source.view === 'conversation' && page.branchId !== source.transcriptSessionId)
+        throw new LocalUiError('chatChanged');
       if (
         page.agent !== source.agent ||
         page.nextOffset < cursor ||
@@ -379,7 +387,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             ))}
           </select>
         </label>
-        {["claude", "grok-acp", "codex"].includes(agent) && (
+        {["claude", "grok-acp", "opencode", "codex"].includes(agent) && (
           <label>
             {t("chatView")}
             <select
@@ -387,7 +395,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
               onChange={(event) => setView(event.target.value)}
             >
               <option value="records">{t("chatRecordedMessages")}</option>
-              <option value="conversation">{t("chatLatestBranch")}</option>
+              <option value="conversation">{t(agent === "opencode" ? "chatConversation" : "chatLatestBranch")}</option>
             </select>
           </label>
         )}
@@ -452,6 +460,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           </select>
         </label>
       )}
+      {agent === "opencode" && view === "conversation" && <p className="muted">{t("chatOpencodeConversation")}</p>}
       {agent === "grok-acp" && view === "conversation" && <p className="muted">{t("chatGrokConversation")}</p>}
       {error && (
         <p className="inline-error" role="alert">
@@ -474,7 +483,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           followRef.current = event.target.checked; setFollowing(event.target.checked);
           if (!event.target.checked && automaticRequest.current) request.current++;
           if (event.target.checked) setError('');
-        }} />{t(recorded ? "chatRecordedFollow" : opened?.agent==='codex' ? "chatCodexFollow" : "chatFollow")}</label>
+        }} />{t(recorded ? "chatRecordedFollow" : opened?.agent === 'opencode' ? 'chatOpencodeFollow' : opened?.agent==='codex' ? 'chatCodexFollow' : "chatFollow")}</label>
         <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
         {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}

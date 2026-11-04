@@ -6,6 +6,7 @@ import {chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpa
 import {constants} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
@@ -17,13 +18,16 @@ export function nativeReportCases(text:string) {
   const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
   return {cases,failed:/<(?:failure|error|skipped)\b/.test(xml)};
 }
-export function validateSharedHerdrReport(text:string) {
+type OwnedRecordedCase='ownedSharedHerdrNavigationThroughRealUi'|'ownedRecordedConversationsThroughRealUi';
+function validateOwnedRecordedReport(text:string,nativeCase:OwnedRecordedCase) {
   const {cases,failed}=nativeReportCases(text),suite=/<testsuites\b[^>]*>/.exec(text)?.[0]??'';
-  if(cases.length!==1 || cases[0].className!=='app.lazysh.client.NativeWorkspaceTest' || cases[0].name!=='ownedSharedHerdrNavigationThroughRealUi' || failed
+  if(cases.length!==1 || cases[0].className!=='app.lazysh.client.NativeWorkspaceTest' || cases[0].name!==nativeCase || failed
     || !['tests="1"','failures="0"','errors="0"','skipped="0"'].every(value=>suite.includes(' '+value)) || !/<\/testsuites>\s*$/.test(text))
-    throw new Error('Actual shared Herdr native case did not pass exactly once without skips');
-  return {nativeCase:'ownedSharedHerdrNavigationThroughRealUi',passed:1,failed:0,skipped:0};
+    throw new Error(`Actual ${nativeCase==='ownedSharedHerdrNavigationThroughRealUi'?'shared Herdr':'recorded Conversation'} native case did not pass exactly once without skips`);
+  return {nativeCase,passed:1,failed:0,skipped:0};
 }
+export function validateSharedHerdrReport(text:string) {return validateOwnedRecordedReport(text,'ownedSharedHerdrNavigationThroughRealUi');}
+export function validateRecordedConversationReport(text:string) {return validateOwnedRecordedReport(text,'ownedRecordedConversationsThroughRealUi');}
 const reportIdentity=(value:{dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint})=>[value.dev,value.ino,value.size,value.mtimeNs].join(':');
 async function sharedHerdrReportFile(directory:string,optional=false) {
   const entries=await readdir(directory,{recursive:true}).catch(error=>{if(optional && error.code==='ENOENT')return [];throw error;});
@@ -35,7 +39,7 @@ async function sharedHerdrReportFile(directory:string,optional=false) {
   return {path,identity:reportIdentity(metadata)};
 }
 export async function sharedHerdrReportIdentity(directory:string) {return (await sharedHerdrReportFile(directory,true))?.identity;}
-export async function verifySharedHerdrResult(directory:string,previous?:string) {
+async function verifyOwnedRecordedResult(directory:string,previous:string|undefined,nativeCase:OwnedRecordedCase) {
   const report=(await sharedHerdrReportFile(directory))!;
   if(report.identity===previous)throw new Error('Shared Herdr native report was not refreshed');
   const file=await open(report.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
@@ -44,9 +48,12 @@ export async function verifySharedHerdrResult(directory:string,previous?:string)
     if(!metadata.isFile() || reportIdentity(metadata)!==report.identity)throw new Error('Shared Herdr report identity changed');
     const bytes=Buffer.alloc(Number(metadata.size)+1),read=await file.read(bytes,0,bytes.length,0);
     if(read.bytesRead!==Number(metadata.size) || reportIdentity(await file.stat({bigint:true}))!==report.identity)throw new Error('Shared Herdr report changed while reading');
-    return validateSharedHerdrReport(bytes.subarray(0,read.bytesRead).toString('utf8'));
+    return validateOwnedRecordedReport(bytes.subarray(0,read.bytesRead).toString('utf8'),nativeCase);
   } finally {await file.close();}
 }
+
+export function verifySharedHerdrResult(directory:string,previous?:string) {return verifyOwnedRecordedResult(directory,previous,'ownedSharedHerdrNavigationThroughRealUi');}
+export function verifyRecordedConversationResult(directory:string,previous?:string) {return verifyOwnedRecordedResult(directory,previous,'ownedRecordedConversationsThroughRealUi');}
 
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
@@ -442,8 +449,60 @@ export function verifyDpadReceiverBytes(bytes:Uint8Array,nonce:string,counts:num
   if(!Buffer.from(bytes).equals(Buffer.from(wire)))throw new Error('Owned D-pad receiver bytes differ');
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false,ime=false,dpad=false) {
+// Test data only: these records are independently authored, not official CLI captures.
+export async function recordedCompanionBytes(path:string|undefined) {
+  if(!path || !path.startsWith('/') || /[\x00-\x1f\x7f]/.test(path))throw new Error('Explicit current-source recorded companion required');
+  const before=await lstat(path);
+  if(!before.isFile() || before.isSymbolicLink() || before.uid!==process.getuid!() || (before.mode&0o022)!==0 || !(before.mode&0o100) || before.size<1 || before.size>256*1024*1024)throw new Error('Untrusted recorded companion source');
+  const bytes=await readFile(path),after=await lstat(path);
+  if(bytes.length!==before.size || before.dev!==after.dev || before.ino!==after.ino || before.mtimeMs!==after.mtimeMs || before.size!==after.size)throw new Error('Recorded companion source changed');
+  return bytes;
+}
+export async function prepareRecordedConversation(fixture:SshFixture,root:string,companion:Buffer) {
+  const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
+  const messages=(kind:'codex'|'v1'|'v2')=>specification.messages.map((message:{id:string;role:string;text:string})=>({...message,text:`${specification.labels[kind]}: ${message.text}`}));
+  const directory=join(fixture.directory,'recorded-conversations'),image=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
+  await mkdir(directory,{mode:0o700});await mkdir(join(fixture.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});
+  await writeFile(image,companion,{flag:'wx',mode:0o700});
+  const version=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).version as string;
+  const check=await fixture.client(true,`'${image}' --version`);
+  if((await check.finish('source-built recorded companion version',5000)).trim()!==`lazysh-agent ${version}`)throw new Error('Recorded companion version mismatch');
+  const records:Record<string,unknown>[]=[{type:'session_meta',payload:{id:specification.codexThreadId,history_mode:'paginated'}},{type:'event_msg',payload:{type:'task_started',turn_id:'owned'}}];
+  for(const message of messages('codex'))records.push({type:'event_msg',payload:{type:'item_completed',thread_id:specification.codexThreadId,turn_id:'owned',item:{type:message.role==='user'?'UserMessage':'AgentMessage',id:message.id,content:[{type:message.role==='user'?'text':'Text',text:message.text}]}}});
+  const codex=join(directory,'recorded.jsonl');await writeFile(codex,records.map((record,ordinal)=>JSON.stringify({timestamp:'2026-01-02T03:04:05Z',ordinal,...record})).join('\n')+'\n',{flag:'wx',mode:0o400});
+  const sources=[{agent:'codex',sessionId:specification.codexThreadId,path:codex,messages:messages('codex')}];
+  for(const format of ['v1','v2'] as const) {
+    const path=join(directory,`opencode-${format}.db`);await writeFile(path,'',{flag:'wx',mode:0o600});
+    const input=join(directory,`seed-${format}.json`);await writeFile(input,JSON.stringify({schema:specification.opencodeSchemas[format],messages:messages(format),sessionId:specification.opencodeSessions[format],v2:format==='v2'}),{flag:'wx',mode:0o600});
+    await sshCommand('create private synthetic recorded database','python3',['-c',`import sqlite3,json,sys
+s=json.load(open(sys.argv[1])); c=sqlite3.connect(sys.argv[2]); c.executescript(s['schema']); sid=s['sessionId']; c.execute('UPDATE '+('session_v2' if s['v2'] else 'session')+' SET id=?',(sid,))
+for i,m in enumerate(s['messages']):
+ if s['v2']:
+  c.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)',(m['id'],sid,m['role'],i,json.dumps({'text':m['text']}),i));c.execute('INSERT INTO session_part VALUES(?,?,?,?)',(m['id'],sid,i,json.dumps({'type':'text','text':m['text']})))
+ else:
+  c.execute('INSERT INTO message VALUES(?,?,?,?)',(m['id'],sid,json.dumps({'role':m['role']}),i));c.execute('INSERT INTO part VALUES(?,?,?,?)',('part_'+str(i),m['id'],sid,json.dumps({'type':'text','text':m['text']})))
+c.commit();c.close()`,input,path]);
+    await chmod(path,0o400);sources.push({agent:'opencode',sessionId:specification.opencodeSessions[format],path,messages:messages(format)});
+  }
+  const hash=async(path:string)=>createHash('sha256').update(await readFile(path)).digest('hex');
+  const before=await Promise.all(sources.map(async source=>({path:source.path,sha256:await hash(source.path),info:await stat(source.path)})));
+  for(const source of sources) {
+    const control=await fixture.client(true,`'${image}' transcript --agent ${source.agent} --path '${source.path}' --session-id '${source.sessionId}' --view conversation --offset 0 --limit 50`);
+    const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));
+    const actual=page.messages?.map((message:{role:string;blocks:{type:string;text:string}[]})=>({role:message.role,blocks:message.blocks}));
+    const expected=source.messages.map((message:{role:string;text:string})=>({role:message.role,blocks:[{type:'text',text:message.text}]}));
+    if(page.schemaVersion!==1 || page.agent!==source.agent || page.view!=='active_branch' || page.branchId!==source.sessionId || !isDeepStrictEqual(actual,expected))throw new Error('Synthetic recorded preflight mismatch');
+  }
+  return {metadata:{provenance:'synthetic',sources:sources.map(source=>({...source,messages:source.messages.map(({role,text}:{role:string;text:string})=>({role,text}))}))},verify:async()=>{
+    for(const item of before) {const after=await stat(item.path);if(await hash(item.path)!==item.sha256 || after.dev!==item.info.dev || after.ino!==item.info.ino || after.size!==item.info.size || after.mtimeMs!==item.info.mtimeMs || after.mode!==item.info.mode || after.nlink!==1)throw new Error('Synthetic recorded corpus changed');}
+    if(await hash(image)!==createHash('sha256').update(companion).digest('hex'))throw new Error('Recorded companion image changed');
+  }};
+}
+
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false,ime=false,dpad=false,recorded=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(recorded && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad))throw new Error('Recorded conversation mode must be isolated');
+  const recordedImage=recorded?await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN):undefined;
   if(dpad && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime))throw new Error('Owned D-pad mode must be isolated');
   if(ime && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || dpad))throw new Error('Owned IME mode must be isolated');
   if(attachments && (herdr || companion || moshBackground || herdrMosh || sharedHerdr))throw new Error('Owned attachment mode must be isolated');
@@ -457,8 +516,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const evidence=companion?await publishedCompanion():undefined;
   const moshBinary=(moshBackground || attachments)?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
   const rawInput=ime || dpad,rawKind=ime?'ime':'dpad';
-  const fixture=herdr?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:companion?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
+  const fixture=herdr?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:(companion || recorded)?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
   const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`};
+  let recordedFixture:Awaited<ReturnType<typeof prepareRecordedConversation>>|undefined;
   let imeObserved:Awaited<ReturnType<typeof identity>>|undefined;
   let imeImageHash:string|undefined;
   const imeDirectory=join(fixture.directory,rawKind),receiverImage=join(fixture.directory,`${rawKind}-receiver`);
@@ -509,6 +569,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(!version)throw new Error('Owned Mosh server version unavailable');
       console.log(`Owned Android Mosh fixture origin=${process.env.LAZYSH_NATIVE_MOSH_SERVER?'explicit':'system'} version=${version} sha256=${createHash('sha256').update(bytes).digest('hex')}`);
     }
+    if(recordedImage)recordedFixture=await prepareRecordedConversation(fixture,root,recordedImage);
     if(evidence) {
       const missing=await fixture.client(true,'if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
       await missing.finish('no preinstalled Android companion fixture executable',5000);
@@ -527,10 +588,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
+    if((await stat(data)).size>16*1024)throw new Error('Owned Android fixture exceeds native bound');
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
@@ -538,12 +600,14 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     const android=join(root,'apps/client/src-tauri/gen/android');
     const sharedReportDirectory=join(android,'app/build/outputs/androidTest-results/herdr-ui');
     const previousSharedReport=sharedHerdr?await sharedHerdrReportIdentity(sharedReportDirectory):undefined;
+    const recordedReportDirectory=join(android,'app/build/outputs/androidTest-results/recorded-conversation-ui');
+    const previousRecordedReport=recorded?await sharedHerdrReportIdentity(recordedReportDirectory):undefined;
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
+      recorded?'-PlazyshRecordedConversationAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
       ...((herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr || attachments || dpad;
     let monitoring=sharedHerdr || rawInput,byteFailure:unknown;
@@ -571,6 +635,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     finally {monitoring=false;await byteWitness;timing.gradleEndMs=crashes?.elapsedMs()??null;}
     if(byteFailure)throw byteFailure;
     if(instrumentationFailure)throw instrumentationFailure;
+    if(recorded)await verifyRecordedConversationResult(recordedReportDirectory,previousRecordedReport);
     if(rawInput) {
       const pid=await readFile(join(imeDirectory,'receiver-pid'),'utf8');
       if(!imeObserved || pid!==`${imeObserved.pid}\n`)throw new Error('Original owned IME receiver was not observed');
@@ -630,7 +695,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     } catch {moshBackgroundObservation={state:'unavailable'};}
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
       const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;
       // Sample before an inspection adb command could implicitly restart its server.
@@ -646,6 +711,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await moshWitness?.stop();
     await crashes?.stop();
     await androidSshCleanup(primary,[
+      ...(recordedFixture?[['recorded-corpus',()=>recordedFixture!.verify()]] as const:[]),
       ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],
       ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
       ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
