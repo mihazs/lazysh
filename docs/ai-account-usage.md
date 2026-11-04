@@ -28,8 +28,11 @@ and invalid selected auth never falls through to another account.
 
 The reader validates all provider entries against the pinned Cline 3.0.74
 structural store schema, including required version, provider and timestamps;
-unknown fields remain compatible. Stores must resolve to regular files and fit
-within 1 MiB. Ordinary symlinks to regular stores are supported. Unix opens are
+unknown fields remain compatible. A store that a later Cline release writes with
+values outside that pinned schema, such as a new enum value in any provider
+entry, is treated as unavailable rather than partially read, including through
+`auth_paths`; an explicit API key still works until the pinned schema is updated.
+Stores must resolve to regular files and fit within 1 MiB. Ordinary symlinks to regular stores are supported. Unix opens are
 nonblocking to reject a FIFO replacement without hanging. Nondefault environment
 store overrides are unavailable on Windows until a bounded Windows reader is
 qualified; existing explicit `auth_paths`, canonical store and API keys retain
