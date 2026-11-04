@@ -44,6 +44,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Information to look up | Reference |
 | --- | --- |
 | Desktop executable selectors, limits and receipt behavior | [Desktop launch arguments](reference/desktop-launch.md) |
+| Per-platform reference-client parity status, evidence and gaps | [Parity matrix](reference/parity-matrix.md) |
 | Companion switches, defaults, revision conflicts and strict schema | [Companion settings](reference/companion-settings.md) |
 | Credential storage, identity binding and native resume-lock contracts | [Credentials](credentials.md) |
 | Generic lifecycle protocol, retention and SQLite/WAL safety | [Companion events and storage](reference/companion-events.md) |
