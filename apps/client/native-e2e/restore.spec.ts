@@ -31,6 +31,8 @@ it('restores the same durable tmux pane after the app is killed, only after expl
   await relaunched.waitUntil(async()=>await clients()===0,{timeout:20_000,timeoutMsg:'Killed application left its tmux client attached'});
   const banner=await relaunched.$('.workspace-restore');await banner.waitForDisplayed({timeout:30_000});
   const restore=await banner.$('button=Restore previous workspace');
+  // Restore stays disabled until the saved hosts load; a click before that is a no-op.
+  await restore.waitForEnabled({timeout:20_000});
   for(const canvas of await relaunched.$$('.terminal-canvas .xterm-screen'))expect(await canvas.isDisplayed()).toBe(false);
   // Relaunch alone never reconnects or attaches; the pane keeps running unattended.
   expect(await clients()).toBe(0);
