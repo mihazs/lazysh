@@ -37,7 +37,7 @@ precedence. Windows explicit/default paths keep their prior synchronous-open rac
 limitation and have not received native acceptance in this change. OAuth store tokens and
 explicit usage/environment API keys are supported; stored manual `settings.apiKey`
 or `auth.apiKey` credentials are not discovered. This does not establish a valid
-subscription or successful quota request. An owned 787-case differential corpus
+subscription or successful quota request. An owned 892-case differential corpus
 matches the pinned schema under Zod 4.4.3 on Node and Bun; it does not prove every
 JavaScript/Rust URL-parser edge or CLI runtime behavior. Primary contracts:
 [Cline storage paths](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/shared/src/storage/paths.ts),

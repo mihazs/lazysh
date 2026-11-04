@@ -65,7 +65,7 @@ unavailable credential source yields an error rather than an invented quota.
   StoredProviderSettingsSchema and imported ProviderSettingsSchema structural
   admission, including all entries, required metadata and ignored unknown fields.
   The owned synthetic fixture records source hashes and exact Zod 4.4.3 integrity;
-  all 787 cases agree with the source schemas under both Node and Bun. This is not
+  all 892 cases agree with the source schemas under both Node and Bun. This is not
   exhaustive URL/runtime equivalence or authentication proof. No JS product
   dependency is introduced. Stored manual keys remain unsupported; explicit usage
   and environment API keys retain precedence. Both adapted/new Rust files remain
@@ -75,3 +75,8 @@ unavailable credential source yields an error rather than an invented quota.
   Windows rejects newly introduced nondefault environment selection; existing
   explicit auth_paths/default behavior remains, including its unqualified
   synchronous-open replacement risk. No Windows race-safety claim is made.
+  Enable existing serde_json `float_roundtrip` to avoid default decimal double
+  rounding admitting nonintegers as positive integers. The 892-case fixture
+  includes 105 raw JSON numeric stores (not parse/reserialized numbers) and
+  matches original Zod JSON.parse semantics. This Cargo feature unifies across
+  consumers; no dependency/number representation or lock entry is added.

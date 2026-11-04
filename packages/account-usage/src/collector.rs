@@ -269,19 +269,24 @@ mod tests {
             config.cline.auth_paths = Some(vec![target.clone()]);
             config.cline.api_key = None;
             for (index, step) in steps.iter().enumerate() {
-                let mut input = corpus["baseline"].clone();
-                let parts = step["path"].as_array().unwrap();
-                let mut parent = &mut input;
-                for key in &parts[..parts.len() - 1] {
-                    parent = parent.get_mut(key.as_str().unwrap()).unwrap();
-                }
-                let key = parts.last().unwrap().as_str().unwrap();
-                if step["remove"] == true {
-                    parent.as_object_mut().unwrap().remove(key);
+                let text = if let Some(raw) = step["rawStore"].as_str() {
+                    raw.to_owned()
                 } else {
-                    parent[key] = step["value"].clone();
-                }
-                std::fs::write(&target, serde_json::to_vec(&input).unwrap()).unwrap();
+                    let mut input = corpus["baseline"].clone();
+                    let parts = step["path"].as_array().unwrap();
+                    let mut parent = &mut input;
+                    for key in &parts[..parts.len() - 1] {
+                        parent = parent.get_mut(key.as_str().unwrap()).unwrap();
+                    }
+                    let key = parts.last().unwrap().as_str().unwrap();
+                    if step["remove"] == true {
+                        parent.as_object_mut().unwrap().remove(key);
+                    } else {
+                        parent[key] = step["value"].clone();
+                    }
+                    serde_json::to_string(&input).unwrap()
+                };
+                std::fs::write(&target, text).unwrap();
                 let actual = core::has_local_credentials(core::VendorId::Cline, &config);
                 if actual != step["valid"].as_bool().unwrap() {
                     std::fs::write(
@@ -887,7 +892,7 @@ mod tests {
             if case == "schema-differential" {
                 assert_eq!(
                     std::fs::read_to_string(directory.path().join("schema.count")).unwrap(),
-                    "787"
+                    "892"
                 );
             }
             assert_eq!(
