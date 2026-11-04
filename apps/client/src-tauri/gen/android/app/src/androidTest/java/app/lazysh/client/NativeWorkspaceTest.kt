@@ -148,6 +148,14 @@ private class OwnedFingerWindowObserver(
     }
 }
 
+private fun ntfyPostFailureObservation(packageName:String?,ownedPrompt:Boolean,allow:Boolean):String {
+    val foreground=when(packageName) {"io.heckel.ntfy"->"ntfy";"com.android.permissioncontroller"->"permission";"app.lazysh.client"->"lazysh";null->"unavailable";else->"other"}
+    return "Ntfy post-failure[foreground=$foreground ownedPrompt=$ownedPrompt allow=$allow]"
+}
+private fun recordNtfyPostFailure(failure:Throwable,observe:()->String) {
+    runCatching {failure.addSuppressed(AssertionError(observe()))}
+}
+
 private class NtfyFirstLaunch(started: Long) {
     val deadline = started + TimeUnit.SECONDS.toNanos(6)
     var attempted = false
@@ -3446,6 +3454,13 @@ class NativeWorkspaceTest {
     }
 
     @Test fun ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy() {
+        assertEquals("Ntfy post-failure[foreground=other ownedPrompt=true allow=false]",ntfyPostFailureObservation("private.package",true,false))
+        assertEquals("Ntfy post-failure[foreground=unavailable ownedPrompt=false allow=false]",ntfyPostFailureObservation(null,false,false))
+        val primary=AssertionError("original")
+        recordNtfyPostFailure(primary) {throw IllegalStateException("private")}
+        assertEquals(0,primary.suppressed.size)
+        recordNtfyPostFailure(primary) {ntfyPostFailureObservation("io.heckel.ntfy",false,true)}
+        assertEquals("Ntfy post-failure[foreground=ntfy ownedPrompt=false allow=true]",primary.suppressed.single().message)
         val policy=NtfyFirstLaunch(0)
         assertTrue("Unowned permission cannot be admitted",!policy.allow(TimeUnit.SECONDS.toNanos(1),false))
         assertTrue("Delayed owned prompt fits original combined budget",policy.allow(TimeUnit.SECONDS.toNanos(5),true))
@@ -3782,6 +3797,13 @@ class NativeWorkspaceTest {
                 if(context.packageManager.checkPermission(android.Manifest.permission.POST_NOTIFICATIONS,"io.heckel.ntfy")==PackageManager.PERMISSION_GRANTED)"granted" else "denied"
             }.getOrDefault("unavailable")
             failure.addSuppressed(AssertionError(firstLaunch.observation(permission)))
+            recordNtfyPostFailure(failure) {
+                val current=device.currentPackageName
+                val prompt=device.findObject(By.res("com.android.permissioncontroller","permission_message"))?.text
+                val owned=current=="com.android.permissioncontroller" && prompt?.contains(Regex("\\bntfy\\b"))==true && prompt?.contains("notifications",ignoreCase=true)==true
+                val allowNow=device.hasObject(By.res("com.android.permissioncontroller","permission_allow_button"))
+                ntfyPostFailureObservation(current,owned,allowNow)
+            }
             throw failure
         }
         checkNotNull(menu).click()

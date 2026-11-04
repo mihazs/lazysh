@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,postFailureObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
@@ -273,6 +273,14 @@ test('post-click menu samples preserve the actual click budgets and first measur
     trace.replace('action=returned','action=none'),trace.replace('clickAfter=positive','clickAfter=unavailable')])
     expect(permissionActionObservation(bad)).toBeUndefined();
   expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
+});
+
+test('post-failure permission observation retains only bounded closed values',()=>{
+  const sample='Ntfy post-failure[foreground=permission ownedPrompt=true allow=false]';
+  expect(postFailureObservation('private '+sample+' private')).toEqual({foreground:'permission',ownedPrompt:true,allow:false});
+  for(const foreground of ['ntfy','permission','lazysh','other','unavailable'])expect(postFailureObservation(sample.replace('foreground=permission',`foreground=${foreground}`))?.foreground).toBe(foreground);
+  for(const invalid of [sample.replace('foreground=permission','foreground=private.app'),sample.replace('ownedPrompt=true','ownedPrompt=private'),sample+sample,' '.repeat(256*1024)+sample])expect(postFailureObservation(invalid)).toBeUndefined();
+  expect(postFailureObservation('no observation after an observer exception')).toBeUndefined();
 });
 
 test('settings observation admits only finite flags and the two-scroll limit',()=>{

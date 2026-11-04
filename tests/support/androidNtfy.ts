@@ -365,6 +365,12 @@ export function firstLaunchObservation(text:string) {
   if(!match)return;
   return {foreground:match[1],allow:match[2]==='true',deny:match[3]==='true',toolbar:match[4]==='true',ownedPrompt:match[5]==='true',attempted:match[6]==='true'};
 }
+export function postFailureObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy post-failure[').length!==2)return;
+  const match=/Ntfy post-failure\[foreground=(ntfy|permission|lazysh|other|unavailable) ownedPrompt=(true|false) allow=(true|false)\]/.exec(text);
+  if(!match)return;
+  return {foreground:match[1],ownedPrompt:match[2]==='true',allow:match[3]==='true'};
+}
 export function permissionActionObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy first-launch action[').length!==2)return;
   const match=/Ntfy first-launch action\[stage=(none|foreground|allow|deny|toolbar|prompt|menu|click) before=(unavailable|positive|expired) after=(unavailable|positive|expired) action=(none|calling|returned|threw) snapshot=(unavailable|beforeAction|afterAction) permission=(granted|denied|unavailable)(?: clickBefore=(unavailable|positive|expired) clickAfter=(unavailable|positive|expired) firstExpiry=(none|between|foreground|allow|deny|toolbar|prompt|menu|click))?\]/.exec(text);
@@ -443,11 +449,12 @@ async function nativeFailure(directory:string) {
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
     const permissionAction=permissionActionObservation(failure);
+    const postFailure=postFailureObservation(failure);
     const settings=settingsObservation(failure);
     const event=eventObservation(failure);
     const returnState=returnStateObservation(failure);
     const challengeState=challengeStateObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{})};
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(postFailure?{postFailure}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{})};
   }catch{return {};}
 }
 
