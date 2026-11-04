@@ -567,3 +567,112 @@ for(const boundary of ['unicode','cursor'] as const)test(`forward deletion witho
   expect(result.proposal).toEqual({text:boundary==='unicode'?'x':'bc',truncated:false});
   expect(result.readOnly).toBe(true);
 });
+
+
+test('zero-code Process preserves owned text before a native suggestion',async({page,context})=>{
+  await commitNativeComposition(page,context,'teh');
+  await page.evaluate(()=>{
+    const area=window.ownedIme.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keyup',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.select();
+  });
+  await commitNativeComposition(page,context,'the');
+  expect(await page.evaluate(()=>({writes:window.ownedIme.writes,proposal:window.ownedIme.proposal}))).toEqual({writes:['teh','\x7f\x7fhe'],proposal:null});
+});
+
+test('zero-code Process during native composition does not commit or replay preedit',async({page,context})=>{
+  const cdp=await context.newCDPSession(page);
+  await cdp.send('Input.imeSetComposition',{text:'teh',selectionStart:3,selectionEnd:3});
+  await page.evaluate(()=>{
+    const area=window.ownedIme.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keypress',{key:'Unidentified',keyCode:0,bubbles:true,composed:true}));
+  });
+  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual([]);
+  await cdp.send('Input.insertText',{text:'the'});
+  await expect.poll(()=>page.evaluate(()=>window.ownedIme.writes)).toEqual(['the']);
+  await cdp.detach();
+});
+
+test('modified Process still fences previous input',async({page,context})=>{
+  await commitNativeComposition(page,context,'teh');
+  await page.evaluate(()=>{
+    const area=window.ownedIme.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,ctrlKey:true,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keyup',{key:'Process',keyCode:0,ctrlKey:true,bubbles:true,composed:true}));
+    area.select();
+  });
+  await commitNativeComposition(page,context,'the');
+  expect(await page.evaluate(()=>({writes:window.ownedIme.writes,proposal:window.ownedIme.proposal}))).toEqual({writes:['teh'],proposal:{text:'the',truncated:false}});
+});
+
+
+test('a finished keypress cannot classify later terminal output as hardware input',async({page})=>{
+  const writes=await page.evaluate(()=>{
+    const o=window.ownedIme,area=o.textarea;
+    area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
+    area.dispatchEvent(new KeyboardEvent('keyup',{key:'x',bubbles:true,composed:true}));
+    o.terminal.input('!',true);
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertText',data:'y',bubbles:true,composed:true}));
+    area.value+='y';area.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:'y',bubbles:true,composed:true}));
+    return o.writes;
+  });
+  expect(writes).toEqual(['x','!','y']);
+});
+
+test('Process clears a previous held hardware classification before software input',async({page,context})=>{
+  await commitNativeComposition(page,context,'teh');
+  const writes=await page.evaluate(()=>{
+    const o=window.ownedIme,area=o.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',keyCode:39,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertText',data:'z',bubbles:true,composed:true}));
+    area.value+='z';area.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:'z',bubbles:true,composed:true}));
+    return o.writes;
+  });
+  expect(writes).toEqual(['teh','\x1b[C','z']);
+});
+
+
+for(const preedit of [false,true])test(`a hardware keypress after Process sends once with preedit=${preedit}`,async({page,context})=>{
+  const cdp=await context.newCDPSession(page);
+  if(preedit)await cdp.send('Input.imeSetComposition',{text:'teh',selectionStart:3,selectionEnd:3});
+  else await commitNativeComposition(page,context,'teh');
+  const writes=await page.evaluate(preedit=>{
+    const o=window.ownedIme,area=o.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertText',data:'x',bubbles:true,composed:true}));
+    area.value+='x';area.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:'x',bubbles:true,composed:true}));
+    if(preedit)area.dispatchEvent(new CompositionEvent('compositionend',{data:'teh',bubbles:true,composed:true}));
+    else area.dispatchEvent(new KeyboardEvent('keyup',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    return o.writes;
+  },preedit);
+  expect(writes).toEqual(['teh','x']);await cdp.detach();
+});
+
+test('an unsafe Process composition blocks a hardware keypress for review',async({page,context})=>{
+  await commitNativeComposition(page,context,'éx');
+  await page.evaluate(()=>window.ownedIme.textarea.setSelectionRange(0,1));
+  const cdp=await context.newCDPSession(page);
+  await cdp.send('Input.imeSetComposition',{text:'a',selectionStart:1,selectionEnd:1});
+  const result=await page.evaluate(()=>{
+    const o=window.ownedIme,area=o.textarea;
+    area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
+    area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
+    return {writes:o.writes,proposal:o.proposal,readOnly:area.readOnly};
+  });
+  expect(result).toEqual({writes:['éx'],proposal:{text:'ax',truncated:false},readOnly:true});await cdp.detach();
+});
+
+
+for(const boundary of ['blur','access'] as const)test(`keypress after ${boundary} sends no terminal input`,async({page},testInfo)=>{
+  const result=await page.evaluate(boundary=>{
+    const o=window.ownedIme,area=o.textarea;
+    if(boundary==='blur')area.blur();else o.setAcceptsInput(false);
+    area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
+    return {writes:o.writes,readOnly:area.readOnly};
+  },boundary);
+  expect(result,testInfo.title).toEqual({writes:[],readOnly:true});
+});
