@@ -108,6 +108,33 @@ test('physical and toolbar Shift+Enter preserve the agent newline key',async({pa
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[13;2u','\r','\x1b[13;2u','\r']);
 });
 
+test('trusted keyless line breaks preserve plain and toolbar Shift Enter',async({page,context})=>{
+  await openShortcutTerminal(page);await page.locator('.terminal-canvas').click();
+  const cdp=await context.newCDPSession(page);
+  await cdp.send('Input.insertText',{text:'\n'});
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\r']);
+  await page.getByRole('button',{name:'Shift',exact:true}).click();
+  await cdp.send('Input.insertText',{text:'\n'});await cdp.send('Input.insertText',{text:'a'});
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\r','\x1b[13;2u','a']);
+  await expect(page.getByRole('button',{name:'Shift',exact:true})).toHaveAttribute('aria-pressed','false');
+  await cdp.detach();
+});
+
+test('physical Enter and keyless line breaks remain distinct without duplicate keydown output',async({page,context})=>{
+  await openShortcutTerminal(page);await page.locator('.terminal-canvas').click();
+  const cdp=await context.newCDPSession(page);
+  const key={key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13};
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',...key});
+  await cdp.send('Input.insertText',{text:'\n'});
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',...key});
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\r']);
+  await cdp.send('Input.insertText',{text:'\n'});
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',...key});
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',...key});
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\r','\r','\r']);
+  await cdp.detach();
+});
+
 test('one-shot Shift keeps one held arrow shifted and leaves the next key plain',async({page},testInfo)=>{
   await openShortcutTerminal(page);await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
   const shift=page.getByRole('button',{name:'Shift',exact:true}),left=page.getByRole('button',{name:'Arrow left',exact:true});

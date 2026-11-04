@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve terminal Enter delivered as an input-only line break, including an explicitly selected toolbar Shift modifier.
+
 - Preserve owned terminal corrections delivered as paired keyless composition-text input events.
 
 - Never pause terminal typing when a keyboard edit, such as an accepted SwiftKey suggestion, cannot be translated safely into terminal input. Changed default: lazysh now skips that one edit, leaves the terminal unchanged and keeps typing, Compose paste and toolbar keys working; a small "Keyboard edit skipped" notice fades after 8 seconds unless expanded for review. Previously typing stayed paused until the review was dismissed.
