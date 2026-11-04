@@ -21,6 +21,9 @@ mod shutdown;
 mod teardown;
 use retirement::retire_transport;
 
+#[cfg(target_os = "linux")]
+#[path = "agent_ssh_activity_fixture.rs"]
+mod agent_ssh_activity;
 #[path = "herdr_guard_fixture.rs"]
 mod herdr_guard;
 
@@ -72,6 +75,13 @@ impl Fixture {
         Self::with_mosh_mode(herdr, false).await
     }
     async fn with_mosh_mode(herdr: Option<&std::path::Path>, mosh: bool) -> Self {
+        Self::with_activity_environment(herdr, mosh, false).await
+    }
+    async fn with_activity_environment(
+        herdr: Option<&std::path::Path>,
+        mosh: bool,
+        activity: bool,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         let tmux_path = std::path::Path::new(&tmux)
@@ -112,6 +122,10 @@ impl Fixture {
         }
         if mosh {
             environment.push(("MOSH_SERVER_NETWORK_TMOUT", "20".into()));
+        }
+        if activity {
+            environment.push(("CODEX_HOME", "/work/hook-home/codex".into()));
+            environment.push(("LAZYSH_STATE_DIR", "/work/activity".into()));
         }
         assert!(
             environment.iter().all(|(_, value)| !value

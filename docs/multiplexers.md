@@ -244,3 +244,32 @@ The snapshots add two observations, not an exit assertion, retry or cleanup
 action, and leave the existing three-second retirement/teardown budgets intact.
 This identifies which observed control lifetime remains when possible; it does
 not establish remote command exit, pending-buffer sizes or the failure cause.
+
+### Codex activity through owned SSH
+
+The ignored native test
+`ssh::tmux_jump_fixture::agent_ssh_activity::real_herdr_codex_hooks_reach_native_agent_snapshot_over_owned_ssh`
+checks a real Codex turn inside Herdr while the native `agent_snapshot` command
+reads its companion reports over an owned, host-key-verified SSH connection. A
+held loopback response makes the Working and Done checks separate observations.
+
+Run it only inside a dedicated user/PID/network namespace with loopback as its
+only network interface, a private synthetic home and NSS configuration, and no
+host credentials. The fixture requires `/work/bin/herdr`, `/work/bin/codex`, the
+published v1.10.4 companion at `/work/lazysh-agent`, a fresh `/work/activity` and
+`/work/cwd`, and the previously reviewed synthetic Codex hook profile under
+`/work/hook-home/codex`. The source pins the companion and reviewed hook/profile
+hashes; do not point it at your actual profile. Build the native test executable
+from the intended source, then invoke this exact case in the isolated environment:
+
+```sh
+LAZYSH_OWNED_ACTIVITY_FIXTURE=1 /work/native-test \
+  ssh::tmux_jump_fixture::agent_ssh_activity::real_herdr_codex_hooks_reach_native_agent_snapshot_over_owned_ssh \
+  --ignored --exact --nocapture
+```
+
+The test uses ordinary ephemeral SSH keys, explicitly stops its owned Herdr and
+SSH servers, and completes its local mock task. It tests the current-source native
+host-tool command, not a packaged client, physical Android device, real provider
+account or another user's hook trust/loading state. A failed setup is not an
+activity-delivery result.
