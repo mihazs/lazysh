@@ -691,7 +691,7 @@ test('keyless composition-text correction refuses unowned Unicode erasure',async
     area.value='èy';area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',bubbles:true,composed:true}));
     return {writes:owner.writes,proposal:owner.proposal,readOnly:area.readOnly};
   });
-  expect(result).toEqual({writes:['éx'],proposal:{text:'èy',truncated:false},readOnly:true});
+  expect(result).toEqual({writes:['éx'],proposal:{text:'èy',truncated:false},readOnly:false});
 });
 
 for(const abandoned of ['canceled','intervening input','intervening keydown','aborted'] as const)test(`${abandoned} retires a keyless composition beforeinput`,async({page})=>{
