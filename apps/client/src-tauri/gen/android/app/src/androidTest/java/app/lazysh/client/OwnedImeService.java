@@ -117,6 +117,12 @@ public final class OwnedImeService extends InputMethodService {
                 result.putBoolean("suffixMatched", after != null && "there".contentEquals(after));
             }
         }
+        if ("lineBreak".equals(method)) {
+            Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
+            result.putBoolean("accepted", target.connection.commitText("\n", 1));
+            // A remote read orders the fixed commit; it does not acknowledge delivery.
+            result.putBoolean("readReturned", target.connection.getTextBeforeCursor(256, 0) != null);
+        }
         if ("old".equals(method) || "current".equals(method)) {
             Snapshot selected = Objects.requireNonNull("old".equals(method) ? saved : active, "Owned IME connection unavailable");
             String text = "owned-" + method + "-" + nonce;
@@ -138,7 +144,7 @@ public final class OwnedImeService extends InputMethodService {
                     || !("arm".equals(method) || "state".equals(method) || "capture".equals(method)
                     || "composeCorrection".equals(method) || "extendTail".equals(method)
                     || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)
-                    || "preedit".equals(method) || "old".equals(method) || "current".equals(method) || "release".equals(method)))
+                    || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
             AtomicReference<Bundle> result = new AtomicReference<>();
