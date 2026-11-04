@@ -2948,7 +2948,10 @@ class NativeWorkspaceTest {
             val geometry = JSONArray(evaluate(scenario, """(() => {
               const target=document.querySelector(${JSONObject.quote(selector)});
               const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
-              return [x,y,innerWidth,innerHeight,r.width,r.height,document.elementFromPoint(x,y)===target];
+              const hit=document.elementFromPoint(x,y), tag=hit?.tagName;
+              const name=typeof tag==='string'?tag.toUpperCase():'';
+              const allowed=new Set(['SELECT','OPTION','DIV','BUTTON','INPUT','TEXTAREA','LABEL','SPAN','HEADER','NAV','SECTION','P','FORM','HTML','BODY','SVG','PATH']);
+              return [x,y,innerWidth,innerHeight,r.width,r.height,hit===target,hit?(allowed.has(name)?name:'OTHER'):'NONE'];
             })()"""))
             val values = (0..5).map { geometry.getDouble(it) }
             try {
@@ -2963,6 +2966,10 @@ class NativeWorkspaceTest {
                         .put("centerInside", values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3])
                         .put("hitOwned", geometry.getBoolean(6))
                         .put("recordedSourceIndex", recordedSourceIndex?.takeIf { it in 0..2 } ?: "unavailable")
+                    if (recordedSourceIndex != null && recordedSourceIndex in 0..2) {
+                        cached.put("hitTag", geometry.getString(7))
+                            .put("bounds", JSONArray(values.map { it.toInt().coerceIn(-8192, 8192) }))
+                    }
                     failure.addSuppressed(AssertionError("Owned select cached geometry: $cached"))
                 }
                 throw failure

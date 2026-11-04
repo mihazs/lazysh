@@ -2369,6 +2369,24 @@ test('recorded Android routing preserves the ordinary owner and uses its own rep
 
 });
 
+test('recorded select geometry reports only the bounded hit category from its existing hit test',async()=>{
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('fun selectOwnedOption(')[1].split('val tapScript')[0];
+  const expression=body.match(/val geometry = JSONArray\(evaluate\(scenario, """([\s\S]*?)"""\)\)/)![1]
+    .replace('${JSONObject.quote(selector)}',JSON.stringify('owned-select'));
+  let calls=0,hit:unknown;
+  const target={getBoundingClientRect:()=>({left:10,top:20,width:100,height:40}),tagName:'SELECT'};
+  const document={querySelector:(selector:string)=>{expect(selector).toBe('owned-select');return target;},elementFromPoint:(x:number,y:number)=>{calls++;expect([x,y]).toEqual([60,40]);return hit;}};
+  const observe=Function('document','innerWidth','innerHeight',`return (${expression});`);
+  for(const [candidate,owned,category] of [[target,true,'SELECT'],[{tagName:'div'},false,'DIV'],[{tagName:'private-value'},false,'OTHER'],[null,false,'NONE']] as const){
+    hit=candidate;const before=calls;
+    expect(observe(document,393,852)).toEqual([60,40,393,852,100,40,owned,category]);expect(calls).toBe(before+1);
+  }
+  expect(body).toContain('values.all { it.isFinite() }');
+  expect(body).toContain('it.toInt().coerceIn(-8192, 8192)');
+  expect(body).toContain('throw failure');
+});
+
 test('recorded native report requires the exact one executed case and rejects failure, skip, stale identity and foreign cases',()=>{
   const report='<testsuites tests="1" failures="0" errors="0" skipped="0"><testcase classname="app.lazysh.client.NativeWorkspaceTest" name="ownedRecordedConversationsThroughRealUi" /></testsuites>';
   expect(validateRecordedConversationReport(report)).toEqual({nativeCase:'ownedRecordedConversationsThroughRealUi',passed:1,failed:0,skipped:0});
