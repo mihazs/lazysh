@@ -19,7 +19,7 @@ fn mosh_guard_startup_requires_the_exact_positive_fd_capability() {
     }
     assert_eq!(
         attach_receipt("owned"),
-        "herdr --session 'owned' --guarded-attach --startup-fd 3"
+        crate::herdr_path::with_path("herdr --session 'owned' --guarded-attach --startup-fd 3")
     );
 }
 

@@ -101,7 +101,7 @@ impl Entry {
             _ => attach_command(self.kind, &self.name),
         }
     }
-    fn preflight_command(&self) -> Result<String> {
+    fn preflight_command(&self, positive_unix: bool) -> Result<String> {
         self.validate()?;
         let (tool, version) = match self.kind {
             MultiplexerKind::Tmux => ("tmux", "-V"),
@@ -132,7 +132,13 @@ impl Entry {
                 command.push_str(&format!(" && {exists}"));
             }
         }
-        Ok(format!("sh -c {}", quote(&command)))
+        Ok(
+            if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
+                crate::herdr_path::with_path(&command)
+            } else {
+                format!("sh -c {}", quote(&command))
+            },
+        )
     }
     pub(crate) async fn prepare(
         &self,
@@ -142,7 +148,12 @@ impl Entry {
         let unavailable = || {
             SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
         };
-        crate::ssh::exec_for_access(session, self.preflight_command()?, lease)
+        let positive_unix = if matches!(self.kind, MultiplexerKind::Herdr) {
+            crate::herdr_path::admit(session, lease).await?
+        } else {
+            false
+        };
+        crate::ssh::exec_for_access(session, self.preflight_command(positive_unix)?, lease)
             .await
             .map_err(|error| {
                 if error.kind() == "remote_command_failed" {
@@ -157,7 +168,16 @@ impl Entry {
                 MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
                 MultiplexerKind::Tmux => unreachable!(),
             };
-            let output = crate::ssh::exec_for_access(session, command.into(), lease).await?;
+            let output = crate::ssh::exec_for_access(
+                session,
+                if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
+                    crate::herdr_path::with_path(command)
+                } else {
+                    command.into()
+                },
+                lease,
+            )
+            .await?;
             if !persistent_sessions(self.kind, &output)?
                 .iter()
                 .any(|target| target.name == self.name)
@@ -176,7 +196,7 @@ pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Resul
         tmux_server: None,
         create_if_missing: true,
     }
-    .preflight_command()
+    .preflight_command(false)
 }
 pub(crate) async fn prepare_default_entry(
     session: &crate::ssh::Session,
@@ -256,9 +276,23 @@ pub async fn multiplexer_sessions(
                     ))
                 }
             };
+            let positive_unix = if matches!(kind, MultiplexerKind::Herdr) {
+                crate::herdr_path::admit(&session, &access).await?
+            } else {
+                false
+            };
             persistent_sessions(
                 kind,
-                &crate::ssh::exec_for_access(&session, command.into(), &access).await?,
+                &crate::ssh::exec_for_access(
+                    &session,
+                    if matches!(kind, MultiplexerKind::Herdr) && positive_unix {
+                        crate::herdr_path::with_path(command)
+                    } else {
+                        command.into()
+                    },
+                    &access,
+                )
+                .await?,
             )
         })
         .await
@@ -330,10 +364,12 @@ fn name(value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn discovery_command(server: &crate::tmux_server::TmuxServer) -> String {
+fn discovery_command(server: &crate::tmux_server::TmuxServer, positive_unix: bool) -> String {
     let tmux = server.prefix();
-    format!("for tool in tmux herdr zellij; do if command -v \"$tool\" >/dev/null 2>&1; then printf '%s\\t1\\n' \"$tool\"; else printf '%s\\t0\\n' \"$tool\"; fi; done; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", quote(PANE_FORMAT))
+    let herdr = crate::herdr_path::select("if command -v herdr >/dev/null 2>&1; then printf 'herdr\\t1\\n'; else printf 'herdr\\t0\\n'; fi", positive_unix);
+    format!("if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\n'; else printf 'tmux\\t0\\n'; fi; {herdr}; if command -v zellij >/dev/null 2>&1; then printf 'zellij\\t1\\n'; else printf 'zellij\\t0\\n'; fi; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", quote(PANE_FORMAT))
 }
+
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
     let mut lines = output.lines();
     let mut available = |tool| -> Result<bool> {
@@ -556,8 +592,12 @@ pub async fn multiplexer_tree(
             let session = state.session(&session_id).await?;
             let server =
                 crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
-            let output =
-                crate::ssh::exec_for_access(&session, discovery_command(&server), &access).await?;
+            let output = crate::ssh::exec_for_access(
+                &session,
+                discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
+                &access,
+            )
+            .await?;
             parse_tree(&output)
         })
         .await
@@ -607,8 +647,14 @@ mod tests {
         assert!(!entry.create_if_missing);
         let command = entry.command().unwrap();
         assert!(command.contains("tmux -u -L 'named '\\''server'"));
-        assert!(entry.preflight_command().unwrap().contains("has-session"));
-        assert!(!entry.preflight_command().unwrap().contains("new-session"));
+        assert!(entry
+            .preflight_command(false)
+            .unwrap()
+            .contains("has-session"));
+        assert!(!entry
+            .preflight_command(false)
+            .unwrap()
+            .contains("new-session"));
         let zellij: Entry =
             serde_json::from_value(serde_json::json!({"kind":"zellij","name":"existing"})).unwrap();
         assert_eq!(zellij.command().unwrap(), "zellij attach 'existing'");

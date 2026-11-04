@@ -503,7 +503,15 @@ pub(crate) async fn bootstrap_entry(
         }
         _ => {
             let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
-            let command = crate::tmux_jump::receipt_command(&entry.command()?, &marker);
+            let raw = entry.command()?;
+            let command = crate::tmux_jump::receipt_command(
+                &if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) {
+                    crate::herdr_path::with_path(&raw)
+                } else {
+                    raw
+                },
+                &marker,
+            );
             (EntryBinding::Ordinary { marker }, command)
         }
     };

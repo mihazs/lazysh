@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Find a safely admitted default Herdr installation under the remote user’s `.local/bin` when it is absent from a positively identified Unix host’s command PATH; PATH remains preferred.
 - Keep the software keyboard connected when arming the terminal toolbar's ctrl, Alt or Shift key. The terminal editor no longer blurs or becomes read-only for the tap, so SwiftKey, Gboard and other keyboards keep their Shift and suggestion state instead of restarting. Pending composition is still sent first, and the editor is still revoked when it is not focused. No defaults change.
 
 - Fix toolbar keys leaving the terminal scrolled into history. Toolbar keys, chord buttons, custom gesture and D-pad corner chords, the D-pad and modified keyboard shortcuts now return the terminal to the live screen after sending, as keyboard typing already did. A reader left looking at an earlier copy of an agent menu, for example after the agent redrew it, now sees the agent's answer after toolbar Enter instead of an unchanged menu. The bytes sent are unchanged. No defaults change.

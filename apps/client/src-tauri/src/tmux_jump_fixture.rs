@@ -72,7 +72,18 @@ impl Fixture {
         Self::with_mosh_mode(herdr, false).await
     }
     async fn with_mosh_mode(herdr: Option<&std::path::Path>, mosh: bool) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        Self::with_mosh_mode_and_user_install(herdr, mosh, false).await
+    }
+    async fn with_mosh_mode_and_user_install(
+        herdr: Option<&std::path::Path>,
+        mosh: bool,
+        user_install: bool,
+    ) -> Self {
+        let dir = if user_install {
+            tempfile::tempdir_in("/tmp").unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
         let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         let tmux_path = std::path::Path::new(&tmux)
             .parent()
@@ -90,11 +101,19 @@ impl Fixture {
                 binary.is_absolute(),
                 "Herdr fixture binary must be absolute"
             );
-            environment
-                .last_mut()
-                .unwrap()
-                .1
-                .insert_str(0, &format!("{}:", binary.parent().unwrap().display()));
+            if user_install {
+                let local_bin = dir.path().join(".local/bin");
+                fs::create_dir_all(&local_bin).unwrap();
+                fs::copy(binary, local_bin.join("herdr")).unwrap();
+                fs::set_permissions(local_bin.join("herdr"), fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            } else {
+                environment
+                    .last_mut()
+                    .unwrap()
+                    .1
+                    .insert_str(0, &format!("{}:", binary.parent().unwrap().display()));
+            }
             for (key, child) in [
                 ("XDG_CONFIG_HOME", "config-home"),
                 ("XDG_CACHE_HOME", "cache-home"),
@@ -173,18 +192,25 @@ impl Fixture {
             let path = dir.path().join("private-groups");
             fs::write(&path, groups + "\n").unwrap();
             let mut launcher = Command::new("bwrap");
+            launcher.args([
+                "--die-with-parent",
+                "--unshare-user",
+                "--unshare-pid",
+                "--dev-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+            ]);
+            if user_install {
+                // Give the owned fixture a namespace-local trusted /tmp parent.
+                launcher
+                    .args(["--tmpfs", "/tmp", "--bind"])
+                    .arg(dir.path())
+                    .arg(dir.path());
+            }
             launcher
-                .args([
-                    "--die-with-parent",
-                    "--unshare-user",
-                    "--unshare-pid",
-                    "--dev-bind",
-                    "/",
-                    "/",
-                    "--proc",
-                    "/proc",
-                    "--ro-bind",
-                ])
+                .args(["--ro-bind"])
                 .arg(path)
                 .args(["/etc/group", "--"])
                 .arg(sshd.trim());
@@ -1384,11 +1410,17 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
 async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
     use crate::multiplexer::{Entry, MultiplexerKind};
     let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
-    for (kind, binary) in [
-        (MultiplexerKind::Herdr, stock.as_str()),
-        (MultiplexerKind::Zellij, "/usr/bin/zellij"),
+    for (kind, binary, user_install) in [
+        (MultiplexerKind::Herdr, stock.as_str(), false),
+        (MultiplexerKind::Herdr, stock.as_str(), true),
+        (MultiplexerKind::Zellij, "/usr/bin/zellij", false),
     ] {
-        let f = Fixture::with_mosh_mode(Some(std::path::Path::new(binary)), true).await;
+        let f = Fixture::with_mosh_mode_and_user_install(
+            Some(std::path::Path::new(binary)),
+            true,
+            user_install,
+        )
+        .await;
         fs::write(f.dir.path().join(".zshrc"), "").unwrap();
         if matches!(kind, MultiplexerKind::Zellij) {
             owned_zellij_layout(&f);
@@ -1399,6 +1431,16 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
         let (_authority, lease) = unlocked_authority();
         for create_if_missing in [true, false] {
             let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+            let parent = state.session(&source.session_id).await.unwrap();
+            if matches!(kind, MultiplexerKind::Herdr) && create_if_missing {
+                assert!(
+                    !parent
+                        .handle
+                        .herdr_unix
+                        .load(std::sync::atomic::Ordering::Acquire),
+                    "each new SSH handle starts without a cached host result"
+                );
+            }
             let entry = Entry {
                 kind,
                 name: "owned-direct-mosh".into(),
@@ -1406,6 +1448,15 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 create_if_missing,
             };
             let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
+            if matches!(kind, MultiplexerKind::Herdr) {
+                assert!(
+                    parent
+                        .handle
+                        .herdr_unix
+                        .load(std::sync::atomic::Ordering::Acquire),
+                    "Unix capability stays on the owning SSH handle"
+                );
+            }
             let session = state.session(&display.session_id).await.unwrap();
             assert!(session.tmux.lock().unwrap().is_none());
             assert!(session.herdr.lock().unwrap().is_none());
@@ -1416,7 +1467,9 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 timeout(BOUND, async {
                     while crate::ssh::exec_for_access(
                         &session,
-                        "herdr --session owned-direct-mosh api snapshot".into(),
+                        crate::herdr_path::with_path(
+                            "herdr --session owned-direct-mosh api snapshot",
+                        ),
                         &lease,
                     )
                     .await
@@ -1430,8 +1483,7 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
                 if create_if_missing {
                     crate::ssh::exec_for_access(
                         &session,
-                        "herdr --session owned-direct-mosh workspace create --label ORDINARY_READY"
-                            .into(),
+                        crate::herdr_path::with_path("herdr --session owned-direct-mosh workspace create --label ORDINARY_READY"),
                         &lease,
                     )
                     .await
@@ -3463,4 +3515,105 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         .unwrap();
     f.stop_listener().await;
     eprintln!("owned Herdr stages: servers_reaped=true workload_stopped=true listener_closed=true");
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH and an absolute LAZYSH_TEST_HERDR_STOCK binary"]
+async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
+    use crate::multiplexer::{multiplexer_sessions, multiplexer_tree, MultiplexerKind};
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap());
+    let f = Fixture::with_mosh_mode_and_user_install(Some(&binary), false, true).await;
+    owned_herdr_shell_config(&f);
+    let mut servers = HerdrServers {
+        fixture: &f,
+        binary: &binary,
+        processes: Vec::new(),
+    };
+    servers.start("owned-default").await;
+    servers
+        .json(
+            "owned-default",
+            &[
+                "workspace",
+                "create",
+                "--no-focus",
+                "--label",
+                "OWNED_DEFAULT",
+                "--cwd",
+                f.dir.path().to_str().unwrap(),
+            ],
+        )
+        .await;
+    let (authority, lease) = unlocked_authority();
+    let (app, state) = herdr_native_app(&f);
+    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    assert!(!parent
+        .handle
+        .herdr_unix
+        .load(std::sync::atomic::Ordering::Acquire));
+    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(discovery).unwrap()["herdrAvailable"],
+        true
+    );
+    let rows = multiplexer_sessions(
+        app.state(),
+        source.session_id.clone(),
+        MultiplexerKind::Herdr,
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert!(serde_json::to_value(rows)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["name"] == "owned-default"));
+    let (child, mut events) = multiplexer_child(
+        &app,
+        &lease,
+        &source,
+        "owned-default",
+        MultiplexerKind::Herdr,
+        true,
+    )
+    .await;
+    owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_DEFAULT").await;
+    let session = state.session(&child.session_id).await.unwrap();
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &child.session_id, &session, true).await;
+    let tree = crate::herdr::herdr_tree(
+        app.state(),
+        source.session_id.clone(),
+        "owned-default".into(),
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let pane = tree.panes[0].pane_id.clone();
+    authority.lock().unwrap();
+    assert!(crate::herdr_path::admit(&parent, &lease).await.is_err());
+    assert!(crate::herdr::herdr_action(
+        app.state(),
+        source.session_id.clone(),
+        "owned-default".into(),
+        crate::herdr::HerdrAction::FocusPane { target: pane },
+        lease.clone()
+    )
+    .await
+    .is_err());
+    herdr_retired(&state, &source.session_id, &parent, false).await;
+    servers.stop().await;
 }

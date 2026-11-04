@@ -714,6 +714,7 @@ impl client::Handler for HostVerifier {
 pub(crate) struct SshHandle {
     handle: Arc<client::Handle<HostVerifier>>,
     open_slots: Arc<Semaphore>,
+    pub(crate) herdr_unix: std::sync::atomic::AtomicBool,
     open_owner_gone: watch::Sender<bool>,
     forward_agent: crate::forward_agent::ForwardAgent,
     pub(crate) peer_address: Option<std::net::SocketAddr>,
@@ -1071,6 +1072,7 @@ where
     Ok(SshHandle {
         handle: Arc::new(handle),
         open_slots: Arc::new(Semaphore::new(4)),
+        herdr_unix: std::sync::atomic::AtomicBool::new(false),
         open_owner_gone: watch::channel(false).0,
         forward_agent,
         peer_address: None,
@@ -3239,6 +3241,9 @@ pub async fn attach_multiplexer(
                 return Err(SshError::new("disconnected", "Session closed"));
             }
             let command = if guarded { crate::herdr_guard::attach_command(&name) } else { ordinary_command };
+            let command = if matches!(kind, crate::multiplexer::MultiplexerKind::Herdr) {
+                crate::herdr_path::select(&command, crate::herdr_path::admit(&parent, &lease).await?)
+            } else { command };
             let (mut channel, initial) = tokio::select! { biased;
                 _ = cancellation.changed() => return Err(SshError::new("disconnected", "Session closed")),
                 result = open_terminal_for(&parent.handle, &lease, cols, rows, Some(command)) => result?,

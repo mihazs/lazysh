@@ -15,6 +15,7 @@ mod forward_agent;
 mod herdr;
 mod herdr_create;
 mod herdr_guard;
+mod herdr_path;
 mod host_clipboard;
 mod identities;
 mod keep_awake;

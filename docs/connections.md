@@ -19,7 +19,16 @@ It does not attempt Eternal Terminal composition. A saved ET preference continue
 to use SSH for direct entry, without changing the saved preference. Plain-terminal
 Auto retains its existing Mosh → ET → SSH order. The dialog identifies these choices.
 
-The remote multiplexer must be installed and runnable. Mosh entry requires a Unix
+The remote multiplexer must be installed and runnable. For Herdr, the remote
+command PATH takes precedence. On a positively identified Linux or macOS SSH
+host, lazysh can also use the official per-user `$HOME/.local/bin/herdr` location
+when that PATH has no Herdr. The executable and its parent directories must pass
+ownership, permission and no-symlink checks. An unavailable Unix probe retains
+the original PATH-only behavior; custom install directories must be on PATH.
+The capability result belongs to the current SSH connection, and a reconnect
+probes again. Selection is repeated per command and does not pin binary identity.
+
+Mosh entry requires a Unix
 host and its private startup receipt; tmux also requires a verified display binding.
 A host advertising guarded Herdr must support its startup-FD extension. Missing
 guard support on stock Herdr retains ordinary terminal capabilities; an advertised
