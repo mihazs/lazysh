@@ -1731,6 +1731,11 @@ const translations = {
   credentialsUse: ["Usar na conexão", "Usar para la conexión"],
   credentialsMemory: ["As chaves permanecem na memória aqui. Para usar o armazenamento de credenciais do sistema operacional, salve as credenciais do servidor no diálogo de conexão.", "Aquí las claves permanecen en la memoria. Para usar el almacén de credenciales del sistema operativo, guarda las credenciales del servidor en su diálogo de conexión."],
   credentialsCopyFailed: ["Não foi possível copiar a chave pública. Selecione e copie manualmente.", "No se pudo copiar la clave pública. Selecciónala y cópiala manualmente."],
+  credentialsKeyFile: ["Arquivo da chave privada", "Archivo de clave privada"],
+  credentialsLoadedFile: ["{{name}} carregado. O conteúdo permanece na memória.", "{{name}} cargado. Su contenido permanece en la memoria."],
+  credentialsClearFile: ["Remover arquivo da chave", "Quitar archivo de clave"],
+  credentialsFileTooLarge: ["Escolha um arquivo de chave privada de até 64 KiB.", "Elige un archivo de clave privada de 64 KiB como máximo."],
+  credentialsFileUnreadable: ["Não foi possível ler este arquivo de chave. Escolha-o novamente.", "No se pudo leer este archivo de clave. Vuelve a elegirlo."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;

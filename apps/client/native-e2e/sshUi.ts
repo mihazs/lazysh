@@ -52,7 +52,11 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|
 export async function openOwnedRememberedSsh(gui:NativeGui,ssh:SshFixture) {
   return openSsh(gui,ssh,'ssh',ssh.port,undefined,true);
 }
-async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean,name:OwnedHostLabel='Owned SSH GUI host') {
+/** `supply` chooses the identity in the open connection dialog and presses Connect itself. */
+export async function openOwnedSshWith(gui:NativeGui,ssh:SshFixture,supply:(connect:Terminal)=>Promise<void>) {
+  return openSsh(gui,ssh,'ssh',ssh.port,undefined,false,'Owned SSH GUI host',supply);
+}
+async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean,name:OwnedHostLabel='Owned SSH GUI host',supply?:(connect:Terminal)=>Promise<void>) {
   const browser=gui.browser!,owner=await gui.appOwner();
   gui.stage='owned SSH host editor';
   const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
@@ -71,7 +75,7 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   await (await browser.$(`button[aria-label=${JSON.stringify(`Connect to ${name}`)}]`)).click();
   const connect=await browser.$(`[role="dialog"][aria-label=${JSON.stringify(`Connect to ${name}`)}]`);await connect.waitForDisplayed();
   expect(await (await connect.$('select')).getValue()).toBe(transport);
-  await enterKey(gui,ssh,connect,false,rememberKey);
+  await (supply?supply(connect):enterKey(gui,ssh,connect,false,rememberKey));
   gui.stage='owned SSH explicit fingerprint review';
   const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
   expect(await trust.getText()).toContain(ssh.fingerprint);
