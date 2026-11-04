@@ -19,7 +19,7 @@ Reading rules:
 - **Desktop** `verified` means Linux unless the cell names Windows. Windows has no SSH GUI test, so a Windows-only gap is not repeated in every row. It is tracked once in [Gaps](#gaps) (#492, #457).
 - Playwright serves the Vite UI with a mocked native bridge (`apps/client/e2e/fixtures/nativeBridge.ts`) in Chromium. It never verifies SSH, transports, keystores, biometrics, push, files or other native effects.
 - Abbreviations: `NWT` = `apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt`; `ssh.spec` = `apps/client/native-e2e/ssh.spec.ts`; `TJF` = `apps/client/src-tauri/src/tmux_jump_fixture.rs`; `HGF` = `apps/client/src-tauri/src/herdr_guard_fixture.rs`; `MX` = `apps/client/src-tauri/src/multiplexer.rs`; `MP` = `apps/client/src/MultiplexerPanel.tsx`; `TP` = `apps/client/src/TerminalPane.tsx`; `PP` = `apps/client/src/PreferencesPanel.tsx`; `prefs` = `apps/client/src/preferences.ts`; `SS` = `apps/client/e2e/simple-shortcuts.spec.ts`; `src-tauri` = `apps/client/src-tauri/src`. Other paths are repository-relative.
-- Job names: `NAR` = `native-android-runtime`, `NAA` = `native-android-auxiliary`, `NAH` = `native-android-herdr-navigation`, `NANT` = `native-android-ntfy`, `NL` = `native-linux`, `ND` = `native-desktop`, `PW` = Playwright in the `client` job (both projects unless marked).
+- Job names: `NAR` = `native-android-runtime`, `NAA` = `native-android-auxiliary`, `NAH` = `native-android-herdr-navigation`, `NANT` = `native-android-ntfy`, `NL` = `native-linux`, `NLR` = `native-linux-runtimes`, `ND` = `native-desktop`, `PW` = Playwright in the `client` job (both projects unless marked).
 
 ## CI evidence
 
@@ -34,10 +34,11 @@ All jobs are in `.github/workflows/checks.yml`.
 | `native-android-ntfy` (fdroid, google) | Real ntfy encrypted enrollment, challenge and authenticated pause. | fdroid red on the last two runs; google green on 41802219276, red on the run in progress. |
 | `native-android` | Android build plus JVM unit tests. These are unit-level, not device evidence. | Green. |
 | `native-linux` | Linux non-ignored Rust tests; selected `#[ignore]` real OpenSSH, Mosh, tmux and Herdr tests; the Linux native GUI suite (`apps/client/native-e2e`, real Tauri app under WebKitWebDriver, Xvfb and a disposable Secret Service); the published companion GUI install; `test:mosh`; `test:tmux`; real tmux Chat input. | Red since run 41603977806 (`66e309a3`, 2026-11-03, last fully green). The GUI step fails on the Mosh attachment-reconnect case (#935), so later steps (`test:published-native-gui`, `test:mosh`, `test:tmux`, tmux Chat) were skipped on every later `main` run. Rows that rely on those steps count as `verified` from the 2026-11-03 run. |
+| `native-linux-runtimes` | Ubuntu 24.04. `test:openssh` (SFTP, listing, remote reads, Git diff, preview forwarding with port fallback and teardown over real OpenSSH), `test:multiplexers` (real tmux, stock Herdr and official Zellij 0.45.1 lifecycle), `test:et` (official ET 7.0.0 built from its checksum-verified release source), `test:voice` (local Whisper on pinned public fixtures) and `test:parakeet-product` (real Parakeet manager with the pinned public archive). Each suite runs even when an earlier one fails. | Added after this audit; no `main` run yet. Rows citing it stay `implemented` until it is green on `main`. |
 | `native-desktop` (macos-latest, windows-latest) | Release checks, credential-vault non-ignored tests, Windows NSIS install/repair/uninstall, `desktop_launch::`, local PTY and ConPTY (`test:local`), display-idle, `app_lock::`, companion storage; macOS host clipboard. | Green on both. |
 | `client` | Vitest and Playwright (mocked native bridge). | Green. |
 
-No CI job runs `test:et`, `test:openssh` (SFTP, previews and files over real OpenSSH), `test:multiplexers` (real tmux lifecycle, Herdr lifecycle and Zellij), `test:voice` (local Whisper), `test:parakeet-product` or the full `test:voice-interop`. The Linux Codex and OpenCode native conversation cases (`ssh.spec:116,163`) are skipped in CI because their manifests are not provided. `ssh.rs:5794` (`macos_host_clipboard_roundtrip`) also exercises SFTP upload, preview forwarding and teardown, but only on the macOS runner.
+At audit time no CI job ran `test:et`, `test:openssh`, `test:multiplexers`, `test:voice` or `test:parakeet-product`; `native-linux-runtimes` now runs them on Linux. No CI job runs the full `test:voice-interop`. The Linux Codex and OpenCode native conversation cases (`ssh.spec:116,163`) are skipped in CI because their manifests are not provided. `ssh.rs:5794` (`macos_host_clipboard_roundtrip`) also exercises SFTP upload, preview forwarding and teardown, but only on the macOS runner.
 
 ## Summary
 
@@ -65,7 +66,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Forced transport selection | verified | verified | `App.tsx:580-584,915-931`; forced modes never fall back (`:254`). Forced Mosh: NWT:2883,3296 (NAR); ssh.spec:387 (NL). Forced SSH in every SSH case. | Forced ET anywhere; Mosh is compiled out on Windows (`src-tauri/mosh.rs:77-84`). |
 | Mosh UDP port range | implemented | verified | `App.tsx:415-416`; validation `mosh.rs:48-58`; bootstrap `-p` `mosh.rs:60-68`. Single-port range in `test:mosh` `ssh.rs:6057-6060` (NL). | Android case with a non-default range. Windows has no Mosh. |
 | Mosh server path | implemented | verified | `App.tsx:414`; quoted command `mosh.rs:60-67`. TJF:1336-1356 custom missing path fails safely (NL). | Android case with a custom path. |
-| Experimental TCP-based ET | implemented | implemented | `src-tauri/et.rs:16-151` (refuses bastion and agent forwarding, `:103-106`). `test:et` (`ssh.rs:5787`, `packages/et-transport/tests/official.rs:194`) is not in CI. | Run `test:et` in CI; Android ET case. |
+| Experimental TCP-based ET | implemented | implemented | `src-tauri/et.rs:16-151` (refuses bastion and agent forwarding, `:103-106`). `test:et` (`ssh.rs:5787`, `packages/et-transport/tests/official.rs:194`) runs in `NLR`. | First green `NLR` run on `main` makes desktop `verified`; Android ET case. |
 
 ## SSH identity and routing
 
@@ -89,7 +90,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Switch, close and reopen | verified | verified | Close NWT:1384-1396 and `sshUi.ts:111-115`; switch ssh.spec:512-529; reopen with saved credentials ssh.spec:349-370 (NL). | Android reopen with saved credentials. |
 | Last-session resume after restart | implemented | implemented | Intents in localStorage `apps/client/src/workspace.ts:21,59-85`; explicit "Restore previous workspace" `App.tsx:1498-1610,1886-1888`. Vitest; mocked `e2e/hosts.spec.ts:153`. | Native restart-and-restore case. Restore is explicit, not automatic. |
 | Reconnect reattaches tmux and Herdr | implemented | implemented | `App.tsx:1543-1577` (`attachTmux`, `attachMultiplexer`). Attach primitives are real-tested (`test:tmux`, HGF), not this restore flow. | Native restore-then-reattach case. |
-| Zellij initial attach without automatic restoration | implemented | implemented | Restore skips Zellij (`App.tsx:1524-1526`). `test:multiplexers` is not in CI. | Same limit as the reference client; real Zellij attach in CI. |
+| Zellij initial attach without automatic restoration | implemented | implemented | Restore skips Zellij (`App.tsx:1524-1526`). Real attach `zellij.rs:97` runs in `NLR` (`test:multiplexers`). | Same limit as the reference client; First green `NLR` run on `main` makes desktop `verified`. |
 | Optional client environment flag | missing | missing | PTY request sends no environment (`ssh.rs:1700`); no env request anywhere in `apps/client`. | Opt-in env request (for example a client marker variable). |
 | Mosh survives backgrounding and SSH control loss | verified | verified | NWT:2487,2723-2753 ownedMoshSurvivesBusyBackgroundThroughRealUi (`tests/android-ssh-host.test.ts:194`, NAR); ssh.spec:540 (UDP daemon survives client and server SSH closure; NL). | No IP-roaming or network-switch test (`docs/multiplexers.md:233-235`); Windows has no Mosh. |
 
@@ -198,7 +199,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | --- | --- | --- | --- | --- |
 | Discover tmux and list sessions, windows and panes | implemented | verified | MX:333-430,547; MP:55,136,150. TJF:1850 real `multiplexer_tree` (`test:tmux`, NL). | Android tmux case. |
 | Detect Herdr and list servers | verified | verified | MX:197-215,240-265; MP:137-142. NWT:1936-1973,2376-2381 (NAR, NAH); ssh.spec:485,505-507 (NL). | — |
-| Detect Zellij and list sessions | implemented | implemented | MX:216,250-251. Only real test `src-tauri/zellij.rs:97` is ignored; `e2e/multiplexer-locales.spec.ts:7-59` is mocked. | Real Zellij in CI. |
+| Detect Zellij and list sessions | implemented | implemented | MX:216,250-251. Real test `src-tauri/zellij.rs:97` runs in `NLR`; `e2e/multiplexer-locales.spec.ts:7-59` is mocked. | First green `NLR` run on `main` makes desktop `verified`. |
 | Recent project directories from agent history | implemented | implemented | MP:103-114,129-131 (newest first, deduplicated). Vitest `MultiplexerPanel.test.tsx:27`. | Real companion history feeding the list. |
 | Start a workspace in a chosen directory | implemented | partial | tmux `-c` MX:481-486; Herdr `apps/client/src/HerdrPanel.tsx:54`; Zellij `ZellijPanel.tsx:30`. Only tmux create-with-directory is real-tested (TJF:1892-1903, NL). | Herdr and Zellij create on desktop; any Android case. |
 
@@ -209,7 +210,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Attach to a session (including named server `-L`) | implemented | verified | MX:90-97; `App.tsx:2254-2260`. TJF:836,1715 (`test:tmux`, NL). | Android tmux case. |
 | Create a session (explicit or saved create-if-missing default) | implemented | verified | MX:113-133,172-195; host editor `App.tsx:573-577`. TJF:1256,1892 (`test:tmux`); TJF:1474 (Mosh entry, NL). | Android tmux default. |
 | Configurable prefix | implemented | implemented | `MultiplexerShortcuts.tsx:15-36`. `e2e/awake-shortcuts-locales.spec.ts:20-44` checks bytes against a mocked writer. | Real PTY delivery and persistence. |
-| Window and pane actions | implemented | partial | MX:434-545; MP:152-163. Rename session, split, create window and wrong-server refusal real-tested (TJF:1809-1890, NL). Select window, rename window and zoom only in ignored MX:702. | Run MX:702 in CI; Android case. |
+| Window and pane actions | implemented | partial | MX:434-545; MP:152-163. Rename session, split, create window and wrong-server refusal real-tested (TJF:1809-1890, NL). Select window, rename window and zoom in MX:702, which runs in `NLR`. | First green `NLR` run on `main` makes desktop `verified`; Android case. |
 | Numbered window controls | implemented | implemented | Prefix plus digit `MultiplexerShortcuts.tsx:41`; Jump To by index `apps/client/src/TmuxJumpPanel.tsx:64-70`. | Remote-effect test. |
 | Detach | implemented | implemented | prefix+d `MultiplexerShortcuts.tsx:22`; closing the tab detaches (MP:166). | Assert the session survives detach. |
 | Project-directory launcher | implemented | implemented | MP:119,129-131,147. | Same as recent directories. |
@@ -221,9 +222,9 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Persistent named servers: list and attach | verified | verified | MX:35,78-87; `ssh.rs:3168-3229`. NWT:1938-1941,2380-2383,3330-3339 (NAR); HGF:241-276 two named servers, ssh.spec:387-451 saved default via Mosh (NL). | — |
 | Workspaces, tabs and panes tree | verified | verified | `src-tauri/herdr.rs:6-41,334`; `apps/client/src/HerdrNavigation.tsx:119-127`. NWT:2391-2394 (NAH); ssh.spec:485 (NL). | — |
 | Focus workspace, tab or pane | verified | partial | `herdr.rs:350-417`; `App.tsx:1835-1867`. NWT:1970-1981,2357-2372 (NAR, NAH). Desktop real test covers FocusWorkspace only (HGF:383). | Desktop tab and pane focus. |
-| Create and rename workspaces and tabs, split | implemented | implemented | `herdr.rs:212-330`; `HerdrPanel.tsx:10-14,54-71`. Real test `herdr.rs:667` is ignored. | Real Herdr lifecycle in CI. |
+| Create and rename workspaces and tabs, split | implemented | implemented | `herdr.rs:212-330`; `HerdrPanel.tsx:10-14,54-71`. Real test `herdr.rs:667` runs in `NLR` with the same-run stock Herdr. | First green `NLR` run on `main` makes desktop `verified`. |
 | Configurable prefix and numbered tabs | implemented | implemented | `MultiplexerShortcuts.tsx:23,41`; tab numbers `HerdrPanel.tsx:62`. | Prefix delivery and remote effect. |
-| Pane zoom | implemented | implemented | `herdr.rs:327-329`; `HerdrPanel.tsx:66`. | Not run by any CI test. |
+| Pane zoom | implemented | implemented | `herdr.rs:327-329`; `HerdrPanel.tsx:66`. Real zoom in `herdr.rs:667` (`NLR`). | First green `NLR` run on `main` makes desktop `verified`. |
 | Per-agent state | partial | implemented | `apps/client/src/useHerdrNavigation.ts:13-52`; `HerdrNavigation.tsx:14,128-130`. Mocked `e2e/workspace.spec.ts:1199-1205`. The Android real case shows only "Unknown status" (NWT:1495-1511). | Real Herdr with a non-unknown agent state. |
 | Exact event context (agent to its pane, workspace, tab, cwd) | verified | implemented | `HerdrNavigation.tsx:128`; `App.tsx:1856-1863`; `apps/client/src/HerdrSessionDetails.tsx:17-28`. NWT:1490-1497,2393,2400 (NAR, NAH). Desktop mocked `workspace.spec.ts:385-387`. | Desktop exact-pane navigation case. |
 
@@ -231,11 +232,11 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Detect, list and attach | implemented | implemented | MX:43,98-99,216; MP:138-142. Real test `zellij.rs:97` ignored; mocked `multiplexer-locales.spec.ts`. | Real Zellij in CI. |
+| Detect, list and attach | implemented | implemented | MX:43,98-99,216; MP:138-142. Real test `zellij.rs:97` runs in `NLR`; mocked `multiplexer-locales.spec.ts`. | First green `NLR` run on `main` makes desktop `verified`. |
 | Initial auto-attach (saved default) | implemented | implemented | `App.tsx:573-577,822`; MX:172-195. TJF:1381,1587 ignored. | Run TJF:1587 in CI. |
 | Shortcut panel | implemented | implemented | `apps/client/src/ZellijPanel.tsx:33-40` (prefix panel deliberately excluded, MP:132). Vitest `ZellijPanel.test.tsx:8`. | Real action effect. |
-| Numbered tabs (1 to 20 plus number field) | implemented | implemented | `ZellijPanel.tsx:36-39`. Mocked `e2e/zellij-quick-tabs.spec.ts:7-46`. | Real go-to-tab. |
-| Remote action bridge | implemented | implemented | `zellij.rs:37,53,56`; unit tests `zellij.rs:76-92`. | Real test is ignored. |
+| Numbered tabs (1 to 20 plus number field) | implemented | implemented | `ZellijPanel.tsx:36-39`. Mocked `e2e/zellij-quick-tabs.spec.ts:7-46`. Real go-to-tab in `zellij.rs:97` (`NLR`). | First green `NLR` run on `main` makes desktop `verified`. |
+| Remote action bridge | implemented | implemented | `zellij.rs:37,53,56`; unit tests `zellij.rs:76-92`; real tab and pane actions `zellij.rs:97` (`NLR`). | First green `NLR` run on `main` makes desktop `verified`. |
 | Jump tree, deep links, custom prefix, reconnect restoration | n/a | n/a | Not offered by the reference client for Zellij; lazysh also has none. | — |
 
 ## Jump navigation
@@ -355,8 +356,8 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Whisper models: catalog download, import, local inference | implemented | implemented | `apps/client/src/VoicePanel.tsx:288-356,596-609`; `src-tauri/voice.rs:453-483`. Catalog tests use a fixture HTTP client; real inference `voice.rs:589-601` is ignored (`test:voice` not in CI). | Real transcription in CI on each platform. |
-| Parakeet local model | missing | partial | `src-tauri/voice/parakeet.rs:52-83` (Linux x86_64 only). CI checks linking only (`voice/interop_tests.rs:74`). | Windows and Android support; run `test:parakeet-product`. |
+| Whisper models: catalog download, import, local inference | implemented | implemented | `apps/client/src/VoicePanel.tsx:288-356,596-609`; `src-tauri/voice.rs:453-483`. Catalog tests use a fixture HTTP client; real inference `voice.rs:589-601` runs on Linux in `NLR` (`test:voice`). | First green `NLR` run on `main` verifies Linux; other platforms. |
+| Parakeet local model | missing | partial | `src-tauri/voice/parakeet.rs:52-83` (Linux x86_64 only). `NLR` runs `test:parakeet-product` (install, warm reuse, removal). | Windows and Android support. |
 | Apple SpeechAnalyzer | n/a | n/a | iOS-only (`packages/apple-speech/src/lib.rs:27`). | — |
 | Optional metered cloud engine | implemented | implemented | `VoicePanel.tsx:469-477,699-705`; `src-tauri/voice/cloud.rs`. Fake HTTPS backend `voice/cloud/tests.rs:566,589` (NL); Android IPC reaches validation only (NWT:4285). | Client against the real transcription service (#345). |
 | Language selection | implemented | implemented | `VoicePanel.tsx:662-687,702-704`; `voice.rs:354`. Mocked `e2e/voice-locales.spec.ts:8`. | Native non-English inference. |
@@ -392,14 +393,14 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Staged, unstaged and untracked changes | implemented | implemented | `apps/client/src/RepositoryPanel.tsx:258-264`; `src-tauri/repository.rs:260-281`. Real local Git `repository.rs:488`, not over SSH. | Status over SSH in CI (`test:openssh`). |
+| Staged, unstaged and untracked changes | implemented | implemented | `apps/client/src/RepositoryPanel.tsx:258-264`; `src-tauri/repository.rs:260-281`. Real local Git `repository.rs:488`; staged and unstaged diff over real OpenSSH in `test:openssh` (`NLR`). Untracked files are not covered over SSH. | Untracked status over SSH; green `NLR` on `main`. |
 | Per-file side-by-side highlighted hunks | partial | partial | Side-by-side table `RepositoryPanel.tsx:87-89,274`; `e2e/repository-annotations.spec.ts:6-12`. | Diff rows are not syntax-highlighted. |
 | Binary-file listing | implemented | implemented | `RepositoryPanel.tsx:269,274`; `repository.rs:363`. | UI test for binary entries. |
 | Remembered file | implemented | implemented | sessionStorage `lazysh-review:{session}` (`RepositoryPanel.tsx:149,192`). Vitest only. | Reload test. |
 | Working tree and historical commits | implemented | implemented | `RepositoryPanel.tsx:145,239-250`; `repository.rs:295,325,386`. Mocked `e2e/file-review-locales.spec.ts:11`. | Native history and tree browsing over SSH. |
 | Line comments included in the next prompt | verified | verified | `RepositoryPanel.tsx:207-233,276` posts a prompt draft consumed at TP:267. `repository-annotations.spec.ts:6-34`, `file-review-locales.spec.ts:43-46` (PW). | Source files are mocked. |
 | CLI entry point | missing | missing | No review subcommand in `apps/agent/src/main.rs:194-330`. | — |
-| Files: browse and code view | implemented | implemented | `apps/client/src/SessionTools.tsx:28-250`; `CodePreview.tsx:10-28`. Mocked `file-review-locales.spec.ts:11-35`. | Real remote read in CI (`test:openssh`). |
+| Files: browse and code view | implemented | implemented | `apps/client/src/SessionTools.tsx:28-250`; `CodePreview.tsx:10-28`. Mocked `file-review-locales.spec.ts:11-35`. Remote listing and reads over real OpenSSH in `test:openssh` (`NLR`). | First green `NLR` run on `main` makes desktop `verified`. |
 | Markdown viewing | implemented | implemented | `RepositoryPanel.tsx:6,270-272`. Vitest only. | Any e2e. |
 | Media viewing | partial | partial | Images up to 2 MB in repository review only (`RepositoryPanel.tsx:71-77,176-178,268`); Files is text only. | Media in Files; video, audio and PDF. |
 
