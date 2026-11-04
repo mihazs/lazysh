@@ -397,13 +397,16 @@ function touchScrollFixture(height?:number) {
   Object.assign(terminal, {element: target});
   if(height) {const surface=document.createElement('div');surface.className='xterm-screen';surface.getBoundingClientRect=()=>({height} as DOMRect);target.append(surface);}
   const wheels: WheelEvent[] = [];
-  target.addEventListener('wheel', event => wheels.push(event));
+  // Pixel travel in order: xterm wheels, or history rows scrolled directly.
+  const moves: number[] = [];
+  target.addEventListener('wheel', event => {wheels.push(event); moves.push(event.deltaY);});
+  Object.assign(terminal, {scrollLines: vi.fn((lines: number) => moves.push(lines * (target.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / terminal.rows))});
   const view = mount();
   const canvas = screen.getByLabelText('Terminal for Host');
   const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
     bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
   }));
-  return {view, canvas, wheels, touch, target};
+  return {view, canvas, wheels, moves, touch, target};
 }
 describe("terminal interactions", () => {
   it.each(['hidden','inactive','disconnect','lock','dispose'] as const)('clears unapplied local context at the %s boundary',boundary=>{
@@ -811,42 +814,43 @@ describe("terminal interactions", () => {
   });
   it.each(['none','x10'])('retains rounded sub-row travel across lifts in %s mode without reversing rounding debt',mode=>{
     terminal.modes.mouseTrackingMode=mode;
-    const {wheels,touch}=touchScrollFixture(486);
+    const {wheels,moves,touch}=touchScrollFixture(486);
     const row=20.25;
     for(const segments of [1,360]) {
-      wheels.length=0;touch('touchstart',100,300);
+      moves.length=0;touch('touchstart',100,300);
       for(let step=1;step<=segments;step++)touch('touchmove',100,300-row*9*step/segments);
-      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(row*9);
-      expect(wheels.every(event=>event.deltaMode===WheelEvent.DOM_DELTA_PIXEL)).toBe(true);
+      expect(moves.reduce((sum,delta)=>sum+delta,0)).toBe(row*9);
+      // Normal history scrolls synchronously instead of through a DOM wheel.
+      expect(wheels).toHaveLength(0);
       touch('touchend',100,120);
     }
-    wheels.length=0;touch('touchstart',100,300);touch('touchmove',100,291);
-    expect(wheels).toHaveLength(0);
+    moves.length=0;touch('touchstart',100,300);touch('touchmove',100,291);
+    expect(moves).toHaveLength(0);
     touch('touchmove',100,270);touch('touchmove',100,285);touch('touchmove',100,290);touch('touchmove',100,291);
-    expect(wheels.map(event=>event.deltaY)).toEqual([row,-row]);
-    touch('touchend',100,290);wheels.length=0;
+    expect([...moves]).toEqual([row,-row]);
+    touch('touchend',100,290);moves.length=0;
     touch('touchstart',100,300);touch('touchmove',100,289);touch('touchend',100,289);
     touch('touchstart',100,300);touch('touchmove',100,289);
-    expect(wheels.map(event=>event.deltaY)).toEqual([row]);
-    touch('touchcancel',100,289);wheels.length=0;touch('touchmove',100,200);expect(wheels).toHaveLength(0);
+    expect([...moves]).toEqual([row]);
+    touch('touchcancel',100,289);moves.length=0;touch('touchmove',100,200);expect(moves).toHaveLength(0);
   });
   it.each(['none','x10','vt200'])('keeps first short drag responsive and repeated travel proportional in %s mode',mode=>{
     terminal.modes.mouseTrackingMode=mode;
-    const {wheels,touch}=touchScrollFixture(480);
+    const {moves,touch}=touchScrollFixture(480);
     for(const direction of [-1,1]) {
-      touch('touchcancel',100,100);wheels.length=0;
+      touch('touchcancel',100,100);moves.length=0;
       for(let gesture=0;gesture<5;gesture++) {
         touch('touchstart',100,100);touch('touchmove',100,100-direction*16);
-        const count=wheels.length;touch('touchmove',100,100-direction*16);expect(wheels).toHaveLength(count);
-        if(gesture===0)expect(wheels.map(event=>event.deltaY)).toEqual(mode==='vt200'?[]:[direction*20]);
+        const count=moves.length;touch('touchmove',100,100-direction*16);expect(moves).toHaveLength(count);
+        if(gesture===0)expect([...moves]).toEqual(mode==='vt200'?[]:[direction*20]);
         touch('touchend',100,100-direction*16);
       }
-      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(direction*(mode==='vt200'?4:80));
+      expect(moves.reduce((sum,delta)=>sum+delta,0)).toBe(direction*(mode==='vt200'?4:80));
     }
   });
   it.each(['none','vt200'])('retires short-drag debt at ownership and gesture boundaries in %s mode',mode=>{
     terminal.modes.mouseTrackingMode=mode;
-    const {view,canvas,wheels,touch,target}=touchScrollFixture(480);
+    const {view,canvas,moves,touch,target}=touchScrollFixture(480);
     const show=(id='ssh',active=true,connected=true)=>view.rerender(<TerminalPane session={{id,name:'Host',connected,terminal} as unknown as LiveSession} active={active} reportError={vi.fn()} />);
     for(const boundary of ['cancel','multitouch','tap','horizontal','mode','height','buffer','scrollback','inactive','disconnect','session','preferences','reader']) {
       terminal.modes.mouseTrackingMode=mode;
@@ -866,8 +870,8 @@ describe("terminal interactions", () => {
       if(boundary==='session')show('another');
       if(boundary==='preferences')act(()=>savePreferences({...getPreferences(),bodyGestures:{...getPreferences().bodyGestures,tap:'escape'}}));
       if(boundary==='reader'){act(()=>savePreferences({...getPreferences(),screenReader:true}));act(()=>savePreferences({...getPreferences(),screenReader:false}));}
-      wheels.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
-      expect(wheels.map(event=>event.deltaY),boundary).toEqual(mode==='vt200'||boundary==='buffer'||boundary==='scrollback'?[]:[boundary==='height'?25:20]);
+      moves.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
+      expect([...moves],boundary).toEqual(mode==='vt200'||boundary==='buffer'||boundary==='scrollback'?[]:[boundary==='height'?25:20]);
       touch('touchcancel',100,86);
     }
     expect(mocks.write).not.toHaveBeenCalled();

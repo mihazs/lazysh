@@ -11,7 +11,7 @@ import TerminalComposer from './TerminalComposer';
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type {UnappliedTerminalEdit} from "./terminalIme";
-import { modifiedTerminalText, observeTerminalInput, type LiveSession } from "./terminal";
+import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
@@ -309,7 +309,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             const viewportScroll = pixelWheel && session.terminal.buffer.active.type !== 'alternate' && session.terminal.options.scrollback !== 0;
             const route = `${tracking}:${viewportScroll}:${session.terminal.buffer.active.type}:${session.terminal.options.scrollback === 0}`;
             const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
-            let count = 1, amount = deltaY;
+            let count = 1, amount = deltaY, lines = 0;
             let mode: number = WheelEvent.DOM_DELTA_PIXEL;
             if (Number.isFinite(height) && height > 0) {
               // xterm rounds visible rows and retains partial wheel travel between events.
@@ -331,7 +331,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
               count = Math.min(limit, Math.abs(rows));
               amount = Math.sign(rows); mode = WheelEvent.DOM_DELTA_LINE;
               scroll.pending -= amount * count * height;
-              if (pixelWheel) {
+              // History scrolls synchronously: a wheel lands on the next scroll
+              // event, after which streaming output could already have moved
+              // a reader who was following the bottom row.
+              if (viewportScroll) {lines = amount * count; count = 0;}
+              else if (pixelWheel) {
                 amount *= count * height; count = count ? 1 : 0; mode = WheelEvent.DOM_DELTA_PIXEL;
               }
             } else {scroll.pending = 0; remainder = null; scroll.mode = null; scroll.height = 0;}
@@ -339,6 +343,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
               bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY: amount, deltaMode: mode,
             }));
+            if (lines) session.terminal.scrollLines(lines);
             event.stopPropagation();
             if (event.cancelable) event.preventDefault();
             return;
@@ -457,6 +462,18 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     // Authoritative Mosh parser resizes never echo back to the server.
     const size = session.moshResize ? session.moshResize.onResizeIntent(resizeRemote) : terminal.onResize(resizeRemote);
     const screen = element.querySelector<HTMLElement>(".xterm-screen");
+    const viewport = element.querySelector<HTMLElement>(".xterm-viewport");
+    let viewportHeight = viewport?.clientHeight ?? 0;
+    // A taller container clamps the DOM viewport before any fit runs. That
+    // scroll is layout, not a reader: xterm would otherwise move the reader to
+    // the clamp and stop following output. Mosh resizes only after a round trip.
+    const clamped = (event: Event) => {
+      if (!viewport || event.target !== viewport || viewport.clientHeight === viewportHeight) return;
+      viewportHeight = viewport.clientHeight;
+      event.stopPropagation();
+      syncTerminalViewport(terminal);
+    };
+    element.addEventListener("scroll", clamped, true);
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
       const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
@@ -468,21 +485,25 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       // A closed Mosh screen retains its final canonical rows. A later stock
       // fit could discard its bottom rows when the final cursor is above them.
       if (session.moshResize) {
-        if (!session.connected) return;
-        const proposed = addon.proposeDimensions();
+        const proposed = session.connected ? addon.proposeDimensions() : undefined;
         if (proposed) {
           try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
           catch {reportError(t('appUnavailableInThisAppBuild'));}
         }
       } else {
-        const buffer = terminal.buffer.active, cols = terminal.cols;
-        // Stock height-only resize moves scrolled-back history with the cursor.
-        const anchor = buffer.type === 'normal' && buffer.viewportY < buffer.baseY
-          ? terminal.registerMarker(buffer.viewportY - buffer.baseY - buffer.cursorY) : undefined;
+        const buffer = terminal.buffer.active;
+        // Stock resize moves scrolled-back history with the cursor.
+        const history = buffer.type === 'normal' && buffer.viewportY < buffer.baseY;
+        let top = buffer.viewportY;
+        // Reflow merges or splits wrapped rows; their logical line start survives.
+        if (history && addon.proposeDimensions()?.cols !== terminal.cols) while (top > 0 && buffer.getLine(top)?.isWrapped) top--;
+        const anchor = history ? terminal.registerMarker(top - buffer.baseY - buffer.cursorY) : undefined;
         try {addon.fit();
-          if (anchor && !anchor.isDisposed && terminal.cols === cols && terminal.buffer.active === buffer) terminal.scrollToLine(anchor.line);
+          if (anchor && !anchor.isDisposed && terminal.buffer.active === buffer) terminal.scrollToLine(anchor.line);
         } finally {anchor?.dispose();}
       }
+      syncTerminalViewport(terminal);
+      if (viewport) viewportHeight = viewport.clientHeight;
     };
     fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);
@@ -495,6 +516,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       if (inputOwner.current === owner) inputOwner.current = null;
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
+      element.removeEventListener("scroll", clamped, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
       resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
       terminal.attachCustomKeyEventHandler(() => true);
