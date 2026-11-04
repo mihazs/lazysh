@@ -222,6 +222,9 @@ private data class NtfyReturnSnapshot(val foreground:String,val roles:Map<NtfyRe
         }
     }
 }
+private fun ntfyChallengeTrafficFailure(primary:Throwable,observe:()->String) {
+    runCatching {primary.addSuppressed(AssertionError(observe()))}
+}
 private fun ntfyReturnFailure(primary:Throwable,snapshot:()->NtfyReturnSnapshot) {
     // Observation/report failures must never replace the original action failure.
     runCatching {
@@ -3751,6 +3754,9 @@ class NativeWorkspaceTest {
     }
 
     @Test fun ownedUnifiedPushEventParserAndKeystoreReplayStateFailClosed() {
+        val trafficPrimary=AssertionError("original")
+        ntfyChallengeTrafficFailure(trafficPrimary) {throw IllegalStateException("private")}
+        assertEquals("original",trafficPrimary.message);assertEquals(0,trafficPrimary.suppressed.size)
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",InstrumentationRegistry.getArguments().getString("lazyshNtfyAcceptance")=="true")
         val context=instrumentation.targetContext
@@ -4128,6 +4134,20 @@ class NativeWorkspaceTest {
                 }
             } catch(_:Exception) {"unavailable"}
             primary.addSuppressed(AssertionError("Ntfy challenge state[enrollment=$enrollment registration=$registration busy=$busy]"))
+            ntfyChallengeTrafficFailure(primary) {
+                val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/challenge-observation").openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
+                try {
+                    connection.connectTimeout=2000;connection.readTimeout=2000;connection.instanceFollowRedirects=false
+                    connection.requestMethod="POST";connection.setRequestProperty("X-Lazysh-Fixture",nonce)
+                    check(connection.responseCode==200)
+                    val bytes=connection.inputStream.use {it.readNBytes(257)}
+                    check(bytes.size<=256)
+                    val value=JSONObject(bytes.toString(Charsets.UTF_8))
+                    val names=listOf("subscribeSeen","subscribeOk","confirmSeen","confirmOk")
+                    check(value.keys().asSequence().toSet()==names.toSet() && names.all {value.get(it) is Boolean})
+                    "Ntfy relay after-failure["+names.joinToString(" ") {"$it=${value.getBoolean(it)}"}+"]"
+                } finally {connection.disconnect()}
+            }
             throw primary
         }
         assertTrue("Exact server device binding",stateType.getDeclaredMethod("getDeviceId").invoke(confirmed)==data.getString("deviceId"))

@@ -422,6 +422,12 @@ export function challengeStateObservation(text:string) {
     busy:match[3]==='unavailable'?null:match[3]==='true',
   };
 }
+export function challengeTrafficObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy relay after-failure[').length!==2)return;
+  const match=/Ntfy relay after-failure\[subscribeSeen=(true|false) subscribeOk=(true|false) confirmSeen=(true|false) confirmOk=(true|false)\]/.exec(text);
+  if(!match)return;
+  return {subscribeSeen:match[1]==='true',subscribeOk:match[2]==='true',confirmSeen:match[3]==='true',confirmOk:match[4]==='true'};
+}
 export function eventObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;
   const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow)(?: hostProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) issuedInHandler=(within|outside|unavailable) postProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) callbackProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) postClock=(unavailable|beforeIssued|expired|withinWindow))?)?\]/g)];
@@ -447,7 +453,8 @@ async function nativeFailure(directory:string) {
     const event=eventObservation(failure);
     const returnState=returnStateObservation(failure);
     const challengeState=challengeStateObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{})};
+    const challengeTraffic=challengeTrafficObservation(failure);
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{}),...(challengeTraffic?{challengeTraffic}:{})};
   }catch{return {};}
 }
 

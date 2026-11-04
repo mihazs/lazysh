@@ -50,6 +50,70 @@ fn fixture_authorized(headers: &HeaderMap, nonce: &str) -> bool {
         == Some(nonce)
 }
 
+#[derive(Default)]
+struct ChallengeTraffic {
+    subscribe_seen: AtomicBool,
+    subscribe_ok: AtomicBool,
+    confirm_seen: AtomicBool,
+    confirm_ok: AtomicBool,
+}
+
+fn challenge_observation(
+    nonce: String,
+    traffic: Arc<ChallengeTraffic>,
+) -> axum::routing::MethodRouter {
+    post(move |headers: HeaderMap| {
+        let nonce = nonce.clone();
+        let traffic = traffic.clone();
+        async move {
+            if !fixture_authorized(&headers, &nonce) {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            axum::Json(serde_json::json!({
+                "subscribeSeen": traffic.subscribe_seen.load(Ordering::SeqCst),
+                "subscribeOk": traffic.subscribe_ok.load(Ordering::SeqCst),
+                "confirmSeen": traffic.confirm_seen.load(Ordering::SeqCst),
+                "confirmOk": traffic.confirm_ok.load(Ordering::SeqCst),
+            }))
+            .into_response()
+        }
+    })
+}
+
+#[tokio::test]
+async fn challenge_observation_is_owned_and_contains_only_closed_flags() {
+    let traffic = Arc::new(ChallengeTraffic::default());
+    traffic.subscribe_seen.store(true, Ordering::SeqCst);
+    let app = Router::new().route("/observe", challenge_observation("owned".into(), traffic));
+    for (nonce, expected) in [
+        ("wrong", StatusCode::UNAUTHORIZED),
+        ("owned", StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/observe")
+                    .header("X-Lazysh-Fixture", nonce)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body = to_bytes(response.into_body(), 256).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "subscribeSeen": true, "subscribeOk": false, "confirmSeen": false, "confirmOk": false
+                })
+            );
+        }
+    }
+}
+
 // Extract only the frozen window from the same snapshot encrypted below.
 // Neither a new clock sample nor private subscription/event fields leave here.
 fn event_window_headers(
@@ -400,11 +464,16 @@ async fn real_ntfy_android_encrypted_challenge() {
     let event_requested = Arc::new(AtomicBool::new(false));
     let event_accepted = Arc::new(AtomicBool::new(false));
     let confirmed = Arc::new(AtomicBool::new(false));
+    let challenge_traffic = Arc::new(ChallengeTraffic::default());
     let source_id = source(&service, SOURCE, "owned public event").await;
     let (worker_stop, receiver) = watch::channel(false);
     let worker_service = service.clone();
     let worker = tokio::spawn(async move { worker_service.worker(receiver).await });
     let control = Router::new()
+        .route(
+            "/__fixture/challenge-observation",
+            challenge_observation(nonce.clone(), challenge_traffic.clone()),
+        )
         .route(
             "/__fixture/background",
             signal(nonce.clone(), background.clone()),
@@ -513,12 +582,14 @@ async fn real_ntfy_android_encrypted_challenge() {
         );
     let confirms = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let router=service.router().layer(axum::middleware::from_fn({
-        let background=background.clone();let confirmed=confirmed.clone();let confirms=confirms.clone();let service=service.clone();let replay=replay.clone();
+        let background=background.clone();let confirmed=confirmed.clone();let confirms=confirms.clone();let service=service.clone();let replay=replay.clone();let traffic=challenge_traffic.clone();
         move |request:axum::extract::Request,next:axum::middleware::Next| {
-            let background=background.clone();let confirmed=confirmed.clone();let confirms=confirms.clone();let service=service.clone();let replay=replay.clone();
+            let background=background.clone();let confirmed=confirmed.clone();let confirms=confirms.clone();let service=service.clone();let replay=replay.clone();let traffic=traffic.clone();
             async move {
                 let subscription=request.uri().path()=="/v1/push/subscription";
                 let confirmation=request.uri().path()=="/v1/push/confirm";
+                if subscription {traffic.subscribe_seen.store(true,Ordering::SeqCst);}
+                if confirmation {traffic.confirm_seen.store(true,Ordering::SeqCst);}
                 if subscription && tokio::time::timeout(Duration::from_secs(8),background.acquire()).await.is_err() {
                     return StatusCode::GATEWAY_TIMEOUT.into_response();
                 }
@@ -527,6 +598,8 @@ async fn real_ntfy_android_encrypted_challenge() {
                     if let Ok(Some(encoded))=saved {if encoded.len()<=16384 {*replay.lock().unwrap()=Some(Zeroizing::new(encoded));}}
                 }
                 let response=next.run(request).await;
+                if subscription && response.status()==StatusCode::OK {traffic.subscribe_ok.store(true,Ordering::SeqCst);}
+                if confirmation && response.status()==StatusCode::OK {traffic.confirm_ok.store(true,Ordering::SeqCst);}
                 if confirmation && response.status()==StatusCode::OK {
                     confirms.fetch_add(1,Ordering::SeqCst);
                     let active=service.db(move |store|Ok(store.connection.query_row(
