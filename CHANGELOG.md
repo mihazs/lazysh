@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve owned terminal corrections delivered as paired keyless composition-text input events.
+
 - Never pause terminal typing when a keyboard edit, such as an accepted SwiftKey suggestion, cannot be translated safely into terminal input. Changed default: lazysh now skips that one edit, leaves the terminal unchanged and keeps typing, Compose paste and toolbar keys working; a small "Keyboard edit skipped" notice fades after 8 seconds unless expanded for review. Previously typing stayed paused until the review was dismissed.
 
 - Add explicitly selected OpenCode recorded Conversation views for V1 and V2 databases, with current tool updates, revert handling and recorded token counters. Records remains the default; recorded history does not establish live agent identity or enable unconfirmed input.
