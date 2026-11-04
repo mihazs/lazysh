@@ -20,13 +20,29 @@ Cline CLI 3.0.74 store selection follows `CLINE_PROVIDER_SETTINGS_PATH`, then
 `~/.cline/data/settings/providers.json`. Overrides use Cline's JavaScript trim
 rules, including relative paths against the companion's working directory.
 Explicit `[cline].auth_paths` and API keys take precedence. A missing or malformed
-selected store never silently reads another default login. Shared stores only
-supply Cline credentials from `cline` or legacy `cline-pass` entries; records
-explicitly naming another provider are ignored. Other providers' newer OAuth
-records cannot replace the Cline credential or select its quota cache. This routes the
-existing supported credential format; it does not establish a valid subscription
-or successful provider quota request. Primary path contract:
-[Cline 3.0.74 source](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/shared/src/storage/paths.ts).
+selected store never silently reads another default login. The saved Cline-family
+`lastUsedProvider` selects `cline` or `cline-pass`; other selections or an absent
+selection use canonical `cline`. A selected pass entry inherits canonical auth
+only when its own auth property is absent. Expiry never ranks different accounts,
+and invalid selected auth never falls through to another account.
+
+The reader validates all provider entries against the pinned Cline 3.0.74
+structural store schema, including required version, provider and timestamps;
+unknown fields remain compatible. Stores must resolve to regular files and fit
+within 1 MiB. Ordinary symlinks to regular stores are supported. Unix opens are
+nonblocking to reject a FIFO replacement without hanging. Nondefault environment
+store overrides are unavailable on Windows until a bounded Windows reader is
+qualified; existing explicit `auth_paths`, canonical store and API keys retain
+precedence. Windows explicit/default paths keep their prior synchronous-open race
+limitation and have not received native acceptance in this change. OAuth store tokens and
+explicit usage/environment API keys are supported; stored manual `settings.apiKey`
+or `auth.apiKey` credentials are not discovered. This does not establish a valid
+subscription or successful quota request. An owned 787-case differential corpus
+matches the pinned schema under Zod 4.4.3 on Node and Bun; it does not prove every
+JavaScript/Rust URL-parser edge or CLI runtime behavior. Primary contracts:
+[Cline storage paths](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/shared/src/storage/paths.ts),
+[CLI selection](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/apps/cli/src/main.ts),
+[store schema](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/core/src/types/provider-settings.ts).
 
 Configuration follows the pinned [ai-usagebar schema](https://github.com/akitaonrails/ai-usagebar/blob/7b0da9a774358283328850620509404e29262431/docs/configuration.md). For example:
 

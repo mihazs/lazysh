@@ -236,7 +236,7 @@ mod tests {
         if std::env::var_os("LAZYSH_OWNED_CLINE_CACHE").is_some() {
             let mut only =
                 load_config_with(None, |vendor, _| vendor == core::VendorId::Cline).unwrap();
-            only.cline = config.cline;
+            only.cline = config.cline.clone();
             only.cline.enabled = true;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -258,6 +258,42 @@ mod tests {
             assert!(!json.contains("owned-cline-cache-token"));
             assert!(!json.contains("owned-foreign-fake-token"));
         }
+        if let Some(path) = std::env::var_os("LAZYSH_OWNED_CLINE_SCHEMA") {
+            let path = std::path::PathBuf::from(path);
+            let corpus: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let steps = corpus["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), corpus["caseCount"].as_u64().unwrap() as usize);
+            assert!(!steps.is_empty());
+            let target = path.with_file_name("schema-current.json");
+            config.cline.auth_paths = Some(vec![target.clone()]);
+            config.cline.api_key = None;
+            for (index, step) in steps.iter().enumerate() {
+                let mut input = corpus["baseline"].clone();
+                let parts = step["path"].as_array().unwrap();
+                let mut parent = &mut input;
+                for key in &parts[..parts.len() - 1] {
+                    parent = parent.get_mut(key.as_str().unwrap()).unwrap();
+                }
+                let key = parts.last().unwrap().as_str().unwrap();
+                if step["remove"] == true {
+                    parent.as_object_mut().unwrap().remove(key);
+                } else {
+                    parent[key] = step["value"].clone();
+                }
+                std::fs::write(&target, serde_json::to_vec(&input).unwrap()).unwrap();
+                let actual = core::has_local_credentials(core::VendorId::Cline, &config);
+                if actual != step["valid"].as_bool().unwrap() {
+                    std::fs::write(
+                        std::env::var_os("LAZYSH_OWNED_CLINE_RECEIPT").unwrap(),
+                        format!("schema-case:{index}"),
+                    )
+                    .unwrap();
+                    panic!("owned Cline schema differential disagreement");
+                }
+            }
+            std::fs::write(path.with_file_name("schema.count"), steps.len().to_string()).unwrap();
+        }
         std::fs::write(
             std::env::var_os("LAZYSH_OWNED_CLINE_RECEIPT").expect("owned completion receipt"),
             if available { "present" } else { "missing" },
@@ -268,6 +304,153 @@ mod tests {
     async fn selected_cline_stores_preserve_cli_precedence_without_network_or_alternate_fallback() {
         use std::{ffi::OsString, process::Stdio};
         for (case, default_valid, overrides, expected) in [
+            (
+                "oversized-store",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@large-store")],
+                false,
+            ),
+            (
+                "regular-symlink",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@store-link")],
+                cfg!(unix),
+            ),
+            (
+                "fifo-store",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@store-fifo")],
+                false,
+            ),
+            (
+                "schema-differential",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@current"),
+                    ("LAZYSH_OWNED_CLINE_SCHEMA", "@schema-corpus"),
+                ],
+                true,
+            ),
+            (
+                "cache-canonical-over-legacy",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@canonical-over-legacy"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "cache-selected-legacy-over-canonical",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@selected-legacy"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "cache-pass-inherits-canonical",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@pass-inherits"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "cache-last-used-foreign-defaults-canonical",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@last-used-foreign"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "canonical-invalid-no-fallback",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@canonical-invalid")],
+                false,
+            ),
+            (
+                "selected-pass-invalid-no-fallback",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@pass-invalid")],
+                false,
+            ),
+            (
+                "legacy-only-without-selection",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@legacy-unselected")],
+                false,
+            ),
+            (
+                "missing-version",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@missing-version")],
+                false,
+            ),
+            (
+                "unsupported-version",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@unsupported-version")],
+                false,
+            ),
+            (
+                "missing-updated",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@missing-updated")],
+                false,
+            ),
+            (
+                "invalid-updated",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-updated")],
+                false,
+            ),
+            (
+                "missing-provider",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@missing-provider")],
+                false,
+            ),
+            (
+                "invalid-token-source",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-token-source")],
+                false,
+            ),
+            (
+                "invalid-expiry",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-expiry")],
+                false,
+            ),
+            (
+                "invalid-last-used",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-last-used")],
+                false,
+            ),
+            (
+                "invalid-modes",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-modes")],
+                false,
+            ),
+            (
+                "invalid-voice-mode",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-voice-mode")],
+                false,
+            ),
+            (
+                "invalid-repairs",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-repairs")],
+                false,
+            ),
             (
                 "cache-control",
                 false,
@@ -374,6 +557,12 @@ mod tests {
             ),
             ("blank-default", true, vec![("CLINE_DIR", "  ")], true),
             (
+                "canonical-environment-path",
+                true,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@default")],
+                true,
+            ),
+            (
                 "explicit-path",
                 false,
                 vec![
@@ -392,17 +581,39 @@ mod tests {
                 true,
             ),
         ] {
-            if matches!(case, "cache-control" | "mixed-cache") && !cfg!(target_os = "linux") {
+            if matches!(case, "regular-symlink" | "fifo-store") && !cfg!(unix) {
+                continue;
+            }
+            // Windows known folders are not isolated by HOME/USERPROFILE.
+            // Never use its real canonical credential store in this fixture.
+            if cfg!(windows) && matches!(case, "blank-default" | "canonical-environment-path") {
+                continue;
+            }
+            let expected = expected
+                && (!cfg!(windows)
+                    || matches!(
+                        case,
+                        "blank-default"
+                            | "canonical-environment-path"
+                            | "explicit-path"
+                            | "inline-key"
+                    ));
+            let cached = case.starts_with("cache-") || case == "mixed-cache";
+            if cached && !cfg!(target_os = "linux") {
                 continue;
             }
             let directory = tempfile::tempdir().unwrap();
+            if case == "schema-differential" {
+                let corpus = include_str!("../tests/fixtures/cline-store-schema.json");
+                std::fs::write(directory.path().join("schema-corpus.json"), corpus).unwrap();
+            }
             let home = directory.path().join("home");
             let profile = directory.path().join("profile");
             let data = directory.path().join("data");
             let file = directory.path().join("selected.json");
             let malformed = directory.path().join("malformed.json");
             let default = home.join(".cline/data/settings/providers.json");
-            let input = r#"{"version":1,"providers":{"cline":{"settings":{"auth":{"accessToken":"owned-cline-fixture","accountId":"owned-account","expiresAt":1}}}}}"#;
+            let input = r#"{"version":1,"providers":{"cline":{"updatedAt":"2026-11-04T00:00:00.000Z","tokenSource":"oauth","settings":{"provider":"cline","auth":{"accessToken":"owned-cline-fixture","accountId":"owned-account","expiresAt":1}}}}}"#;
             for path in [
                 &file,
                 &profile.join("data/settings/providers.json"),
@@ -423,13 +634,35 @@ mod tests {
             )
             .unwrap();
             std::fs::write(&malformed, "malformed-owned-store").unwrap();
-            let cline = serde_json::json!({"settings":{"provider":"cline","auth":{"accessToken":"owned-cline-cache-token","accountId":"owned-cline-cache-account","expiresAt":1}}});
-            let foreign = serde_json::json!({"settings":{"provider":"openai-codex","auth":{"accessToken":"owned-foreign-fake-token","accountId":"owned-foreign-account","expiresAt":2}}});
+            std::fs::write(
+                directory.path().join("large-store.json"),
+                vec![b' '; 1024 * 1024 + 1],
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+                if case == "regular-symlink" {
+                    symlink(&file, directory.path().join("store-link.json")).unwrap();
+                }
+                if case == "fifo-store" {
+                    let status = std::process::Command::new("mkfifo")
+                        .arg(directory.path().join("store-fifo.json"))
+                        .status()
+                        .unwrap();
+                    assert!(status.success());
+                }
+            }
+
+            let cline = serde_json::json!({"updatedAt":"2026-11-04T00:00:00.000Z","tokenSource":"oauth","settings":{"provider":"cline","auth":{"accessToken":"owned-cline-cache-token","accountId":"owned-cline-cache-account","expiresAt":1}}});
+            let foreign = serde_json::json!({"updatedAt":"2026-11-04T00:00:00.000Z","tokenSource":"oauth","settings":{"provider":"openai-codex","auth":{"accessToken":"owned-foreign-fake-token","accountId":"owned-foreign-account","expiresAt":2}}});
             let mut legacy = cline.clone();
-            legacy["settings"]
-                .as_object_mut()
-                .unwrap()
-                .remove("provider");
+            legacy["settings"]["provider"] = serde_json::json!("cline-pass");
+            legacy["settings"]["auth"]["accountId"] =
+                serde_json::json!("owned-legacy-cache-account");
+            legacy["settings"]["auth"]["accessToken"] =
+                serde_json::json!("owned-legacy-cache-token");
+            legacy["settings"]["auth"]["expiresAt"] = serde_json::json!(2);
             let mut invalid_cline = cline.clone();
             invalid_cline["settings"]["auth"]["accessToken"] = serde_json::json!("");
             let mut other = foreign.clone();
@@ -451,16 +684,139 @@ mod tests {
             ] {
                 std::fs::write(
                     directory.path().join(format!("{name}.json")),
-                    serde_json::to_vec(&serde_json::json!({"version":1,"providers":providers}))
+                    serde_json::to_vec(&serde_json::json!({"version":1,"lastUsedProvider":if name=="legacy" {"cline-pass"}else{"cline"},"providers":providers}))
                         .unwrap(),
                 )
                 .unwrap();
             }
-            if matches!(case, "cache-control" | "mixed-cache") {
+            let mut canonical_newer = cline.clone();
+            canonical_newer["settings"]["auth"]["expiresAt"] = serde_json::json!(2);
+            let mut selected_legacy = legacy.clone();
+            selected_legacy["settings"]["auth"]["expiresAt"] = serde_json::json!(1);
+            let mut pass_without_auth = legacy.clone();
+            pass_without_auth["settings"]
+                .as_object_mut()
+                .unwrap()
+                .remove("auth");
+            let mut pass_invalid = legacy.clone();
+            pass_invalid["settings"]["auth"]["accessToken"] = serde_json::json!("");
+            for (name, selected, providers) in [
+                (
+                    "canonical-over-legacy",
+                    "cline",
+                    serde_json::json!({"cline":cline,"cline-pass":legacy}),
+                ),
+                (
+                    "selected-legacy",
+                    "cline-pass",
+                    serde_json::json!({"cline":canonical_newer,"cline-pass":selected_legacy}),
+                ),
+                (
+                    "pass-inherits",
+                    "cline-pass",
+                    serde_json::json!({"cline":cline,"cline-pass":pass_without_auth}),
+                ),
+                (
+                    "last-used-foreign",
+                    "openai-codex",
+                    serde_json::json!({"cline":cline,"cline-pass":legacy,"openai-codex":foreign}),
+                ),
+                (
+                    "canonical-invalid",
+                    "cline",
+                    serde_json::json!({"cline":invalid_cline,"cline-pass":legacy}),
+                ),
+                (
+                    "pass-invalid",
+                    "cline-pass",
+                    serde_json::json!({"cline":cline,"cline-pass":pass_invalid}),
+                ),
+                (
+                    "legacy-unselected",
+                    "cline",
+                    serde_json::json!({"cline-pass":legacy}),
+                ),
+            ] {
+                let mut value = serde_json::json!({"version":1,"lastUsedProvider":selected,"providers":providers});
+                if name == "legacy-unselected" {
+                    value.as_object_mut().unwrap().remove("lastUsedProvider");
+                }
+                std::fs::write(
+                    directory.path().join(format!("{name}.json")),
+                    serde_json::to_vec(&value).unwrap(),
+                )
+                .unwrap();
+            }
+            for name in [
+                "missing-version",
+                "unsupported-version",
+                "missing-updated",
+                "invalid-updated",
+                "missing-provider",
+                "invalid-token-source",
+                "invalid-expiry",
+                "invalid-last-used",
+                "invalid-modes",
+                "invalid-voice-mode",
+                "invalid-repairs",
+            ] {
+                let mut value = serde_json::json!({"version":1,"providers":{"cline":cline}});
+                match name {
+                    "missing-version" => {
+                        value.as_object_mut().unwrap().remove("version");
+                    }
+                    "unsupported-version" => value["version"] = serde_json::json!(2),
+                    "missing-updated" => {
+                        value["providers"]["cline"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("updatedAt");
+                    }
+                    "invalid-updated" => {
+                        value["providers"]["cline"]["updatedAt"] =
+                            serde_json::json!("not-a-timestamp")
+                    }
+                    "missing-provider" => {
+                        value["providers"]["cline"]["settings"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("provider");
+                    }
+                    "invalid-token-source" => {
+                        value["providers"]["cline"]["tokenSource"] = serde_json::json!("unknown")
+                    }
+                    "invalid-expiry" => {
+                        value["providers"]["cline"]["settings"]["auth"]["expiresAt"] =
+                            serde_json::json!(-1)
+                    }
+                    "invalid-last-used" => value["lastUsedProvider"] = serde_json::json!(true),
+                    "invalid-modes" => value["modes"] = serde_json::json!([]),
+                    "invalid-voice-mode" => {
+                        value["modes"] = serde_json::json!({"voiceInput":{"modelId":"owned"}})
+                    }
+                    "invalid-repairs" => {
+                        value["repairs"] = serde_json::json!({"bedrockProfile":"true"})
+                    }
+                    _ => unreachable!(),
+                }
+                std::fs::write(
+                    directory.path().join(format!("{name}.json")),
+                    serde_json::to_vec(&value).unwrap(),
+                )
+                .unwrap();
+            }
+            if cached {
                 let cache = directory.path().join("cache/ai-usagebar/cline");
                 std::fs::create_dir_all(&cache).unwrap();
                 // SHA256 identifiers belong only to the fixed synthetic account/token above.
                 let payload = serde_json::json!({"target":"https://api.cline.bot|user:d2dd244c787353bcfbd337e190ed80e4864a50d822a440691bbc3a4fcb330680|v3","credential":"b3a8a0e5d87a0913272a234bb81578f4da3c75406efa7fc54ef8828738b5ffe0","plan":{"name":"Owned cached plan","period_end":null},"windows":[{"percent":37.0,"reset":null},null,null]});
+                let mut payload = payload;
+                if case == "cache-selected-legacy-over-canonical" {
+                    payload["credential"] = serde_json::json!(
+                        "4a4ea91a223253952c2a00cb548bf087a89ad91d54edf7fcd49451b84a9b708f"
+                    );
+                    payload["target"]=serde_json::json!("https://api.cline.bot|user:6f45ec30e1f3cd055cb830918e3fe274f10d05a4d12cd36339cee5a87c84f05c|v3");
+                }
                 std::fs::write(
                     cache.join("usage.json"),
                     serde_json::to_vec(&payload).unwrap(),
@@ -498,14 +854,14 @@ mod tests {
                     "@profile" => profile.as_os_str().to_owned(),
                     "@data" => data.as_os_str().to_owned(),
                     "@file" => file.as_os_str().to_owned(),
+                    "@default" => default.as_os_str().to_owned(),
                     "@malformed" => malformed.as_os_str().to_owned(),
                     "@trimmed-data" => {
                         OsString::from(format!("\u{feff} {} \t\u{feff}", data.display()))
                     }
                     "@nel-file" => OsString::from(format!("\u{85}{}", file.display())),
                     "@oversized" => OsString::from("x".repeat(4097)),
-                    "@current" | "@foreign" | "@other" | "@mixed" | "@invalid-cline"
-                    | "@mismatched" | "@legacy" => directory
+                    value if value.starts_with('@') => directory
                         .path()
                         .join(format!("{}.json", &value[1..]))
                         .into_os_string(),
@@ -522,7 +878,18 @@ mod tests {
                     panic!("owned Cline probe exceeded its deadline");
                 }
             };
-            assert!(status.success(), "selected Cline store case failed: {case}");
+            assert!(
+                status.success(),
+                "selected Cline store case failed: {case}; receipt={}",
+                std::fs::read_to_string(directory.path().join("probe.result"))
+                    .unwrap_or_else(|_| "absent".into())
+            );
+            if case == "schema-differential" {
+                assert_eq!(
+                    std::fs::read_to_string(directory.path().join("schema.count")).unwrap(),
+                    "787"
+                );
+            }
             assert_eq!(
                 std::fs::read_to_string(directory.path().join("probe.result"))
                     .expect("the selected private helper must actually execute"),

@@ -33,7 +33,7 @@ rusqlite = { version = "0.41", default-features = false, features = ["bundled"] 
 unicode-width = "0.2"
 getrandom = "0.4.3"
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["process", "fs"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Threading"] }
 [dev-dependencies]
