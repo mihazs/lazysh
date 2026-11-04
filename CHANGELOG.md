@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Open reported agent activity in a focused mobile detail view with contextual Back and restored list position.
+
 - Fix companion hook events failing on Windows with `StorageError: operation failed (sqlite_code=5)` when many agent hooks open the companion store at once, including the first run that creates it. Opening a store that is already set up no longer waits behind other openers or their durable commits; only creating or upgrading the store is exclusive. WAL mode, full commit durability, private sidecar checks and the 3-second wait budget are unchanged. No defaults change.
 
 - Keep an opened Chat transcript reader when switching to the terminal or another session view and back: its messages, reading position and unsent draft stay as they were instead of resetting to an empty reader. Following pauses while the reader is out of view, a confirmed terminal destination is still released on leaving, and a reader opened from reported agent history still retires when left.

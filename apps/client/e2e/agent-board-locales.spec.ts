@@ -56,6 +56,12 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} reported discovery keeps
   await context.locator('summary').click();
   await expect(context).toContainText(agentBoardRecord.paneId);
   await expect(context.getByRole('button',{name:/jump|attach/i})).toHaveCount(0);
+  await expect(root.locator('.approval-panel article')).toBeVisible();
+  if(testInfo.project.name==='phone') {
+    await expect(search).toBeHidden();
+    const back=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('navigationBack');});
+    await context.getByRole('button',{name:back,exact:true}).click();await expect(search).toBeVisible();
+  }
   const approval=root.locator('.approval-panel article');const original=await approval.elementHandle();
   const callsBefore=await page.evaluate(()=>window.agentBoard.calls);
   await search.fill('PARSER');await search.focus();const input=await search.elementHandle();
@@ -77,6 +83,7 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} reported discovery keeps
   await search.fill('no matching report');await expect(root.getByText('No matching reported agents', {exact:true})).toBeVisible();
   await root.getByRole('button',{name:'Clear filters',exact:true}).click();
   await root.locator('.agent-card').filter({hasText:agentBoardRecord.summary}).getByRole('button').first().click();
+  if(testInfo.project.name==='phone')await root.getByRole('region',{name:'Selected report'}).getByRole('button',{name:'Back',exact:true}).click();
   await root.getByRole('searchbox').scrollIntoViewIfNeeded();
   expect(await root.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('reported-agent-discovery.png')});
@@ -91,14 +98,31 @@ test('clearing report details visibly restores the selected row in a long activi
     window.agentBoard=mountAgentBoard();
     window.agentBoard.setReports(Array.from({length:30},(_,index)=>({...agentBoardRecord,sessionId:`long-report-${index}`,agent:'Codex',state:'working',project:`/work/${index}`,summary:`Synthetic work ${index}`})));
   });
+  const search=page.getByRole('searchbox',{name:'Search reported agents'});await search.fill('/work/');
   const row=page.getByRole('button',{name:'View Codex report for /work/29',exact:true});
+  await row.scrollIntoViewIfNeeded();const scroller=page.locator('.agent-board-fixture'),before=await scroller.evaluate(node=>node.scrollTop);
   await row.click();
   const details=page.getByRole('region',{name:'Selected report',exact:true});
   await expect(details).toBeFocused();
   await expect(details).toBeInViewport();
-  await details.getByRole('button',{name:'Clear selection',exact:true}).click();
+  await details.getByRole('button',{name:testInfo.project.name==='phone'?'Back':'Clear selection',exact:true}).click();
   await expect(details).toHaveCount(0);
   await expect(row).toBeFocused();
   await expect(row).toBeInViewport({ratio:0.95});
+  await expect(search).toHaveValue('/work/');
+  if(testInfo.project.name==='phone') {
+    expect(before).toBeGreaterThan(0);expect(Math.abs((await scroller.evaluate(node=>node.scrollTop))-before)).toBeLessThanOrEqual(1);
+    await row.click();await expect(search).toBeHidden();
+    const modal=await page.evaluateHandle(()=>{const node=document.createElement('div');node.setAttribute('role','dialog');node.setAttribute('aria-modal','true');document.body.append(node);return node;});
+    expect(await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))).toBe(true);
+    await expect(details).toBeVisible();await modal.evaluate(node=>node.remove());
+    expect(await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))).toBe(false);
+    await expect(row).toBeFocused();await expect(search).toHaveValue('/work/');
+    expect(Math.abs((await scroller.evaluate(node=>node.scrollTop))-before)).toBeLessThanOrEqual(1);
+    await row.click();
+    const elsewhere=await page.evaluateHandle(()=>{const button=document.createElement('button');button.textContent='External focus';document.body.append(button);button.focus();window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true}));return button;});
+    await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
+    expect(await elsewhere.evaluate(node=>document.activeElement===node)).toBe(true);await elsewhere.evaluate(node=>node.remove());
+  }
   await page.screenshot({path:testInfo.outputPath('report-clear-visible-row.png')});
 });
