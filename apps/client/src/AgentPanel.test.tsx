@@ -404,6 +404,40 @@ it('keeps the companion empty state stable during polling and retains an error u
 
 describe('live Herdr discovery',()=>{
 
+  it('restores focus to the completed group when a focused agent finishes during polling',()=>pollingClock(async invoke=>{
+    const hasFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    let snapshot=tree;
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:snapshot);
+    render(<HerdrNavigation sessionId="moving-focus" hostLabel="Owned host" visible mode="agents" onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    browser.getByRole('button',{name:/^builder/}).focus();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(document.activeElement).toBe(browser.getByRole('button',{name:/^builder/}));
+    snapshot={...tree,agents:tree.agents.map(agent=>({...agent,agent_status:'done'}))};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    const done=browser.getByRole('button',{name:/^Done · 1/});expect(done.getAttribute('aria-expanded')).toBe('false');expect(document.activeElement).toBe(done);hasFocus.mockRestore();
+  }));
+
+  it.each(['blur','unfocused'] as const)('does not reclaim focus after %s while agents refresh',reason=>pollingClock(async invoke=>{
+    let snapshot=tree;const hasFocus=vi.spyOn(document,'hasFocus').mockReturnValue(reason!=='unfocused');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:snapshot);
+    render(<HerdrNavigation sessionId="released-focus" hostLabel="Owned host" visible mode="agents" onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const row=screen.getByRole('button',{name:/^builder/});row.focus();if(reason==='blur')row.blur();
+    snapshot={...tree,agents:tree.agents.map(agent=>({...agent,agent_status:'done'}))};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(document.activeElement).toBe(document.body);hasFocus.mockRestore();
+  }));
+
+  it('does not reclaim focus after the agent view is hidden',()=>pollingClock(async invoke=>{
+    const hasFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    const props={sessionId:'hidden-focus',hostLabel:'Owned host',mode:'agents' as const,onNavigate:vi.fn(),onAttach:vi.fn(),onClose:vi.fn()};
+    const view=render(<HerdrNavigation {...props} visible/>);await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const row=screen.getByRole('button',{name:/^builder/});row.focus();view.rerender(<HerdrNavigation {...props} visible={false}/>);row.blur();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(document.activeElement).toBe(document.body);hasFocus.mockRestore();
+  }));
+
   it('keeps completed agents compact, searchable and expandable across refreshes',()=>pollingClock(async invoke=>{
     const completed={...tree,panes:[...tree.panes,{...tree.panes[0],terminal_id:'term-done',pane_id:'done-pane',focused:false,agent_status:'done'}],agents:[...tree.agents,{...tree.agents[0],terminal_id:'term-done',pane_id:'done-pane',name:'finished task',agent_status:'done'}]};
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:completed);

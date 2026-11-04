@@ -26,6 +26,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
   const [statusToggles,setStatusToggles]=useState<Set<string>>(()=>new Set());
   const statusId=useId();
+  const navigationRoot=useRef<HTMLElement>(null),focusedAgent=useRef<string|undefined>(undefined);
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();
   const setupTrigger=useRef<HTMLButtonElement>(null);
   const setupHeading=useRef<HTMLHeadingElement>(null);
@@ -45,6 +46,18 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       settledCallback.current?.({host:sessionId,server:data?.server??'',mode,identity:settledIdentity,failed:settledFailed});
   },[sessionId,visible,busy,lease,mode,data?.server,settledIdentity,settledFailed]);
   const tree=data?.snapshot;
+  useLayoutEffect(()=>{
+    if(visible && mode==='agents' && lease.current() && !document.hidden && document.hasFocus() && focusedAgent.current && document.activeElement===document.body) {
+      const target=Array.from(navigationRoot.current?.querySelectorAll<HTMLElement>('[data-agent-identity]')??[]).find(node=>node.dataset.agentIdentity===focusedAgent.current);
+      const group=target?.closest('section');
+      const fallback=group?.querySelector<HTMLButtonElement>('.herdr-status-toggle');
+      (fallback??target?.querySelector<HTMLButtonElement>('.herdr-navigation-row'))?.focus();
+    }
+  },[data?.snapshot,data?.rows,visible,mode,lease]);
+  useEffect(()=>{
+    const pointer=(event:PointerEvent)=>{if(!document.activeElement?.contains(event.target as Node))focusedAgent.current=undefined;};
+    window.addEventListener('pointerdown',pointer,true);return()=>window.removeEventListener('pointerdown',pointer,true);
+  },[]);
   const referenceCounts=reportedSessionCounts(data?.rows??[]);
   const term=query.trim().toLocaleLowerCase();
   const match=(...values:(string|null|undefined)[])=>values.some(value=>value?.toLocaleLowerCase().includes(term));
@@ -93,7 +106,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const rows=data?.rows.filter(agent=>match(agent.name,agent.agent,agent.cwd,agent.pane_id,
     tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,
     tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label))??[];
-  return <section className="herdr-navigation" data-mode={mode} data-setup-view={setupOpen||undefined} hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy} onKeyDownCapture={event=>{if(event.key==='Escape' && setupRequested){event.preventDefault();event.stopPropagation();showSetup(false);}}}>
+  return <section ref={navigationRoot} onFocusCapture={event=>{focusedAgent.current=(event.target as HTMLElement).closest<HTMLElement>('[data-agent-identity]')?.dataset.agentIdentity;}} onBlurCapture={()=>{focusedAgent.current=undefined;}} className="herdr-navigation" data-mode={mode} data-setup-view={setupOpen||undefined} hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy} onKeyDownCapture={event=>{if(event.key==='Escape' && setupRequested){event.preventDefault();event.stopPropagation();showSetup(false);}}}>
     <header><div><h3 ref={setupHeading} tabIndex={-1}>{t(setupOpen?'herdrAgentsServer':mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small>{hostLabel}</small></div>{!setupOpen && <button className="icon-button" ref={setupTrigger} title={t('herdrAgentsServer')} aria-label={t('herdrAgentsServer')} onClick={()=>showSetup(true)}><Settings2 size={18} aria-hidden="true"/></button>}{data?.server && mode==='spaces' && <details className="herdr-shared-focus-note muted" onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))event.currentTarget.open=false;}} onKeyDownCapture={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary aria-label={t('herdrSharedFocusShort')} title={t('herdrSharedFocusShort')}><Info size={17} aria-hidden="true"/></summary><p>{t('herdrNavigationShared')}</p></details>}<button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button herdr-navigation-back" title={t(setupRequested?'navigationBack':'herdrNavigationBack')} onClick={()=>setupRequested?showSetup(false):onClose()}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t(setupRequested?'navigationBack':'herdrNavigationBack')}</span></button></header>
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
@@ -128,7 +141,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
           const matching=rows.filter(agent=>agent.agent_status===status);
           const key=JSON.stringify([data.server,status]),closed=!term && (status==='done'?!statusToggles.has(key):statusToggles.has(key));
           const groupId=`${statusId}-${status}`;
-          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{term?<span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>:<button type="button" className="herdr-status-toggle" aria-expanded={!closed} aria-controls={groupId} onClick={()=>setStatusToggles(previous=>{const next=new Set(previous);if(!next.delete(key))next.add(key);return next;})}><span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>{closed?<ChevronRight size={16} aria-hidden="true"/>:<ChevronDown size={16} aria-hidden="true"/>}</button>}</h4><div id={groupId} hidden={closed}>{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div></section>;
+          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{term?<span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>:<button type="button" className="herdr-status-toggle" aria-expanded={!closed} aria-controls={groupId} onClick={()=>setStatusToggles(previous=>{const next=new Set(previous);if(!next.delete(key))next.add(key);return next;})}><span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>{closed?<ChevronRight size={16} aria-hidden="true"/>:<ChevronDown size={16} aria-hidden="true"/>}</button>}</h4><div id={groupId} hidden={closed}>{matching.map(agent=><div className="herdr-agent-row" data-agent-identity={JSON.stringify([agent.terminal_id,agent.pane_id])} key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div></section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
       </div>
