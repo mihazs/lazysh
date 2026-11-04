@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Reduce workspace clutter by removing the redundant explanation beneath the session manager action.
+
 - Import SSH private keys from a file in the SSH identities panel on desktop and Android. The file contents stay in memory, are not shown in the paste field, and files over 64 KiB are refused before reading. Imported OpenSSH, PEM and PKCS#8 keys tolerate Windows line endings and a byte-order mark. Connecting with a public key (`.pub`, `authorized_keys` entry, certificate, RFC 4716 or PEM public key) now fails before authentication with a specific error instead of a generic decode error, and an encrypted key without its passphrase reports that a passphrase is needed. Host-key pins stay in `hosts.json`; storage is unchanged.
 
 - Keep a terminal reader in history while output streams and across resizes: a finger scroll that starts at the live bottom no longer snaps back to new output, width changes keep the same logical line after reflow, and a taller viewport (for example, closing the on-screen keyboard) no longer moves a Mosh reader or stops a Mosh session at the bottom from following output.
