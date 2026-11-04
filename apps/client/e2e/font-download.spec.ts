@@ -1,3 +1,4 @@
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {readFileSync} from 'node:fs';
 import {openLocalizedApp} from './fixtures/localizedApp';
@@ -6,7 +7,8 @@ import type {policy} from './fixtures/FontPolicyHarness';
 declare global{interface Window{notoPolicy:typeof policy;}}
 const config=JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json',import.meta.url),'utf8'));
 async function preferences(page:import('@playwright/test').Page){
-  await openLocalizedApp(page,'en');await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await openLocalizedApp(page,'en');await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts',{exact:true}).click();
 }
 test('font download stays explicit and preserves an existing font after an invalid response',async({page})=>{

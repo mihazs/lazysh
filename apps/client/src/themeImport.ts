@@ -72,13 +72,23 @@ export function exportTheme(value: ImportedTheme): {json: string; code: string; 
 }
 function rgb(value: string): number[] {return [1,3,5].map(index => parseInt(value.slice(index,index+2),16));}
 function mix(a: string,b: string,amount: number): string {const other=rgb(b);return '#'+rgb(a).map((c,i)=>Math.round(c*(1-amount)+other[i]*amount).toString(16).padStart(2,'0')).join('');}
+function luminance(color:string): number {return rgb(color).map(v=>{const n=v/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);}
 export function contrast(a: string,b: string): number {
-  const luminance=(color:string)=>rgb(color).map(v=>{const n=v/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
   const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);
 }
 function readable(value: string, backgrounds: string[]): string {
   const candidates=[value.slice(0,7),'#000000','#ffffff'];
   return candidates.find(color=>backgrounds.every(bg=>contrast(color,bg)>=4.5)) ?? (contrast('#000000',backgrounds[0])>contrast('#ffffff',backgrounds[0])?'#000000':'#ffffff');
+}
+function glassOpacityFloor(panel:string,foregrounds:string[]): string {
+  // Opaque black/white bound every RGB underlay. Keep each result on the
+  // panel's side of the ink luminance; endpoint contrast alone can miss a crossing.
+  for(let percent=78;percent<100;percent++) {
+    const backgrounds=['#000000','#ffffff'].map(underlay=>mix(panel,underlay,1-percent/100));
+    if(foregrounds.every(ink=>backgrounds.every(background=>(luminance(background)-luminance(ink))*(luminance(panel)-luminance(ink))>0 && contrast(ink,background)>=4.5)))
+      return `${percent+1}%`; // One percentage point covers channel quantization.
+  }
+  return '100%';
 }
 export function chromeColors(theme: ImportedTheme): Record<string,string> {
   const {colors:c}=importedTheme(theme), bg=c.background!.slice(0,7), fg=c.foreground!.slice(0,7);
@@ -91,5 +101,6 @@ export function chromeColors(theme: ImportedTheme): Record<string,string> {
     const candidate=c[key]??fg, background=panel;
     result[name+'-bg']=background;result[name]=readable(candidate,[...surfaces,background]);
   }
-  return Object.fromEntries(Object.entries(result).map(([key,value])=>['--theme-'+key,value]));
+  return {...Object.fromEntries(Object.entries(result).map(([key,value])=>['--theme-'+key,value])),
+    '--theme-glass-opacity-floor':glassOpacityFloor(panel,['text','muted','accent','danger','warning','blue','purple'].map(key=>result[key]))};
 }

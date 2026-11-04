@@ -1,5 +1,51 @@
 # Android instrumentation
 
+## Controlled clock state for owned ntfy acceptance
+
+The dedicated ntfy owner uses the source-pinned API36/default AOSP provisioner,
+the attested QEMU process/AVD, and stable local ADB-server, transport, guest boot
+and adbd identities. Guest SDK36 and absence of all three fixture packages are
+required. This is never an operation on a physical device or an operator-selected
+host. System-image field provenance and actual shell command support still need
+qualification on the workflow-owned image; source support alone is not execution.
+
+After downloads, APK preparation and trust inspection, before fixture packages or
+enrollment state exist, the owner saves the exact automatic-time boolean, disables
+and reads it back, then sets OS wall time **once** to freshly sampled host time plus
+1000ms using ordinary-shell `cmd alarm set-time`. It does not request root, grant
+permissions, change authenticated host timestamps, or retry a failed setup.
+An independent Toybox `date +%s%3N` read with host wall/monotonic brackets must put
+the entire guest-minus-host interval strictly above zero and at most2000ms.
+Both millisecond quantization intervals are included; the readback uncertainty and
+monotonic span must each be at most250ms. These are fixed fixture-admission bounds,
+not production tolerances or increased acceptance deadlines. Exit0 from the setter
+is insufficient: Android16's service deliberately reports success independently
+of the native clock setter result.
+
+The original notification callback, future/stale-event checks, replay protection,
+durable receipts and native deadlines remain unchanged. Initial readback does not
+prove later drift or exact UTC synchronization; a real native pass is still
+required. This controlled positive-offset fixture does not qualify arbitrary user
+clocks, automatic-time operation, near-expiry delivery, performance or physical
+Samsung behavior. Exported receipts contain only closed setup/readback/restoration
+states and declared bounds, never raw timestamps or command output.
+
+Cleanup first stops owned children/reverses and removes fixture packages, then
+independently verifies package/state absence before restoring and reading back the
+original automatic-time boolean. Lost ownership or unestablished teardown blocks
+restoration rather than changing time beneath retained high-water state. Primary
+acceptance failures and closed cleanup-failure stages remain in the finite failure
+receipt; setup/cleanup failure cannot produce a successful acceptance receipt.
+
+The existing `tests/android-ntfy.test.ts` Bun owner covers interval boundaries,
+quantization, host discontinuities, unsupported/unchanged readback, ownership,
+single-setting policy and teardown/restoration. The actual task remains
+`bun run test:android-ntfy`; unit success does not replace its three native cases.
+Primary Android16 source: [alarm service](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/apex/jobscheduler/service/java/com/android/server/alarm/AlarmManagerService.java),
+[shell permissions](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/packages/Shell/AndroidManifest.xml),
+[automatic-time commands](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/services/core/java/com/android/server/timedetector/TimeDetectorShellCommand.java)
+and [Toybox date precision](https://android.googlesource.com/platform/external/toybox/+/e21e76d30fa15996188b79affbc25cfd0c13deff/toys/posix/date.c).
+
 ## Build SDK
 
 Install `platforms;android-36` and `platforms;android-37.0`. The app and shared push library compile
@@ -283,6 +329,32 @@ reported no failure; the aborted SSH native finally remains unconfirmed. Manual
 Android upload remains unexecuted; the next packaged case must qualify image reads.
 
 
+The existing `test:android-ssh` owner also selects `ownedSshImeTransactionsThroughRealUi` through `LAZYSH_ANDROID_UI_IME=1`, with separate `ssh-ime-ui` reports. This opt-in case uses the current packaged app, ordinary hostkey/authentication UI, a source-bound raw receiver, and the test APK's fixed-operation InputMethodService. It never navigates to the separate Vite IME harness. In the closed `--ime-transactions NONCE` mode, the receiver emits a nonce-bound READY only after raw-mode/pid setup. After that genuine banner, native composing correction, tail extension, two ASCII deletions and an intentional repeat must produce exactly `there\x7f\x7fthe`; a later current-connection marker must arrive once and a retained old connection must add nothing. Native waits for a distinct nonce-bound DELIVERED banner before Disconnect; the receiver emits it only after writing and flushing the exact fixed wire stream. An earlier acknowledgement cannot hide later unexpected bytes. Commit return values and remote editor readbacks are not host-delivery acknowledgements: the host independently checks exact receiver bytes and the observed receiver PID/birth/executable hash.
+
+This case requires the owned API36 AOSP emulator and the existing explicit receiver binary admission. It checks normal text/non-password EditorInfo and the absence of `NO_PERSONALIZED_LEARNING`, retaining existing suggestion/autocorrect hints. Fixture admission checks matched APK signers; provider access stays target-UID scoped with a fixed nonce, no arbitrary text arguments and only fixed transaction names. The original default/enabled IME state is restored before ordinary host cleanup; primary and cleanup failures remain distinct. No private keyboard mode, changed timeout, injected DOM value or replacement terminal wire is used. Local compilation/contracts do not establish native acceptance; physical SwiftKey/Samsung/Rex behavior, Unicode/non-tail edits and full IME parity remain unqualified.
+
+
+The existing `test:android-ssh` owner selects the D-pad checkpoint with `LAZYSH_ANDROID_UI_DPAD=1` and separate `ssh-dpad-ui` reports; the generic Android suite excludes its fixture-dependent method. The packaged app authenticates to the owned SSH server, uses normal Preferences → Keyboard and gestures → Toolbar keys and order → Add dpad, and restores that toolbar change afterward. A real native tap sends one Up; a separate trusted MotionEvent stream retains one pointer/downTime from DOWN through held Up, Left, Down, Right and neutral MOVE phases before one UP. No injected DOM events or replacement terminal are used.
+
+The closed test-only receiver mode `DIRECTORY --dpad-pan NONCE` validates a 32-lowercase-hex nonce before output mutation. READY follows raw mode/PID setup. Bounded nonce-bound counts are emitted only after each complete arrow has been written/flushed; progress alone is not a quiescence barrier. Within the original five-second gesture budget, native checks the rendered neutral state, allows 240ms to settle, snapshots counts, then verifies no change across another 240ms neutral pause and a 240ms post-UP pause. Native sends exactly `owned-dpad-NONCE` once through ordinary Compose/Paste draft without Enter and waits for the real server DELIVERED banner before Disconnect. A fresh private count-only receipt is read using the existing retained-APK/run-as pattern; independent host PID/birth/executable/ancestor checks and final exact raw bytes must match that snapshot. Extra, malformed or reordered bytes remain failures even after an earlier progress/DELIVERED banner. Default silent receiver and IME mode behavior, hard 16KiB bound, private no-overwrite files and original timeouts remain intact. Local compilation/contracts are not actual Android execution, physical-device, keyboard or performance qualification.
+
+The two packaged raw-input cases explicitly request `ownedReceiverRoot` in the
+existing private-TTY SSH fixture. This reuses the protected owned root and private
+NSS-home mounts already used by the Herdr fixture; it does not weaken the receiver's
+ancestor ownership checks. Other SSH/Mosh/companion callers retain their prior
+namespace. The option rejects tool, companion, Mosh, shared-navigation or non-private
+TTY combinations before starting a process. The existing host owner includes an
+`owned namespaced SSH raw receiver root` negative/positive control selected by
+`LAZYSH_TEST_SSH_USER_NAMESPACE=1` and `LAZYSH_TEST_RECEIVER_BIN`: the old root must
+reject before receiver output creation, while the owned root must deliver the exact
+fixed IME wire through the same source-bound receiver. This host check is not an
+Android input or gesture acceptance result.
+
+The existing Linux namespaced-SSH CI selector includes this host control. Its source
+image may retain Cargo executable permissions: admission requires an owned regular
+non-link file (including Cargo hardlinks), owner execute and no group/other write. The actual
+private execution copy remains single-link mode0500 with byte equality and ancestry checks.
+
 ## Opt-in SwiftKey admission (#602)
 
 The `checks` workflow admits this research job only for a `pull_request` whose
@@ -298,15 +370,23 @@ it is not vendor typing acceptance and must not replace the separate normal
 RemoteIC case or become a required green PR check. Review the finite receipt and
 fresh vendor accessibility facts before extending its public UI actions.
 
+The hosted job explicitly selects the separate APKPure standalone profile: pinned
+apkeep 1.1.0 fetches SwiftKey 9.13.18.4 without an account, and the exact APK
+size, SHA-256, package, version, native ABIs and cryptographic signer must match
+before the disposable guest can install it. The signer also matches SwiftKey's
+[asset links](https://share.swiftkey.com/.well-known/assetlinks.json). The device's
+installed keyboard version is unknown. The existing Google Play six-split profile
+and its authentication failure classification remain available unchanged.
+
 Preparation builds the current x86_64 product/test APKs and real companion/raw
 receiver outside the offline runtime, verifies the same-run guarded Herdr,
-and privately downloads the exact six SwiftKey 9.13.18.4 splits using pinned
+and the original profile privately downloads the exact six SwiftKey 9.13.18.4 splits using pinned
 goopdl 1.3.1. `tests/fixtures/swiftkey.json` records exact names, sizes, hashes,
 version, common signer and dependency versions. A changed/unavailable result
 stops the gate; there is no outer retry or latest-version substitution. The tool
 itself can perform its bounded anonymous compatibility/token refresh behavior.
 The common signer and exact bytes match retained local acquisition evidence;
-independent published Microsoft certificate binding is not established here.
+the HTTPS SwiftKey asset links independently bind this package to that signer.
 
 A new bubblewrap user/network/PID namespace encloses the emulator, private ADB,
 loopback nonce harness and owned SSH/Herdr receiver from startup. It mounts a

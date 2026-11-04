@@ -1,6 +1,9 @@
+import './WorkspaceHierarchy.css';
+import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {appVersion} from './version';
+import {onBackButtonPress} from '@tauri-apps/api/app';
 import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -9,8 +12,11 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useLayoutEffect,
+  useCallback,
   useMemo,
   useRef,
+  useId,
   useState,
   type ReactNode,
 } from "react";
@@ -24,6 +30,7 @@ import {
   Bot,
   Activity,
   ChevronRight,
+  ArrowLeft,
   Command,
   FolderOpen,
   GitCompareArrows,
@@ -64,12 +71,13 @@ import {
   type HerdrNavigationTarget,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import {installMoshResize} from "./moshResize";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
-import HerdrNavigation from "./HerdrNavigation";
+import HerdrNavigation,{type HerdrContentReceipt} from "./HerdrNavigation";
 import type {HerdrTree} from "./useHerdrNavigation";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
@@ -98,7 +106,7 @@ const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
 
 function disposeTerminal(session?: LiveSession) {
   if (!session || session.disposed) return;
-  session.disposed = true; session.connected = false; forgetSession(session.id); session.terminal.dispose();
+  session.disposed = true; session.connected = false; forgetSession(session.id); session.moshResize?.dispose(); session.terminal.dispose();
 }
 
 async function prepareSession(
@@ -118,6 +126,20 @@ async function prepareSession(
     connected: true,
   };
   let pendingBytes = 0;
+  let displayFailed = false, transportClosed = false;
+  const failDisplay = () => {
+    if (session.disposed || displayFailed) return;
+    displayFailed = true; session.connected = false;
+    session.message = t("appConnectionClosed");
+    window.dispatchEvent(new Event("lazysh-session-change"));
+    // Before establishment the existing pending-session catch owns teardown.
+    // Never replace this session's lease to obtain disconnect authority.
+    if (session.id && !transportClosed) void bindProtectedApi(nativeApi, lease)
+      .disconnect(session.id).catch(error => {
+        if (!session.disposed) window.dispatchEvent(new CustomEvent("lazysh-error", {detail: errorMessage(error)}));
+      });
+    void session.moshResize?.close();
+  };
   const acknowledge = (bytes: number) => {
     if (!session.connected) return;
     if (!session.id) {
@@ -135,11 +157,16 @@ async function prepareSession(
   const onEvent = (event: SshEvent) => {
     if (session.disposed) return;
     if (event.type === "data")
-      session.terminal.write(new Uint8Array(event.data), () =>
-        acknowledge(event.data.length),
-      );
+      session.terminal.write(new Uint8Array(event.data), () => {
+        acknowledge(event.data.length);
+        if (session.moshResize?.failure) failDisplay();
+      });
     else {
+      transportClosed = true;
       session.connected = false;
+      void session.moshResize?.close().then(() => {
+        if (session.moshResize?.failure) failDisplay();
+      });
       session.message = event.message || t("appConnectionClosed");
       window.dispatchEvent(new Event("lazysh-session-change"));
     }
@@ -187,6 +214,10 @@ async function selectTransport(
     const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
     try {
       ensureAlive();
+      if (kind === 'mosh') {
+        try { child.session.moshResize = installMoshResize(child.session.terminal); }
+        catch { throw {kind: 'mosh_unsupported', message: t('appUnavailableInThisAppBuild')}; }
+      }
       const result = kind==='ssh' && entry
         ? entry.createIfMissing
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
@@ -293,11 +324,13 @@ function Dialog({
   children,
   close,
   mobilePresentation = "sheet",
+  initialFocus,
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
   mobilePresentation?: "page" | "sheet";
+  initialFocus?: () => HTMLElement | null;
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -308,7 +341,7 @@ function Dialog({
     const focusable = () => focusableWithin(ref.current);
     const controls = focusable();
     (
-      controls.find((control) => control.matches("input, textarea")) ??
+      initialFocus?.() ?? controls.find((control) => control.matches("input, textarea")) ??
       controls[0]
     )?.focus();
     const keydown = (event: KeyboardEvent) => {
@@ -319,8 +352,14 @@ function Dialog({
       cycleFocus(event,focusable());
     };
     const current = ref.current;
+    const back = (event: Event) => {
+      if (Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1) !== current) return;
+      event.preventDefault();closeRef.current();
+    };
+    window.addEventListener('lazysh-workspace-back', back);
     current?.addEventListener("keydown", keydown);
     return () => {
+      window.removeEventListener('lazysh-workspace-back', back);
       current?.removeEventListener("keydown", keydown);
       previous?.focus();
     };
@@ -636,6 +675,8 @@ export function ConnectDialog({
   const [passphrase, setPassphrase] = useState("");
   const [rememberCredentials, setRememberCredentials] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(false);
+  const [credentialsReady, setCredentialsReady] = useState(false);
+  const destination = useRef<HTMLParagraphElement>(null);
   const [storedCredentials, setStoredCredentials] = useState(
     host.credentialsStored === true,
   );
@@ -660,6 +701,7 @@ export function ConnectDialog({
   const [moshServer, setMoshServer] = useState(host.mosh?.serverPath ?? defaultMosh.serverPath);
   const [moshPortMin, setMoshPortMin] = useState(host.mosh?.portMin ?? defaultMosh.portMin);
   const [moshPortMax, setMoshPortMax] = useState(host.mosh?.portMax ?? defaultMosh.portMax);
+  const transportLabel = transport === 'auto' ? t(defaultMultiplexer ? 'defaultMuxAuto' : 'appAutoMoshThenETThenSSH') : transport === 'et' ? 'Eternal Terminal' : transport === 'mosh' ? 'Mosh' : 'SSH';
   const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
@@ -702,7 +744,8 @@ export function ConnectDialog({
       .then((saved) => {
         if (alive.current) setSavedCredentials(saved === true);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive.current) setCredentialsReady(true); });
     return () => {
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
@@ -711,6 +754,13 @@ export function ConnectDialog({
       connectingSessions.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!credentialsReady || document.activeElement !== destination.current) return;
+    const form = destination.current?.closest('form');
+    (focusableWithin(form ?? null).find(control => control.matches('input[required], textarea[required]'))
+      ?? form?.querySelector<HTMLButtonElement>('button[type="submit"]'))?.focus();
+  }, [credentialsReady, capabilitiesReady]);
 
   async function connect(accept = false) {
     if (connecting.current || (transport === 'auto' && !capabilitiesReady)) return;
@@ -814,6 +864,7 @@ export function ConnectDialog({
   return (
     <Dialog
       mobilePresentation={trust ? "sheet" : "page"}
+      initialFocus={() => destination.current}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -855,11 +906,13 @@ export function ConnectDialog({
             void connect();
           }}
         >
-          <p className="destination">
+          <p ref={destination} tabIndex={-1} className="destination">
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
-          {!recovery && <label>{t("appTransport")}<select
+          {!recovery && <details className="connection-options" onInvalidCapture={event => { event.currentTarget.open = true; }}>
+            <summary>{t('appConnectionOptions')} · {transportLabel}</summary>
+            <label>{t("appTransport")}<select
               value={transport}
               disabled={busy || !!launch?.mux}
               onChange={(event) =>
@@ -876,12 +929,13 @@ export function ConnectDialog({
                 {!etAvailable || defaultMultiplexer ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
-          </label>}
+          </label>
+            <TransportOptions mode={transport} busy={busy}
+              options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
+              change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
+          </details>}
           {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
           {defaultMultiplexer && <p className="security-note">{t('defaultMuxConnecting',{kind:defaultMultiplexer.kind,name:defaultMultiplexer.name})} {t('defaultMuxSsh')}</p>}
-          {!recovery && <TransportOptions mode={transport} busy={busy}
-            options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
-            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />}
           {!recovery && host.jumpHostId && (
             <fieldset>
               <legend>{t("appBastion")}{" "}
@@ -1062,7 +1116,7 @@ export function ConnectDialog({
           )}
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
-            <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
+            <button type="submit" className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
               {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
@@ -1102,6 +1156,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
+  const trail = useRef<{sessionId:string;view:View;sidebar:boolean;mode:NavigationMode}[]>([]);
+  const [backCount,setBackCount] = useState(0);
+  const terminalBack = useRef<{sessionId:string;close:()=>boolean}|null>(null);
+  const [terminalHasBack,setTerminalHasBack] = useState(false);
+  const bindTerminalBack = useCallback((sessionId:string,close:(()=>boolean)|null)=>{
+    if(close)terminalBack.current={sessionId,close};
+    else if(terminalBack.current?.sessionId===sessionId)terminalBack.current=null;
+    setTerminalHasBack(terminalBack.current!==null);
+  },[]);
+
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
@@ -1131,12 +1195,21 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [sidebar, setSidebar] = useState(false);
   const [wideSidebar,setWideSidebar]=useState(()=>typeof window.matchMedia==='function'?!window.matchMedia('(max-width: 600px)').matches:true);
   const [navigation,setNavigation]=useState<Record<string,{mode:NavigationMode;agents:boolean}>>({});
-  const navigationOwner=useRef({sessionId:null as string|null,agents:false});
+  const navigationOwner=useRef({sessionId:null as string|null,agents:false,activity:false});
+  const historyNavigationIntent=useRef(0);
+  const historyNavigationGeneration=historyNavigationIntent.current;
+  const agentDrawerReceipt=useRef<HerdrContentReceipt|undefined>(undefined);
+  const agentDrawerOffset=useRef<Readonly<{source:LiveSession;mode:NavigationMode;entry:object;context:typeof trail.current[number];returning:boolean;server:string;receipt:object;top:number}>|undefined>(undefined);
   const herdrNavigationIntent=useRef<{source:string;destination?:string;navigation:{mode:NavigationMode;agents:boolean}|undefined}|null>(null);
   useEffect(()=>{const changed=()=>{if(document.hidden)herdrNavigationIntent.current=null;};document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed);},[]);
   const pickerOwner=useRef({source:'',visible:false,revision:0});
   const [pickerState,setPickerState]=useState<{owner:object;busy:boolean}>();
   const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
+  const agentScroll=useRef<HTMLDivElement>(null),liveAgentContent=useRef<HTMLDivElement>(null),reportedAgentContent=useRef<HTMLDivElement>(null);
+  const agentContentId=useId();
+  const [agentSections,setAgentSections]=useState<Record<string,'live'|'activity'>>({});
+  const agentSectionPositions=useRef(new WeakMap<LiveSession,{entry:object;receipt:object|undefined;live:number;activity:number}>());
+  const agentSectionFocus=useRef<{source:LiveSession;entry:object;section:'live'|'activity'}|undefined>(undefined);
   useEffect(()=>{
     if(typeof window.matchMedia!=='function')return;
     const media=window.matchMedia('(max-width: 600px)');
@@ -1145,7 +1218,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   },[]);
   useEffect(()=>{
     if(wideSidebar || !sidebar)return;
-    navigationRef.current?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus();
+    navigationRef.current?.querySelector<HTMLButtonElement>('.workspace-destination-heading > button, .brand:not([hidden]) .sidebar-close')?.focus();
     const keydown=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setSidebar(false);}
       else cycleFocus(event,focusableWithin(navigationRef.current));
@@ -1168,10 +1241,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
-  function openReportedHistory(source:ReportedHistorySource) {
-    if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.agents
+  function openReportedHistory(source:ReportedHistorySource,expectedNavigation:number) {
+    if(!mounted.current || expectedNavigation!==historyNavigationIntent.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.activity
       || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
-    setReportedHistory(source);setView('chat');setSidebar(false);
+    setReportedHistory(source);visitView('chat');
   }
   const directContext = useRef({sessionId:activeId,generation:0});
   if(directContext.current.sessionId!==activeId)
@@ -1202,7 +1275,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
       || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
       || !sessionsRef.current.includes(session))return;
-    setView('attachments');setSidebar(false);
+    visitView('attachments');
   }
   function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
     const current=()=>mounted.current && lease.current() && !document.hidden
@@ -1218,28 +1291,142 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
   const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
+  const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
+  const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
+  const secondaryTools=sessionViews.filter(tool=>!primaryToolIds.includes(tool.id));
+  function mobileToolButton({id,label,Icon}:ReturnType<typeof views>[number]){
+    return <button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
+  }
+
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
+  const agentSection=agentSections[activeId??'']??'live';
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
+  const savedAgentOffset=agentDrawerOffset.current;
+  if(savedAgentOffset && (!lease.current() || savedAgentOffset.source!==active || savedAgentOffset.mode!==navigationEntry.mode || (!savedAgentOffset.returning && savedAgentOffset.entry!==navigationEntry)
+    || wideSidebar || !remoteActive || closingSessions.current.has(savedAgentOffset.source.id) || (view==='terminal' && !sidebar)))agentDrawerOffset.current=undefined;
+  useLayoutEffect(()=>{
+    const saved=agentDrawerOffset.current;
+    if(saved?.returning && agentsVisible && !wideSidebar && lease.current() && !document.hidden
+      && saved.source===active && saved.mode===navigationEntry.mode && navigationState.current[active.id]===navigationEntry)
+      agentDrawerOffset.current={...saved,entry:navigationEntry,returning:false};
+  },[active,agentsVisible,wideSidebar,lease,navigationEntry]);
+  function agentContentSettled(receipt:HerdrContentReceipt) {
+    if(!active || !agentsVisible || wideSidebar || !lease.current() || document.hidden
+      || receipt.host!==active.id || receipt.mode!==navigationEntry.mode || navigationState.current[active.id]!==navigationEntry)return;
+    agentDrawerReceipt.current=receipt;
+    const saved=agentDrawerOffset.current;
+    if(!saved)return;
+    if(saved.returning){agentDrawerOffset.current={...saved,entry:navigationEntry,returning:false};}
+    if(saved.source!==active || (!saved.returning && saved.entry!==navigationEntry) || saved.mode!==receipt.mode || saved.server!==receipt.server){agentDrawerOffset.current=undefined;return;}
+    if(receipt.failed){agentDrawerOffset.current=undefined;return;}
+    if(saved.receipt===receipt.identity)return;
+    agentDrawerOffset.current=undefined;
+    const scroller=agentScroll.current;
+    if(scroller)scroller.scrollTop=saved.top;
+  }
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
-  navigationOwner.current={sessionId:activeId,agents:agentsVisible};
+  navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
   const pickerInFlight=pickerVisible && (pickerState?.owner!==currentPickerOwner || pickerState.busy);
   function showNavigation(mode:NavigationMode) {
+    agentDrawerOffset.current=undefined;
     if(mode!=='connections' && pendingMuxRequest)return;
     if(mode==='agents' && !remoteActive)return;
     const id=activeId??'';
     setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
-    if(mode!=='connections')setView('terminal');
+    if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
   }
+  function showAgentSetup(source:LiveSession) {
+    if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
+      || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
+    setAgentSections(previous=>({...previous,[source.id]:'activity'}));
+    showNavigation('agents');
+  }
+  function jumpAgentContent(section:'live'|'activity') {
+    const scroller=agentScroll.current,target=section==='live'?liveAgentContent.current:reportedAgentContent.current;
+    if(!active || !agentsVisible || !lease.current() || !scroller || !target)return;
+    agentDrawerOffset.current=undefined;
+    const receipt=agentDrawerReceipt.current?.identity;
+    const previous=agentSectionPositions.current.get(active);
+    const positions=previous?.entry===navigationEntry && previous.receipt===receipt ? previous : {entry:navigationEntry,receipt,live:0,activity:0};
+    positions[agentSection]=scroller.scrollTop;
+    agentSectionPositions.current.set(active,positions);
+    if(section===agentSection){target.focus({preventScroll:true});return;}
+    historyNavigationIntent.current++;navigationOwner.current.activity=false;
+    agentSectionFocus.current={source:active,entry:navigationEntry,section};
+    setAgentSections(previous=>({...previous,[active.id]:section}));
+  }
+  useLayoutEffect(()=>{
+    const intent=agentSectionFocus.current;agentSectionFocus.current=undefined;
+    if(!intent || intent.source!==active || intent.entry!==navigationEntry || intent.section!==agentSection || !agentsVisible || !lease.current())return;
+    const saved=agentSectionPositions.current.get(active),scroller=agentScroll.current;
+    if(scroller)scroller.scrollTop=saved?.entry===navigationEntry && saved.receipt===agentDrawerReceipt.current?.identity ? saved[agentSection] : 0;
+    (agentSection==='live'?liveAgentContent.current:reportedAgentContent.current)?.focus({preventScroll:true});
+  },[agentSection,active,agentsVisible,navigationEntry,lease]);
+
+  function rememberContext(){
+    if(!active)return;
+    trail.current=[...trail.current,{sessionId:active.id,view,sidebar,mode:navigationEntry.mode}].slice(-32);
+    setBackCount(trail.current.length);
+  }
+  function visitView(next:View) {
+    if(!active || (view===next && !sidebar))return;
+    agentDrawerOffset.current=undefined;
+    const receipt=agentDrawerReceipt.current;
+    const scroller=agentScroll.current;
+    const capture=!wideSidebar && agentsVisible && lease.current() && !document.hidden
+      && navigationState.current[active.id]===navigationEntry && receipt?.host===active.id && receipt.mode===navigationEntry.mode && !receipt.failed;
+    const top=scroller?.scrollTop;
+    rememberContext();
+    const context=trail.current.at(-1);
+    if(capture && top!==undefined && context)agentDrawerOffset.current={source:active,mode:navigationEntry.mode,entry:navigationEntry,context,returning:false,server:receipt.server,receipt:receipt.identity,top};
+    setView(next);setSidebar(false);
+  }
+  function returnToContext(terminal=false) {
+    if(!lease.current() || pendingMuxRequest)return;
+    let destination:typeof trail.current[number]|undefined;
+    while(trail.current.length){
+      const candidate=trail.current.pop()!;
+      if(sessionsRef.current.some(session=>session.id===candidate.sessionId && session.connected && !session.disposed) && (!terminal || candidate.view==='terminal')){destination=candidate;break;}
+    }
+    setBackCount(trail.current.length);
+    const saved=agentDrawerOffset.current;
+    if(saved)agentDrawerOffset.current=!saved.returning && !terminal && destination===saved.context
+      && destination.sessionId===saved.source.id && destination.mode===saved.mode && destination.sidebar
+      && active===saved.source && navigationState.current[saved.source.id]===saved.entry
+      ?{...saved,returning:true}:undefined;
+    if(destination){
+      setActiveId(destination.sessionId);setView(terminal?'terminal':destination.view);setSidebar(!terminal && destination.sidebar);
+      setNavigation(previous=>({...previous,[destination.sessionId]:{mode:destination.mode,agents:destination.mode==='agents'||previous[destination.sessionId]?.agents===true}}));
+    }else{setView('terminal');setSidebar(false);}
+  }
+  const canHandleBack=navigationCovered || (!wideSidebar && sidebar) || terminalHasBack || backCount>0 || (!!active && view!=='terminal');
+  const handleBack = useRef(()=>{});
+  handleBack.current=()=>{
+    if(!lease.current())return;
+    if(!window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))return;
+    if(!wideSidebar && sidebar){if(navigationEntry.mode!=='connections' && trail.current.length)returnToContext();else setSidebar(false);return;}
+    if(terminalBack.current?.sessionId===activeId && terminalBack.current.close())return;
+    returnToContext();
+  };
+  useEffect(()=>{
+    if(!native || !canHandleBack)return;
+    let alive=true;let unregister:(()=>Promise<void>)|undefined;
+    void onBackButtonPress(()=>{if(alive)handleBack.current();}).then(listener=>{
+      if(alive)unregister=()=>listener.unregister();else void listener.unregister();
+    }).catch(()=>{});
+    return()=>{alive=false;void unregister?.();};
+  },[canHandleBack]);
   function chooseLiveSession(id:string) {
+    agentDrawerOffset.current=undefined;
     if(pendingMuxRequest || !sessionsRef.current.some(session=>session.id===id && session.connected))return;
     setActiveId(id);setView('terminal');setSidebar(false);
   }
@@ -1719,7 +1906,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         className={`sidebar ${sidebar ? "sidebar-open" : ""}`}
         aria-label={t("appHostsAndConnections")}
       >
-        <div className="brand">
+        {navigationEntry.mode!=='connections' && <header className="workspace-destination-heading">
+          <button type="button" className="icon-button" aria-label={t('navigationReturnTerminal')} title={t('navigationReturnTerminal')} onClick={()=>{if(wideSidebar){showNavigation('connections');navigationRef.current?.querySelector<HTMLButtonElement>('[data-workspace-mode=connections]')?.focus();}else setSidebar(false);setView('terminal');}}><ArrowLeft size={20} aria-hidden="true"/></button>
+          <h2>{t(navigationEntry.mode==='workspaces'?'navigationWorkspaces':'appAgents')}</h2>
+          {active?.connected && <button type="button" className="icon-button" aria-label={t('navigationUsageShortcut')} title={t('appUsage')} onClick={()=>visitView('usage')}><Activity size={18} aria-hidden="true"/></button>}
+        </header>}
+        <div className="brand" hidden={navigationEntry.mode!=='connections'}>
           <img className="brand-mark" src={bedModeMark} alt="" aria-hidden="true" width={35} height={35}/>
           <span>
             lazysh<small>{t("appYourAgentsWithinReach")}</small>
@@ -1733,7 +1925,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </button>
         </div>
         <nav className="workspace-navigation-modes" aria-label={t('navigationTitle')}>
-          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</button>)}
+          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
         </nav>
         <div className="navigation-connections" hidden={navigationEntry.mode!=='connections'}>
         <button className="search-button" onClick={() => setPalette(true)}>
@@ -1816,27 +2008,24 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
-        <div className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
-        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
+        <nav className="agent-section-jumps" hidden={!agentsVisible} aria-label={t('agentsSections')}>
+          <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} aria-pressed={agentSection==='live'} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
+          <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
+        </nav>
+        <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
+        <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>
+        {remoteActive && active && <AgentPanel key={active.id} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
+          }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
-          <h3>{t('navigationLiveSessions')}</h3>
-          <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
-            {sessions.filter(session=>session.connected).map(session=><button className="subtle-button" key={session.id} aria-current={activeId===session.id?'location':undefined} disabled={pendingMuxRequest} onClick={()=>chooseLiveSession(session.id)}><strong>{session.name}</strong><small>{session.destination}</small></button>)}
-            {!sessions.some(session=>session.connected) && <p>{t('navigationNoSessions')}</p>}
-          </div>
           {remoteActive && <>
-            <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>{setView('sessions');setSidebar(false);}}>{t('navigationManageSessions')}</button>
+            <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
             {active?.attached?.kind!=='tmux' && <p className="muted">{t('navigationManagerHint')}</p>}
             {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
-        </div>}
-        {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
-            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
-          }:undefined}/>
         </div>}
         </div>
         <div className="sidebar-bottom">
@@ -1860,7 +2049,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className={`workspace${compactTerminal ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
+      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         <header className="workspace-header">
           <button
@@ -1883,7 +2072,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div className="header-right">
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
-              className="icon-button mobile-tools"
+              className="icon-button mobile-tools workspace-tools-trigger"
               aria-label={t("appWorkspaceTools")}
               onClick={() => setMobileTools(true)}
             >
@@ -2003,32 +2192,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {active ? (
           <>
-            <div className="session-toolbar">
-              <nav className="view-tabs" aria-label={t("appSessionViews")}>
-                {sessionViews.map(({ id, label, Icon }) => (
-                  <button
-                    key={id}
-                    aria-current={(id==='agents'?agentsVisible:view===id) ? "page" : undefined}
-                    disabled={id==='agents' && pendingMuxRequest}
-                    onClick={() => id==='agents'?showNavigation('agents'):setView(id)}
-                  >
-                    <Icon size={15} />
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </nav>
-              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => showNavigation('workspaces')}>{t("appJumpTo")}</button>}
-              <button
-                className="icon-button disconnect-button"
-                aria-label={t("appEndValue1Connection", {value1: active.name})}
-                disabled={closingIds.includes(active.id)}
-                onClick={() => void closeSession(active)}
-              >
-                <Unplug size={16} />
-              </button>
-            </div>
             {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
             {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
+            {view!=='terminal' && <nav className="context-navigation" aria-label={t('navigationContext')}>
+              <button type="button" className="subtle-button" disabled={pendingMuxRequest} onClick={()=>returnToContext()}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
+              <span>{sessionViews.find(item=>item.id===view)?.label}</span>
+              <button type="button" className="icon-button" title={t('navigationReturnTerminal')} aria-label={t('navigationReturnTerminal')} disabled={pendingMuxRequest} onClick={()=>returnToContext(true)}><TerminalSquare size={18} aria-hidden="true"/></button>
+            </nav>}
             <div className="session-body">
               <Suspense
                 fallback={
@@ -2041,13 +2211,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showNavigation("agents"):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
@@ -2099,7 +2270,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </Suspense>
             </div>
             <footer className="workspace-footer">
-              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>{setView('usage');setSidebar(false);}}/>}
+              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>visitView('usage')}/>}
               <span>
                 {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}
                 {active.destination}
@@ -2235,15 +2406,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          {native && <section aria-label={t('defaultMuxLabel')}>
+          <PreferencesPanel before={native?[{id:'connections',title:t('preferencesCategoryConnections'),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
             {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
-          </section>}
-          <PreferencesPanel />
-          <AccessPanel />
-          <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+          </section>}]:[]} after={[
+            {id:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
+            {id:'notifications',title:t('preferencesCategoryNotifications'),content:<button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t('appRemotePushSettings')}</button>},
+          ]}/>
           </div>
         </Dialog>
       )}
@@ -2273,46 +2444,63 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
-          <div className="form-stack">
+          <div className="workspace-tools-content">
             {active && <>
-              <nav className="mobile-session-views" aria-label={t('appSessionViews')}>
-                {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else setView(id);}}><Icon size={16}/><span>{label}</span></button>)}
+              <nav className="mobile-session-views workspace-primary-tools" aria-label={t('appSessionViews')}>
+                <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
+                {primaryTools.map(mobileToolButton)}
               </nav>
-              <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
-              {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-              {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
-              <button type="button" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+              {secondaryTools.length>0 && <details className="workspace-more-tools">
+                <summary>{t('workspaceMoreTools')}</summary>
+                <nav className="mobile-session-views" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>
+              </details>}
+              <details className="workspace-connection-actions">
+                <summary>{t('navigationConnections')}</summary>
+                <div className="workspace-tools-group">
+                  <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+                  {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
+                  {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+                  {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+                </div>
+              </details>
             </>}
-            {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
-            <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
-            <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setInbox(true);
-              }}
-            >{t("appOpenNotificationInbox")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setSync(true);
-              }}
-            >{t("appOpenEncryptedSync")}</button>
-            <button
-              disabled={!native}
-              onClick={() => {
-                setMobileTools(false);
-                setSharing(true);
-              }}
-            >{t("appOpenShareableUploads")}</button>
-            <button
-              onClick={() => {
-                setMobileTools(false);
-                setPalette(true);
-              }}
-            >{t("appSearchSavedHosts")}</button>
+            <details className="workspace-application-options">
+              <summary>{t('workspaceApplicationOptions')}</summary>
+              <div className="workspace-tools-group">
+                <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
+                <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setInbox(true);
+                  }}
+                >{t("appOpenNotificationInbox")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setSync(true);
+                  }}
+                >{t("appOpenEncryptedSync")}</button>
+                <button
+                  disabled={!native}
+                  onClick={() => {
+                    setMobileTools(false);
+                    setSharing(true);
+                  }}
+                >{t("appOpenShareableUploads")}</button>
+                <button
+                  onClick={() => {
+                    setMobileTools(false);
+                    setPalette(true);
+                  }}
+                >{t("appSearchSavedHosts")}</button>
+              </div>
+            </details>
+            {active && <div className="workspace-tools-danger">
+              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+            </div>}
           </div>
         </Dialog>
       )}

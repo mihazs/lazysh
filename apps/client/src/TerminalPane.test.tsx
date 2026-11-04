@@ -9,14 +9,14 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("./bridge", () => ({api: mocks}));
-vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
+vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -26,10 +26,11 @@ beforeEach(() => {
   access();
   vi.clearAllMocks();
   vi.stubGlobal("PointerEvent", class extends MouseEvent {
-    pointerId: number; pointerType: string;
-    constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch";}
+    pointerId: number; pointerType: string; isPrimary:boolean;
+    constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string; isPrimary?:boolean} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch"; this.isPrimary=options.isPrimary??true;}
   });
   mocks.write.mockResolvedValue(undefined); mocks.writeSequence.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
+  mocks.propose.mockReturnValue({cols:80,rows:24});
   mocks.openWebUrl.mockResolvedValue(undefined);
   mocks.zellijNavigate.mockResolvedValue(undefined);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -63,13 +64,333 @@ function mountInputOwner(initial = "") {
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
   terminal.focus.mockImplementation(()=>textarea.focus());
   const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
-  const view=render(<TerminalPane session={session} active reportError={vi.fn()} />);
+  const reportError=vi.fn();
+  const view=render(<TerminalPane session={session} active reportError={reportError} />);
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
-  return {textarea,session,view,emit};
+  return {textarea,session,view,emit,reportError};
 }
-function touchScrollFixture() {
+it('preserves physical and toolbar Shift+Enter without submitting an ordinary Enter',()=>{
+  savePreferences({...defaults,toolbar:['shift','enter']});
+  const owner=mountInputOwner();owner.textarea.focus();
+  const handle=terminal.attachCustomKeyEventHandler.mock.calls[0][0] as (event:KeyboardEvent)=>boolean;
+  const event=new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,cancelable:true});
+  expect(handle(event)).toBe(false);
+  expect(event.defaultPrevented).toBe(true);
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u']);
+  expect(handle(new KeyboardEvent('keyup',{key:'Enter',shiftKey:true}))).toBe(true);
+  expect(handle(new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,isComposing:true}))).toBe(true);
+  expect(handle(new KeyboardEvent('keydown',{key:'Enter'}))).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+  fireEvent.click(screen.getByRole('button',{name:'enter'}));
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u']);
+});
+it('applies one-shot Shift to keyless keyboard Enter without rewriting paste or terminal replies',()=>{
+  const owner=mountInputOwner();owner.textarea.focus();
+  fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+  for(const data of ['\r','\n']) {
+    fireEvent.input(owner.textarea,{data,inputType:'insertLineBreak'});
+    act(()=>owner.emit(data));
+  }
+  fireEvent.paste(owner.textarea);
+  owner.emit('\n');
+  owner.emit('\r',false);
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\n','\n','\r']);
+  expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('false');
+});
+it('consumes one-shot toolbar Shift after a named key and a literal keyboard key',()=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  try {
+    const owner=mountInputOwner();const shift=screen.getByRole('button',{name:'Shift'});
+    fireEvent.click(shift);fireEvent.click(screen.getByRole('button',{name:'Arrow left'}));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');expect(shift.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    fireEvent.click(shift);fireEvent.input(owner.textarea,{data:'a',inputType:'insertText'});act(()=>owner.emit('a'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','a');expect(shift.getAttribute('aria-pressed')).toBe('false');
+  } finally {focused.mockRestore();}
+});
+it.each(['unapplied','composing'] as const)('disarms Shift locally while %s IME text remains guarded',mode=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+  try {
+    const owner=mountInputOwner(mode==='unapplied'?'previous':'');Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
+    const shift=screen.getByRole('button',{name:'Shift'});fireEvent.click(shift);
+    if(mode==='composing')fireEvent.compositionStart(owner.textarea);
+    else act(()=>{owner.textarea.value='previous';owner.textarea.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertReplacementText',bubbles:true,cancelable:true}));});
+    act(()=>{owner.textarea.value='local correction';owner.textarea.setSelectionRange(16,16);if(mode==='unapplied')fireEvent.input(owner.textarea,{data:'local correction',inputType:'insertReplacementText'});});
+    if(mode==='unapplied')expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+    terminal.focus.mockClear();const currentShift=screen.getByRole('button',{name:'Shift'});expect(currentShift).toHaveProperty('disabled',false);fireEvent.click(currentShift);
+    expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('false');expect(mocks.write).not.toHaveBeenCalled();expect(terminal.focus).not.toHaveBeenCalled();
+    if(mode==='unapplied'){expect(screen.getByText('Edit not sent · Review')).toBeDefined();expect(owner.textarea.readOnly).toBe(true);}
+    else expect(owner.textarea.value).toBe('local correction');
+  } finally {focused.mockRestore();}
+});
+
+function dpadFixture(initial="") {
+  vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
+  const owner=mountInputOwner(initial);fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+  const pad=screen.getByRole('group',{name:'Terminal D-pad'});
+  pad.setPointerCapture=vi.fn();
+  const arrow=(direction:string)=>within(pad).getByRole('button',{name:`D-pad ${direction}`,hidden:true});
+  const point={pointerId:41,pointerType:'touch',button:0,clientX:100,clientY:100};
+  const down=()=>fireEvent.pointerDown(arrow('up'),point);
+  const move=(x:number,y:number)=>fireEvent.pointerMove(pad,{...point,clientX:x,clientY:y});
+  const up=()=>fireEvent.pointerUp(pad,point);
+  const advance=(milliseconds:number)=>act(()=>vi.advanceTimersByTime(milliseconds));
+  const bytes=()=>mocks.write.mock.calls.map(call=>call[1]);
+  return {...owner,pad,arrow,point,down,move,up,advance,bytes};
+}
+describe('expanded D-pad pointer ownership',()=>{
+  function touchStart(target:Element,count=1) {
+    const event=new Event('touchstart',{bubbles:true,cancelable:true});
+    Object.defineProperty(event,'touches',{value:Array.from({length:count},(_,identifier)=>({identifier}))});
+    fireEvent(target,event);return event;
+  }
+  it('consumes only an admitted direction touchstart and retires its listener on teardown',()=>{
+    const owner=dpadFixture(),arrow=owner.arrow('up');
+    expect(touchStart(arrow).defaultPrevented).toBe(false);
+    owner.down();expect(touchStart(arrow).defaultPrevented).toBe(true);
+    expect(touchStart(screen.getByRole('button',{name:'D-pad left corner'})).defaultPrevented).toBe(false);
+    expect(touchStart(owner.textarea).defaultPrevented).toBe(false);
+    owner.advance(400);expect(owner.bytes()).toEqual(['\x1b[A']);
+    owner.up();expect(touchStart(arrow).defaultPrevented).toBe(false);
+    fireEvent.click(arrow,{detail:0});expect(owner.bytes()).toEqual(['\x1b[A','\x1b[A']);
+    owner.down();owner.view.unmount();expect(touchStart(arrow).defaultPrevented).toBe(false);
+    owner.advance(800);expect(owner.bytes()).toEqual(['\x1b[A','\x1b[A']);
+  });
+  it.each(['multitouch','disabled','reader','inactive','disconnected','revoked','stale'] as const)('leaves %s touchstarts to the browser without broad suppression',boundary=>{
+    const owner=dpadFixture(),arrow=owner.arrow('up');owner.down();
+    if(boundary==='disabled')(arrow as HTMLButtonElement).disabled=true;
+    if(boundary==='reader')act(()=>savePreferences({...getPreferences(),screenReader:true}));
+    if(boundary==='inactive')owner.view.rerender(<TerminalPane session={owner.session} active={false} reportError={owner.reportError}/>);
+    if(boundary==='disconnected')owner.view.rerender(<TerminalPane session={{...owner.session,connected:false}} active reportError={owner.reportError}/>);
+    if(boundary==='revoked')act(()=>access(true));
+    if(boundary==='stale')owner.view.rerender(<TerminalPane session={{...owner.session,id:'other'}} active reportError={owner.reportError}/>);
+    expect(touchStart(arrow,boundary==='multitouch'?2:1).defaultPrevented).toBe(false);
+    expect(owner.bytes()).toEqual([]);
+  });
+
+  it('sends one tap, preserves accessible activation and modifiers without arrow toggles',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(399);expect(pad.bytes()).toEqual([]);pad.up();
+    fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual(['\x1b[A']);
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    fireEvent.click(pad.arrow('right'),{detail:0});expect(pad.bytes()).toEqual(['\x1b[A','\x1b[1;2C']);
+    expect(pad.arrow('right').hasAttribute('aria-pressed')).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'D-pad left corner'}));expect(pad.bytes().at(-1)).toBe('\x03');
+  });
+  it('keeps Shift for one held D-pad pan and retires it at release',()=>{
+    const pad=dpadFixture();const shift=screen.getByRole('button',{name:'Shift'});fireEvent.click(shift);
+    pad.down();pad.advance(480);expect(shift.getAttribute('aria-pressed')).toBe('false');pad.move(-24,0);pad.advance(160);
+    expect(pad.bytes()).toEqual(['\x1b[1;2A','\x1b[1;2A','\x1b[1;2D','\x1b[1;2D']);pad.up();
+    fireEvent.click(pad.arrow('right'));expect(pad.bytes().at(-1)).toBe('\x1b[C');
+  });
+  it('preserves a corner touch click when its implicit pointer capture ends',()=>{
+    const pad=dpadFixture(),corner=screen.getByRole('button',{name:'D-pad left corner'});
+    fireEvent.pointerDown(corner,pad.point);fireEvent.pointerUp(corner,pad.point);
+    fireEvent.lostPointerCapture(corner,pad.point);fireEvent.click(corner,{detail:1});
+    expect(pad.bytes()).toEqual(['\x03']);
+  });
+  it('paces held arrows and direction changes independently of move event volume, pausing in the dead zone',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(399);expect(pad.bytes()).toEqual([]);
+    pad.advance(1);expect(pad.bytes()).toEqual(['\x1b[A']);pad.advance(160);
+    expect(pad.bytes()).toEqual(Array(3).fill('\x1b[A'));
+    for(let x=120;x<150;x++)pad.move(x,101);
+    expect(pad.bytes()).toHaveLength(3);pad.advance(79);expect(pad.bytes()).toHaveLength(3);pad.advance(1);
+    expect(pad.bytes().at(-1)).toBe('\x1b[C');
+    pad.move(100,100);pad.advance(800);expect(pad.bytes()).toHaveLength(4);
+    pad.move(101,140);pad.advance(80);expect(pad.bytes().at(-1)).toBe('\x1b[B');
+    pad.up();fireEvent.click(pad.arrow('down'),{detail:1});pad.advance(1000);expect(pad.bytes()).toHaveLength(5);
+  });
+  it('does not turn a pan without a delivered move event into an arrow tap',()=>{
+    const pad=dpadFixture();pad.down();fireEvent.pointerUp(pad.pad,{...pad.point,clientX:150});
+    fireEvent.click(pad.arrow('up'),{detail:1});pad.advance(1000);expect(pad.bytes()).toEqual([]);
+  });
+  it.each(['pending','repeating'] as const)('cancels every %s gesture at each input boundary',phase=>{
+    // Each boundary starts with a fresh lease and gesture; no canceled timer may resume.
+    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','compose','keys','modal','dispose']){
+      const pad=dpadFixture();pad.down();if(phase==='repeating')pad.advance(400);
+      const sent=pad.bytes().length;let hidden:ReturnType<typeof vi.spyOn>|undefined,dialog:HTMLElement|undefined;
+      if(boundary==='cancel')fireEvent.pointerCancel(pad.pad,pad.point);
+      if(boundary==='capture')fireEvent.lostPointerCapture(pad.pad,pad.point);
+      if(boundary==='blur')fireEvent(window,new Event('blur'));
+      if(boundary==='hidden')hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
+      if(boundary==='lock')act(()=>access(true));
+      if(['inactive','disconnect','session','terminal'].includes(boundary)){
+        const session=boundary==='session'?{...pad.session,id:'replacement'}:boundary==='terminal'?{...pad.session,terminal:createMockTerminal() as unknown as LiveSession['terminal']}:boundary==='disconnect'?{...pad.session,connected:false}:pad.session;
+        pad.view.rerender(<TerminalPane session={session} active={boundary!=='inactive'} reportError={pad.reportError} />);
+      }
+      if(boundary==='close')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+      if(boundary==='compose')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+      if(boundary==='keys')fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+      if(boundary==='modal'){dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');document.body.append(dialog);}
+      if(boundary==='dispose')pad.view.unmount();
+      pad.advance(1000);expect(pad.bytes(),`${phase}/${boundary}`).toHaveLength(sent);
+      hidden?.mockRestore();dialog?.remove();
+      fireEvent.pointerUp(document,pad.point);
+      if(pad.pad.isConnected)fireEvent.click(pad.arrow('up'),{detail:1});
+      pad.advance(1000);expect(pad.bytes(),`trailing ${phase}/${boundary}`).toHaveLength(sent);
+      cleanup();act(()=>access());mocks.write.mockClear();
+    }
+  });
+  it('switches expanded input tools without losing an unsent draft or sending bytes',()=>{
+    const pad=dpadFixture();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect(screen.queryByRole('button',{name:'D-pad up'})).toBeNull();
+    expect(screen.getByRole('button',{name:'dpad'}).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'Unsent draft'}});
+    fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+    expect(screen.queryByLabelText('Compose text')).toBeNull();
+    expect(screen.getByRole('button',{name:'D-pad up'})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    expect((screen.getByLabelText('Compose text') as HTMLTextAreaElement).value).toBe('Unsent draft');
+    expect(pad.bytes()).toEqual([]);
+  });
+  it('keeps the same live input owner across metadata replacement but retires a replaced terminal',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    const renamed={...pad.session,name:'Renamed host'};
+    pad.view.rerender(<TerminalPane session={renamed} active reportError={pad.reportError} />);
+    pad.move(140,100);pad.advance(80);expect(pad.bytes()).toEqual(['\x1b[A','\x1b[C']);
+    pad.view.rerender(<TerminalPane session={{...renamed,terminal:createMockTerminal() as unknown as LiveSession['terminal']}} active reportError={pad.reportError} />);
+    pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
+    pad.down();pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+  it('retains the initial hold deadline when panning before it, and permits a fresh gesture after cancellation',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(200);pad.move(60,100);pad.advance(199);expect(pad.bytes()).toEqual([]);
+    pad.advance(1);expect(pad.bytes()).toEqual(['\x1b[D']);fireEvent(window,new Event('blur'));pad.up();
+    pad.down();pad.advance(400);expect(pad.bytes()).toEqual(['\x1b[D','\x1b[A']);pad.up();
+  });
+  it('falls back to single accessible clicks when pointer capture is unavailable',()=>{
+    const pad=dpadFixture();Object.defineProperty(pad.pad,'setPointerCapture',{value:undefined});
+    pad.down();pad.advance(1000);expect(pad.bytes()).toEqual([]);pad.up();
+    fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual(['\x1b[A']);
+  });
+  it('flushes the owned IME composition once before repeating named arrows',()=>{
+    const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    try {
+      const pad=dpadFixture();screen.getByLabelText('Terminal for Host').append(pad.textarea.parentElement!);pad.textarea.focus();
+      Object.assign(terminal,{input:(data:string)=>pad.emit(data)});
+      fireEvent.compositionStart(pad.textarea);
+      pad.textarea.value='owned composition';pad.textarea.setSelectionRange(17,17);
+      pad.down();pad.advance(400);expect(pad.bytes()).toEqual(['owned composition','\x1b[A']);
+      pad.advance(160);pad.up();expect(pad.bytes()).toEqual(['owned composition','\x1b[A','\x1b[A','\x1b[A']);
+    } finally {focused.mockRestore();}
+  });
+  it('stops rather than bypassing an unapplied IME edit',()=>{
+    const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    try {
+      const pad=dpadFixture('previous');
+      act(()=>{pad.textarea.value='local correction';pad.textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));});
+      expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+      pad.down();pad.advance(800);pad.up();fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual([]);
+    } finally {focused.mockRestore();}
+  });
+  it('rejects a secondary finger that arrives before any D-pad-owned pointer',()=>{
+    const pad=dpadFixture();fireEvent.pointerDown(document,{...pad.point,pointerId:40});
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,isPrimary:false});pad.advance(800);
+    fireEvent.pointerUp(pad.pad,{...pad.point,isPrimary:false});fireEvent.click(pad.arrow('up'),{detail:1});
+    expect(pad.bytes()).toEqual([]);
+  });
+  it.each(['blur','capture','hidden'] as const)('recovers after %s without requiring an undelivered old release',boundary=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);let hidden:ReturnType<typeof vi.spyOn>|undefined;
+    if(boundary==='blur')fireEvent(window,new Event('blur'));
+    if(boundary==='capture')fireEvent.lostPointerCapture(pad.pad,pad.point);
+    if(boundary==='hidden'){hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
+    pad.advance(800);expect(pad.bytes()).toHaveLength(1);hidden?.mockRestore();
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:43,isPrimary:true});pad.advance(400);
+    expect(pad.bytes()).toEqual(['\x1b[A','\x1b[A']);fireEvent.pointerUp(pad.pad,{...pad.point,pointerId:43});
+  });
+  it('does not confuse a different pointer type primary with release of held contacts',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    fireEvent.pointerDown(document,{...pad.point,pointerId:42,pointerType:'mouse',isPrimary:true});
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:43,isPrimary:true});pad.advance(800);
+    expect(pad.bytes()).toHaveLength(1);
+    fireEvent.pointerUp(document,{...pad.point,pointerId:42,pointerType:'mouse'});fireEvent.pointerUp(document,{...pad.point,pointerId:43});
+    pad.down();pad.advance(400);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+  it('uses elapsed hold time across a wall-clock jump',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(200);vi.setSystemTime(new Date(Date.now()-60000));
+    pad.move(140,100);pad.advance(200);expect(pad.bytes()).toEqual(['\x1b[C']);pad.up();
+  });
+  it('blocks rearming after another pointer until all involved pointers end',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    fireEvent.pointerDown(document,{...pad.point,pointerId:42,isPrimary:false});pad.advance(800);expect(pad.bytes()).toHaveLength(1);
+    pad.up();fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:44,isPrimary:false});pad.advance(800);expect(pad.bytes()).toHaveLength(1);fireEvent.pointerUp(document,{...pad.point,pointerId:44});
+    fireEvent.pointerUp(document,{...pad.point,pointerId:42});pad.up();
+    pad.down();pad.advance(400);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+});
+it.each(['terminal','composer','search'])('keeps a credential dialog focused when delayed %s focus runs',mode=>{
+  const frames:Array<()=>void>=[];
+  vi.stubGlobal('requestAnimationFrame',(callback:()=>void)=>{frames.push(callback);return frames.length;});
+  const owner=mountInputOwner();
+  screen.getByLabelText('Terminal for Host').append(owner.textarea);
+  if(mode==='composer')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  if(mode==='search')fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  const dialog=document.createElement('div'),password=document.createElement('input');
+  dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');password.type='password';
+  dialog.append(password);document.body.append(dialog);password.focus();terminal.focus.mockClear();
+  try {
+    act(()=>frames.splice(0).forEach(callback=>callback()));
+    expect(document.activeElement).toBe(password);
+    expect(terminal.focus).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled();
+  } finally {dialog.remove();}
+  fireEvent.click(screen.getByRole('button',{name:'tab'}));
+  expect(terminal.focus).toHaveBeenCalledOnce();
+  expect(mocks.write).toHaveBeenLastCalledWith('ssh','\t');
+});
+it.each(['terminal-user','terminal-nonuser','named-key','chord','gesture'] as const)('records content-free %s input failures without hiding the cause',async caller=>{
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try {
+    savePreferences({...defaults,chords:[{label:'Owned sequence',keys:'C-b T'}],bodyGestures:{...defaults.bodyGestures,tap:'escape',doubleTap:'none',tripleTap:'none'}});
+    const owner=mountInputOwner();
+    const send=()=>{
+      if(caller.startsWith('terminal-'))owner.emit('private-content-😀',caller==='terminal-user');
+      else if(caller==='named-key')fireEvent.click(screen.getByRole('button',{name:'tab'}));
+      else if(caller==='chord')fireEvent.click(screen.getByRole('button',{name:'Owned sequence'}));
+      else {
+        const canvas=screen.getByLabelText('Terminal for Host');
+        fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:10,clientY:10});
+        fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:10,clientY:10});
+      }
+    };
+    for(const [kind,cause,message] of [['backpressure','queue-full','Terminal input queue is full'],['input_closed','channel-closed','Terminal input channel is closed'],['transport_error','other','private native failure']]) {
+      mocks[caller==='chord'?'writeSequence':'write'].mockRejectedValueOnce({kind,message,hostId:'private-host',sessionId:'private-session'});
+      await act(async()=>send());
+      const raw=warn.mock.calls.at(-1)!;
+      expect(raw).toHaveLength(1);
+      const receipt=JSON.parse((raw[0] as string).replace('lazysh-terminal-input ',''));
+      expect(receipt).toEqual({caller,cause,utf16Units:caller.startsWith('terminal-')?18:caller==='chord'?2:1,
+        dispatch:{active:true,connected:true,disposed:false,currentOwner:true},receipt:{active:true,connected:true,disposed:false,currentOwner:true}});
+      expect(raw[0]).not.toMatch(/private|ssh|Host|😀/);
+      expect(owner.reportError).toHaveBeenLastCalledWith(message);
+    }
+  } finally {focused.mockRestore();warn.mockRestore();}
+});
+it.each(['inactive','disconnect','replacement','dispose'] as const)('captures dispatch and %s receipt ownership without retaining the rejected input',async boundary=>{
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  let reject!:(error:unknown)=>void;
+  mocks.write.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+  try {
+    const owner=mountInputOwner();
+    act(()=>owner.emit('x'.repeat(70000),false));
+    if(boundary==='dispose')owner.view.unmount();
+    else owner.view.rerender(<TerminalPane session={boundary==='replacement'?{...owner.session,id:'private-replacement'}:boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={owner.reportError} />);
+    await act(async()=>reject({kind:'input_closed',message:'private failure'}));
+    const receipt=JSON.parse((warn.mock.calls.at(-1)![0] as string).replace('lazysh-terminal-input ',''));
+    expect(receipt).toEqual({caller:'terminal-nonuser',cause:'channel-closed',utf16Units:65536,
+      dispatch:{active:true,connected:true,disposed:false,currentOwner:true},
+      receipt:{active:boundary!=='inactive'&&boundary!=='dispose',connected:boundary!=='disconnect',disposed:boundary==='replacement'||boundary==='dispose',currentOwner:boundary!=='replacement'&&boundary!=='dispose'}});
+    expect(owner.reportError).toHaveBeenLastCalledWith('private failure');
+    expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
+  } finally {warn.mockRestore();}
+});
+function touchScrollFixture(height?:number) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
+  if(height) {const surface=document.createElement('div');surface.className='xterm-screen';surface.getBoundingClientRect=()=>({height} as DOMRect);target.append(surface);}
   const wheels: WheelEvent[] = [];
   target.addEventListener('wheel', event => wheels.push(event));
   const view = mount();
@@ -77,7 +398,7 @@ function touchScrollFixture() {
   const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
     bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
   }));
-  return {view, canvas, wheels, touch};
+  return {view, canvas, wheels, touch, target};
 }
 describe("terminal interactions", () => {
   it.each(['hidden','inactive','disconnect','lock','dispose'] as const)('clears unapplied local context at the %s boundary',boundary=>{
@@ -449,10 +770,6 @@ describe("terminal interactions", () => {
     expect(wheels).toHaveLength(2);
     touch('touchstart',100,100); touch('touchmove',180,103);
     expect(wheels).toHaveLength(2);
-    terminal.hasSelection.mockReturnValue(true);
-    touch('touchstart',100,100); touch('touchmove',100,160);
-    expect(wheels).toHaveLength(2);
-    terminal.hasSelection.mockReturnValue(false);
     fireEvent.compositionStart(canvas);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
@@ -461,6 +778,124 @@ describe("terminal interactions", () => {
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
     expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['none','vt200'])('routes selected vertical drags through xterm wheels in %s mode without consuming taps or horizontal selection gestures',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    terminal.hasSelection.mockReturnValue(true);
+    const {wheels,touch}=touchScrollFixture();
+    touch('touchstart',100,100); touch('touchmove',100,105); touch('touchend',100,105);
+    touch('touchstart',100,100); touch('touchmove',180,103); touch('touchend',180,103);
+    expect(wheels).toHaveLength(0);
+    touch('touchstart',100,100);
+    for (const offset of [5,8,15,60]) touch('touchmove',100,100+offset);
+    expect(wheels.length).toBeGreaterThan(0);
+    expect(terminal.hasSelection()).toBe(true);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['none','x10'])('retains rounded sub-row travel across lifts in %s mode without reversing rounding debt',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {wheels,touch}=touchScrollFixture(486);
+    const row=20.25;
+    for(const segments of [1,360]) {
+      wheels.length=0;touch('touchstart',100,300);
+      for(let step=1;step<=segments;step++)touch('touchmove',100,300-row*9*step/segments);
+      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(row*9);
+      expect(wheels.every(event=>event.deltaMode===WheelEvent.DOM_DELTA_PIXEL)).toBe(true);
+      touch('touchend',100,120);
+    }
+    wheels.length=0;touch('touchstart',100,300);touch('touchmove',100,291);
+    expect(wheels).toHaveLength(0);
+    touch('touchmove',100,270);touch('touchmove',100,285);touch('touchmove',100,290);touch('touchmove',100,291);
+    expect(wheels.map(event=>event.deltaY)).toEqual([row,-row]);
+    touch('touchend',100,290);wheels.length=0;
+    touch('touchstart',100,300);touch('touchmove',100,289);touch('touchend',100,289);
+    touch('touchstart',100,300);touch('touchmove',100,289);
+    expect(wheels.map(event=>event.deltaY)).toEqual([row]);
+    touch('touchcancel',100,289);wheels.length=0;touch('touchmove',100,200);expect(wheels).toHaveLength(0);
+  });
+  it.each(['none','x10','vt200'])('keeps first short drag responsive and repeated travel proportional in %s mode',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {wheels,touch}=touchScrollFixture(480);
+    for(const direction of [-1,1]) {
+      touch('touchcancel',100,100);wheels.length=0;
+      for(let gesture=0;gesture<5;gesture++) {
+        touch('touchstart',100,100);touch('touchmove',100,100-direction*16);
+        const count=wheels.length;touch('touchmove',100,100-direction*16);expect(wheels).toHaveLength(count);
+        if(gesture===0)expect(wheels.map(event=>event.deltaY)).toEqual(mode==='vt200'?[]:[direction*20]);
+        touch('touchend',100,100-direction*16);
+      }
+      expect(wheels.reduce((sum,event)=>sum+event.deltaY,0)).toBe(direction*(mode==='vt200'?4:80));
+    }
+  });
+  it.each(['none','vt200'])('retires short-drag debt at ownership and gesture boundaries in %s mode',mode=>{
+    terminal.modes.mouseTrackingMode=mode;
+    const {view,canvas,wheels,touch,target}=touchScrollFixture(480);
+    const show=(id='ssh',active=true,connected=true)=>view.rerender(<TerminalPane session={{id,name:'Host',connected,terminal} as unknown as LiveSession} active={active} reportError={vi.fn()} />);
+    for(const boundary of ['cancel','multitouch','tap','horizontal','mode','height','buffer','scrollback','inactive','disconnect','session','preferences','reader']) {
+      terminal.modes.mouseTrackingMode=mode;
+      Object.assign(terminal.buffer.active,{type:'normal'});Object.assign(terminal.options,{scrollback:1000});
+      target.querySelector('.xterm-screen')!.getBoundingClientRect=()=>({height:480} as DOMRect);
+      touch('touchcancel',100,100);show();
+      touch('touchstart',100,100);touch('touchmove',100,86);touch('touchend',100,86);
+      if(boundary==='cancel')touch('touchcancel',100,86);
+      if(boundary==='multitouch')canvas.dispatchEvent(new TouchEvent('touchmove',{bubbles:true,touches:[{identifier:1},{identifier:2}] as Touch[]}));
+      if(boundary==='tap'||boundary==='horizontal') {touch('touchstart',100,100);touch('touchmove',boundary==='horizontal'?180:100,boundary==='horizontal'?100:95);touch('touchend',100,100);}
+      if(boundary==='mode')terminal.modes.mouseTrackingMode=mode==='none'?'x10':'drag';
+      if(boundary==='height')target.querySelector('.xterm-screen')!.getBoundingClientRect=()=>({height:600} as DOMRect);
+      if(boundary==='buffer')Object.assign(terminal.buffer.active,{type:'alternate'});
+      if(boundary==='scrollback')Object.assign(terminal.options,{scrollback:0});
+      if(boundary==='inactive'){show('ssh',false);show();}
+      if(boundary==='disconnect'){show('ssh',true,false);show();}
+      if(boundary==='session')show('another');
+      if(boundary==='preferences')act(()=>savePreferences({...getPreferences(),bodyGestures:{...getPreferences().bodyGestures,tap:'escape'}}));
+      if(boundary==='reader'){act(()=>savePreferences({...getPreferences(),screenReader:true}));act(()=>savePreferences({...getPreferences(),screenReader:false}));}
+      wheels.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
+      expect(wheels.map(event=>event.deltaY),boundary).toEqual(mode==='vt200'||boundary==='buffer'||boundary==='scrollback'?[]:[boundary==='height'?25:20]);
+      touch('touchcancel',100,86);
+    }
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['alternate','zero-scrollback'])('keeps untracked %s wheel arrow input on whole notches',route=>{
+    const {wheels,touch}=touchScrollFixture(480);
+    if(route==='alternate')Object.assign(terminal.buffer.active,{type:'alternate'});
+    else Object.assign(terminal.options,{scrollback:0});
+    for(let gesture=0;gesture<5;gesture++) {
+      touch('touchstart',100,100);touch('touchmove',100,84);touch('touchend',100,84);
+      if(gesture===0)expect(wheels).toHaveLength(0);
+    }
+    expect(wheels.map(event=>[event.deltaY,event.deltaMode])).toEqual(Array.from({length:4},()=>[20,WheelEvent.DOM_DELTA_PIXEL]));
+  });
+  it('does not carry capped whole notches from an ended drag into a new gesture',()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const {wheels,touch}=touchScrollFixture(480);
+    touch('touchstart',100,1500);touch('touchmove',100,300);touch('touchend',100,300);
+    wheels.length=0;touch('touchstart',100,100);touch('touchmove',100,86);
+    expect(wheels).toHaveLength(0);
+  });
+  it('uses touch distance rather than move frequency for mouse wheel notches, preserving direction and gesture ownership',()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const {wheels,touch}=touchScrollFixture(480);
+    for(const segments of [1,2,8,48]) {
+      wheels.length=0;touch('touchstart',100,300);
+      for(let step=1;step<=segments;step++)touch('touchmove',100,300-180*step/segments);
+      expect(wheels.map(event=>[event.deltaY,event.deltaMode,event.clientX,event.clientY])).toEqual(Array.from({length:9},()=>[1,WheelEvent.DOM_DELTA_LINE,100,300]));
+      touch('touchend',100,120);
+    }
+    wheels.length=0;touch('touchstart',100,300);touch('touchmove',100,290);
+    expect(wheels).toHaveLength(0);
+    touch('touchmove',100,295);touch('touchmove',100,310);
+    expect(wheels.map(event=>event.deltaY)).toEqual([-1]);
+    touch('touchcancel',100,310);touch('touchmove',100,100);
+    expect(wheels).toHaveLength(1);
+    wheels.length=0;touch('touchstart',100,100);
+    for(let step=1;step<=20;step++)touch('touchmove',100+step*.8,100-step);
+    expect(wheels.map(event=>event.deltaY)).toEqual([1]);
+    touch('touchend',116,80);
+    wheels.length=0;touch('touchstart',100,1500);touch('touchmove',100,300);
+    expect(wheels).toHaveLength(Math.ceil(innerHeight/20));
+    touch('touchmove',100,299);expect(wheels).toHaveLength(60);
+    touch('touchend',100,299);wheels.length=0;
+    touch('touchstart',100,300);touch('touchmove',100,290);expect(wheels).toHaveLength(0);
   });
   it('keeps one continuous drag routed to its original pane across boundaries and reversal until end or cancel', () => {
     const {wheels, touch} = touchScrollFixture();
@@ -485,6 +920,7 @@ describe("terminal interactions", () => {
     const view = mount();
     let canvas = screen.getByLabelText("Terminal for Host");
     expect(canvas.style.touchAction).toBe("auto");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(true);
     const accessiblePinch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}, {identifier: 2}] as Touch[]});
     canvas.dispatchEvent(accessiblePinch);
     expect(accessiblePinch.defaultPrevented).toBe(false);
@@ -492,6 +928,7 @@ describe("terminal interactions", () => {
     savePreferences({...defaults});
     mount();
     canvas = screen.getByLabelText("Terminal for Host");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(false);
     const oneTouch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}] as Touch[]});
     canvas.dispatchEvent(oneTouch);
     expect(oneTouch.defaultPrevented).toBe(false);
@@ -773,7 +1210,7 @@ describe("extended touch toolbar", () => {
     expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\t','\x1b[C']);
     expect(onOpenAttachments).toHaveBeenCalledOnce();
   });
-  it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
+  it("cycles Control and Alt locks, consumes one-shot Shift, and sends named keys", () => {
     savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
     const key=(name:string)=>screen.getByRole('button',{name});
     fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl'));
@@ -782,8 +1219,8 @@ describe("extended touch toolbar", () => {
     expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[24;5~','\x1b[5;5~']);
     fireEvent.click(key('ctrl · lock')); fireEvent.click(key('Shift')); fireEvent.click(key('Arrow left'));
     expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
-    expect(key('Shift').getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(key('Shift'));fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
     expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(key('AltGr')); fireEvent.click(key('Arrow right'));
     expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;7C');
@@ -792,6 +1229,30 @@ describe("extended touch toolbar", () => {
     expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
     expect(key('Alt').getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(key('PageUp')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[5;7~');
+  });
+  it('keeps the initial Shift snapshot for one held toolbar key without lending it to another key',()=>{
+    vi.useFakeTimers();mount();const shift=screen.getByRole('button',{name:'Shift'}),left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.click(shift);fireEvent.pointerDown(left,{pointerId:7});act(()=>vi.advanceTimersByTime(560));
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[1;2D','\x1b[1;2D','\x1b[1;2D']);expect(shift.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    act(()=>vi.advanceTimersByTime(80));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    fireEvent.pointerUp(left,{pointerId:7});fireEvent.click(left,{detail:1});act(()=>vi.advanceTimersByTime(800));expect(mocks.write).toHaveBeenCalledTimes(5);
+    fireEvent.click(left);expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[D');
+  });
+  it.each(['cancel','blur','inactive','disconnect','lock'] as const)('retires held Shift at the %s boundary without leaking it to the next key',boundary=>{
+    vi.useFakeTimers();const owner=mountInputOwner();const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));fireEvent.pointerDown(left,{pointerId:17});act(()=>vi.advanceTimersByTime(400));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    if(boundary==='cancel')fireEvent.pointerCancel(left,{pointerId:17});
+    else if(boundary==='blur')fireEvent.blur(left);
+    else if(boundary==='lock'){act(()=>access(true));act(()=>access(false));}
+    else {
+      owner.view.rerender(<TerminalPane session={boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={owner.reportError} />);
+      owner.view.rerender(<TerminalPane session={owner.session} active reportError={owner.reportError} />);
+    }
+    act(()=>vi.advanceTimersByTime(800));expect(mocks.write).toHaveBeenCalledOnce();
+    if(boundary==='lock'){fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenCalledOnce();owner.view.unmount();terminal=createMockTerminal();mountInputOwner();}
+    fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
   });
   it("repeats held navigation and stops on pointer cancellation and inactive sessions", () => {
     vi.useFakeTimers(); const view=mount();
@@ -864,4 +1325,62 @@ it("portals only the active terminal controls into the existing header and retai
     expect(within(target).getAllByRole('button')).toHaveLength(2);
     view.unmount(); expect(target.childElementCount).toBe(0);
   } finally {target.remove();}
+});
+
+it('publishes only the active local overlay Back handler and keeps its draft without sending',()=>{
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const onBackChange=vi.fn(),reportError=vi.fn();
+  const view=render(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'retained draft'}});
+  const close=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  act(()=>expect(close()).toBe(true));expect(screen.queryByLabelText('Compose text')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  const stale=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+  view.rerender(<TerminalPane session={session} active={false} reportError={reportError} onBackChange={onBackChange}/>);
+  expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);act(()=>expect(stale()).toBe(false));
+  view.rerender(<TerminalPane session={session} active reportError={reportError} onBackChange={onBackChange}/>);
+  expect(screen.getByLabelText('Compose text')).toHaveProperty('value','retained draft');
+  view.unmount();expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  expect(mocks.write).not.toHaveBeenCalled();expect(terminal.paste).not.toHaveBeenCalled();
+});
+
+
+it('routes every Mosh fit path through proposals and guarded intents without clearing or echoing canonical resizes',async()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(400);
+  let observe!:()=>void,receive!:(size:{cols:number;rows:number})=>void;
+  vi.stubGlobal('ResizeObserver',class {constructor(callback:()=>void){observe=callback;}observe(){}disconnect(){}});
+  const stop=vi.fn(),controller={onResizeIntent:vi.fn(callback=>{receive=callback;return{dispose:stop};}),requestSize:vi.fn(),dispose:vi.fn()};
+  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  const resized=vi.spyOn(terminal,'onResize'),reportError=vi.fn();
+  try {
+    const view=render(<TerminalPane session={session} active reportError={reportError}/>);
+    const initial=controller.requestSize.mock.calls.length;expect(initial).toBeGreaterThan(0);
+    act(()=>observe());expect(controller.requestSize.mock.calls.length).toBeGreaterThan(initial);
+    act(()=>savePreferences({...defaults,fontSize:18}));
+    await act(async()=>view.rerender(<TerminalPane session={session} active={false} reportError={reportError}/>));
+    await act(async()=>view.rerender(<TerminalPane session={session} active reportError={reportError}/>));
+    expect(controller.requestSize).toHaveBeenLastCalledWith(80,24);expect(mocks.fit).not.toHaveBeenCalled();expect(resized).not.toHaveBeenCalled();
+    await act(async()=>receive({cols:91,rows:17}));expect(mocks.resize).toHaveBeenLastCalledWith('mosh',91,17);
+    access(true);await act(async()=>receive({cols:92,rows:18}));expect(mocks.resize).toHaveBeenCalledTimes(1);
+    const count=controller.requestSize.mock.calls.length;session.connected=false;act(()=>observe());expect(controller.requestSize).toHaveBeenCalledTimes(count);
+    view.unmount();expect(stop).toHaveBeenCalledOnce();expect(controller.dispose).not.toHaveBeenCalled();
+    access();session.connected=true;render(<TerminalPane session={session} active reportError={reportError}/>);
+    expect(controller.onResizeIntent).toHaveBeenCalledTimes(2);expect(controller.requestSize.mock.calls.length).toBeGreaterThan(count);
+  } finally {width.mockRestore();}
+});
+
+it('keeps ordinary non-Mosh fits and resize notifications on the stock path',async()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(400);let resize!:(size:{cols:number;rows:number})=>void;
+  terminal.onResize=callback=>{resize=callback;return{dispose(){}};};
+  try{mount();expect(mocks.fit).toHaveBeenCalled();expect(mocks.propose).not.toHaveBeenCalled();await act(async()=>resize({cols:72,rows:19}));expect(mocks.resize).toHaveBeenCalledWith('ssh',72,19);}finally{width.mockRestore();}
+});
+
+it('reports an unsupported measured Mosh size without clearing the canonical screen or issuing remote resize',()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(6000),reportError=vi.fn();
+  const controller={onResizeIntent:()=>({dispose(){}}),requestSize:()=>{throw new Error('unsupported measured grid');}};
+  const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
+  try{render(<TerminalPane session={session} active reportError={reportError}/>);expect(reportError).toHaveBeenCalled();expect(mocks.fit).not.toHaveBeenCalled();expect(mocks.resize).not.toHaveBeenCalled();}finally{width.mockRestore();}
 });

@@ -158,6 +158,7 @@ fn main() {
         "agent_reported_history",
         "install_companion",
         "companion_hooks",
+        "companion_hook_discovery",
         "get_companion_settings",
         "update_companion_settings",
         "agent_transcript",

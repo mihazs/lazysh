@@ -27,13 +27,15 @@ internal class RegistrationController(
 ) {
     private var epoch = 0L
     private var selecting = false
+    private var enrollmentReserved = false
     private var selection = 0L
     val registration: Registration @Synchronized get() = store.value
-    val busy: Boolean @Synchronized get() = selecting
+    val busy: Boolean @Synchronized get() = selecting || enrollmentReserved
 
     @Synchronized fun register(expected: Long, select: ((Boolean) -> Unit) -> Unit, done: (Boolean) -> Unit) {
         if (expected < epoch || selecting || store.value.phase == Phase.REVOKE_PENDING) { done(false); return }
         epoch = expected
+        enrollmentReserved = false
         val instance = store.value.instance ?: newInstance()
         store.value = Registration(instance, true, Phase.SELECTING)
         selecting = true
@@ -66,10 +68,12 @@ internal class RegistrationController(
     @Synchronized fun reserveEnrollment(expected: Long): Boolean {
         if (expected < epoch || selecting || store.value != Registration()) return false
         epoch = expected
+        enrollmentReserved = true
         return true
     }
+    @Synchronized fun releaseEnrollment(expected: Long) { if(epoch == expected)enrollmentReserved=false }
     @Synchronized fun withReserved(expected: Long, action: () -> Unit): Boolean {
-        if (epoch != expected || selecting || store.value != Registration()) return false
+        if (epoch != expected || selecting || !enrollmentReserved || store.value != Registration()) return false
         action()
         return true
     }
@@ -82,6 +86,7 @@ internal class RegistrationController(
     @Synchronized fun disable(expected: Long, beforeRevoke: () -> Unit = {}): Boolean {
         if (expected < epoch) return false
         epoch = expected
+        enrollmentReserved = false
         beforeRevoke()
         return revoke()
     }

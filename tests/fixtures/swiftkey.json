@@ -53,5 +53,17 @@
     "typer": "0.27.3",
     "typing_extensions": "4.16.0",
     "websocket_client": "1.9.2"
+  },
+  "apkPureStandalone": {
+    "name": "com.touchtype.swiftkey@9.13.18.4@x86_64.apk",
+    "bytes": 240905889,
+    "sha256": "9879d25016c0193ece597669623b2c6a94671c2ff6280149f1f5a5904189438e",
+    "abis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "apkeepSha256": "badd7ad9fa7d2f32abe01eaf33b7ff086361a95bbc000a33bf44b630d4bf2140"
   }
 }

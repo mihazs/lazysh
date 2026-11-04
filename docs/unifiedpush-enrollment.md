@@ -1,6 +1,6 @@
 # Private UnifiedPush relay enrollment
 
-This optional F-Droid Android flow connects the [encrypted Web Push server foundation](web-push-server.md) to native enrollment and challenge confirmation. It is **challenge-only**: host event payloads and notification display remain ignored. It does not complete #344 or establish real distributor interoperability merely by compiling or passing protocol fixtures. No app subscription, Google account or mandatory paid provider is required. You operate the relay and choose a compatible free-software distributor/service.
+This optional Google/FOSS Android UnifiedPush flow connects the [encrypted Web Push server foundation](web-push-server.md) to native enrollment and challenge confirmation. Encrypted challenge confirmation establishes the private binding; authenticated bound events require separate native display consent. Plaintext, unbound or replayed messages never enable display. It does not complete #344 or establish real distributor interoperability merely by compiling or passing protocol fixtures. No app subscription, Google account or mandatory paid provider is required. You operate the relay and choose a compatible free-software distributor/service.
 
 ## Connect explicitly
 

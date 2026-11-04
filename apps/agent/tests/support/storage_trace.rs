@@ -9,6 +9,8 @@ use std::{
 #[path = "../../src/storage_failure_record.rs"]
 #[allow(dead_code)]
 mod failure_record;
+#[path = "wal_failure.rs"]
+mod wal_failure;
 
 const FILE_LIMIT: usize = 64;
 const EXCERPT_LIMIT: usize = 128 * 1024;
@@ -172,17 +174,21 @@ struct InitializationWorker {
     result: WorkerResult,
     sqlite_code: Option<i32>,
     exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sql_phase: Option<failure_record::Phase>,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum InitializationRecord {
     Phase(failure_record::Failure),
     Worker(InitializationWorker),
     FailedTest(&'static str),
+    WalFailure(wal_failure::Record),
 }
 impl InitializationRecord {
     fn line(&self) -> String {
         match self {
             Self::Phase(record) => record.line(),
+            Self::WalFailure(record) => record.line().expect("finite WAL observation"),
             Self::FailedTest(name) => format!(
                 "lazysh-initialization-failed-test {}\n",
                 serde_json::json!({"name": name})
@@ -208,16 +214,45 @@ pub(super) fn assert_child_storage_error(output: &Output, code: i32) {
     assert_eq!(record.open_elapsed_us, None);
 }
 
-// Only the CLI's complete sanitized terminal error is source-bound here.
-// It identifies a cause class, never the SQL boundary or time spent waiting.
-fn child_error(output: &Output) -> Option<(WorkerResult, Option<i32>)> {
+// Only a complete sanitized child error and its optional same-child finite phase
+// may be correlated. Never infer a worker phase from the parent's global output.
+fn child_error(
+    output: &Output,
+) -> Option<(WorkerResult, Option<i32>, Option<failure_record::Phase>)> {
     if output.status.code() != Some(1) || !output.stdout.is_empty() || output.stderr.len() > 4096 {
         return None;
     }
-    let line = std::str::from_utf8(&output.stderr)
+    let text = std::str::from_utf8(&output.stderr)
         .ok()?
         .strip_suffix('\n')?;
-    let line = line.strip_suffix('\r').unwrap_or(line);
+    let mut lines = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line));
+    let first = lines.next()?;
+    let (diagnostic, terminal) = match lines.next() {
+        None => (None, first),
+        Some(terminal) => (Some(failure_record::Failure::parse(first)?), terminal),
+    };
+    if lines.next().is_some() {
+        return None;
+    }
+    let (result, code) = terminal_error(terminal)?;
+    if let Some(record) = &diagnostic {
+        let matches = match result {
+            WorkerResult::StorageError => {
+                record.result == failure_record::ResultClass::StorageError
+            }
+            WorkerResult::IoError => record.result == failure_record::ResultClass::IoError,
+            _ => false,
+        };
+        if !matches || record.sqlite_code != code {
+            return None;
+        }
+    }
+    Some((result, code, diagnostic.map(|record| record.phase)))
+}
+
+fn terminal_error(line: &str) -> Option<(WorkerResult, Option<i32>)> {
     match line {
         "lazysh-agent: IoError: operation failed" => Some((WorkerResult::IoError, None)),
         "lazysh-agent: StorageError: operation failed" => Some((WorkerResult::StorageError, None)),
@@ -237,13 +272,14 @@ impl InitializationWorker {
         output: &Output,
         (start, elapsed): &(std::time::Duration, std::time::Duration),
     ) -> Option<Self> {
-        let (result, sqlite_code) = child_error(output).unwrap_or_else(|| {
+        let (result, sqlite_code, sql_phase) = child_error(output).unwrap_or_else(|| {
             (
                 if output.status.success() {
                     WorkerResult::Success
                 } else {
                     WorkerResult::OtherError
                 },
+                None,
                 None,
             )
         });
@@ -255,16 +291,23 @@ impl InitializationWorker {
             open_elapsed_us: None,
             total_elapsed_us: u64::try_from(elapsed.as_micros()).ok()?,
             actual_hold_us: None,
-            // The ordinary child strips diagnostics. Its SQL boundary is not observed.
+            // Phase opt-in does not expose open/ingest durations; keep timing stage unknown.
             stage: WorkerStage::Unknown,
             result,
             sqlite_code,
             exit_code: output.status.code(),
+            sql_phase,
         })
     }
 
     fn valid(&self) -> bool {
-        if self.worker >= 16
+        if (self.sql_phase.is_some()
+            && (self.origin != WorkerOrigin::ConcurrentHooks
+                || !matches!(
+                    self.result,
+                    WorkerResult::StorageError | WorkerResult::IoError
+                )))
+            || self.worker >= 16
             || self.round
                 >= if self.origin == WorkerOrigin::Initialization {
                     4
@@ -331,6 +374,7 @@ impl InitializationWorker {
             result,
             sqlite_code,
             exit_code: None,
+            sql_phase: None,
         })
     }
 }
@@ -378,6 +422,8 @@ pub(super) fn concurrent_workers(
     );
 }
 
+const WAL_OWNER: &str = "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail";
+
 // Only reviewed source names may leave the private owner spool.
 const FAILED_TESTS: &[&str] = &[
     "cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks",
@@ -394,6 +440,7 @@ const FAILED_TESTS: &[&str] = &[
     "concurrent_ingest_recovers_after_a_transient_database_lock",
     "config_is_print_only_and_contains_supported_hooks",
     "additional_native_agents_report_only_their_actual_lifecycle_contracts",
+    "copilot_distinct_children_complete_without_retiring_the_parent",
     "unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent",
     "codex_hooks_preserve_main_turn_while_subagents_finish",
     "opencode_native_events_keep_exact_sessions_and_bounded_metadata",
@@ -403,9 +450,10 @@ const FAILED_TESTS: &[&str] = &[
     "disabled_operations_fail_before_transcript_or_device_access_but_settings_remain_readable",
     "distinct_sessions_and_agents_keep_their_latest_state",
     "hook_previews_label_their_dialect_and_platform_binding_without_creating_state",
+    "hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles",
     "invalid_events_fail_without_files_or_secret_echo",
     "invalid_snapshot_limits_fail_before_creating_storage",
-    "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail",
+    WAL_OWNER,
     "legacy_read_only_transaction_blocks_migration_explicitly_without_losing_data",
     "lifecycle_events_update_status_without_executing_actions",
     "links_public_files_and_special_files_are_refused_without_changing_targets",
@@ -438,6 +486,18 @@ const FAILED_TESTS: &[&str] = &[
     "storage_trace::initialization_worker_stage_drift_still_fails",
     "storage_trace::worker_origins_keep_independent_epochs_and_strict_bounds",
     "storage_trace::child_observations_keep_unknown_sql_phase_and_redact_output",
+    "wal_failure::tests::panic_observation_preserves_payload_and_runs_after_owned_drop",
+    "wal_failure::tests::successful_or_disabled_observation_never_writes",
+    "wal_failure::tests::failed_observation_write_cannot_replace_the_original_panic",
+    "wal_failure::tests::closed_record_rejects_private_unknown_control_and_oversized_fields",
+    "wal_failure::tests::child_stage_and_parent_readiness_cannot_describe_contradictory_progress",
+    "storage_trace::wal_failure::tests::panic_observation_preserves_payload_and_runs_after_owned_drop",
+    "storage_trace::wal_failure::tests::successful_or_disabled_observation_never_writes",
+    "storage_trace::wal_failure::tests::failed_observation_write_cannot_replace_the_original_panic",
+    "storage_trace::wal_failure::tests::closed_record_rejects_private_unknown_control_and_oversized_fields",
+    "storage_trace::wal_failure::tests::child_stage_and_parent_readiness_cannot_describe_contradictory_progress",
+    "storage_trace::wal_failure_projection_requires_the_actual_owner_and_coherent_unique_records",
+    "storage_trace::wal_failure_projection_rejects_private_records_without_leaking_them",
     "storage_trace::project_owned_initialization_diagnostics",
     "storage_trace::trace_export_rejects_symlinks_and_hard_links_without_reading_them",
     "sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code",
@@ -455,6 +515,7 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
     let mut phases = 0;
     let mut workers = std::collections::BTreeSet::new();
     let mut failed_tests = std::collections::BTreeSet::new();
+    let mut wal_failures = Vec::new();
     for line in std::str::from_utf8(bytes).ok()?.lines() {
         if line.starts_with(failure_record::PREFIX) {
             if phases == 4 * 16 {
@@ -476,6 +537,13 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
                 return None;
             }
             records.push(InitializationRecord::Worker(record));
+        } else if line.starts_with(wal_failure::PREFIX) {
+            if wal_failures.len() == 2 {
+                return None;
+            }
+            let record = wal_failure::Record::parse(line)?;
+            wal_failures.push(record);
+            records.push(InitializationRecord::WalFailure(record));
         } else if line.starts_with("test result: ") {
             continue;
         } else if line.starts_with("test ") && line.contains("FAILED") {
@@ -492,6 +560,11 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
                 records.push(InitializationRecord::FailedTest(name));
             }
         }
+    }
+    if !wal_failure::coherent(&wal_failures)
+        || (!wal_failures.is_empty() && !failed_tests.contains(WAL_OWNER))
+    {
+        return None;
     }
     Some(records)
 }
@@ -529,6 +602,72 @@ fn initialization_projection_exports_only_bounded_closed_records() {
         assert!(initialization_projection(raw.as_bytes()).is_none());
     }
     assert!(initialization_projection(&[255]).is_none());
+}
+
+fn wal_failure_line(origin: &str, stage: &str, readiness: &str) -> String {
+    format!(
+        "{}{}\n",
+        wal_failure::PREFIX,
+        serde_json::json!({"schemaVersion":1,"scope":"failureUnwind","origin":origin,"stage":stage,"readiness":readiness})
+    )
+}
+#[test]
+fn wal_failure_projection_requires_the_actual_owner_and_coherent_unique_records() {
+    let parent = wal_failure_line("parent", "readiness", "disconnected");
+    let child = wal_failure_line("child", "spillWrite", "notApplicable");
+    let failed = format!("test {WAL_OWNER} ... FAILED\n");
+    let records = initialization_projection(format!("{child}{parent}{failed}").as_bytes()).unwrap();
+    assert_eq!(records.len(), 3);
+    for child_stage in ["storeOpen", "commit", "readyFlush", "awaitKill"] {
+        let spawned = wal_failure_line("parent", "spawn", "notReached");
+        let progressing = wal_failure_line("child", child_stage, "notApplicable");
+        assert!(
+            initialization_projection(format!("{progressing}{spawned}{failed}").as_bytes())
+                .is_some()
+        );
+    }
+    for record in &records[..2] {
+        assert!(record.line().starts_with(wal_failure::PREFIX));
+    }
+    for raw in [
+        format!("{child}{failed}"),
+        format!("{parent}{parent}{failed}"),
+        format!("{child}{child}{failed}"),
+        format!("{child}{parent}{parent}{failed}"),
+        format!("{parent}{child}"),
+        format!(
+            "{}{child}{failed}",
+            wal_failure_line("parent", "reopen", "ready")
+        ),
+    ] {
+        assert!(initialization_projection(raw.as_bytes()).is_none());
+    }
+    assert!(initialization_projection(
+        format!(
+            "{}{failed}",
+            wal_failure_line("parent", "integrity", "ready")
+        )
+        .as_bytes()
+    )
+    .is_some());
+}
+#[test]
+fn wal_failure_projection_rejects_private_records_without_leaking_them() {
+    let parent = wal_failure_line("parent", "readiness", "timeout");
+    let failed = format!("test {WAL_OWNER} ... FAILED\n");
+    let raw = format!("private panic payload /private/db\n{parent}{failed}private tail\n");
+    let projected = initialization_projection(raw.as_bytes()).unwrap();
+    assert!(projected
+        .iter()
+        .all(|record| !record.line().contains("private")));
+    for invalid in [
+        parent.replace("timeout", "private-error"),
+        parent.replace("1,", "1,\"secret\":\"private\","),
+        parent.replace("{", "{\r"),
+        format!("{}{}\n", wal_failure::PREFIX, "x".repeat(513)),
+    ] {
+        assert!(initialization_projection(format!("{invalid}{failed}").as_bytes()).is_none());
+    }
 }
 
 #[test]
@@ -609,6 +748,11 @@ fn failed_test_allowlist_covers_every_owned_source_test() {
         ("", include_str!("../storage_wal.rs")),
         ("", include_str!("../installation.rs")),
         ("storage_trace::", include_str!("storage_trace.rs")),
+        ("wal_failure::tests::", include_str!("wal_failure.rs")),
+        (
+            "storage_trace::wal_failure::tests::",
+            include_str!("wal_failure.rs"),
+        ),
         (
             "storage_trace::failure_record::tests::",
             include_str!("../../src/storage_failure_record.rs"),
@@ -876,11 +1020,6 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
         [canonical.as_slice(), canonical.as_slice()].concat(),
         [canonical.as_slice(), b"private payload"].concat(),
         [
-            journal_mode_busy_record().line().as_bytes(),
-            canonical.as_slice(),
-        ]
-        .concat(),
-        [
             b"lazysh-storage-diagnostic {invalid}\n",
             canonical.as_slice(),
         ]
@@ -893,9 +1032,113 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
         error.stderr = rejected;
         assert!(child_error(&error).is_none());
     }
+    let diagnostic = journal_mode_busy_record().line();
+    for invalid in [
+        diagnostic.repeat(2),
+        diagnostic.replace("journal_mode", "private"),
+        diagnostic.replace("StorageError", "IoError"),
+        diagnostic.replace("\"sqliteCode\":5", "\"sqliteCode\":6"),
+        diagnostic.replace("\"sqliteCode\":5", "\"sqliteCode\":null"),
+        diagnostic.replace(
+            "\"sqliteCode\":5",
+            "\"sqliteCode\":5,\"private\":\"secret\"",
+        ),
+        format!("{diagnostic}private payload\n"),
+    ] {
+        error.stderr = [invalid.as_bytes(), canonical].concat();
+        assert!(child_error(&error).is_none());
+        let observed = InitializationWorker::child(
+            7,
+            &error,
+            &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+        )
+        .unwrap();
+        assert_eq!(observed.sql_phase, None);
+        assert_eq!(observed.result, WorkerResult::OtherError);
+        assert!(!InitializationRecord::Worker(observed)
+            .line()
+            .contains("private"));
+    }
+    for phase in [
+        failure_record::Phase::BootstrapLock,
+        failure_record::Phase::IngestBegin,
+    ] {
+        let record = failure_record::Failure {
+            phase,
+            ..journal_mode_busy_record()
+        };
+        for ending in ["\n", "\r\n"] {
+            error.stderr = [
+                record.line().replace('\n', ending).as_bytes(),
+                std::str::from_utf8(canonical)
+                    .unwrap()
+                    .replace('\n', ending)
+                    .as_bytes(),
+            ]
+            .concat();
+            let observed = InitializationWorker::child(
+                7,
+                &error,
+                &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+            )
+            .unwrap();
+            assert!(observed.valid());
+            assert_eq!(observed.sql_phase, Some(phase));
+            assert_eq!(observed.result, WorkerResult::StorageError);
+            assert_eq!(observed.sqlite_code, Some(5));
+            assert_eq!(observed.stage, WorkerStage::Unknown);
+            assert_eq!(observed.open_elapsed_us, None);
+            let value = serde_json::to_value(&observed).unwrap();
+            rejects_worker_fields(
+                &value,
+                &[
+                    ("sqlPhase", serde_json::json!("private")),
+                    ("result", serde_json::json!("Success")),
+                    ("origin", serde_json::json!("initialization")),
+                ],
+            );
+            let line = InitializationRecord::Worker(observed).line();
+            assert_eq!(
+                initialization_projection(line.as_bytes()).unwrap()[0].line(),
+                line
+            );
+        }
+    }
     error.stderr = canonical.to_vec();
     error.stdout = b"private output".to_vec();
     assert!(child_error(&error).is_none());
+
+    drop(super::Store::open(directory.path()).unwrap());
+    let blocker = rusqlite::Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = std::time::Instant::now();
+    let output = super::run_traced(
+        directory.path(),
+        &["ingest", "--agent", "generic"],
+        &serde_json::to_vec(&super::event("observed", "working")).unwrap(),
+        None,
+        true,
+    );
+    blocker.execute_batch("ROLLBACK").unwrap();
+    let observed =
+        InitializationWorker::child(3, &output, &(std::time::Duration::ZERO, started.elapsed()))
+            .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(observed.valid());
+    assert_eq!(observed.sql_phase, Some(failure_record::Phase::IngestBegin));
+    assert_eq!(observed.sqlite_code, Some(5));
+    assert_eq!(observed.open_elapsed_us, None);
+    let line = InitializationRecord::Worker(observed).line();
+    assert!(!line.contains(directory.path().to_str().unwrap()));
+    assert!(!line.contains("observed"));
+    assert_eq!(
+        initialization_projection(line.as_bytes()).unwrap()[0].line(),
+        line
+    );
+    assert!(super::snapshot(directory.path(), "50")["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     for (worker, args) in [
         (0, &["--help"][..]),
@@ -995,6 +1238,13 @@ fn project_owned_initialization_diagnostics() {
                 records
                     .iter()
                     .filter(|record| matches!(record, InitializationRecord::FailedTest(_)))
+                    .count()
+            );
+            eprintln!(
+                "initialization-wal-failure-records={}",
+                records
+                    .iter()
+                    .filter(|record| matches!(record, InitializationRecord::WalFailure(_)))
                     .count()
             );
             for record in records {

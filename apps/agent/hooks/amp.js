@@ -40,9 +40,12 @@ export default function lazysh(amp) {
     try {
       directory = amp.system.workspaceRoot ? amp.helpers.filePathFromURI(amp.system.workspaceRoot) : 'Amp (no workspace)';
     } catch { return; }
-    const watch = { id: ctx.thread.id, directory, writing: false, pending: undefined, changed: false };
+    const watch = { id: ctx.thread.id, directory, writing: false, pending: undefined, changed: false, running: false };
     const receive = state => {
       if (!current(watch) || !['idle', 'running', 'awaiting-approval', 'error'].includes(state)) return;
+      // Idle also describes threads that never ran; only end an observed run.
+      if (state === 'idle' && !watch.running) return;
+      if (state !== 'awaiting-approval') watch.running = state === 'running';
       watch.pending = state;
       if (!watch.writing) void drain(watch);
     };

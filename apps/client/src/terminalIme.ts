@@ -17,8 +17,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   let previous = area.value, start = previous.length;
   let composing = false, ending = false, hardware = false, sending = false, key229 = false;
   let generation = 0, deferred: KeyboardEvent | undefined, replaying = false;
+  let keypressEvent: Event | undefined;
   let completion: ReturnType<typeof setTimeout> | undefined;
-  let fallbackPending: {owner:number; previous:string; value:string} | undefined;
+  let fallbackPending: {owner:number; delta:string} | undefined;
   const cancelComposition = () => {
     // xterm 5.5 has no public API to cancel a retained asynchronous IME commit.
     helper._isComposing = false; helper._isSendingComposition = false;
@@ -33,10 +34,10 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const foreground = () => acceptsInput() && document.hasFocus() && !document.hidden;
   const focused = () => foreground() && document.activeElement === area && !area.readOnly;
   const ownedDelta = (value: string) => {
-    // Blink can report caret 0 for a fresh keyless insertion after refocus. With
-    // an empty baseline there is no sent span to erase or replay.
-    if (value.slice(0, start) !== previous.slice(0, start)
-      || (previous.length > 0 && (area.selectionStart !== value.length || area.selectionEnd !== value.length))) return;
+    // InputConnection selection is independent of its composing range. The
+    // native caret may remain inside a corrected word; our remote cursor stays
+    // at the end of this owned suffix, so translate the text change from there.
+    if (value.slice(0, start) !== previous.slice(0, start)) return;
     const old = Array.from(previous.slice(start)), next = Array.from(value.slice(start));
     let common = 0;
     while (common < old.length && old[common] === next[common]) common++;
@@ -67,13 +68,12 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (!pending) return;
     fallbackPending = undefined; clearTimeout(completion);
     if (pending.owner !== generation || !focused()) return;
-    const old = pending.previous, value = pending.value;
-    // Match xterm 5.5 CompositionHelper._handleAnyTextareaChanges, with an owned timer.
-    send(value.length > old.length ? value.replace(old, '') : value.length < old.length ? '\x7f' : value !== old ? value : '');
+    // This edit already passed the owned-prefix and ASCII-erasure checks.
+    send(pending.delta);
   };
   const output = terminal.onData(() => {
     if (userInput() && !sending && !composing && !ending) {
-      const physical = hardware; reset(); hardware = physical;
+      const physical = hardware || !!keypressEvent?.eventPhase; reset(); hardware = physical;
     }
   });
   const replay = (event: KeyboardEvent) => {
@@ -106,6 +106,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     resume();
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
     if (!composing && !ending) commitFallback();
+    if (event.key === 'Process' && !event.code && event.keyCode === 0 && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      hardware = false; event.stopImmediatePropagation(); return;
+    }
     if (event.keyCode === 229) {
       hardware = false;
       // xterm's key229 timeout treats an equal-length correction as another word.
@@ -138,19 +141,21 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     commitFallback();
     if (hardware) {reset(); return;}
     const value = area.value;
-    const fallback = () => {
-      const blocked = key229, old = previous;
+    const fallback = (delta:string) => {
+      const blocked = key229, ownedStart = start;
       reset();
       if (blocked) {
+        start = ownedStart;
         event.stopImmediatePropagation();
         const owner = generation;
-        fallbackPending = {owner,previous:old,value};
+        fallbackPending = {owner,delta};
         completion = setTimeout(() => {if (generation === owner) commitFallback();}, 0);
       }
     };
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
-    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)) {fallback(); return;}
+    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
+      && (event.inputType !== 'deleteContentForward' || key229)) {fallback(delta); return;}
     event.stopImmediatePropagation(); key229 = false; previous = value;
     send(delta);
   };
@@ -176,6 +181,14 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const paste = (event: Event) => {if (event.target === area) flush();};
   const activate = () => {commitFallback(); resume();};
   const keyup = () => {hardware = false;};
+  const keypress = (event: Event) => {
+    if (event.target !== area) return;
+    if (!focused()) {event.preventDefault(); event.stopImmediatePropagation(); revoke(); return;}
+    keypressEvent = event;
+    if ((composing || ending) && event instanceof KeyboardEvent && (event.charCode || event.which || event.keyCode)
+      && !flush()) {event.preventDefault(); event.stopImmediatePropagation();}
+  };
+  element.addEventListener('keypress', keypress, true);
   element.addEventListener('keydown', keydown, true);
   element.addEventListener('keyup', keyup, true);
   element.addEventListener('beforeinput', before, true);
@@ -188,6 +201,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   element.addEventListener('click', activate, true);
   return {get blocked() {return !!unapplied;}, reset() {unapplied = null; onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
     unapplied = null; onUnappliedEdit(null); revoke(); output.dispose();
+    element.removeEventListener('keypress', keypress, true);
     element.removeEventListener('keydown', keydown, true);
     element.removeEventListener('keyup', keyup, true);
     element.removeEventListener('beforeinput', before, true);

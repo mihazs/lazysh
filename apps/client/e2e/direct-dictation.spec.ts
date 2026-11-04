@@ -58,7 +58,7 @@ for(const action of ['cancel','navigate','disconnect','disconnect intent','repla
     else if(action==='navigate')await (await workspaceControl(page,'Terminal')).click();
     else if(action==='disconnect intent'){
       await page.evaluate(()=>{window.dictationFixture.deferDisconnect=true;});
-      await page.getByRole('button',{name:'Disconnect Local terminal',exact:true}).click();
+      await (await workspaceControl(page,'End Local terminal connection')).click();
     }else if(action==='replace session'){
       if((page.viewportSize()?.width ?? 1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
       await page.getByRole('button',{name:'Open local terminal',exact:true}).click();

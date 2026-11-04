@@ -169,6 +169,9 @@ final class AppIconUITests: XCTestCase {
     XCTAssertTrue(preferences.waitForExistence(timeout: 20))
     XCTAssertTrue(preferences.isHittable, "Preferences must accept a real touch")
     preferences.tap()
+    let appearance = app.webViews.buttons["Appearance and fonts"].firstMatch
+    try reveal(appearance, in: app)
+    appearance.tap()
     XCTAssertTrue(app.webViews.buttons["Refresh app icon"].firstMatch.waitForExistence(timeout: 10))
   }
   @MainActor

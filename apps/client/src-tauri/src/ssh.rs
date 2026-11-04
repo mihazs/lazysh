@@ -2264,11 +2264,13 @@ pub async fn write_stdin(
                 .await?
                 .input
                 .try_send(Input::Data(data, lease.clone()))
-                .map_err(|_| {
-                    SshError::new(
-                        "backpressure",
-                        "Terminal input queue is full or disconnected",
-                    )
+                .map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(_) => {
+                        SshError::new("backpressure", "Terminal input queue is full")
+                    }
+                    mpsc::error::TrySendError::Closed(_) => {
+                        SshError::new("input_closed", "Terminal input channel is closed")
+                    }
                 })?;
             Ok(())
         })
@@ -2844,7 +2846,7 @@ fn transcript_view_command(
     let mut command = transcript_command(agent, path, offset, checkpoint)?;
     match view {
         None | Some("records") => {}
-        Some("conversation") if matches!(agent, "claude" | "grok-acp") && offset == 0 => {
+        Some("conversation") if matches!(agent, "claude" | "grok-acp" | "codex") && offset == 0 => {
             command.push_str(" --view conversation")
         }
         _ => {
@@ -3896,7 +3898,9 @@ mod tests {
             ("claude", 0, Some("conversation"), true),
             ("grok-acp", 1, Some("conversation"), false),
             ("claude", 1, Some("conversation"), false),
-            ("codex", 0, Some("conversation"), false),
+            ("codex", 0, Some("conversation"), true),
+            ("codex", 1, Some("conversation"), false),
+            ("codex", 0, Some("conversation; execute"), false),
             ("antigravity-jsonl", 0, Some("conversation"), false),
             ("grok-acp", 0, Some("conversation; execute"), false),
             ("grok-acp", 7, Some("records"), true),
@@ -5010,6 +5014,63 @@ mod tests {
         .unwrap();
         parent_session.cancel.send(true).unwrap();
         parent_session.output_credits.close();
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn terminal_input_distinguishes_full_queue_from_closed_channel() {
+        use tauri::Manager;
+        let (host, _, server_task) = server(false).await;
+        let (_directory, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (input, mut receiver) = mpsc::channel(32);
+        let (cancel, _) = watch::channel(false);
+        let session = Arc::new(adopted_fixture_session(handle, input, cancel));
+        state
+            .sessions
+            .lock()
+            .await
+            .insert("owned".into(), session.clone());
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        for _ in 0..32 {
+            write_stdin(
+                access_lease(),
+                app.state(),
+                "owned".into(),
+                "x".into(),
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        }
+        for (closed, expected_kind, expected_message) in [
+            (false, "backpressure", "Terminal input queue is full"),
+            (true, "input_closed", "Terminal input channel is closed"),
+        ] {
+            if closed {
+                receiver.close();
+            }
+            let error = write_stdin(
+                access_lease(),
+                app.state(),
+                "owned".into(),
+                "private text".into(),
+                None,
+            )
+            .await
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            assert_eq!(error.kind, expected_kind);
+            assert_eq!(error.message, expected_message);
+            assert_eq!(session.input.capacity(), 0);
+        }
+        drop(receiver);
+        app.state::<AppState>().sessions.lock().await.clear();
         server_task.abort();
     }
 

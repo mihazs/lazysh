@@ -56,7 +56,6 @@ test('actual Amp asset observes exact native states and thread identities withou
   await settle();
   expect(payloads).toEqual([
     ...['running', 'awaiting-approval', 'running', 'idle', 'error'].map(state => ({ schemaVersion: 1, threadId: 'T-first', directory: '/owned/project', state })),
-    { schemaVersion: 1, threadId: 'T-second', directory: '/owned/project', state: 'idle' },
   ]);
   expect(JSON.stringify(payloads)).not.toContain('PRIVATE_CONTEXT');
   expect(spawn.mock.calls[0]).toEqual(['lazysh-agent', ['ingest', '--agent', 'amp'], { stdio: ['pipe', 'ignore', 'ignore'], timeout: 3000, killSignal: 'SIGKILL' }]);
@@ -66,7 +65,24 @@ test('actual Amp asset observes exact native states and thread identities withou
   for (const registration of amp.subscriptions) expect(registration.unsubscribe).toHaveBeenCalledOnce();
   first.emit('running');
   amp.handlers.get('agent.start')!({}, amp.thread('T-after-dispose').context);
-  expect(spawn).toHaveBeenCalledTimes(6);
+  expect(spawn).toHaveBeenCalledTimes(5);
+});
+
+test('an idle observation does not invent a completed turn for a newly observed thread', async () => {
+  const { payloads } = companion();
+  const amp = sdk();
+  const thread = amp.thread('T-never-ran', Promise.resolve('idle'));
+  amp.handlers.get('session.start')!({}, thread.context);
+  await settle();
+  thread.emit('idle');
+  await settle();
+  expect(payloads).toEqual([]);
+  for (const state of ['awaiting-approval', 'idle', 'running', 'error', 'idle', 'running', 'awaiting-approval', 'idle', 'idle']) {
+    thread.emit(state);
+    await settle();
+  }
+  expect(payloads.map((payload: any) => payload.state)).toEqual(['awaiting-approval', 'running', 'error', 'running', 'awaiting-approval', 'idle']);
+  await amp.dispose();
 });
 
 test('a delayed initial state cannot overwrite a newer approval or revive a disposed observer', async () => {

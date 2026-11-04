@@ -1,11 +1,11 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {ownedHerdrContext} from './support/androidHerdr';
+import {herdrHistoryFailureStage,HerdrFixture,ownedHerdrContext} from './support/androidHerdr';
 
-async function oracle(name:'ownedVisibleHerdr'|'ownedLiveHerdrNavigation'='ownedVisibleHerdr') {
-  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-visible-herdr.js'),'utf8');
-  return new Function('getComputedStyle',`${source};return ${name};`)((node:{display:string})=>({display:node.display,visibility:'visible'}));
+async function oracle(name:'ownedVisibleHerdr'|'ownedLiveHerdrNavigation'|'ownedHerdrSwipeGeometry'|'ownedHerdrObserveFinger'='ownedVisibleHerdr') {
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/'+(name.startsWith('ownedHerdr')?'owned-herdr-finger.js':'owned-visible-herdr.js')),'utf8');
+  return new Function('getComputedStyle',`${source};return ${name};`)((node:{display:string;visibility?:string})=>({display:node.display,visibility:node.visibility??'visible'}));
 }
 function fixture() {
   const labels=['source','source / owned-guard','source / owned-guard / owned-guard'];
@@ -111,7 +111,8 @@ test('the shared emulator wrapper rejects unknown owners and all exact command b
   const auxiliary=workflow.jobs['native-android-auxiliary'];
   expect(auxiliary.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('auxiliary');
   expect(script).toBe(action(auxiliary).with.script);
-  expect(script).toContain('bun run test:android-mosh && bun run test:android-ssh;');
+  expect(script).toContain('mosh) bun run test:android-mosh; exit $? ;;');
+  expect(script).toContain('guarded) bun run test:android-ssh; exit $? ;;');
   expect(script).toContain('bun run test:android-fdroid;');
   const body=script.slice("bash -c '".length,-1);
   const syntax=Bun.spawn(['bash','-n'],{stdin:Buffer.from(body),stdout:'pipe',stderr:'pipe'});
@@ -123,4 +124,199 @@ test('the shared emulator wrapper rejects unknown owners and all exact command b
     expect(await child.exited).toBe(1);
     expect(await new Response(child.stderr).text()).toBe('Unknown Android runtime owner\n');
   }
+});
+
+function swipeGeometryFixture(){
+  const rect={left:10,top:20,right:200,bottom:300,width:190,height:280};
+  const canvas={},surface={getClientRects:()=>[{}],getBoundingClientRect:()=>rect};
+  const terminal={classList:{contains:()=>true},parentElement:canvas,querySelectorAll:()=>[surface]};
+  const screen={parentElement:terminal,closest:()=>canvas,getBoundingClientRect:()=>rect,contains:(node:unknown)=>node===screen};
+  const viewport={offsetLeft:0,offsetTop:0,width:411,height:800,scale:1};
+  const document={elementFromPoint:()=>screen};
+  return {rect,canvas,surface,terminal,screen,viewport,document};
+}
+test('native swipe geometry exposes the finite first unavailable stage instead of conflating empty hit results',async()=>{
+  const geometry=await oracle('ownedHerdrSwipeGeometry'),f=swipeGeometryFixture();
+  expect(geometry([],f.viewport,2.625,f.document).diagnostic).toMatchObject({stage:'screen-count',screenCount:0});
+  expect(geometry([f.screen],null,2.625,f.document).diagnostic).toMatchObject({stage:'viewport',screenCount:1,hasViewport:false});
+  expect(geometry([f.screen],{...f.viewport,scale:2},2.625,f.document).diagnostic).toMatchObject({stage:'scale',scale:2});
+  expect(geometry([f.screen],f.viewport,2.625,f.document).diagnostic.stage).toBe('ready');
+});
+
+test('native geometry identifies structure, surface, bounds and hit failures without exporting DOM data',async()=>{
+  const geometry=await oracle('ownedHerdrSwipeGeometry');
+  const run=(change:(f:ReturnType<typeof swipeGeometryFixture>)=>void)=>{const f=swipeGeometryFixture();change(f);return geometry([f.screen],f.viewport,2.625,f.document);};
+  expect(run(f=>{f.screen.parentElement=null as never;}).diagnostic.stage).toBe('structure');
+  expect(run(f=>{f.terminal.querySelectorAll=()=>[];}).diagnostic.stage).toBe('surface-count');
+  expect(run(f=>{f.terminal.querySelectorAll=()=>Array(20).fill(f.surface);}).diagnostic.surfaceCount).toBe(8);
+  expect(run(f=>{f.surface.getClientRects=()=>[];}).diagnostic.stage).toBe('surface-hidden');
+  const bounds=run(f=>{f.rect.right=Infinity;});
+  expect(bounds.ready).toBe(false);expect(bounds.diagnostic.stage).toBe('bounds');
+  expect(bounds.diagnostic.screenRect[2]).toBe(-1);
+  const hit=run(f=>{f.document.elementFromPoint=()=>({textContent:'private output',id:'secret'} as never);});
+  expect(hit.diagnostic.stage).toBe('hits');expect(hit.diagnostic.hits).toEqual(['other','other','other']);
+  expect(JSON.stringify(hit.diagnostic)).not.toMatch(/private|secret|textContent/);
+});
+
+test('passive finger observer keeps exact touch identity while bounding wheel observations and removing every listener',async()=>{
+  const observe=await oracle('ownedHerdrObserveFinger');
+  const listeners=new Map<string,(event:any)=>void>(),options:unknown[]=[];
+  const canvas={contains:()=>true,addEventListener:(type:string,handler:(event:any)=>void,option:unknown)=>{listeners.set(type,handler);options.push(option);},
+    removeEventListener:(type:string,handler:unknown,capture:boolean)=>{expect(listeners.get(type)).toBe(handler);expect(capture).toBe(true);listeners.delete(type);}};
+  const globalListeners=new Map<string,(event:any)=>void>();
+  const surface={scrollTop:0,scrollHeight:432,clientHeight:432},textarea={},terminal={classList:{contains:()=>true},querySelector:(selector:string)=>selector==='.xterm-viewport'?surface:textarea};
+  const screen={closest:()=>canvas,parentElement:terminal,textContent:'OLD500',isConnected:true,
+    querySelectorAll:()=>({length:24}),getBoundingClientRect:()=>({height:432})},window:Record<string,any>={
+    addEventListener:(type:string,handler:(event:any)=>void,option:unknown)=>{expect(option).toEqual({capture:true,passive:true});globalListeners.set(type,handler);},
+    removeEventListener:(type:string,handler:unknown,capture:boolean)=>{expect(globalListeners.get(type)).toBe(handler);expect(capture).toBe(true);globalListeners.delete(type);}};
+  expect(observe(window,'owned',[screen])).toBe(true);
+  expect(observe(window,'owned',[screen])).toBe(false);
+  expect(options).toEqual(Array(5).fill({capture:true,passive:true}));
+  const globalEvent=(type:string,extra:Record<string,unknown>={})=>globalListeners.get(type)!({type,isTrusted:true,eventPhase:1,target:screen,pointerId:9,clientX:50,clientY:100,getCoalescedEvents:()=>[],...extra});
+  globalEvent('pointerdown');globalEvent('pointermove',{cancelable:true,defaultPrevented:true,getCoalescedEvents:()=>Array(40).fill({})});
+  // Global delivery alone cannot satisfy the unchanged canvas touch/MOVE oracle.
+  expect(window.owned.sample()).toMatchObject({moves:0,active:true,held:false});
+  const touch=(type:string,identifier=7)=>listeners.get(type)!({type,isTrusted:true,target:screen,touches:[{identifier}]});
+  touch('touchstart');touch('touchmove');touch('touchmove');
+  listeners.get('wheel')!({deltaMode:1,deltaY:-5,clientX:199,clientY:206});
+  listeners.get('wheel')!({deltaMode:99,deltaY:-1e20,clientX:Infinity,clientY:-1e20});
+  for(let i=0;i<80;i++)listeners.get('wheel')!({deltaMode:0,deltaY:-165});
+  listeners.get('wheel')!({deltaY:165});listeners.get('wheel')!({deltaY:0});listeners.get('wheel')!({deltaY:NaN});
+  expect(window.owned.sample()).toMatchObject({row:500,newest:false,active:true,held:true,moves:2,wheels:64,wheelUp:64,wheelDown:1,wheelZero:1,wheelInvalid:1});
+  expect(window.owned.sample().global).toMatchObject({state:'observed',overflow:false});
+  touch('touchmove',8);expect(window.owned.sample().active).toBe(false);
+  screen.textContent='OLD999 NEW512';expect(window.owned.sample()).toMatchObject({row:999,newest:true});
+  expect(window.owned.sample().baseline).toEqual({row:500,newest:false,visual:{state:'observed',mouseTrackingMode:'unknown',activeBuffer:'unknown',
+    mouseCaptureClass:true,renderedRows:24,rowsClamped:false,screenHeight:432,viewport:{top:0,height:432,client:432}}});
+  expect(window.owned.sample().wheelRecords).toHaveLength(8);
+  expect(window.owned.sample().wheelRecordsOverflow).toBe(true);
+  expect(window.owned.sample().wheelRecords.slice(0,2)).toEqual([
+    {mode:1,deltaY:-5,point:[199,206]},{mode:'unavailable',deltaY:-65535,point:[null,-65535]},
+  ]);
+  surface.scrollTop=NaN;
+  expect(window.owned.sample().visual).toEqual({state:'unavailable',mouseTrackingMode:'unknown',activeBuffer:'unknown'});
+  expect(window.owned.sample().baseline.visual.state).toBe('observed');
+  const before=window.owned.sample();globalEvent('touchmove',{changedTouches:[{identifier:4,clientX:NaN,clientY:Infinity}]});
+  expect(window.owned.sample().moves).toBe(before.moves);
+  expect(window.owned.sample().global.events[1]).toMatchObject({type:'pointermove',target:'screen',trusted:true,cancelable:true,defaultPrevented:true,phase:1,identityMatches:true,coalescedCount:8,point:[50,100]});
+  expect(window.owned.sample().global.events[2]).toMatchObject({point:[null,null],identityMatches:false});
+  expect(window.owned.sample().global.events[0]).toMatchObject({cancelable:false,defaultPrevented:false});
+  globalEvent('lostpointercapture',{target:{id:'private-session-id',textContent:'private terminal output'},clientX:1e9,clientY:-1e9,eventPhase:99});
+  expect(window.owned.sample().global.events[3]).toMatchObject({target:'other',point:[65535,-65535],phase:-1});
+  expect(JSON.stringify(window.owned.sample().global)).not.toMatch(/private|session-id|terminal output/);
+  for(const [target,kind] of [[canvas,'canvas'],[terminal,'terminal'],[surface,'viewport'],[textarea,'textarea'],[null,'none']] as const){
+    globalEvent('pointercancel',{target});expect(window.owned.sample().global.events.at(-1).target).toBe(kind);
+  }
+  globalEvent('pointermove',{getCoalescedEvents:()=>{throw new Error('private observer failure');}});
+  expect(window.owned.sample().global.state).toBe('unavailable');expect(window.owned.sample().moves).toBe(before.moves);
+  for(let i=0;i<30;i++)globalEvent('pointermove');
+  expect(window.owned.sample().global.events).toHaveLength(24);expect(window.owned.sample().global.overflow).toBe(true);
+  window.owned.dispose();expect(listeners.size).toBe(0);expect(globalListeners.size).toBe(0);
+});
+
+test('failure history projects only bounded owned readback and focus booleans and redacts observation errors',async()=>{
+  const fixture=Object.create(HerdrFixture.prototype) as HerdrFixture;
+  Object.assign(fixture,{historyPane:{paneId:'owned-history'},agent:{paneId:'owned-original'},
+    history:async(...args:unknown[])=>{expect(args).toEqual([]);return {offset:1,max:512,rows:30,oldRows:29,newTail:false,text:'private output'};},
+    run:async(args:string[])=>{expect(args).toEqual(['api','snapshot']);return JSON.stringify({result:{snapshot:{focused_pane_id:'owned-history',private:'secret'}}});}});
+  expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'available',offset:1,max:512,rows:30,oldRows:29,newTail:false,focusHistory:true,focusOriginal:false});
+  Object.assign(fixture,{history:async()=>{throw new Error('private host/path/output');}});
+  expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'unavailable',stage:'unknown'});
+  const errors=[['Owned history unavailable','server-or-history-identity'],['Owned history request invalid','history-identity'],
+    ['Owned history socket identity invalid','socket-identity'],['Owned history socket unavailable','socket-unavailable'],
+    ['Owned history API failed','history-reply'],['Owned history observation invalid','history-validation'],
+    ['Owned receiver output missing','receiver-output'],['Owned receiver bytes differ','receiver-bytes'],
+    ['Owned receiver identity changed','receiver-identity']] as const;
+  for(const [message,stage] of errors){
+    expect(herdrHistoryFailureStage(new Error(message))).toBe(stage);
+    Object.assign(fixture,{history:async()=>{throw new Error(message);}});
+    expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'unavailable',stage});
+  }
+  for(const value of [{message:'Owned history unavailable'},new Proxy(new Error(),{get(){throw new Error('private');}})])
+    expect(herdrHistoryFailureStage(value)).toBe('unknown');
+  Object.assign(fixture,{history:async()=>({offset:8,max:512,rows:23,oldRows:23,newTail:false})});
+  for(const focused of [null,'','private\ntext','x'.repeat(129)]){
+    Object.assign(fixture,{run:async()=>JSON.stringify({result:{snapshot:{focused_pane_id:focused}}})});
+    expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'unavailable',stage:'focus-read'});
+  }
+  Object.assign(fixture,{run:async()=>{throw new Error('private focus error');}});
+  expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'unavailable',stage:'focus-read'});
+});
+
+
+test('actual owned mouse recognizer accepts only six exact chunked controls and discards private frames',async()=>{
+  const source=await readFile(join(import.meta.dir,'android-ssh-host.test.ts'),'utf8');
+  const block=source.split('// Begin closed capture recognizer:')[1]?.split('// End closed capture recognizer.')[0];
+  expect(block).toBeDefined();
+  const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(block!.slice(block!.indexOf('const capture=')));
+  const setup=()=>new Function('Buffer',`${compiled};return capture;`)(Buffer);
+  const empty={state:'unknown',normal:null,drag:null,motion:null};
+  for(const [mode,index] of [[1000,'normal'],[1002,'drag'],[1003,'motion']] as const){
+    for(const enabled of [true,false]){
+      const value=`\x1b[?${mode}${enabled?'h':'l'}`;
+      for(let cut=0;cut<=value.length;cut++){
+        const capture=setup();capture.write(Buffer.from(value.slice(0,cut)));capture.write(Buffer.from(value.slice(cut)));
+        expect(capture.sample()).toEqual({...empty,state:'observed',[index]:enabled});
+        expect(capture.enabled()).toBe(enabled);
+      }
+    }
+  }
+  const capture=setup();
+  capture.write(Buffer.from('\x1eLAZYSH-GUARD-1:00000080:'+JSON.stringify({boot:'private-boot',ticket:'private-ticket'})+'\x1f'));
+  capture.write(Buffer.from('\x1b[?1000X\x1b[?9999h\x1b[?1000;1002h'));
+  expect(capture.sample()).toEqual(empty);expect(capture.enabled()).toBe(false);
+  capture.write(Buffer.from('\x1b[?100'));capture.write(Buffer.from('private-reset'));capture.write(Buffer.from('0h'));
+  expect(capture.sample()).toEqual(empty);
+  for(const byte of Buffer.from('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1000l\x1b[?1002l\x1b[?1003l'))capture.write(Buffer.from([byte]));
+  expect(capture.sample()).toEqual({state:'observed',normal:false,drag:false,motion:false});expect(capture.enabled()).toBe(false);
+  expect(JSON.stringify(capture.sample())).not.toMatch(/private|ticket|boot/);
+  capture.write('unexpected-string-chunk');
+  expect(capture.sample().state).toBe('unavailable');expect(capture.enabled()).toBe(false);
+});
+
+function landingFixture() {
+  const global=new Map<string,(event:any)=>void>();let hit:unknown,reads=0;
+  const rect={left:2,top:98,right:397,bottom:243,height:145};
+  const canvas={isConnected:true,contains:(node:unknown)=>node===screen||node===canvas,addEventListener:()=>{},removeEventListener:()=>{},getBoundingClientRect:()=>rect};
+  const document={elementFromPoint:(x:number,y:number)=>{expect([x,y]).toEqual([199,134]);reads++;return hit;}};
+  const screen={isConnected:true,closest:()=>canvas,textContent:'OLD496 NEW512',ownerDocument:document,getBoundingClientRect:()=>rect};
+  hit=screen;
+  const window:Record<string,any>={addEventListener:(name:string,callback:any)=>global.set(name,callback),removeEventListener:(name:string)=>global.delete(name)};
+  const event=(type:string,target:unknown=screen,isTrusted=true)=>global.get(type)!({type,target,isTrusted,clientX:199,clientY:134,pointerId:0,eventPhase:1,changedTouches:[{identifier:0,clientX:199,clientY:134}],touches:[{identifier:0,clientX:199,clientY:134}],preventDefault:()=>{throw Error('observer must remain passive');}});
+  return {global,rect,canvas,screen,document,window,event,setHit:(value:unknown)=>{hit=value;},reads:()=>reads};
+}
+
+test('first trusted finger landing observes current bounds and hit ownership once without admitting a gesture',async()=>{
+  const observe=await oracle('ownedHerdrObserveFinger'),f=landingFixture();
+  expect(observe(f.window,'owned',[f.screen])).toBe(true);
+  f.event('pointerdown',f.screen,false);
+  expect(f.window.owned.sample().global.landing).toBeNull();
+  f.rect.top=300;f.rect.bottom=670;
+  const other={textContent:'private terminal text',id:'private-id',className:'private-class'};
+  f.setHit(other);f.event('pointerdown',other);
+  const landing=f.window.owned.sample().global.landing;
+  expect(landing).toEqual({state:'observed',screenConnected:true,canvasConnected:true,screenRect:[2,300,397,670],canvasRect:[2,300,397,670],point:[199,134],target:'other',targetOwned:false,hit:'other',hitOwned:false});
+  for(const name of ['pointermove','touchstart','pointerdown'])f.event(name);
+  expect(f.reads()).toBe(1);expect(f.window.owned.sample().global.landing).toEqual(landing);
+  expect(f.window.owned.sample()).toMatchObject({moves:0,wheels:0,active:true,held:false});
+  expect(JSON.stringify(landing)).not.toMatch(/private|textContent|className/);
+  f.window.owned.dispose();expect(f.global.size).toBe(0);
+});
+
+test.each(['owned','fallback','no-hit','disconnected','missing','throwing','invalid','invalid-owner','clamped'])('finger landing keeps closed %s observations and never changes the canvas oracle',async mode=>{
+  const observe=await oracle('ownedHerdrObserveFinger'),f=landingFixture();
+  if(mode==='no-hit')f.setHit(null);
+  if(mode==='disconnected'){f.screen.isConnected=false;f.canvas.isConnected=false;}
+  if(mode==='missing')f.screen.ownerDocument=undefined as never;
+  if(mode==='throwing')f.document.elementFromPoint=()=>{throw Error('private error URL/token');};
+  if(mode==='invalid')f.rect.right=NaN;
+  if(mode==='invalid-owner')f.canvas.contains=()=> 'private-owner-result' as never;
+  if(mode==='clamped')f.rect.right=1e9;
+  expect(observe(f.window,'owned',[f.screen])).toBe(true);f.event(mode==='fallback'?'touchstart':'pointerdown');
+  const landing=f.window.owned.sample().global.landing;
+  if(['missing','throwing','invalid','invalid-owner'].includes(mode))expect(landing).toEqual({state:'unavailable',screenConnected:null,canvasConnected:null,screenRect:null,canvasRect:null,point:null,target:'unknown',targetOwned:null,hit:'unknown',hitOwned:null});
+  else expect(landing).toMatchObject({state:'observed',screenConnected:mode!=='disconnected',canvasConnected:mode!=='disconnected',target:'screen',targetOwned:true,hit:mode==='no-hit'?'none':'screen',hitOwned:mode!=='no-hit',screenRect:[2,98,mode==='clamped'?65535:397,243]});
+  expect(JSON.stringify(landing)).not.toMatch(/private|URL|token/);
+  expect(f.window.owned.sample()).toMatchObject({moves:0,wheels:0,held:false,active:mode!=='disconnected'});
+  f.window.owned.dispose();expect(f.global.size).toBe(0);
 });

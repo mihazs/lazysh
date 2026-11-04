@@ -5,10 +5,15 @@ import PreferencesPanel from "./PreferencesPanel";
 import { defaults, getPreferences, savePreferences, parseChord } from "./preferences";
 afterEach(() => cleanup());
 
+function mountPreferences(...summaries:string[]) {
+  render(<PreferencesPanel/>);
+  for(const summary of summaries)fireEvent.click(screen.getByRole('button',{name:summary}));
+}
+
 describe("terminal settings", () => {
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});
-    render(<PreferencesPanel />);
+    mountPreferences('Keyboard and gestures','Terminal touch gestures');
     fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
     fireEvent.change(screen.getByLabelText('Single tap custom shortcut text'),{target:{value:' 你好,, 😀 '}});
     fireEvent.change(screen.getByLabelText('D-pad left corner shortcut builder'),{target:{value:'simple'}});
@@ -36,7 +41,7 @@ describe("terminal settings", () => {
   });
   it('refreshes only the externally changed slot and discards its stale drafts', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'},gestureChords:{tap:'F12',doubleTap:'C-b'}});
-    render(<PreferencesPanel />);
+    mountPreferences('Keyboard and gestures','Terminal touch gestures');
     for (const label of ['Single tap','Double tap']) {
       fireEvent.change(screen.getByLabelText(`${label} shortcut builder`),{target:{value:'simple'}});
       fireEvent.change(screen.getByLabelText(`${label} custom shortcut text`),{target:{value:'unsaved'}});
@@ -51,7 +56,7 @@ describe("terminal settings", () => {
   });
   it('retains per-slot validation errors and complete invalid drafts without altering saved bindings', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'custom'},dpadCorners:{...defaults.dpadCorners,right:'custom'},gestureChords:{tap:'F12',cornerRight:'C-c'}});
-    render(<PreferencesPanel />);
+    mountPreferences('Keyboard and gestures','Terminal touch gestures');
     fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
     fireEvent.click(screen.getByLabelText('Single tap Control'));
     fireEvent.change(screen.getByLabelText('Single tap custom shortcut text'),{target:{value:'a,'}});
@@ -71,7 +76,7 @@ describe("terminal settings", () => {
   });
   it('keeps Advanced default and existing records, while saving Simple text verbatim', () => {
     savePreferences({...defaults,chords:[{label:'Existing',keys:'F12, M-h'}]});
-    render(<PreferencesPanel />);
+    mountPreferences('Keyboard and gestures','Keyboard chords');
     expect(screen.getByLabelText<HTMLSelectElement>('Shortcut builder').value).toBe('advanced');
     fireEvent.change(screen.getByLabelText('Shortcut builder'),{target:{value:'simple'}});
     fireEvent.change(screen.getByLabelText('Chord name'),{target:{value:'Literal'}});
@@ -91,7 +96,7 @@ describe("terminal settings", () => {
   });
   it('reports Simple validation errors and retains the complete unsaved input', () => {
     savePreferences({...defaults});
-    render(<PreferencesPanel />);
+    mountPreferences('Keyboard and gestures','Keyboard chords');
     fireEvent.change(screen.getByLabelText('Shortcut builder'),{target:{value:'simple'}});
     fireEvent.change(screen.getByLabelText('Chord name'),{target:{value:'Unsent'}});
     expectRejectedShortcutDrafts(['a'.repeat(124),'a'.repeat(200),'a\nb']);
@@ -100,18 +105,27 @@ describe("terminal settings", () => {
   });
   it("persists theme and reordered toolbar, rejects invalid theme import, and resets", () => {
     savePreferences({...defaults});
-    render(<PreferencesPanel />);
+    mountPreferences('Appearance and fonts');
     expect(screen.getByLabelText<HTMLSelectElement>("Session switcher layout").value).toBe("list");
     fireEvent.change(screen.getByLabelText("Session switcher layout"), {target: {value: "cards"}});
     expect(getPreferences().sessionLayout).toBe("cards");
     fireEvent.change(screen.getByLabelText("Terminal theme"), {target: {value: "paper"}});
     expect(getPreferences().theme).toBe("paper");
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Keyboard and gestures"}));
+    fireEvent.click(screen.getByRole("button",{name:"Toolbar keys and order"}));
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
     expect(getPreferences().toolbar.slice(0, 2)).toEqual(["ctrl", "esc"]);
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Appearance and fonts"}));
+    fireEvent.click(screen.getByText("Import and share theme",{exact:true}));
     fireEvent.change(screen.getByLabelText("Theme JSON or share code"), {target: {value: '{"background":"url(https://bad)","foreground":"#ffffff"}'}});
     fireEvent.click(screen.getByRole("button", {name: "Preview theme"}));
     expect(screen.getByText(/Invalid theme color/).getAttribute('role')).toBe('status');
     expect(getPreferences().customTheme).toBeUndefined();
+    fireEvent.click(screen.getByRole("button",{name:"Back"}));
+    fireEvent.click(screen.getByRole("button",{name:"Reset settings"}));
     fireEvent.click(screen.getByRole("button", {name: "Reset preferences"}));
     expect(getPreferences()).toEqual(defaults);
   });
@@ -126,3 +140,25 @@ function expectRejectedShortcutDrafts(values: string[]) {
       expect(getPreferences().chords).toEqual([]);
   }
 }
+
+
+it('navigates category pages and preserves an unsaved snippet and restored list focus',()=>{
+  savePreferences({...defaults});
+  const {container}=render(<PreferencesPanel/>);
+  expect(container.querySelectorAll('[data-settings-page]:not([hidden])')).toHaveLength(0);
+  const input=screen.getByRole('button',{name:'Keyboard and gestures'});fireEvent.click(input);
+  fireEvent.click(screen.getByRole('button',{name:'Text snippets'}));
+  const name=screen.getByLabelText('Snippet name'),text=screen.getByLabelText('Snippet text');
+  fireEvent.change(name,{target:{value:'Unsent draft'}});fireEvent.change(text,{target:{value:' exact draft '}});
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  expect(screen.getByRole('button',{name:'Text snippets'})).toBe(document.activeElement);
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  expect(input).toBe(document.activeElement);
+  fireEvent.click(screen.getByRole('button',{name:'Appearance and fonts'}));
+  expect(screen.getByRole('spinbutton',{name:'Font size'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  fireEvent.click(input);fireEvent.click(screen.getByRole('button',{name:'Text snippets'}));
+  expect(screen.getByLabelText('Snippet text')).toBe(text);
+  expect(name).toHaveProperty('value','Unsent draft');expect(text).toHaveProperty('value',' exact draft ');
+  expect(getPreferences().snippets).toEqual(defaults.snippets);
+});

@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
-import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import ChatPanel from './ChatPanel';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
-const page=(text='Initial branch')=>({schemaVersion:1,agent:'claude',view:'active_branch',messages:[{id:text,role:'assistant',blocks:[{type:'text',text}]}],nextOffset:100,hasMore:false});
+describe.each(['claude','codex'])('%s recorded conversation',agent=>{
+const followLabel=agent==='codex'?'Follow recorded Codex conversation':'Follow selected Claude branch';
+const page=(text='Initial branch')=>({schemaVersion:1,agent,view:'active_branch',messages:[{id:text,role:'assistant',blocks:[{type:'text',text}]}],nextOffset:100,hasMore:false});
 
 beforeEach(()=>{vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 async function open(){
   const result=render(<ChatPanel sessionId="host"/>);
+  if(agent==='codex')fireEvent.change(screen.getByLabelText('Agent'),{target:{value:agent}});
   fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/claude.jsonl'}});
   fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
   await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));});
@@ -21,9 +24,9 @@ it('defaults off, serializes polling and waits two seconds after completion befo
   let resolve!: (value:unknown)=>void;
   vi.mocked(invoke).mockResolvedValueOnce(page()).mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue(page('Newest branch'));
   await open();
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('checked',false);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('checked',false);
   await advance(10_000);expect(invoke).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  fireEvent.click(screen.getByLabelText(followLabel));
   await advance(1999);expect(invoke).toHaveBeenCalledTimes(1);
   await advance(1);expect(invoke).toHaveBeenCalledTimes(2);
   await advance(20_000);expect(invoke).toHaveBeenCalledTimes(2);
@@ -36,18 +39,18 @@ it('defaults off, serializes polling and waits two seconds after completion befo
 });
 it('stops on errors and requires explicit resume',async()=>{
   vi.mocked(invoke).mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error('Read failed')).mockResolvedValue(page('Recovered branch'));
-  await open();fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  await open();fireEvent.click(screen.getByLabelText(followLabel));
   await advance(2000);
   expect(screen.getByRole('alert').textContent).toBe('Read failed');
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('checked',false);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('checked',false);
   await advance(10_000);expect(invoke).toHaveBeenCalledTimes(2);
-  fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  fireEvent.click(screen.getByLabelText(followLabel));
   await advance(2000);expect(screen.getByText('Recovered branch')).toBeTruthy();
 });
 it('pauses hidden/page-hidden reads, drops late hidden results and resumes at the completion interval',async()=>{
   let resolve!: (value:unknown)=>void;
   vi.mocked(invoke).mockResolvedValueOnce(page()).mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue(page('Visible branch'));
-  await open();fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  await open();fireEvent.click(screen.getByLabelText(followLabel));
   Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
   fireEvent(document,new Event('visibilitychange'));
   await advance(20_000);expect(invoke).toHaveBeenCalledTimes(1);
@@ -64,29 +67,29 @@ it('pauses hidden/page-hidden reads, drops late hidden results and resumes at th
 });
 it('stops on source/session changes and unmount rather than following a new target implicitly',async()=>{
   vi.mocked(invoke).mockResolvedValue(page());
-  const result=await open();fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  const result=await open();fireEvent.click(screen.getByLabelText(followLabel));
   fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/other.jsonl'}});
   await advance(10_000);expect(invoke).toHaveBeenCalledTimes(1);
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('checked',false);
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('checked',false);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('disabled',true);
   await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));});
-  fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  fireEvent.click(screen.getByLabelText(followLabel));
   result.rerender(<ChatPanel sessionId="other-host"/>);
   await advance(10_000);expect(invoke).toHaveBeenCalledTimes(2);
-  expect(screen.queryByLabelText('Follow selected Claude branch')).toBeNull();
+  expect(screen.queryByLabelText(followLabel)).toBeNull();
   result.unmount();await advance(10_000);expect(invoke).toHaveBeenCalledTimes(2);
 });
 it('does not acquire a new access lease or display an old result after lock and unlock',async()=>{
   let resolve!: (value:unknown)=>void;
   vi.mocked(invoke).mockResolvedValueOnce(page()).mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));
-  await open();fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  await open();fireEvent.click(screen.getByLabelText(followLabel));
   await advance(2000);
   await act(async()=>{access(true);access();await Promise.resolve();await Promise.resolve();});
   await act(async()=>{resolve(page('Stale private content'));});
   expect(screen.queryByText('Stale private content')).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('checked',false);
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('checked',false);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('disabled',true);
   await advance(20_000);expect(invoke).toHaveBeenCalledTimes(2);
 });
 it('keeps an explicitly requested manual read when visibility changes',async()=>{
@@ -97,20 +100,24 @@ it('keeps an explicitly requested manual read when visibility changes',async()=>
   fireEvent(window,new Event('pagehide'));
   await act(async()=>{resolve(page('Explicit result'));});
   expect(screen.getByText('Explicit result')).toBeTruthy();
-  expect(screen.getByLabelText('Follow selected Claude branch')).toHaveProperty('checked',false);
+  expect(screen.getByLabelText(followLabel)).toHaveProperty('checked',false);
 });
 it('keeps the reader in history until Jump to latest and resumes following the bottom',async()=>{
   vi.mocked(invoke).mockResolvedValueOnce(page()).mockResolvedValue(page('New branch'));
   await open();
   const list=screen.getByRole('region',{name:'Conversation messages'});
+  fireEvent.change(screen.getByLabelText('Draft for this terminal'),{target:{value:'Preserve my unsubmitted draft'}});
   Object.defineProperty(list,'scrollHeight',{configurable:true,value:1000});
   Object.defineProperty(list,'clientHeight',{configurable:true,value:200});
-  fireEvent.click(screen.getByLabelText('Follow selected Claude branch'));
+  fireEvent.click(screen.getByLabelText(followLabel));
   expect(list.scrollTop).toBe(1000);
   list.scrollTop=100;fireEvent.scroll(list);
   await advance(2000);expect(list.scrollTop).toBe(100);
+  expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','Preserve my unsubmitted draft');
   fireEvent.click(screen.getByRole('button',{name:'Jump to latest'}));
   expect(list.scrollTop).toBe(1000);
   Object.defineProperty(list,'scrollHeight',{configurable:true,value:1500});
   await advance(2000);expect(list.scrollTop).toBe(1500);
+});
+
 });

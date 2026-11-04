@@ -54,7 +54,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             ),
             5,
         ),
-        Agent::Opencode => (false, 0),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => (false, 0),
     };
     if !valid {
         return Err("HooksInvalidTemplate");
@@ -83,7 +83,7 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Droid => crate::hooks::droid_config(),
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
-        Agent::Opencode => return Ok(Vec::new()),
+        Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => return Ok(Vec::new()),
     };
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
@@ -120,19 +120,68 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         })
         .collect()
 }
-pub(super) fn plugin(binary: &Path) -> Result<String, &'static str> {
-    let body = crate::hooks::opencode_plugin();
-    let body = body["content"].as_str().ok_or("HooksInvalidTemplate")?;
-    const COMMAND: &str = "['lazysh-agent', 'ingest', '--agent', 'opencode']";
-    if body.matches(COMMAND).count() != 1 {
+pub(super) fn owned_file(agent: Agent, binary: &Path) -> Result<String, &'static str> {
+    let path = binary.to_str().ok_or("HooksInvalidBinary")?;
+    if agent == Agent::Copilot {
+        let mut config = crate::hooks::copilot_config();
+        let expected = [
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+            "SessionEnd",
+            "notification",
+        ];
+        if config["version"] != 1 || config.as_object().is_none_or(|v| v.len() != 2) {
+            return Err("HooksInvalidTemplate");
+        }
+        let events = config["hooks"]
+            .as_object_mut()
+            .ok_or("HooksInvalidTemplate")?;
+        if events.len() != expected.len() {
+            return Err("HooksInvalidTemplate");
+        }
+        for event in expected {
+            let commands = events
+                .get_mut(event)
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or("HooksInvalidTemplate")?;
+            if commands.len() != 1
+                || commands[0]
+                    != serde_json::json!({"type":"command","exec":"lazysh-agent","args":["ingest","--agent","copilot"],"timeoutSec":5})
+            {
+                return Err("HooksInvalidTemplate");
+            }
+            commands[0]["exec"] = path.into();
+        }
+        return serde_json::to_string_pretty(&config)
+            .map(|text| text + "\n")
+            .map_err(|_| "HooksInvalidTemplate");
+    }
+    let path = serde_json::to_string(path).map_err(|_| "HooksInvalidBinary")?;
+    let (asset, command, replacement) = match agent {
+        Agent::Opencode => (
+            crate::hooks::opencode_plugin(),
+            "['lazysh-agent', 'ingest', '--agent', 'opencode']",
+            format!("[{path}, 'ingest', '--agent', 'opencode']"),
+        ),
+        Agent::Amp => (
+            crate::hooks::amp_plugin(),
+            "childProcess.spawn('lazysh-agent',",
+            format!("childProcess.spawn({path},"),
+        ),
+        Agent::Cline => (
+            crate::hooks::cline_plugin(),
+            "childProcess.execFile('lazysh-agent',",
+            format!("childProcess.execFile({path},"),
+        ),
+        _ => return Err("HooksInvalidTemplate"),
+    };
+    let body = asset["content"].as_str().ok_or("HooksInvalidTemplate")?;
+    if body.matches(command).count() != 1 {
         return Err("HooksInvalidTemplate");
     }
-    let path = binary.to_str().ok_or("HooksInvalidBinary")?;
-    let path = serde_json::to_string(path).map_err(|_| "HooksInvalidBinary")?;
-    Ok(body.replace(
-        COMMAND,
-        &format!("[{path}, 'ingest', '--agent', 'opencode']"),
-    ))
+    Ok(body.replace(command, &replacement))
 }
 
 /// Provider envelope handling stays separate from ownership of individual groups.

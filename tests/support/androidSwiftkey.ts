@@ -6,7 +6,7 @@ import {createServer,connect} from 'node:net';
 import {createReadStream} from 'node:fs';
 import {OwnedProcess,identity,descendants} from './ownedProcess';
 import {HerdrFixture} from './androidHerdr';
-import {androidSshAcceptance} from './androidSsh';
+import {androidSshAcceptance,androidSshCleanup} from './androidSsh';
 import pins from '../fixtures/swiftkey.json';
 export const swiftkeyPins=pins;
 type Split=typeof pins.files[number]&{package:string;versionCode:string;signer:string;signature:boolean;abis:string[]};
@@ -33,7 +33,7 @@ export function admitSwiftkeySet(rows:Split[]) {
   return true;
 }
 const quietEnvironment=(home:string)=>({PATH:'/usr/bin:/bin',HOME:home,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',TMPDIR:home});
-type SwiftkeyPreparationPhase='venv'|'pinned-dependencies'|'anonymous-exact-download';
+type SwiftkeyPreparationPhase='venv'|'pinned-dependencies'|'anonymous-exact-download'|'apkeep-tool'|'apkpure-download';
 export type SwiftkeyPreparation={phase:SwiftkeyPreparationPhase|'not-started';state:'not-started'|'running'|'succeeded'|'failed';exitCode:number|null;reason:'none'|'auth-unavailable'|'unknown'};
 export async function swiftkeyPrivateTool(phase:SwiftkeyPreparationPhase,program:string,args:string[],directory:string,environment:NodeJS.ProcessEnv,observation:SwiftkeyPreparation,milliseconds=120_000) {
   // Output can contain anonymous auth material or signed delivery URLs. Drain
@@ -113,6 +113,39 @@ export async function verifySwiftkeyFiles(directory:string,sdk:string,java:strin
   admitSwiftkeySet(rows);return rows;
 }
 
+type Standalone=Split&{versionName:string};
+export function admitSwiftkeyStandalone(rows:Standalone[]) {
+  const expected=pins.apkPureStandalone,row=rows[0];
+  if(rows.length!==1 || !row || row.name!==expected.name || row.bytes!==expected.bytes || row.sha256!==expected.sha256 ||
+    row.package!==pins.package || row.versionCode!==pins.versionCode || row.versionName!==pins.versionName ||
+    row.signer!==pins.signer || !row.signature || JSON.stringify(row.abis)!==JSON.stringify(expected.abis))
+    throw new Error('Exact SwiftKey standalone admission failed');
+  return true;
+}
+export async function verifySwiftkeyStandalone(directory:string,sdk:string,java:string) {
+  const expected=pins.apkPureStandalone,files=await readdir(directory);
+  if(files.length!==1 || files[0]!==expected.name)throw new Error('Exact SwiftKey standalone admission failed');
+  const path=join(directory,expected.name),info=await lstat(path);
+  if(!info.isFile() || info.size!==expected.bytes || await fileDigest(path)!==expected.sha256)throw new Error('Exact SwiftKey standalone admission failed');
+  const badging=await new OwnedProcess(join(sdk,'build-tools/36.0.0/aapt'),['dump','badging',path],directory,quietEnvironment(directory)).finish('SwiftKey standalone package admission',5000);
+  const signature=await new OwnedProcess(java,['-jar',join(sdk,'build-tools/36.0.0/lib/apksigner.jar'),'verify','--print-certs',path],directory,quietEnvironment(directory)).finish('SwiftKey standalone signature admission',30000);
+  const row={name:expected.name,bytes:info.size,sha256:await fileDigest(path),package:badging.match(/^package: name='([^']+)'/m)?.[1]??'',
+    versionCode:badging.match(/^package:.* versionCode='([0-9]+)'/m)?.[1]??'',versionName:badging.match(/^package:.* versionName='([^']+)'/m)?.[1]??'',
+    signer:signature.match(/^Signer #1 certificate SHA-256 digest: ([a-f0-9]+)$/m)?.[1]??'',signature:!signature.includes('Signer #2 certificate'),
+    abis:badging.match(/^native-code: (.+)$/m)?.[1].match(/'[^']+'/g)?.map(x=>x.slice(1,-1))??[]};
+  admitSwiftkeyStandalone([row]);return [row];
+}
+async function acquireSwiftkeyStandalone(directory:string,sdk:string,java:string,preparation:SwiftkeyPreparation) {
+  const home=join(directory,'fetch-home'),downloads=join(directory,'vendor');await mkdir(home,{mode:0o700});await mkdir(downloads,{mode:0o700});
+  const env=quietEnvironment(home),tool=join(home,'apkeep');
+  await swiftkeyPrivateTool('apkeep-tool','/usr/bin/curl',['--fail','--silent','--show-error','--location','--proto','=https','--proto-redir','=https','--max-filesize','16939544','--output',tool,'https://github.com/EFForg/apkeep/releases/download/1.1.0/apkeep-x86_64-unknown-linux-gnu'],home,env,preparation);
+  const toolInfo=await lstat(tool);
+  if(!toolInfo.isFile() || toolInfo.size!==16939544 || await fileDigest(tool)!==pins.apkPureStandalone.apkeepSha256)throw new Error('Pinned apkeep differs');
+  await chmod(tool,0o700);
+  await swiftkeyPrivateTool('apkpure-download','/usr/bin/prlimit',['--fsize=536870912:536870912','--',tool,'-a',pins.package+'@'+pins.versionName,'-d','apk-pure','-o','acknowledge_dangers=true,arch=x86_64','-r','1',downloads],home,env,preparation,240_000);
+  await verifySwiftkeyStandalone(downloads,sdk,java);await rm(home,{recursive:true,force:true});
+}
+
 export async function ownedSwiftkeyCanary(host:string,port=0) {
   const nonce=randomBytes(16).toString('hex');const server=createServer(socket=>socket.end(nonce));
   await new Promise<void>((yes,no)=>{server.once('error',no);server.listen(port,host,yes);});return {server,nonce};
@@ -145,17 +178,32 @@ async function blocked(host:string,port:number) {
     socket.once('timeout',()=>{socket.destroy();no(new Error('Isolation probe timed out'));});
   });
 }
+export function admitSwiftkeyInputHashes(profile:'play-splits'|'apkpure-standalone',hashes:Record<string,string>) {
+  const files=profile==='play-splits'?pins.files:[pins.apkPureStandalone];
+  if(files.some(file=>hashes['vendor/'+file.name]!==file.sha256))throw new Error('SwiftKey nominated input differs');
+}
+export async function swiftkeyChildCleanup(primary:boolean,receiver:{expectBytes(bytes:Buffer):Promise<unknown>;stop():Promise<unknown>}|undefined,
+  emulator:{stop():Promise<unknown>}|undefined,adb:{stop():Promise<unknown>},servers:readonly (()=>void)[],receipt:{receiverFinalZero?:boolean},save:()=>Promise<unknown>) {
+  await androidSshCleanup(primary,[
+    ['receiver-zero',async()=>{if(receiver){await receiver.expectBytes(Buffer.alloc(0));receipt.receiverFinalZero=true;}}],
+    ['Herdr',async()=>{await receiver?.stop();}],['emulator',async()=>{await emulator?.stop();}],
+    ['adb',async()=>{await adb.stop();}],...servers.map(stop=>['server',async()=>{stop();}] as const),['receipt',save],
+  ]);
+}
 export async function swiftkeyNamespaceChild() {
   const work='/work',sdk='/sdk',serial='emulator-5582';
   const env={...quietEnvironment(userInfo().homedir),TMPDIR:'/work/tmp',ANDROID_HOME:sdk,ANDROID_USER_HOME:work+'/android',ANDROID_EMULATOR_HOME:work+'/emulator',ANDROID_AVD_HOME:work+'/avd',ANDROID_ADB_SERVER_PORT:'5053',ADB_VENDOR_KEYS:work+'/keys',QT_QPA_PLATFORM:'offscreen'};
   // Adopt only our new namespace environment, never a parent auth/profile env.
   Object.assign(process.env,env,{ANDROID_SERIAL:serial,LAZYSH_ANDROID_KEYBOARD_PROFILE:'google-api36-latin'});
-  const receipt:{stage:string;qualified:false;network?:unknown;kvm?:boolean;boot?:boolean;receiverZero?:boolean;bootCounts?:Record<string,number>;namespaces?:ReturnType<typeof admitSwiftkeyNamespaces>;namespaceAdmission?:'rejected'|'separate'}={stage:'namespace',qualified:false};
+  const profile=process.env.LAZYSH_SWIFTKEY_PROFILE;
+  if(profile!=='play-splits' && profile!=='apkpure-standalone')throw new Error('Unknown SwiftKey profile');
+  const receipt:{stage:string;qualified:false;network?:unknown;kvm?:boolean;boot?:boolean;receiverZero?:boolean;receiverFinalZero?:boolean;bootCounts?:Record<string,number>;namespaces?:ReturnType<typeof admitSwiftkeyNamespaces>;namespaceAdmission?:'rejected'|'separate'}={stage:'namespace',qualified:false};
   try {receipt.namespaces=admitSwiftkeyNamespaces(JSON.parse(process.env.LAZYSH_SWIFTKEY_PARENT_NS??'null'),await swiftkeyNamespaceIds());receipt.namespaceAdmission='separate';}
   catch {receipt.namespaceAdmission='rejected';await writeFile(work+'/receipt.json',JSON.stringify(receipt)+'\n',{mode:0o600});throw new Error('SwiftKey namespace isolation not established');}
   const adb=new OwnedProcess(sdk+'/platform-tools/adb',['-L','tcp:5053','--one-device',serial,'server','nodaemon'],work,env,false);
   let emulator:OwnedProcess|undefined,herdr:HerdrFixture|undefined,server:ReturnType<typeof Bun.serve>|undefined,server6:ReturnType<typeof Bun.serve>|undefined;
   const command=(args:string[])=>new OwnedProcess(sdk+'/platform-tools/adb',['-s',serial,...args],work,env).finish('isolated Android command',5000);
+  let primary=false;
   try {
     const links=await new OwnedProcess('/usr/bin/ip',['-j','link','show'],work,env).finish('isolated links',2000);
     const names=JSON.parse(links).map((x:{ifname:string})=>x.ifname);
@@ -199,13 +247,13 @@ export async function swiftkeyNamespaceChild() {
     receipt.stage='public-product';
     herdr=await HerdrFixture.start({herdrBinary:work+'/bundle/herdr',agentBinary:work+'/bundle/lazysh-agent',receiverBinary:work+'/bundle/owned-terminal-receiver'});
     await herdr.expectBytes(Buffer.alloc(0));receipt.receiverZero=true;
-    await androidSshAcceptance(work+'/closure',herdr,false,false,false,false,{product:work+'/bundle/product.apk',test:work+'/bundle/test.apk',vendor:work+'/vendor'});
+    await androidSshAcceptance(work+'/closure',herdr,false,false,false,false,false,false,false,{product:work+'/bundle/product.apk',test:work+'/bundle/test.apk',vendor:work+'/vendor',profile});
     // This intermediate owner deliberately cannot report typing acceptance.
     throw new Error('UNQUALIFIED: vendor replacement owner is not yet admitted');
-  } finally {
-    await writeFile(work+'/receipt.json',JSON.stringify(receipt)+'\n',{mode:0o600});
-    try {await herdr?.expectBytes(Buffer.alloc(0));}
-    finally {try {await herdr?.stop();}finally {try {await emulator?.stop();}finally {try {await adb.stop();}finally {server?.stop(true);server6?.stop(true);}}}}
+  } catch(error) {primary=true;throw error;}
+  finally {
+    await swiftkeyChildCleanup(primary,herdr,emulator,adb,[()=>{server?.stop(true);},()=>{server6?.stop(true);}],receipt,
+      ()=>writeFile(work+'/receipt.json',JSON.stringify(receipt)+'\n',{mode:0o600}));
   }
 }
 
@@ -219,6 +267,8 @@ export async function copySwiftkeyClosure(root:string,destination:string) {
 
 export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../..')) {
   if(process.platform!=='linux'||process.arch!=='x64'||process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Explicit disposable hosted SwiftKey owner required');
+  const profile=process.env.LAZYSH_SWIFTKEY_PROFILE??'play-splits';
+  if(profile!=='play-splits' && profile!=='apkpure-standalone')throw new Error('Unknown SwiftKey profile');
   const sdk=await realpath(process.env.ANDROID_HOME??'');const java=await realpath(join(process.env.JAVA_HOME??'','bin/java'));
   const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-'));await chmod(directory,0o700);
   const home=userInfo().homedir;
@@ -229,7 +279,8 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
   const seen=new Map<string,{pid:number;start:string}>();const canaries:Awaited<ReturnType<typeof ownedSwiftkeyCanary>>[]=[];let parentCanariesProven=false;
   try {
     for(const name of ['home','android','emulator','avd','keys','config','cache','data','runtime','tmp','bundle','closure/tests','closure/apps/client/published-native-e2e','closure/apps/client/native-e2e'])await mkdir(join(directory,name),{recursive:true,mode:0o700});
-    await acquireSwiftkey(directory,sdk,java,preparation);
+    if(profile==='apkpure-standalone')await acquireSwiftkeyStandalone(directory,sdk,java,preparation);
+    else await acquireSwiftkey(directory,sdk,java,preparation);
     const provenance:Record<string,string>={};
     for(const [name,source] of [['product.apk',process.env.LAZYSH_SWIFTKEY_PRODUCT_APK],['test.apk',process.env.LAZYSH_SWIFTKEY_TEST_APK],['herdr',process.env.LAZYSH_TEST_HERDR],['lazysh-agent',process.env.LAZYSH_TEST_AGENT_BIN],['owned-terminal-receiver',process.env.LAZYSH_TEST_RECEIVER_BIN],['bun',process.execPath]]) {
       if(!source)throw new Error('Immutable SwiftKey source input missing');await copyFile(await realpath(source),join(directory,'bundle',name));await chmod(join(directory,'bundle',name),0o700);provenance[name]=await fileDigest(join(directory,'bundle',name));
@@ -237,12 +288,13 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
     const copied=await copySwiftkeyClosure(root,join(directory,'closure'));
     for(const file of copied)immutablePaths['source/'+file]=join(directory,'closure',file);
     for(const name of await readdir(join(directory,'bundle')))immutablePaths['bundle/'+name]=join(directory,'bundle',name);
-    for(const file of pins.files)immutablePaths['vendor/'+file.name]=join(directory,'vendor',file.name);
+    for(const file of profile==='play-splits'?pins.files:[pins.apkPureStandalone])immutablePaths['vendor/'+file.name]=join(directory,'vendor',file.name);
     const image=join(sdk,'system-images/android-36/google_apis/x86_64');
     if(digest(await readFile(join(image,'source.properties')))!=='edfc961bd9128fbfea84b4c61aac3a72ea270ca286425e22b3ed01ac759b1fc3')throw new Error('Pinned Google API36 rev7 image metadata differs');
     if(await fileDigest(join(image,'system.img'))!=='eb4bd8cc387915563a0a051c51ac58012e183e1bd21bb0fe2e82f1b255de45a1')throw new Error('Pinned image bytes differ');
     for(const [name,path] of [['emulator',join(sdk,'emulator/emulator')],['adb',join(sdk,'platform-tools/adb')],['bwrap','/usr/bin/bwrap'],['system.img',join(image,'system.img')],['source.properties',join(image,'source.properties')]]){provenance[name]=await fileDigest(path);immutablePaths['tool/'+name]=path;}
     inputHashes=await swiftkeyInputHashes(immutablePaths);
+    admitSwiftkeyInputHashes(profile,inputHashes);
     const source=(await new OwnedProcess('/usr/bin/git',['rev-parse','HEAD'],root,quietEnvironment(join(directory,'home'))).finish('SwiftKey source identity',5000)).trim();
     if(!/^[a-f0-9]{40}$/.test(source)||source!==process.env.GITHUB_SHA)throw new Error('SwiftKey source nomination differs from checkout');
     provenance.source=source;
@@ -270,7 +322,7 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
     for(const path of ['/usr','/bin','/lib','/lib64'])args.push('--ro-bind',path,path);
     args.push('--dir','/etc');for(const path of ['/etc/passwd','/etc/group','/etc/hosts','/etc/nsswitch.conf','/etc/ld.so.cache'])args.push('--ro-bind',path,path);
     args.push('--proc','/proc','--dev','/dev','--dev-bind','/dev/kvm','/dev/kvm','--tmpfs','/dev/shm','--tmpfs','/tmp','--ro-bind',sdk,'/sdk','--bind',directory,'/work','--ro-bind',join(directory,'bundle'),'/work/bundle','--ro-bind',join(directory,'closure'),'/work/closure','--ro-bind',join(directory,'vendor'),'/work/vendor','--bind',join(directory,'home'),home,'--chdir','/work/closure','--clearenv');
-    for(const [name,value] of Object.entries({...quietEnvironment(home),LAZYSH_ANDROID_SWIFTKEY_CHILD:'1',LAZYSH_SWIFTKEY_PARENT_NS:JSON.stringify(parentNamespaces)}))args.push('--setenv',name,value);
+    for(const [name,value] of Object.entries({...quietEnvironment(home),LAZYSH_ANDROID_SWIFTKEY_CHILD:'1',LAZYSH_SWIFTKEY_PROFILE:profile,LAZYSH_SWIFTKEY_PARENT_NS:JSON.stringify(parentNamespaces)}))args.push('--setenv',name,value);
     args.push('--','/work/bundle/bun','test','tests/android-ssh.test.ts','--test-name-pattern','isolated SwiftKey native discovery');
     child=new OwnedProcess('/usr/bin/bwrap',args,directory,quietEnvironment(join(directory,'home')),false);
     const owner=await child.liveIdentity();if(!owner)throw new Error('Namespace owner identity absent');

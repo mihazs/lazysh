@@ -3,8 +3,219 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
+
+test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
+  expect(ntfyAndroidVariant()).toBe('fdroid');
+  for(const value of ['google','fdroid'] as const)expect(ntfyAndroidVariant(value)).toBe(value);
+  for(const value of ['','Google','foss','google ','fdroid\n','private-provider-token']) {
+    let failure:unknown;
+    try{ntfyAndroidVariant(value);}catch(error){failure=error;}
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('Owned ntfy Android distribution is unsupported');
+  }
+});
+test('ntfy CI retains FOSS native coverage and separately builds the real Google variant',async()=>{
+  const root=resolve(import.meta.dir,'..');
+  const jobs=Bun.YAML.parse(await readFile(join(root,'.github/workflows/checks.yml'),'utf8')) as {jobs:Record<string,any>};
+  const job=jobs.jobs['native-android-ntfy'];
+  expect(job.strategy.matrix['push-variant']).toEqual(['fdroid','google']);
+  expect(job.strategy['fail-fast']).toBe(false);
+  expect(job['timeout-minutes']).toBe(35);
+  const build=job.steps.find((step:any)=>step.name==='Build current Google APK for Firebase-free push acceptance');
+  expect(build.if).toBe("matrix.push-variant == 'google'");
+  expect(build.run).toBe('bun run build:android:emulator');
+  const runtime=job.steps.find((step:any)=>step.name==='Real ntfy encrypted native enrollment').with;
+  expect([runtime['api-level'],runtime.target,runtime.arch,runtime['emulator-port']]).toEqual([36,'default','x86_64',5580]);
+  expect(runtime.script).toContain('LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy');
+  expect(runtime.script).toContain('bun run test:android-ntfy');
+  expect(job.steps.find((step:any)=>step.name==='Retain finite ntfy acceptance receipts only').with.name).toBe('lazysh-ntfy-acceptance-${{ matrix.push-variant }}');
+});
+
+const clockPoint=(wall:number,nanos=0n)=>({wall,before:nanos,after:nanos});
+test('controlled clock admits only an entire positive interval within the declared bound',()=>{
+  const before=clockPoint(100000),after=clockPoint(100010,10000000n);
+  for(const [raw,result]of [['100010','outsideDeclaredOffset'],['100011','outsideDeclaredOffset'],['100012','verified'],
+    ['101999','verified'],['102000','outsideDeclaredOffset'],['100005','outsideDeclaredOffset'],['%s%3N','malformed'],
+    ['101000\r\n','malformed'],['101000\n\n','malformed'],['NaN','malformed'],['8640000000000000','malformed']]as const)
+    expect(controlledNtfyClockReadback(raw,before,after)).toBe(result);
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100251,251000000n))).toBe('wideBracket');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100248,248000000n))).toBe('verified');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100249,249000000n))).toBe('wideBracket');
+  expect(controlledNtfyClockReadback('101000',before,clockPoint(100100,1000000n))).toBe('hostDiscontinuity');
+  expect(controlledNtfyClockReadback('101000',before,after,clockPoint(99000))).toBe('hostDiscontinuity');
+  expect(controlledNtfyClockReadback('101000',clockPoint(NaN),after)).toBe('hostDiscontinuity');
+});
+
+function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean}={}) {
+  const commands:string[][]=[],events:string[]=[];let auto=options.auto??true,set:number|undefined,index=0;
+  const points=[clockPoint(100000),clockPoint(100010,10000000n),clockPoint(100020,20000000n)].map(point=>({...point,after:point.after+100n}));
+  const clock=new OwnedNtfyClock(async args=>{
+    commands.push(args);events.push(args.join(' '));
+    if(args[1]==='pm')return options.occupied?'package:app.lazysh.client\n':'';
+    if(args[1]==='date')return options.readback??String(options.unchanged?100015:set!+15)+'\n';
+    if(args[2]==='alarm'){if(options.unsupported)throw new Error('private unsupported token');set=Number(args[4]);return '';}
+    if(args[3]==='is_auto_detection_enabled')return options.autoReply??String(auto)+'\n';
+    if(args[3]==='set_auto_detection_enabled'){
+      if(options.restoreFails&&set!==undefined)throw new Error('private restoration token');
+      if(!options.ignoreRestore||set===undefined)auto=args[4]==='true';return '';
+    }
+    throw new Error('Unexpected command');
+  },async()=>{events.push('identity');if(options.identityLostAfterSet&&set!==undefined)throw new Error('Owned identity changed');},()=>{
+    events.push('sample');return points[index++];
+  });
+  return {clock,commands,events,get auto(){return auto;}};
+}
+
+test('one fixed clock setup restores the exact original boolean only after absent-state teardown',async()=>{
+  for(const auto of [true,false]) {
+    const f=controlledClockFixture({auto});await f.clock.prepare();
+    expect(f.clock.observation()).toMatchObject({state:'verified',readback:'verified',restoration:'pending'});
+    expect(f.commands.filter(a=>a[2]==='alarm')).toEqual([['shell','cmd','alarm','set-time','101000']]);
+    await expect(f.clock.prepare()).rejects.toThrow('cannot be repeated');
+    await f.clock.restore(async()=>{f.events.push('teardown');});
+    expect(f.auto).toBe(auto);expect(f.clock.observation().restoration).toBe('restored');
+    const teardown=f.events.indexOf('teardown');
+    expect(f.events.slice(teardown+1)).toContain(`shell cmd time_detector set_auto_detection_enabled ${auto}`);
+    expect(f.commands.filter(a=>a[2]==='alarm')).toHaveLength(1);
+    expect(JSON.stringify(f.clock.observation())).not.toMatch(/101000|private|token|epoch|boot|hash/);
+    await expect(f.clock.restore(async()=>{})).rejects.toThrow('cannot be repeated');
+  }
+});
+
+test('unsupported or unchanged clock never passes on set-time success and never retries',async()=>{
+  for(const options of [{unsupported:true},{unchanged:true},{readback:'%s%3N\n'}]) {
+    const f=controlledClockFixture(options);await expect(f.clock.prepare()).rejects.toThrow();
+    expect(f.clock.observation().state).toBe('preparing');
+    expect(f.commands.filter(a=>a[2]==='alarm')).toHaveLength(1);
+    await f.clock.restore(async()=>{});expect(f.auto).toBe(true);
+    expect(f.clock.observation().restoration).toBe('restored');
+  }
+});
+
+test('malformed automatic-time state cannot be guessed or mutated',async()=>{
+  for(const autoReply of ['','True','true\n\n','false\r\n','private']) {
+    const f=controlledClockFixture({autoReply});await expect(f.clock.prepare()).rejects.toThrow('automatic time response invalid');
+    expect(f.commands.some(a=>a[3]==='set_auto_detection_enabled'||a[2]==='alarm')).toBe(false);
+    await f.clock.restore(async()=>{throw new Error('No restoration should be needed');});
+  }
+});
+
+test('package or identity failure admits no mutation and cannot restore beneath retained state',async()=>{
+  const occupied=controlledClockFixture({occupied:true});await expect(occupied.clock.prepare()).rejects.toThrow('packages/state must be absent');
+  expect(occupied.commands.every(a=>a[1]==='pm')).toBe(true);
+  let commands=0;const original=new Error('Owned identity failed');
+  const denied=new OwnedNtfyClock(async()=>{commands++;return '';},async()=>{throw original;});
+  await expect(denied.prepare()).rejects.toBe(original);expect(commands).toBe(0);
+  const blocked=controlledClockFixture();await blocked.clock.prepare();const count=blocked.commands.length;
+  await expect(blocked.clock.restore(async()=>{throw original;})).rejects.toBe(original);
+  expect(blocked.commands).toHaveLength(count);expect(blocked.clock.observation().restoration).toBe('blocked');
+  const lost=controlledClockFixture({identityLostAfterSet:true});await expect(lost.clock.prepare()).rejects.toThrow('identity changed');
+  await expect(lost.clock.restore(async()=>{})).rejects.toThrow('identity changed');
+  expect(lost.commands.filter(a=>a[3]==='set_auto_detection_enabled')).toHaveLength(1);
+});
+
+test('restoration failure is closed, recorded and cannot be retried',async()=>{
+  for(const options of [{restoreFails:true},{ignoreRestore:true}]) {
+    const f=controlledClockFixture(options);await f.clock.prepare();let cleanup:unknown;
+    try{await f.clock.restore(async()=>{});}catch(error){cleanup=error;}
+    expect(cleanup).toBeInstanceOf(Error);
+    expect(String(cleanup)).not.toContain('private');expect(f.clock.observation().restoration).toBe('failed');
+    await expect(f.clock.restore(async()=>{})).rejects.toThrow('cannot be repeated');
+  }
+  const options={occupied:false},retained=controlledClockFixture(options);await retained.clock.prepare();options.occupied=true;
+  await expect(retained.clock.restore(async()=>{})).rejects.toThrow('packages/state must be absent');
+  expect(retained.clock.observation().restoration).toBe('blocked');
+  expect(retained.commands.filter(a=>a[3]==='set_auto_detection_enabled')).toHaveLength(1);
+});
+
+test('clock ownership requires stable QEMU-admitted bridge, transport and boot observations',()=>{
+  const owner={server:{state:'available' as const,hash:'server'},guest:{connection:'device',process:'unavailable',mainPids:[],reverse:'not-created',
+    transport:'available',transportHash:'transport',boot:'available',bootHash:'boot',adbd:'available',adbdHash:'adbd'}};
+  expect(sameNtfyClockOwner(owner,owner)).toBe(true);
+  expect(sameNtfyClockOwner({...owner,guest:{...owner.guest,connection:'offline'}},owner)).toBe(false);
+  expect(sameNtfyClockOwner(owner,{...owner,server:{state:'inconclusive',hash:null}})).toBe(false);
+  for(const field of ['transportHash','bootHash','adbdHash','connection']as const)
+    expect(sameNtfyClockOwner(owner,{...owner,guest:{...owner.guest,[field]:'changed'}})).toBe(false);
+});
+
+test('teardown absence uses strict exact package names rather than uninstall acknowledgements or prefixes',async()=>{
+  const queried:string[]=[];
+  await absentNtfyPackages(async args=>{queried.push(args.at(-1)!);return 'package:app.lazysh.client.unrelated\n';});
+  expect(queried).toEqual(['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client']);
+  for(const reply of ['package:app.lazysh.client\n','private output','\n','package:app.lazysh.client.unrelated\r\n','package:app.lazysh.client.unrelated\n'.repeat(200)])
+    await expect(absentNtfyPackages(async()=>reply)).rejects.toThrow('packages/state must be absent');
+  await expect(absentNtfyPackages(async()=>{throw new Error('Read unavailable');})).rejects.toThrow('Read unavailable');
+});
+test('host-device comparison accounts for second and millisecond quantization',()=>{
+  const compare=(guest:string,start=100000,end=100010)=>ntfyClockComparison(guest,clockPoint(start),clockPoint(end,BigInt(end-start)*1000000n));
+  expect(compare('100\n')).toMatchObject({status:'observed',offset:'overlapsZero',magnitude:'crossesBand',uncertainty:'atMostTwoSeconds'});
+  expect(compare('99')).toMatchObject({offset:'behind',magnitude:'crossesBand'});
+  expect(compare('98')).toMatchObject({offset:'behind',magnitude:'oneToFiveSeconds'});
+  expect(compare('102')).toMatchObject({offset:'ahead',magnitude:'oneToFiveSeconds'});
+  expect(compare('90')).toMatchObject({offset:'behind',magnitude:'fiveToThirtySeconds'});
+  expect(compare('60')).toMatchObject({offset:'behind',magnitude:'atLeastThirtySeconds'});
+  expect(compare('140')).toMatchObject({offset:'ahead',magnitude:'atLeastThirtySeconds'});
+  expect(compare('105')).toMatchObject({magnitude:'crossesBand'});
+  expect(compare('100',100000,103000)).toMatchObject({offset:'overlapsZero',uncertainty:'twoToFiveSeconds'});
+  expect(compare('100',100000,106000)).toMatchObject({uncertainty:'overFiveSeconds'});
+  for(const [elapsed,uncertainty]of [[999,'atMostTwoSeconds'],[1000,'twoToFiveSeconds'],[3999,'twoToFiveSeconds'],[4000,'overFiveSeconds']]as const)
+    expect(compare('100',100000,100000+elapsed).uncertainty).toBe(uncertainty);
+});
+
+test('clock comparison suppresses offset claims after host discontinuity and malformed observations',()=>{
+  const start=clockPoint(100000);
+  for(const [end,progress]of [[clockPoint(103000,1000000n),'wallAhead'],[clockPoint(99000,1000000n),'wallBehind']]as const)
+    expect(ntfyClockComparison('98',start,end)).toMatchObject({status:'hostDiscontinuity',offset:'unavailable',magnitude:'unavailable',hostProgress:progress});
+  expect(ntfyClockComparison('100',start,clockPoint(100000,1000000n))).toMatchObject({status:'observed'});
+  expect(ntfyClockComparison('100',start,clockPoint(100001))).toMatchObject({status:'observed'});
+  expect(ntfyClockComparison('100',start,clockPoint(99999))).toMatchObject({status:'hostDiscontinuity',hostProgress:'wallBehind'});
+  for(const text of ['','private-key','100\nprivate','100\n\n','100\r\n',' 100','0100','-1','NaN','Infinity','100.5','9'.repeat(200)])
+    expect(ntfyClockComparison(text,start,start)).toMatchObject({status:'malformed',offset:'unavailable'});
+  for(const point of [clockPoint(NaN),clockPoint(Infinity),clockPoint(-1),clockPoint(1.5),clockPoint(Number.MAX_SAFE_INTEGER),clockPoint(100000,-1n),{wall:100000,before:1n,after:0n}])
+    expect(ntfyClockComparison('100',point,start)).toMatchObject({status:'outOfBounds',offset:'unavailable'});
+  expect(ntfyClockComparison('8640000000000',start,start)).toMatchObject({status:'outOfBounds'});
+  expect(ntfyClockComparison('100',clockPoint(100000,2n),clockPoint(100000,1n))).toMatchObject({status:'outOfBounds'});
+  expect(ntfyClockComparison('100',start,clockPoint(100000,9_223_372_036_854_775_808n))).toMatchObject({status:'outOfBounds'});
+  expect(JSON.stringify(ntfyClockComparison('98',start,clockPoint(100001,1000000n)))).not.toMatch(/[0-9]|private|epoch|wallTime|nanos/);
+});
+
+test('one diagnostic read preserves owned identity checks and redacts command failures',async()=>{
+  const calls:string[]=[];let sample=0;
+  const observed=await observeNtfyClock(async()=>{calls.push('read');return '98\n';},async()=>{calls.push('check');},()=>clockPoint(100000,sample++===0?0n:1000000n));
+  expect(calls).toEqual(['check','read','check']);expect(observed.offset).toBe('behind');
+  const failed=await observeNtfyClock(async()=>{throw new Error('private-token /private/path 123');},async()=>{},()=>clockPoint(100000));
+  expect(failed).toMatchObject({status:'commandFailed',offset:'unavailable'});
+  expect(JSON.stringify(failed)).not.toMatch(/private|token|path|123/);
+  let reads=0,checks=0;
+  const original=new Error('Owned identity changed');
+  await expect(observeNtfyClock(async()=>{reads++;return '100';},async()=>{throw original;})).rejects.toBe(original);expect(reads).toBe(0);
+  await expect(observeNtfyClock(async()=>{throw new Error('private command');},async()=>{if(++checks===2)throw original;},()=>clockPoint(100000))).rejects.toBe(original);
+  expect(checks).toBe(2);
+  checks=0;
+  await expect(observeNtfyClock(async()=> '100',async()=>{if(++checks===2)throw original;},()=>clockPoint(100000))).rejects.toBe(original);
+});
+
+test('diagnostic command teardown settles before the final identity check',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.stdout.write("private");process.exit(7)']);
+  const result=await observeNtfyClock(()=>child.finish('owned clock unit fixture',2000),async()=>{
+    if(child.child.exitCode!==null)expect(await child.liveIdentity()).toBeUndefined();
+  },()=>clockPoint(100000));
+  expect(result.status).toBe('commandFailed');expect(child.child.exitCode).toBe(7);
+  expect(await child.liveIdentity()).toBeUndefined();expect(child.child.stdout!.destroyed).toBe(true);
+});
+
+test('successful and timed-out diagnostic children release owned handles without changing the caller budget',async()=>{
+  for(const timeout of [false,true]) {
+    const child=new OwnedProcess(process.execPath,['-e',timeout?'setInterval(()=>{},1000)':'process.stdout.write("100\\n")']);
+    let checks=0;
+    const result=await observeNtfyClock(()=>child.finish('owned clock cleanup fixture',timeout?25:2000),async()=>{checks++;},()=>clockPoint(100000));
+    expect(result.status).toBe(timeout?'commandFailed':'observed');expect(checks).toBe(2);
+    expect(await child.liveIdentity()).toBeUndefined();expect(child.child.stdout!.destroyed).toBe(true);
+    expect(child.child.stdin!.destroyed).toBe(true);expect(child.child.stderr!.destroyed).toBe(true);
+  }
+});
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
   const sdk=process.env.ANDROID_HOME;
@@ -50,11 +261,41 @@ test('one permission action retains closed stage budgets without changing legacy
   expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
 });
 
+test('post-click menu samples preserve the actual click budgets and first measured expiry',()=>{
+  const legacy='Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied]';
+  const trace=legacy.replace('permission=denied]','permission=denied clickBefore=positive clickAfter=positive firstExpiry=prompt]');
+  expect(permissionActionObservation(trace)).toEqual({...permissionActionObservation(legacy),clickBefore:'positive',clickAfter:'positive',firstExpiry:'prompt'});
+  for(const firstExpiry of ['none','between','foreground','allow','deny','toolbar','prompt','menu','click'])
+    expect(permissionActionObservation(trace.replace('firstExpiry=prompt',`firstExpiry=${firstExpiry}`))?.firstExpiry).toBe(firstExpiry);
+  for(const bad of [trace.replace('clickBefore=positive','clickBefore=private'),trace.replace('clickAfter=positive','clickAfter=1000'),
+    trace.replace('firstExpiry=prompt','firstExpiry=private-operation'),trace.replace(' clickAfter=positive',''),
+    trace.replace(' clickBefore=positive',''),trace.replace(' firstExpiry=prompt',''),trace.replace('clickBefore=positive','clickBefore=unavailable'),
+    trace.replace('action=returned','action=none'),trace.replace('clickAfter=positive','clickAfter=unavailable')])
+    expect(permissionActionObservation(bad)).toBeUndefined();
+  expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
+});
+
 test('settings observation admits only finite flags and the two-scroll limit',()=>{
   const diagnostic='Owned default server; settingsForeground=true settingsToolbar=true preferenceList=true preferenceTarget=false scrollAttempts=2';
   expect(settingsObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:true,toolbar:true,list:true,target:false,scrollAttempts:2});
   expect(settingsObservation(diagnostic.replace('scrollAttempts=2','scrollAttempts=3'))).toBeUndefined();
   expect(settingsObservation(diagnostic.replace('settingsToolbar=true','settingsToolbar=private-data'))).toBeUndefined();
+});
+
+test('return failure retains one closed snapshot and discards private failure context',()=>{
+  const state='foreground=ntfy settings=true defaultDialog=unavailable add=false certificate=false allow=false deny=unavailable ime=true';
+  const trace=`Ntfy return state[${state}]`;
+  expect(returnStateObservation(`private-prefix\n${trace}\nprivate-suffix`)).toEqual({
+    foreground:'ntfy',settings:true,defaultDialog:null,add:false,certificate:false,allow:false,deny:null,ime:true});
+  expect(JSON.stringify(returnStateObservation(trace))).not.toMatch(/private|origin|fingerprint|package|timestamp/);
+  for(const foreground of ['ntfy','permission','lazysh','aospIme','other','unavailable'])
+    expect(returnStateObservation(trace.replace('foreground=ntfy',`foreground=${foreground}`))?.foreground).toBe(foreground);
+  for(const bad of [trace+trace,trace.replace('settings=true','settings=private'),trace.replace('foreground=ntfy','foreground=io.heckel.ntfy'),
+    trace.replace('ime=true','ime=1'),trace.replace('state[','state[private='),trace.replace('ime=true]','ime=true private]'),
+    trace.replace('settings=true','settings=true\u0000'),trace.replace('settings=true','settings=true\n'),
+    trace.replace('certificate=false','certificate=false origin=secret'),trace.replace(' defaultDialog=unavailable',''),
+    trace.replace('foreground=ntfy','first{foreground=ntfy'),trace+'x'.repeat(256*1024)])
+    expect(returnStateObservation(bad)).toBeUndefined();
 });
 
 const eventDiagnostic='Actual bound-event notification required; eventObservation[entered=true readReturned=false initialReceipts=zero finalReceipts=one appNotifications=true postPermission=false channelEnabled=unavailable ownedNotification=false]';
@@ -119,6 +360,23 @@ test.each([
   expect(eventObservation(text)).toBeUndefined();
 });
 
+test('challenge failure state retains only closed phases and a nullable busy flag',()=>{
+  const sample='Ntfy challenge state[enrollment=VERIFY registration=READY busy=false]';
+  expect(challengeStateObservation(sample)).toEqual({enrollment:'VERIFY',registration:'READY',busy:false});
+  for(const phase of ['BOOTSTRAP','REGISTER','SUBSCRIBE','VERIFY','CONFIRMED','REVOKE_PENDING','FAILED','absent','unavailable','unknown'])
+    expect(challengeStateObservation(sample.replace('enrollment=VERIFY',`enrollment=${phase}`))?.enrollment).toBe(phase);
+  for(const phase of ['OFF','SELECTING','REQUESTED','READY','FAILED','UNAVAILABLE','REVOKE_PENDING','absent','unavailable','unknown'])
+    expect(challengeStateObservation(sample.replace('registration=READY',`registration=${phase}`))?.registration).toBe(phase);
+  for(const value of ['true','false','unavailable'])expect(challengeStateObservation(sample.replace('busy=false',`busy=${value}`))?.busy).toBe(value==='unavailable'?null:value==='true');
+  const privateValue='private-endpoint-key';
+  const unknown=challengeStateObservation(sample.replace('VERIFY',privateValue).replace('READY',privateValue));
+  expect(unknown).toEqual({enrollment:'unknown',registration:'unknown',busy:false});
+  expect(JSON.stringify(unknown)).not.toContain(privateValue);
+  for(const invalid of [sample+sample,sample.replace(' busy=false',''),sample.replace('busy=false','busy=private'),
+    sample.replace('busy=false]','busy=false endpoint=private]'),sample.replace('VERIFY','VERIFY registration=PRIVATE'),sample+'x'.repeat(256*1024)])
+    expect(challengeStateObservation(invalid)).toBeUndefined();
+});
+
 test('every fixed native selector label retains a finite failure stage without private text',async()=>{
   const source=await readFile(resolve(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=source.split('fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {')[1]?.split('\n    @Test')[0];
@@ -146,6 +404,64 @@ test('native receipt requires every exact owned case without substitution or ski
     report.replace('</testsuite>','<skipped /></testsuite>'),report+rows[0]]){
     expect(()=>validateNtfyReport(invalid)).toThrow('did not pass without skips');
   }
+});
+
+test('tool failure projection uses actual owned nonzero, deadline and spawn outcomes without private output',async()=>{
+  const stage='ordinary release resource assembly';
+  for(const [program,args,budget,outcome,exit]of [
+    ['sh',['-c','printf "private-origin\n"; printf "Connection reset by peer\nprivate-key" >&2; exit 7'],2000,'nonzero-exit',7],
+    ['sleep',['30'],20,'deadline',null],
+    ['/owned/not-present/private-launcher',[],2000,'spawn-failed',null],
+  ] as const) {
+    const child=new OwnedProcess(program,[...args]);let original:unknown;
+    try{await child.finish(stage,budget);}catch(error){original=error;}
+    expect(original).toBeInstanceOf(Error);
+    const observed=await ntfyToolFailure(stage,original,child,true);
+    expect(observed.operation).toBe('release-resources');expect(observed.outcome).toBe(outcome);expect(observed.exit).toBe(exit);
+    expect(observed.process.scope).toBe('after-finish-cleanup');
+    expect(JSON.stringify(observed)).not.toMatch(/private|origin|private-launcher|Connection reset/);
+    if(outcome==='nonzero-exit'){expect(observed.output.connectionReset).toBe(true);expect(observed.process.exitCode).toBe(7);}
+    else expect(observed.output.unclassified).toBe(true);
+    expect(child.stdout.length).toBeLessThanOrEqual(16*1024);expect(child.stderr.length).toBeLessThanOrEqual(16*1024);
+  }
+});
+
+test('ownership, unknown callers and failed observers cannot project private error data or invented causes',async()=>{
+  const original=new Error('private-path https://private-origin/token');
+  const unstarted=await ntfyToolFailure('ordinary release resource assembly',original,undefined,false);
+  expect(unstarted.outcome).toBe('ownership-check');expect(unstarted.ownershipCheckReturned).toBe(false);
+  expect(unstarted.process.state).toBe('unavailable');
+  const child=new OwnedProcess('sh',['-c','exit 0']);await child.finish('ordinary release resource assembly',2000);
+  const observe=spyOn(child,'startupDiagnostic').mockRejectedValue(new Error('private-observer'));
+  try {
+    for(const error of [original,new Error('Owned fixture failed: ordinary release resource assembly; exit=999'),
+      new Error('Owned fixture deadline: private-stage'),{message:'private-object'},
+      Object.defineProperty(new Error('unused'),'message',{get(){throw new Error('private-getter');}})]) {
+      const projected=await ntfyToolFailure('ordinary release resource assembly',error,child,true);
+      expect(projected.outcome).toBe('unknown');expect(projected.process.state).toBe('unavailable');
+      expect(projected.exit).toBeNull();expect(JSON.stringify(projected)).not.toMatch(/private|https|999|message/);
+    }
+    const unknown=await ntfyToolFailure('private-caller-path',new Error('Owned fixture deadline: private-caller-path'),child,true);
+    expect(unknown.operation).toBe('unclassified');expect(unknown.outcome).toBe('unknown');
+    expect(JSON.stringify(unknown)).not.toContain('private');
+    expect((await ntfyToolFailure('__proto__',original,undefined,true)).operation).toBe('unclassified');
+  }finally{observe.mockRestore();}
+});
+
+test('tool process metadata rejects malformed values and classifies only the retained output window',async()=>{
+  const child=new OwnedProcess('sh',['-c','printf "Connection reset by peer"; head -c 20000 /dev/zero | tr "\\0" x; exit 9']);
+  let failure:unknown;try{await child.finish('ordinary release resource assembly',2000);}catch(error){failure=error;}
+  const state=spyOn(child,'startupDiagnostic').mockResolvedValue({state:'private-state',exitCode:999} as never);
+  try {
+    const result=await ntfyToolFailure('ordinary release resource assembly',failure,child,true);
+    expect(result.outcome).toBe('nonzero-exit');expect(result.exit).toBe(9);
+    expect(result.process).toEqual({scope:'after-finish-cleanup',state:'unavailable',exitCode:null});
+    expect(result.output.connectionReset).toBe(false);expect(result.output.unclassified).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/private|Connection|xxx/);
+    const hostile=Object.defineProperty(child,'stdout',{configurable:true,get(){throw new Error('private-tail');}});
+    await expect(ntfyToolFailure('ordinary release resource assembly',failure,hostile,true)).rejects.toThrow('private-tail');
+    // The enclosing run helper treats a projection failure as optional and rethrows its original error.
+  }finally{state.mockRestore();}
 });
 
 test('private transfer creates an absent owned directory, rejects symlinks and cannot replace a receipt',async()=>{

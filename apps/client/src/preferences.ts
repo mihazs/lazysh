@@ -209,6 +209,7 @@ export function parseChordSteps(source: string): string[] {
     const isNamed = Object.hasOwn(named, key);
     let value = isNamed ? named[key] : key;
     if (!isNamed && (key.length !== 1 || !/^[!-~]$/.test(key))) throw new LocalUiError('validationUnknownKeyValue1', key);
+    if (shift && key === "Enter" && !ctrl && !alt) return "\x1b[13;2u";
     if (shift && key === "Tab") return alt ? "\x1b\x1b[Z" : "\x1b[Z";
     if (shift && /^[a-z]$/i.test(value)) value = value.toUpperCase();
     else if (shift && !isNamed) throw new LocalUiError('validationUseTheResultingCharacterInsteadOfShiftValue1', key);

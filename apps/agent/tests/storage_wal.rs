@@ -3,6 +3,8 @@
 mod binary;
 #[path = "../src/storage_schema.rs"]
 mod storage_schema;
+#[path = "support/wal_failure.rs"]
+mod wal_failure;
 use chrono::Utc;
 use lazysh_agent::{Event, SessionState, Store};
 use rusqlite::Connection;
@@ -13,6 +15,7 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+use wal_failure::{Observation, Origin, Readiness, Stage};
 
 fn event() -> Event {
     Event {
@@ -234,6 +237,8 @@ impl Drop for OwnedChild {
 
 #[test]
 fn killed_writer_recovers_committed_wal_and_discards_uncommitted_tail() {
+    // Declare first: original child kill/reap must precede reporting; a cleanup hang leaves no report.
+    let observation = Observation::new(Origin::Parent);
     let dir = tempfile::tempdir().unwrap();
     let mut child = OwnedChild(
         Command::new(std::env::current_exe().unwrap())
@@ -255,24 +260,37 @@ fn killed_writer_recovers_committed_wal_and_discards_uncommitted_tail() {
             }
         }
     });
+    observation.stage(Stage::Readiness);
     let ready = receive.recv_timeout(Duration::from_secs(5));
+    observation.readiness(match &ready {
+        Ok(()) => Readiness::Ready,
+        Err(mpsc::RecvTimeoutError::Timeout) => Readiness::Timeout,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Readiness::Disconnected,
+    });
     if ready.is_err() {
         let _ = child.0.kill();
     }
     reader.join().unwrap();
     ready.expect("owned crash writer did not reach committed+uncommitted state");
+    observation.stage(Stage::Sidecar);
     assert!(
         fs::metadata(dir.path().join("events.sqlite3-wal"))
             .unwrap()
             .len()
             > 32
     );
+    observation.stage(Stage::Kill);
     child.0.kill().unwrap();
+    observation.stage(Stage::Reap);
     assert!(!child.0.wait().unwrap().success());
+    observation.stage(Stage::Reopen);
     let mut recovered = Store::open(dir.path()).unwrap();
+    observation.stage(Stage::Snapshot);
     let snapshot = recovered.snapshot(50, Utc::now()).unwrap();
+    observation.stage(Stage::Count);
     assert_eq!(snapshot.sessions.len(), 1);
     assert_eq!(snapshot.sessions[0].event_count, 1);
+    observation.stage(Stage::Schema);
     let db = Connection::open(dir.path().join("events.sqlite3")).unwrap();
     assert_eq!(
         db.query_row(
@@ -283,6 +301,7 @@ fn killed_writer_recovers_committed_wal_and_discards_uncommitted_tail() {
         .unwrap(),
         0
     );
+    observation.stage(Stage::Integrity);
     assert_eq!(
         db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
             .unwrap(),
@@ -296,12 +315,17 @@ fn crash_writer_child() {
     let Some(directory) = std::env::var_os("LAZYSH_WAL_CRASH_FIXTURE") else {
         return;
     };
+    let observation = Observation::new(Origin::Child);
     let mut store = Store::open(std::path::Path::new(&directory)).unwrap();
+    observation.stage(Stage::Commit);
     store.ingest(&event(), Utc::now()).unwrap();
+    observation.stage(Stage::CommittedSidecar);
     let wal = std::path::Path::new(&directory).join("events.sqlite3-wal");
     let committed_bytes = fs::metadata(&wal).unwrap().len();
+    observation.stage(Stage::PendingOpen);
     let pending =
         Connection::open(std::path::Path::new(&directory).join("events.sqlite3")).unwrap();
+    observation.stage(Stage::SpillWrite);
     pending
         .execute_batch(
             "PRAGMA cache_size=1; PRAGMA cache_spill=1;
@@ -309,12 +333,15 @@ fn crash_writer_child() {
             CREATE TABLE spill (data BLOB); INSERT INTO spill VALUES (zeroblob(131072));",
         )
         .unwrap();
+    observation.stage(Stage::SpillSize);
     assert!(
         fs::metadata(wal).unwrap().len() > committed_bytes,
         "fixture must spill uncommitted WAL frames before termination"
     );
+    observation.stage(Stage::ReadyFlush);
     println!("WAL_FIXTURE_READY");
     std::io::stdout().flush().unwrap();
+    observation.stage(Stage::AwaitKill);
     // Parent kills this owned process while both SQLite connections remain live.
     let _ = std::io::stdin().read_exact(&mut [0]);
     panic!("parent must terminate the live writer");

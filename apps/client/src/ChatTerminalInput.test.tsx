@@ -24,16 +24,17 @@ function fixture(overrides:Partial<ComponentProps<typeof ChatTerminalInput>>={})
   const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{backend:'tmux' as const,hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},compositionActive:false,onSent:sent,...overrides};
   return {props,sent,view:render(<ChatTerminalInput {...props}/>)};
 }
-it.each(['  你好 😀  ', '  first\n\té; \'"$()#{pane_id}\\ 世界\nlast  '])('requires confirmation and sequences exact Send/Stop bytes for %j',async draft=>{
-  const {sent}=fixture({draft});expect(invoke).not.toHaveBeenCalled();expect(screen.getByText(t('chatTerminalPasteNote'))).toBeTruthy();await confirm();
+const recordedSources=[source,{...tmuxChatReaderSource('codex'),view:'conversation' as const}];
+it.each(['  你好 😀  ', '  first\n\té; \'"$()#{pane_id}\\ 世界\nlast  '].flatMap(draft=>recordedSources.map(reader=>({draft,reader}))))('requires confirmation and sequences exact Send/Stop bytes for $reader.agent / $draft',async ({draft,reader})=>{
+  const {sent}=fixture({draft,source:reader});expect(invoke).not.toHaveBeenCalled();expect(screen.getByText(t('chatTerminalPasteNote'))).toBeTruthy();await confirm();
   expect(screen.getByText('Agent terminal')).toBeTruthy();expect(screen.getByText('Agent work')).toBeTruthy();expect(screen.getByText('Claude workspace')).toBeTruthy();
   for(const opaque of [target.generation,target.sessionId,target.windowId,target.paneId,receipt])expect(screen.queryByText(opaque)).toBeNull();
-  expect(actions()).toEqual([{kind:'snapshot'},{kind:'bind',destination:target,source}]);
+  expect(actions()).toEqual([{kind:'snapshot'},{kind:'bind',destination:target,source:reader}]);
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatTerminalSent'));
-  expect(actions()[2]).toEqual({kind:'input',receipt,source,operation:1,input:{kind:'send',text:draft}});
+  expect(actions()[2]).toEqual({kind:'input',receipt,source:reader,operation:1,input:{kind:'send',text:draft}});
   expect(sent).toHaveBeenCalledExactlyOnceWith(draft,7);
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));await screen.findByText(t('chatTerminalStopRequested'));
-  expect(actions()[3]).toEqual({kind:'input',receipt,source,operation:2,input:{kind:'request_stop'}});
+  expect(actions()[3]).toEqual({kind:'input',receipt,source:reader,operation:2,input:{kind:'request_stop'}});
   expect(sent).toHaveBeenCalledTimes(1);
   expect(invoke).toHaveBeenLastCalledWith('tmux_chat',expect.anything(),{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
 });
@@ -85,15 +86,15 @@ it.each(['one line','first\nsecond'])('does not dispatch during IME composition 
   expect(actions().filter(action=>action.kind==='input')).toHaveLength(0);
 });
 const staleCases=(['snapshot','bind','input'] as const).flatMap(kind=>(['source','session','lease','unmount'] as const).flatMap(transition=>(['success','failure'] as const).flatMap(outcome=>(kind==='input'?['one line','first\n\tsecond']:['one line']).map(draft=>({kind,transition,outcome,draft})))));
-it.each(staleCases)('drops stale $kind $outcome after $transition for $draft',async({kind,transition,outcome,draft})=>{
+it.each(staleCases.flatMap(row=>(row.kind==='bind'||row.kind==='input') && (row.transition==='source'||row.transition==='lease') ? recordedSources.map(reader=>({...row,reader})) : [{...row,reader:source}]))('drops stale $reader.agent $kind $outcome after $transition for $draft',async({kind,transition,outcome,draft,reader})=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args)=>((args as {action:{kind:string}}).action.kind===kind)?new Promise((yes,no)=>{finish=yes;fail=no;}):nativeReply(command,args));
-  const {props,sent,view}=fixture({draft});
+  const {props,sent,view}=fixture({draft,source:reader});
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));
   if(kind!=='snapshot')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalConfirm')}));
   if(kind==='input')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalSend')}));
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
-  if(transition==='source')view.rerender(<ChatTerminalInput {...props} source={{...source,path:'/different.jsonl'}}/>);
+  if(transition==='source')view.rerender(<ChatTerminalInput {...props} source={{...reader,path:'/different.jsonl'}}/>);
   else if(transition==='session')view.rerender(<ChatTerminalInput {...props} sessionId="ssh-replacement"/>);
   else if(transition==='lease')await act(async()=>{access(true);access();});
   else view.unmount();
@@ -139,7 +140,7 @@ it.each(Object.keys(transcriptAgents))('admits explicit Records context for the 
 it.each(Object.keys(transcriptAgents) as TranscriptAgentId[])('enforces the native-reader option matrix for %s',agent=>{
   for(const view of ['records','conversation'])for(const inlineImages of [false,true]){
     const context={...tmuxChatReaderSource(agent),view,inlineImages};
-    const expected=(view==='records'||['claude','grok-acp'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
+    const expected=(view==='records'||['claude','grok-acp','codex'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
     expect(validTerminalSource(context)).toBe(expected);
   }
 });

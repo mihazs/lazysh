@@ -1,10 +1,54 @@
-import {OwnedProcess, identity, descendants, type OwnedPid} from './ownedProcess';
+import {reportOwnedTeardownFailure,OwnedProcess, OUTPUT_LIMIT, identity, descendants, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
 import {isAbsolute, join, normalize} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+
+export function receiverProbeErrors(text:string) {
+  const flags={auth:/Permission denied|Authentication failed/i.test(text),key:/Load key|bad permissions|invalid format/i.test(text),
+    hostkey:/Host key verification failed|REMOTE HOST IDENTIFICATION/i.test(text),pty:/PTY allocation|openpty|pseudo-terminal/i.test(text),
+    channel:/channel [0-9]+:|session request failed|connection (?:closed|reset|refused)/i.test(text),
+    shell:/shell request failed|Could not chdir|exec.*(?:shell|sh).*failed/i.test(text),
+    fs:/No such file|Read-only file system|(?:open|stat|access|mkdir|chdir)[^\r\n]{0,160}: Permission denied/i.test(text),proc:/procfs|\/proc\/|proc mount/i.test(text),
+    accountLocked:/account is locked/i.test(text),accountMissing:/Invalid user|(?:getpwnam|getpwuid)[^\r\n]{0,80}(?:failed|not found)/i.test(text),
+    uidSwitch:/(?:setresuid|setresgid|seteuid|setegid|initgroups)[^\r\n]{0,80}(?:failed|Operation not permitted|Invalid argument)/i.test(text),
+    authorizedKeyRead:/Could not open user[^\r\n]{0,160}authorized keys|auth_openkeyfile[^\r\n]{0,80}(?:failed|denied)/i.test(text),
+    ownership:/Authentication refused|bad ownership or modes|safe_path[^\r\n]{0,80}(?:fatal|failed|unsafe)/i.test(text),
+    sandbox:/sandbox[^\r\n]{0,80}(?:failed|denied|violation)|seccomp[^\r\n]{0,80}(?:failed|denied|violation|killed)/i.test(text),
+    accountDenied:/PAM[^\r\n]{0,80}(?:denied|failure|error)|account[^\r\n]{0,80}(?:expired|denied)|not allowed because shell/i.test(text)};
+  return {...flags,unknown:text.length>0 && !Object.values(flags).some(Boolean)};
+}
+
+// Failure-only metadata; never wait for or act on another SSH admission.
+export async function reportOwnedSshPromptFailure(fixture:Pick<SshFixture,'prompt'|'daemon'>,control:OwnedProcess,observer:OwnedProcess,activeStreams:number) {
+  const sample=async(child:OwnedProcess,prompt?:string)=>{
+    let startup:{state:string;exitCode:number|null}={state:'unavailable',exitCode:null};
+    let ownedLive:boolean|null=null,promptSeen:boolean|null=null;
+    type OutputState='unavailable'|'empty'|'some'|'limit';
+    let stdout:OutputState='unavailable',stderr:OutputState='unavailable';
+    let errors:ReturnType<typeof receiverProbeErrors>|null=null;
+    try {
+      const value=await child.startupDiagnostic();
+      if(['missing-launcher','launch-denied','launch-failed','early-exit','signaled','running','launch-unavailable'].includes(value.state) &&
+        (value.exitCode===null || (Number.isInteger(value.exitCode)&&value.exitCode>=0&&value.exitCode<=255)))startup={state:value.state,exitCode:value.exitCode};
+    } catch {/* Unavailable is not a healthy process. */}
+    try{ownedLive=!!await child.liveIdentity();}catch{/* Preserve unknown ownership. */}
+    const size=(text:string)=>text.length===0?'empty':text.length>=OUTPUT_LIMIT?'limit':'some';
+    try{const text=child.stdout.slice(-OUTPUT_LIMIT);stdout=size(text);if(prompt!==undefined)promptSeen=text.includes(prompt);}catch{/* No captured text leaves this sample. */}
+    try{const text=child.stderr.slice(-OUTPUT_LIMIT);stderr=size(text);errors=receiverProbeErrors(text);}catch{/* Unavailable is not an empty error stream. */}
+    return {startup,ownedLive,stdout,promptSeen,stderr,errors};
+  };
+  try {
+    const [first,second,daemon]=await Promise.all([sample(control,fixture.prompt),sample(observer,fixture.prompt),sample(fixture.daemon)]);
+    const valid=Number.isSafeInteger(activeStreams)&&activeStreams>=0;
+    console.error(JSON.stringify({scope:'ssh-prompt-admission',state:'sampled',activeStreams:valid?Math.min(activeStreams,8):null,
+      activeStreamsCapped:valid?activeStreams>8:null,control:first,observer:second,daemon}));
+  } catch {
+    try{console.error(JSON.stringify({scope:'ssh-prompt-admission',state:'unavailable'}));}catch{/* Preserve the original prompt failure even if emission fails. */}
+  }
+}
 
 export async function sshCommand(stage:string,program:string,args:string[],cwd?:string) {
   return new OwnedProcess(program,args,cwd).finish(stage,5000);
@@ -47,7 +91,7 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
-  if(primary)throw primary;
+  if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':'ssh-stop');throw primary;}
 }
 export type HerdrTools={herdrBinary:string;agentBinary:string;receiverBinary:string};
 // Two actual native installation budgets, plus explicit SSH/UI setup and teardown.
@@ -64,7 +108,9 @@ export class SshFixture {
     if(!this.toolNamespace || !this.environment)throw new Error('Owned Herdr namespace required');
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin/herdr'),...args],this.directory,this.environment);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean}={}) {
+    if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
+    const ownedRoot=!!tools || options.ownedReceiverRoot===true;
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
@@ -121,15 +167,15 @@ export class SshFixture {
         environment!.PATH=bin+':/usr/bin:/bin';
       }
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
-      // Only the three-display navigation case shares the existing 600s outer fixture budget.
-      const commandSeconds=options.companion || options.sharedNavigation?companionFixtureBudget/1000:90;
+      // Long-lived UI owners share the existing bounded 600s host fixture budget.
+      const commandSeconds=options.companion || options.sharedNavigation || options.ownedReceiverRoot?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
         `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
         ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
-        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
+        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
         `Banner none`,''].join('\n'),{mode:0o600});
       const arguments_=['-D','-e','-f',config];
       const privateTtyGroup=options.privateTtyGroup===true || !!tools;
@@ -149,8 +195,8 @@ export class SshFixture {
         const groupFile=join(directory,'namespace-group');
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
         let mounts=['--dev-bind','/','/'];
-        if(tools) {
-          // Host root is unmapped in this user namespace; give the companion
+        if(ownedRoot) {
+          // Host root is unmapped in this user namespace; give the receiver/companion
           // an owned root rather than weakening its state-ancestor checks.
           const root=join(directory,'namespace-root');await mkdir(root,{mode:0o700});
           mounts=['--bind',root,'/','--dev-bind','/dev','/dev','--dir','/tmp','--bind',directory,directory];
@@ -171,7 +217,7 @@ export class SshFixture {
         // Herdr shares this owned filesystem while retaining Bun's PID/network
         // namespace, so receiver PID/start records remain directly verifiable.
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
-        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:tools?['--proc','/proc']:[]),'--',sshd,...arguments_]);
+        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,privateTtyGroup,toolNamespace);
@@ -188,8 +234,9 @@ export class SshFixture {
     }
   }
   private async keyOptions(identity=true,port=this.port) {
-    const known=join(this.directory,'known_hosts');
-    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
+    // A later launch must not truncate a trust file another client is reading.
+    const known=join(this.directory,`known_hosts-${randomUUID()}`);
+    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600,flag:'wx'});
     return ['-F','/dev/null','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
       ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none'])];

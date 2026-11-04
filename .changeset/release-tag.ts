@@ -112,7 +112,7 @@ export async function createStableTag(next: Candidate, policy: ReleasePolicy, bu
   requireGate(existing.status === 404, 'cannot inspect tag');
   const created = await request('git/refs', { ref: `refs/tags/${next.tag}`, sha: next.sha });
   if (created.status === 422) return sameCommit(await request(path));
-  requireGate(created.status === 201, 'tag creation failed');
+  requireGate(created.status === 201, `tag creation failed (HTTP ${created.status})`);
   await sameCommit(created);
   return 'created';
 }

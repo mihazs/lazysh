@@ -1,3 +1,4 @@
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import { expect, test } from '@playwright/test';
@@ -5,7 +6,8 @@ import { expect, test } from '@playwright/test';
 const fontFile = new URL('./fixtures/LiberationMono-Regular.ttf', import.meta.url).pathname;
 
 async function preferences(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts', { exact: true }).click();
 }
 
@@ -55,7 +57,8 @@ test('font count is bounded and missing selections report fallback explicitly', 
 
 test('brand, light and dark themes keep controls readable and reset', async ({ page }, testInfo) => {
   await page.goto('/');
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
   const appTheme = page.getByRole('combobox', {name: 'App theme', exact: true});
   await expect(appTheme.locator('option[value="forest"]')).toHaveText('lazysh');
   await expect(page.getByRole('combobox', {name: 'Terminal theme', exact: true})).toHaveValue('forest');
@@ -66,7 +69,9 @@ test('brand, light and dark themes keep controls readable and reset', async ({ p
     expect(contrast.filter(item => item.ratio < 4.5), theme).toEqual([]);
     await page.screenshot({path: testInfo.outputPath(`${theme}-preferences.png`)});
   }
+  await openPreferenceCategory(page,'Reset');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
+  await openPreferenceCategory(page,'Appearance');
   await expect(appTheme).toHaveValue('forest');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'forest');
@@ -80,6 +85,7 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByRole('combobox', {name: 'D-pad left corner', exact: true}).selectOption('custom');
   await page.getByLabel('D-pad left corner chord', {exact: true}).fill('text:/clear');
   await page.getByRole('button', {name: 'Save D-pad left corner chord', exact: true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords', {exact: true}).click();
   await page.getByLabel('Chord name', {exact: true}).fill('Agent pane');
   await page.getByLabel('Key sequence', {exact: true}).fill('F12, M-h');
@@ -92,6 +98,7 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByRole('button', {name: 'Reset gestures', exact: true}).click();
   await expect(page.getByRole('combobox', {name: 'Double tap', exact: true})).toHaveValue('none');
   await expect(page.getByLabel('Double tap chord', {exact: true})).toHaveCount(0);
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords', {exact: true}).click();
   await expect(page.getByText('Agent pane: F12, M-h', {exact: true})).toBeVisible();
 });
@@ -130,7 +137,7 @@ test('long settings use a mobile page with a persistent close action and short c
     }
     await page.setViewportSize({width:393,height:844});
   }else{
-    const bounds=(await dialog.boundingBox())!; expect(bounds.width).toBe(480);expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);
+    const bounds=(await dialog.boundingBox())!; expect(bounds.width).toBe(920);expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);
   }
   await page.screenshot({path:testInfo.outputPath('settings-presentation.png')});
   await close.click(); await page.keyboard.press('Control+k');
@@ -140,4 +147,68 @@ test('long settings use a mobile page with a persistent close action and short c
   if(phone){const bounds=(await choices.boundingBox())!;expect(bounds.y).toBeGreaterThan(0);expect(bounds.y+bounds.height).toBeLessThan(844);}
   await page.screenshot({path:testInfo.outputPath('choice-sheet.png')});
   await page.keyboard.press('Escape');await expect(choices).toHaveCount(0);
+});
+
+
+test('Preferences starts with compact categories at the top and keeps drafts while switching them',async({page},testInfo)=>{
+  await page.goto('/');if(testInfo.project.name==='phone')await page.setViewportSize({width:393,height:852});
+  await (await workspaceControl(page,'Preferences')).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
+  expect(await dialog.locator('[data-settings-page]:visible').count()).toBe(0);
+  await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();
+  await expect(dialog.locator('.settings-index button').first()).toBeInViewport({ratio:0.9});
+  await expect(dialog.locator('.settings-index button').last()).toBeInViewport({ratio:0.9});
+  await page.screenshot({path:testInfo.outputPath('preferences-category-entry.png'),animations:'disabled'});
+  await openPreferenceCategory(page,'Input');await page.getByRole('button',{name:'Text snippets',exact:true}).click();
+  const name=dialog.getByRole('textbox',{name:'Snippet name',exact:true}),text=dialog.getByRole('textbox',{name:'Snippet text',exact:true});
+  await name.fill('Unsent');await text.fill(' exact local draft ');const original=await text.elementHandle();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await openPreferenceCategory(page,'Appearance');await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeVisible();
+  await openPreferenceCategory(page,'Input');await dialog.getByRole('button',{name:'Text snippets',exact:true}).click();await expect(name).toHaveValue('Unsent');await expect(text).toHaveValue(' exact local draft ');
+  expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  const handled=await page.evaluate(()=>{const back=new Event('lazysh-workspace-back',{cancelable:true});window.dispatchEvent(back);return back.defaultPrevented;});
+  expect(handled).toBe(true);
+  await expect(dialog.getByRole('button',{name:'Text snippets',exact:true})).toBeFocused();
+  await dialog.getByRole('button',{name:'Close Preferences',exact:true}).focus();
+  await page.keyboard.press('Escape');
+  await expect(dialog.getByRole('button',{name:'Keyboard and gestures',exact:true})).toBeFocused();
+  await openPreferenceCategory(page,'Appearance');
+  if(testInfo.project.name==='desktop'){
+    const language=dialog.locator('.settings-index').getByRole('button',{name:'Language and region',exact:true});
+    await expect(language).toBeVisible();await language.focus();await page.keyboard.press('Shift+Tab');
+    await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  }
+  await page.emulateMedia({reducedMotion:'reduce',forcedColors:'active'});
+  await expect(dialog.locator('[data-settings-page="appearance"]')).toHaveCSS('animation-name','none');
+  await expect(dialog.locator('.settings-detail-header')).toHaveCSS('backdrop-filter','none');
+  for(const width of [320,600,768,1280]){
+    await page.setViewportSize({width,height:852});
+    await dialog.locator('.settings-navigation').evaluate(node=>{(node as HTMLElement).style.fontSize='20px';});
+    expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+    await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeInViewport();
+  }
+  await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+});
+
+test('control contrast composites translucent text and ancestor groups on solid reading surfaces',async({page})=>{
+  await page.setContent(`<main style="background:black;color:white">
+    <p>Opaque positive</p>
+    <p style="color:rgb(255 255 255 / 10%)">Transparent foreground</p>
+    <div style="opacity:.1"><p>Transparent group</p></div>
+    <div style="opacity:.5;background:white"><div style="background:rgb(0 0 0 / 50%)"><p style="color:black">Nested layers</p></div></div>
+    <p style="opacity:.5">Excluded leaf</p>
+  </main>`);
+  const samples=await page.locator('main').evaluate(controlContrast);
+  expect(samples.map(sample=>sample.text)).not.toContain('Excluded leaf');
+  expect(samples.find(sample=>sample.text==='Opaque positive')!.ratio).toBe(21);
+  for(const text of ['Transparent foreground','Transparent group'])expect.soft(samples.find(sample=>sample.text===text)!.ratio,text).toBeLessThan(1.3);
+  // Black text stays black over the outer black; the white panel is first
+  // dimmed by its 50%-black child, then the whole group is composited at 50%.
+  const layered=samples.find(sample=>sample.text==='Nested layers')!.ratio;
+  expect.soft(layered).toBeGreaterThan(1.9);expect.soft(layered).toBeLessThan(2.1);
 });

@@ -57,11 +57,61 @@ remains separate work in [issue #490](https://github.com/mihazs/lazysh/issues/49
 
 ## Android
 
+### Preferred: Obtainium
+
+[Obtainium](https://github.com/ImranR98/Obtainium) installs and tracks APK updates
+from release pages. It is the preferred Android installation method for lazysh.
+It uses the same GitHub APKs as manual downloads, not a separate signing channel.
+This recommendation does not claim that installation or cross-version updates
+through Obtainium have been device-tested in this documentation change.
+
+1. Install Obtainium from its [official project](https://github.com/ImranR98/Obtainium#installation).
+2. In Obtainium, add the source URL `https://github.com/mihazs/lazysh` using its
+   GitHub source. Leave prerelease inclusion **off** for the published release
+   channel; a stable GitHub tag still describes a development-preview app.
+3. Choose **one** APK flavor using the APK/link regular-expression filter
+   (wording varies by Obtainium version). Use `lazysh-.*-android-foss-arm64\.apk$`
+   for FOSS, or `lazysh-.*-android-google-arm64\.apk$` for Google. These expressions
+   match APK asset names and download URLs. Do not use the release-title filter.
+4. Before installing, check that the selected release has the intended version,
+   ARM64 architecture and flavor. Review its `release.json`, `SHA256SUMS`, release
+   notes and signing status. If there is no matching APK, stop and check the
+   release; do not install a debug/CI artifact as a fallback.
+5. Allow Android's **Install unknown apps** permission for Obtainium when prompted,
+   then confirm installation. Restrict that permission when it is no longer
+   needed; later updates may require granting it again. Keep normal Android
+   package/signature checks and explicit user confirmation.
+6. Let Obtainium check that same source for future releases and review updates
+   before installing. Keep the chosen flavor and certificate. Back up/export
+   important data before an upgrade. A signature mismatch is not fixed safely
+   by blindly uninstalling; uninstalling can remove local data and credentials.
+
+The FOSS and Google builds share an application ID and cannot coexist. Switching
+flavors can change notification setup and is not a promised compatible migration,
+even if Android accepts the certificate. A future F-Droid-signed build is a
+separate channel. Do not enable root/silent installers or bypass signature
+verification to follow this guide. GitHub API rate limiting may delay Obtainium
+checks; wait or follow its [source troubleshooting](https://wiki.obtainium.imranr.dev/sources/)
+rather than sharing a repository token in a report.
+
+### Manual APK installation and verification
+
 Use the ARM64 release APK for a compatible Android 7.0/API24 or newer device.
 The Google and FOSS builds use the same application ID and cannot coexist.
 The FOSS build excludes Firebase/GMS; a compatible UnifiedPush distributor and
 self-hosted service are separate setup requirements. It must not be described as
 complete remote-notification parity while #344 remains open.
+
+For a manually downloaded APK, save `SHA256SUMS` from the **same release** and
+check the exact file before opening it. For example, on Linux use
+`sha256sum lazysh-1.4.1-android-foss-arm64.apk`, on macOS use
+`shasum -a 256 lazysh-1.4.1-android-foss-arm64.apk`, or in PowerShell use
+`Get-FileHash .\lazysh-1.4.1-android-foss-arm64.apk -Algorithm SHA256`.
+Replace the example version/flavor with your downloaded file and compare the
+complete result with that file's SHA256SUMS entry and release manifest. This
+manual comparison is not a claim that Obtainium automatically enforces the
+release's SHA256SUMS. A matching hash verifies bytes against the published hash;
+it does not independently establish publisher identity or native correctness.
 
 Allow installation from the browser/file manager used to open the APK, install,
 then turn that permission off if no longer needed. Future APK updates must have
@@ -94,6 +144,11 @@ verifying the source and checksum. A later signed channel must document its
 publisher certificate. Never disable system-wide security protection to install.
 
 ## macOS
+
+Public macOS application packages are currently deferred; use a source build.
+macOS companion executables are separate host tools, not a desktop app installer.
+The following DMG guidance applies only if a future release explicitly provides
+that verified package and its signing status.
 
 Choose Apple Silicon or Intel as appropriate. Open the DMG and copy the app into
 Applications, replacing the previous app while preserving its user data. An

@@ -109,7 +109,7 @@ export function parseTranscript(value: unknown): Page {
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new LocalUiError('chatInvalidToolStatus');
-      if (block.isError !== undefined && ((page.agent !== 'claude'
+      if (block.isError !== undefined && ((page.agent !== 'claude' && !(page.agent==='codex' && page.view==='active_branch')
         && !(page.agent === 'pi' && page.view === 'record_stream' && message.role === 'tool'))
         || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
         throw new LocalUiError('chatInvalidToolError');
@@ -193,7 +193,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
-  const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
+  const conversation = ['claude','codex'].includes(opened?.agent??'') && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
@@ -280,7 +280,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
-          ...(view === "conversation" && ["claude", "grok-acp"].includes(agent) ? { view } : {}),
+          ...(view === "conversation" && ["claude", "grok-acp", "codex"].includes(agent) ? { view } : {}),
         }
       : opened;
     if (!source) return;
@@ -379,7 +379,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             ))}
           </select>
         </label>
-        {["claude", "grok-acp"].includes(agent) && (
+        {["claude", "grok-acp", "codex"].includes(agent) && (
           <label>
             {t("chatView")}
             <select
@@ -474,7 +474,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           followRef.current = event.target.checked; setFollowing(event.target.checked);
           if (!event.target.checked && automaticRequest.current) request.current++;
           if (event.target.checked) setError('');
-        }} />{t(recorded ? "chatRecordedFollow" : "chatFollow")}</label>
+        }} />{t(recorded ? "chatRecordedFollow" : opened?.agent==='codex' ? "chatCodexFollow" : "chatFollow")}</label>
         <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
         {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use lazysh_notifications::{client, Config, Event, Kind, Service};
+use lazysh_notifications::{client, Config, DestinationFormat, Event, Kind, Service};
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
@@ -21,6 +21,19 @@ enum State {
     Working,
     NeedsAttention,
     Done,
+}
+#[derive(clap::Args)]
+struct DestinationArgs {
+    #[arg(long)]
+    data_dir: PathBuf,
+    #[arg(long)]
+    admin_file: PathBuf,
+    #[arg(long)]
+    destination_file: PathBuf,
+    #[arg(long)]
+    destination_token_file: PathBuf,
+    #[arg(long, value_enum, default_value = "webhook")]
+    destination_format: DestinationFormat,
 }
 #[derive(Subcommand)]
 enum Command {
@@ -72,26 +85,14 @@ enum Command {
         output: PathBuf,
     },
     Serve {
-        #[arg(long)]
-        data_dir: PathBuf,
-        #[arg(long)]
-        admin_file: PathBuf,
-        #[arg(long)]
-        destination_file: PathBuf,
-        #[arg(long)]
-        destination_token_file: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
         #[arg(long, default_value = "127.0.0.1:7350")]
         listen: SocketAddr,
     },
     ConfigureDestination {
-        #[arg(long)]
-        data_dir: PathBuf,
-        #[arg(long)]
-        admin_file: PathBuf,
-        #[arg(long)]
-        destination_file: PathBuf,
-        #[arg(long)]
-        destination_token_file: PathBuf,
+        #[command(flatten)]
+        destination: DestinationArgs,
     },
     SourceCreate {
         #[arg(long)]
@@ -148,11 +149,22 @@ enum Command {
         receipt_id: Uuid,
     },
 }
-fn config(dir: PathBuf, admin: PathBuf, url: PathBuf, key: PathBuf) -> Result<Config, String> {
-    let admin = client::read_token(&admin)?;
-    let url = lazysh_common::service_secrets::read_secret(&url)?;
-    let key = client::read_token(&key)?;
-    Config::new(dir, admin.trim(), url.trim(), key.trim())
+fn config(args: DestinationArgs) -> Result<Config, String> {
+    let admin = client::read_token(&args.admin_file)?;
+    let url = lazysh_common::service_secrets::read_secret(&args.destination_file)?;
+    let key = match args.destination_format {
+        DestinationFormat::Webhook => client::read_token(&args.destination_token_file)?,
+        DestinationFormat::Gotify => {
+            lazysh_common::service_secrets::read_secret(&args.destination_token_file)?
+        }
+    };
+    Config::with_format(
+        args.data_dir,
+        admin.trim(),
+        url.trim(),
+        key.trim(),
+        args.destination_format,
+    )
 }
 fn print(value: impl serde::Serialize) -> Result<(), String> {
     println!(
@@ -268,35 +280,11 @@ async fn run() -> Result<(), String> {
             print(serde_json::json!({"created":true}))
         }
         Command::Serve {
-            data_dir,
-            admin_file,
-            destination_file,
-            destination_token_file,
+            destination,
             listen,
-        } => {
-            serve(
-                config(
-                    data_dir,
-                    admin_file,
-                    destination_file,
-                    destination_token_file,
-                )?,
-                listen,
-            )
-            .await
-        }
-        Command::ConfigureDestination {
-            data_dir,
-            admin_file,
-            destination_file,
-            destination_token_file,
-        } => {
-            Service::reconfigure(config(
-                data_dir,
-                admin_file,
-                destination_file,
-                destination_token_file,
-            )?)?;
+        } => serve(config(destination)?, listen).await,
+        Command::ConfigureDestination { destination } => {
+            Service::reconfigure(config(destination)?)?;
             print(serde_json::json!({"configured":true,"enabled":false}))
         }
         Command::SourceCreate {
@@ -390,5 +378,78 @@ async fn main() {
     if let Err(error) = run().await {
         eprintln!("lazysh-notifications: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destination_format_defaults_to_webhook_and_requires_explicit_gotify() {
+        for command in ["serve", "configure-destination"] {
+            let args = [
+                "lazysh-notifications",
+                command,
+                "--data-dir",
+                "/owned/state",
+                "--admin-file",
+                "/owned/admin",
+                "--destination-file",
+                "/owned/url",
+                "--destination-token-file",
+                "/owned/key",
+            ];
+            let format = |command: Command| match command {
+                Command::Serve { destination, .. }
+                | Command::ConfigureDestination { destination } => destination.destination_format,
+                _ => panic!("wrong command"),
+            };
+            assert!(matches!(
+                format(Cli::try_parse_from(args).unwrap().command),
+                DestinationFormat::Webhook
+            ));
+            assert!(matches!(
+                format(
+                    Cli::try_parse_from(args.into_iter().chain(["--destination-format", "gotify"]))
+                        .unwrap()
+                        .command
+                ),
+                DestinationFormat::Gotify
+            ));
+            assert!(Cli::try_parse_from(
+                args.into_iter().chain(["--destination-format", "unknown"])
+            )
+            .is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gotify_config_reads_private_opaque_application_token_instead_of_a_relay_capability() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let admin = directory.path().join("admin");
+        let url = directory.path().join("url");
+        let token = directory.path().join("token");
+        client::write_private(
+            &admin,
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        client::write_private(&url, b"https://gotify.example/message\n").unwrap();
+        client::write_private(&token, b"opaque-gotify-app-token\n").unwrap();
+        let load = |destination_format| {
+            config(DestinationArgs {
+                data_dir: directory.path().join("state"),
+                admin_file: admin.clone(),
+                destination_file: url.clone(),
+                destination_token_file: token.clone(),
+                destination_format,
+            })
+        };
+        assert!(load(DestinationFormat::Gotify).is_ok());
+        assert!(load(DestinationFormat::Webhook).is_err());
     }
 }

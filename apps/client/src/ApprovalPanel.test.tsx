@@ -98,3 +98,30 @@ it.each(['accepted','rejected'])('retires an old hidden decision %s without chan
   const decisions=vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval');
   expect(decisions).toHaveLength(1);expect(decisions[0][1]).toMatchObject({sessionId:'original-ssh',agentSessionId:request.sessionId,id:request.id,expectedHash:request.expectedHash});
 });
+
+it('keeps empty board approvals compact while polling and reveals real requests and failures immediately',async()=>{
+  vi.useFakeTimers();
+  try {
+    let result:unknown={schemaVersion:1,requests:[]};
+    vi.mocked(invoke).mockImplementation(async command=>{
+      if(command==='agent_approvals'){if(result instanceof Error)throw result;return result;}
+      return {schemaVersion:1,accepted:true};
+    });
+    render(<ApprovalPanel sessionId="compact-approvals" compactEmpty/>);
+    await act(async()=>{});expect(screen.queryByRole('region')).toBeNull();
+    result={schemaVersion:1,requests:[request]};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
+    expect(screen.getByRole('button',{name:'Allow this request'})).toBeTruthy();
+    expect(screen.getByText('Bash',{exact:false})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Deny request'}));await act(async()=>{});
+    expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',expect.objectContaining({id:request.id,expectedHash:request.expectedHash,decision:'deny'}),expect.anything());
+    expect(screen.queryByRole('region')).toBeNull();
+    result=new Error('Owned approval reader unavailable');
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
+    expect(screen.getByRole('alert')).toHaveProperty('textContent','Owned approval reader unavailable');
+    result={schemaVersion:1,requests:[]};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
+    expect(screen.queryByRole('region')).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='agent_approvals')).toHaveLength(4);
+  } finally {vi.useRealTimers();}
+});

@@ -11,6 +11,7 @@ import {pushStatus as off} from './test/pushData';
 it.each(['fcm','unifiedpush'])('requires explicit %s consent and never registers during mount', async provider => {
   vi.mocked(invoke).mockResolvedValue({...off,provider});
   render(<PushSettingsPanel />);
+  if(provider==='unifiedpush')fireEvent.click(await screen.findByText('Registration only (optional)'));
   const button = await screen.findByRole('button', { name: 'Register this device' });
   expect(button).toHaveProperty('disabled', true);
   expect(vi.mocked(invoke).mock.calls).toEqual([['push_registration_status', undefined, {headers:{'X-Lazysh-Access':expect.any(String)}}]]);
@@ -113,4 +114,145 @@ it('can pause pending native enrollment and discards its late success',async()=>
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('push_registration_disable',undefined,{headers:{'X-Lazysh-Access':expect.any(String)}}));
   finish({...unified,enabled:true,reason:'Stale private confirmation'});
   await waitFor(()=>expect(screen.queryByText('Stale private confirmation')).toBeNull());
+});
+
+it('offers UnifiedPush on an unconfigured Google build without registering implicitly',async()=>{
+  const google={...off,configured:false,availableProviders:['unifiedpush','fcm'],reason:'No Firebase configuration'};
+  vi.mocked(invoke).mockResolvedValueOnce(google).mockResolvedValue({...google,provider:'unifiedpush',configured:true,reason:'Choose your distributor'});
+  render(<PushSettingsPanel/>);
+  const services=await screen.findByRole('combobox',{name:'Push service'});
+  expect(services).toHaveProperty('disabled',false);
+  fireEvent.change(services,{target:{value:'unifiedpush'}});
+  await screen.findByText('Choose your distributor');
+  expect(invoke).toHaveBeenLastCalledWith('push_registration_provider',{provider:'unifiedpush'},{headers:{'X-Lazysh-Access':expect.any(String)}});
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',false);
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByText(/configure your server in the ntfy distributor/)).toBeDefined();
+});
+it.each([{enabled:true},{tokenPresent:true},{busy:true}])('keeps provider selection unavailable while native state is active: %j',async state=>{
+  vi.mocked(invoke).mockResolvedValue({...off,availableProviders:['unifiedpush','fcm'],...state});
+  render(<PushSettingsPanel/>);
+  expect(await screen.findByRole('combobox',{name:'Push service'})).toHaveProperty('disabled',true);
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+it('clears old consent when a provider change succeeds natively but its response is lost',async()=>{
+  const initial={...off,availableProviders:['unifiedpush','fcm']};
+  const recovered={...initial,provider:'unifiedpush',reason:'Recovered UnifiedPush status'};
+  vi.mocked(invoke).mockResolvedValueOnce(initial)
+    .mockRejectedValueOnce(new Error('PRIVATE_LOST_PROVIDER_RESPONSE')).mockResolvedValueOnce(recovered);
+  render(<PushSettingsPanel/>);
+  const services=await screen.findByRole('combobox',{name:'Push service'});
+  await waitFor(()=>expect(services).toHaveProperty('disabled',false));
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',true);
+  fireEvent.change(services,{target:{value:'unifiedpush'}});
+  await screen.findByText('Recovered UnifiedPush status');
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',false);
+  expect(screen.getByRole('button',{name:'Connect or resume delivery service'})).toHaveProperty('disabled',true);
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual([
+    'push_registration_status','push_registration_provider','push_registration_status',
+  ]);
+  expect(document.body.textContent).not.toContain('PRIVATE_LOST_PROVIDER_RESPONSE');
+});
+
+it('exposes retained FCM revocation limits and blocks switching when configuration is missing',async()=>{
+  const reason='Saved FCM registration is retained. Use a build configured for the original Firebase project to revoke it before switching services.';
+  vi.mocked(invoke).mockResolvedValue({...off,configured:false,tokenPresent:true,availableProviders:['unifiedpush','fcm'],reason});
+  render(<PushSettingsPanel/>);
+  expect(await screen.findByRole('combobox',{name:'Push service'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('status').textContent).toBe(reason);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  expect(screen.getByRole('button',{name:'Retry token revocation'})).toHaveProperty('disabled',false);
+});
+
+it('keeps provider consent before every setup action and help does not contact a service',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...off,provider:'unifiedpush',displaySupported:true});
+  render(<PushSettingsPanel/>);
+  const consent=await screen.findByRole('checkbox');
+  const connect=screen.getByRole('button',{name:'Connect or resume delivery service'});
+  expect(consent.compareDocumentPosition(connect)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(connect).toHaveProperty('disabled',true);
+  const help=screen.getByText('Setup and privacy details').closest('details')!;
+  expect(help.open).toBe(false);fireEvent.click(screen.getByText('Setup and privacy details'));
+  expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
+  expect(screen.getByText(/Connect delivery/)).toBeTruthy();
+});
+
+it('makes private enrollment the first off-state action and never registers separately',async()=>{
+  const initial={...off,provider:'unifiedpush'};
+  vi.mocked(invoke).mockResolvedValueOnce(initial).mockResolvedValue({...initial,enabled:true,tokenPresent:true,displaySupported:true,reason:'Relay verified'});
+  render(<PushSettingsPanel/>);
+  const connect=await screen.findByRole('button',{name:'Connect or resume delivery service'});
+  expect(connect.closest('details')).toBeNull();
+  expect(connect).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(connect);
+  await screen.findByText('Relay verified');
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_enroll']);
+  expect(screen.getByRole('button',{name:'Review remote notification display'})).toBeTruthy();
+});
+it('explains the distributor prerequisite when registration is unavailable and refresh is read-only',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...off,provider:'unifiedpush',configured:false,reason:'Distributor missing'});
+  render(<PushSettingsPanel/>);
+  await screen.findByText('Distributor missing');
+  expect(screen.getByText(/Install and open a UnifiedPush distributor, such as ntfy/).closest('details')).toBeNull();
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  expect(screen.queryByRole('button',{name:'Connect or resume delivery service'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Refresh registration status'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(invoke).mock.calls.every(call=>call[0]==='push_registration_status')).toBe(true);
+});
+it('requires explicit pause of standalone registration before starting fresh relay enrollment',async()=>{
+  const fresh={...off,provider:'unifiedpush'};
+  vi.mocked(invoke).mockResolvedValueOnce({...fresh,enabled:true,tokenPresent:true,displaySupported:false})
+    .mockResolvedValueOnce(fresh).mockResolvedValueOnce({...fresh,enabled:true,tokenPresent:true,displaySupported:true,reason:'Connected after cleanup'});
+  render(<PushSettingsPanel/>);
+  const pause=await screen.findByRole('button',{name:'Pause and remove registration'});
+  expect(screen.getByText('Pause registration and finish cleanup before starting a new relay connection.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Connect or resume delivery service'})).toBeNull();
+  fireEvent.click(pause);
+  const connect=await screen.findByRole('button',{name:'Connect or resume delivery service'});
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked',false);
+  fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(connect);
+  await screen.findByText('Connected after cleanup');
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_disable','push_registration_enroll']);
+});
+it('retains partial UnifiedPush recovery and cleanup without inferring an empty registration',async()=>{
+  const partial={...off,provider:'unifiedpush',tokenPresent:true,availableProviders:['unifiedpush','fcm'],reason:'Private setup retained'};
+  vi.mocked(invoke).mockResolvedValueOnce(partial).mockRejectedValueOnce(new Error('PRIVATE_NATIVE_REJECTION')).mockResolvedValueOnce(partial);
+  render(<PushSettingsPanel/>);
+  const connect=await screen.findByRole('button',{name:'Connect or resume delivery service'});
+  expect(connect.closest('details')?.open).toBe(true);
+  expect(screen.getByRole('combobox',{name:'Push service'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Retry registration cleanup'})).toBeTruthy();
+  expect(invoke).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(connect);
+  await screen.findByRole('alert');
+  expect(screen.getByRole('status').textContent).toBe('Private setup retained');
+  expect(screen.getByRole('button',{name:'Retry registration cleanup'})).toBeTruthy();
+  expect(document.body.textContent).not.toContain('PRIVATE_NATIVE_REJECTION');
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_enroll','push_registration_status']);
+});
+
+
+it.each(['fcm','unifiedpush','apns'])('keeps %s privacy before consent, then available in healthy setup details without native calls',async provider=>{
+  vi.mocked(invoke).mockResolvedValueOnce({...off,provider}).mockResolvedValue({...off,provider,enabled:true,tokenPresent:true});
+  render(<PushSettingsPanel/>);
+  const consent=await screen.findByRole('checkbox');
+  const notice=screen.getByText(/This control does not upload SSH credentials/);
+  const original=notice.textContent;
+  expect(notice.closest('details')).toBeNull();
+  expect(notice.compareDocumentPosition(consent)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(consent).toHaveProperty('checked',false);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh registration status'}));
+  await screen.findByRole('button',{name:provider==='apns'?'Disable APNs registration':provider==='unifiedpush'?'Pause and remove registration':'Pause and revoke token'});
+  const retained=screen.getByText(original!);
+  const help=screen.getByText('Setup and privacy details').closest('details')!;
+  expect(retained.closest('details')).toBe(help);
+  expect(help.open).toBe(false);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  fireEvent.click(screen.getByText('Setup and privacy details'));
+  expect(help.open).toBe(true);
+  expect(retained.textContent).toBe(original);
+  expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_status']);
 });

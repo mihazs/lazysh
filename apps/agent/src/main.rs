@@ -119,7 +119,7 @@ enum Command {
     GeminiConfig,
     /// Print a standalone Droid hooks.json fragment; never changes settings.
     DroidConfig,
-    /// Print a Kimi TOML hook fragment; never changes settings.
+    /// Print legacy Kimi CLI 1.52 TOML hooks; never changes settings. Kimi Code 2.4 lifecycle is unqualified.
     KimiConfig,
     /// Print a Copilot CLI hook fragment; never changes settings.
     CopilotConfig,

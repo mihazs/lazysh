@@ -123,6 +123,16 @@ test('create-only tag uses the exact validated source SHA', async () => {
     { path: 'git/refs', body: { ref: `refs/tags/${next.tag}`, sha } },
   ]);
 });
+test('tag creation failure retains only its closed HTTP status', async () => {
+  const refused = response({ message: 'PRIVATE_RESPONSE_BODY', token: 'PRIVATE_TOKEN' }, 403);
+  refused.headers.set('X-Private', 'PRIVATE_RESPONSE_HEADER');
+  const api = requests([main(), response({}, 404), refused]);
+  await expect(createStableTag(next, active, 'success', api.request)).rejects.toMatchObject({
+    message: 'Release gate: tag creation failed (HTTP 403)',
+  });
+  expect(refused.bodyUsed).toBe(false);
+  expect(api.calls).toHaveLength(3);
+});
 test.each([false, true])('same-commit retry is idempotent, including concurrent create: %s', async race => {
   const api = requests([main(), ...(race ? [response({}, 404), response({}, 422)] : []), response(ref())]);
   expect(await createStableTag(next, active, 'success', api.request)).toBe('existing');
@@ -244,6 +254,23 @@ test('current-main admission accepts same-version first-parent progress, rejects
     git('commit', '-m', 'test: replace history');
     await expect(requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'))).rejects.toThrow('first-parent');
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('source build frees only unused host toolchains before pulling the pinned container', async () => {
+  const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
+  const job = workflow.jobs['source-build'], steps = job.steps;
+  const cleanup = steps.find((step: any) => step.name === 'Reclaim unused host toolchains for container build');
+  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(cleanup?.run?.split('\n').map((line: string) => line.trim()).filter((line: string) => line && !line.startsWith('#'))).toEqual([
+    'df -h /',
+    'sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup',
+    'df -h /',
+  ]);
+  const provision = steps.find((step: any) => step.name === 'Provision owned official buildserver container');
+  expect(steps.indexOf(cleanup)).toBe(steps.indexOf(provision) - 1);
+  expect(provision.run).toContain('registry.gitlab.com/fdroid/fdroidserver@sha256:1ea8bef1820bff06c2974e31b4fc4c79c364cd24231b86e71fa4b926797e0dac');
+  expect(provision.run).toContain('--env ANDROID_HOME=/opt/android-sdk');
+  expect(provision.run).toContain('sdkmanager "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"');
 });
 
 test('workflow isolates write token after successful source and binary acceptance', async () => {

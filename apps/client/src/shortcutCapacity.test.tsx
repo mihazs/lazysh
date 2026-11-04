@@ -24,7 +24,9 @@ describe('non-tiered shortcut collections',()=>{
   it.each(['chords','snippets'] as const)('adds and retains a thirteenth %s entry through the real Preferences controls',kind=>{
     savePreferences({...defaults,...collection(12)});
     render(<PreferencesPanel/>);
+    fireEvent.click(screen.getByText('Keyboard and gestures'));
     const chord=kind==='chords';
+    fireEvent.click(screen.getByText(chord?'Keyboard chords':'Text snippets',{exact:true}));
     const name=screen.getByLabelText(chord?'Chord name':'Snippet name');
     const input=screen.getByLabelText(chord?'Key sequence':'Snippet text');
     fireEvent.change(name,{target:{value:'Thirteenth'}});
@@ -37,6 +39,8 @@ describe('non-tiered shortcut collections',()=>{
   it('keeps the saved collection and snippet draft when device storage refuses a write',()=>{
     savePreferences({...defaults,...collection(12)});
     render(<PreferencesPanel/>);
+    fireEvent.click(screen.getByText('Keyboard and gestures'));
+    fireEvent.click(screen.getByText('Text snippets',{exact:true}));
     fireEvent.change(screen.getByLabelText('Snippet name'),{target:{value:'Unsaved'}});
     fireEvent.change(screen.getByLabelText('Snippet text'),{target:{value:' retained draft '}});
     vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new DOMException('full','QuotaExceededError');});

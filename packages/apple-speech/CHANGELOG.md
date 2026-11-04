@@ -1,5 +1,245 @@
 # @lazysh/apple-speech
 
+## 1.10.3
+
+### Patch Changes
+
+- @lazysh/common@1.10.3
+
+## 1.10.2
+
+### Patch Changes
+
+- @lazysh/common@1.10.2
+
+## 1.10.1
+
+### Patch Changes
+
+- @lazysh/common@1.10.1
+
+## 1.10.0
+
+### Patch Changes
+
+- @lazysh/common@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- @lazysh/common@1.9.11
+
+## 1.9.10
+
+### Patch Changes
+
+- @lazysh/common@1.9.10
+
+## 1.9.9
+
+### Patch Changes
+
+- @lazysh/common@1.9.9
+
+## 1.9.8
+
+### Patch Changes
+
+- @lazysh/common@1.9.8
+
+## 1.9.7
+
+### Patch Changes
+
+- @lazysh/common@1.9.7
+
+## 1.9.6
+
+### Patch Changes
+
+- @lazysh/common@1.9.6
+
+## 1.9.5
+
+### Patch Changes
+
+- @lazysh/common@1.9.5
+
+## 1.9.4
+
+### Patch Changes
+
+- @lazysh/common@1.9.4
+
+## 1.9.3
+
+### Patch Changes
+
+- @lazysh/common@1.9.3
+
+## 1.9.2
+
+### Patch Changes
+
+- @lazysh/common@1.9.2
+
+## 1.9.1
+
+### Patch Changes
+
+- @lazysh/common@1.9.1
+
+## 1.9.0
+
+### Patch Changes
+
+- @lazysh/common@1.9.0
+
+## 1.8.4
+
+### Patch Changes
+
+- @lazysh/common@1.8.4
+
+## 1.8.3
+
+### Patch Changes
+
+- @lazysh/common@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- @lazysh/common@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- @lazysh/common@1.8.1
+
+## 1.8.0
+
+### Patch Changes
+
+- @lazysh/common@1.8.0
+
+## 1.7.8
+
+### Patch Changes
+
+- @lazysh/common@1.7.8
+
+## 1.7.7
+
+### Patch Changes
+
+- @lazysh/common@1.7.7
+
+## 1.7.6
+
+### Patch Changes
+
+- @lazysh/common@1.7.6
+
+## 1.7.5
+
+### Patch Changes
+
+- @lazysh/common@1.7.5
+
+## 1.7.4
+
+### Patch Changes
+
+- @lazysh/common@1.7.4
+
+## 1.7.3
+
+### Patch Changes
+
+- @lazysh/common@1.7.3
+
+## 1.7.2
+
+### Patch Changes
+
+- @lazysh/common@1.7.2
+
+## 1.7.1
+
+### Patch Changes
+
+- @lazysh/common@1.7.1
+
+## 1.7.0
+
+### Patch Changes
+
+- @lazysh/common@1.7.0
+
+## 1.6.0
+
+### Patch Changes
+
+- @lazysh/common@1.6.0
+
+## 1.5.5
+
+### Patch Changes
+
+- @lazysh/common@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- @lazysh/common@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- @lazysh/common@1.5.3
+
+## 1.5.2
+
+### Patch Changes
+
+- @lazysh/common@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/common@1.5.1
+
+## 1.5.0
+
+### Patch Changes
+
+- @lazysh/common@1.5.0
+
+## 1.4.2
+
+### Patch Changes
+
+- @lazysh/common@1.4.2
+
+## 1.4.1
+
+### Patch Changes
+
+- @lazysh/common@1.4.1
+
+## 1.4.0
+
+### Patch Changes
+
+- @lazysh/common@1.4.0
+
 ## 1.3.3
 
 ### Patch Changes

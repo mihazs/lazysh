@@ -1,12 +1,13 @@
 import {expect,test} from 'bun:test';
-import {chmod,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
-import {sshCommand} from './support/sshFixture';
+import {sshCommand,receiverProbeErrors} from './support/sshFixture';
+import {identity,reportOwnedTeardownFailure} from './support/ownedProcess';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -21,7 +22,16 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
     const output=await client.finish('actual SSH shell',5000);
     expect(output).toContain(fixture.prompt);
     expect(output).toContain(fixture.expected);
+    const trustOption=client.child.spawnargs.find(value=>value.startsWith('UserKnownHostsFile='));
+    expect(trustOption).toBeDefined();
+    const trust=trustOption!.slice('UserKnownHostsFile='.length);
+    expect(trust.startsWith(`${fixture.directory}/`)).toBe(true);
+    expect((await stat(trust)).mode&0o777).toBe(0o600);
+    const pin=await readFile(trust);
+    await chmod(trust,0o400);
     const rejected=await fixture.client(false);
+    expect(await readFile(trust)).toEqual(pin);
+    expect((await stat(trust)).mode&0o777).toBe(0o400);
     await expect(rejected.finish('no ephemeral credential',5000)).rejects.toThrow('Owned fixture failed: no ephemeral credential');
   } finally {await fixture.stop();}
   expect(await listening(port)).toBe(false);
@@ -146,6 +156,18 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app perform
   await androidSshAcceptance();
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')('actual Android packaged D-pad pans one held native pointer and stops its original SSH receiver',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true);
+},610_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')('actual Android packaged terminal sends native IME transactions once through its original SSH receiver',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true);
+},610_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')('actual Android manual Mosh attachment uploads a large valid PNG and preserves a pre-existing destination',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,true);
+},610_000);
+
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android Mosh survives busy background with the same owned shell and releases its last worker',async()=>{
   await androidSshAcceptance(undefined,undefined,false,true);
 },610_000);
@@ -158,6 +180,7 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
 for(const mosh of [false,true]) {
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN || (mosh && !process.env.LAZYSH_NATIVE_MOSH_SERVER))(`owned Herdr ${mosh?'Mosh':'SSH'} exec reads its real companion transcript in the private namespace`,async()=>{
   const owned=await HerdrFixture.start(herdrTools(),mosh?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined);
+  let primary=false;
   try {
     if(mosh) {
       const server=await owned.ssh.client(true,'mosh-server --version');
@@ -171,7 +194,7 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
     expect(await readFile(join(owned.ssh.directory,'sshd_config'),'utf8')).toContain('timeout --kill-after=1s 90s');
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
-    const {agent}=owned.metadata();
+    const {agent,history}=owned.metadata();
     const remote=await owned.ssh.client(true,`herdr --session '${owned.name}' api snapshot`);
     const remoteSnapshot=JSON.parse(await remote.finish('owned SSH-visible Herdr snapshot',5000)).result?.snapshot;
     expect(remoteSnapshot?.focused_pane_id===agent.paneId
@@ -195,12 +218,125 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
       terminal_id:agent.terminalId,workspace_id:agent.workspaceId,tab_id:agent.tabId});
     const reports=await owned.ssh.client(true,'lazysh-agent snapshot --limit 50');
     expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
+    expect(history?.paneId).not.toBe(agent.paneId);
+    expect(snapshot.focused_pane_id).toBe(agent.paneId);
+    expect(await owned.history()).toMatchObject({offset:0,newTail:true});
+    await expect(owned.expectHistoryScrolled()).rejects.toThrow('Owned remote history did not scroll and restore');
+    // This controls only the real host readback contract, never the native swipe oracle.
+    await owned.run(['tab','focus',history!.tabId]);
+    const client=new OwnedProcess('/usr/bin/script',['-q','-e','-f','-c',
+      `stty rows 24 cols 80; exec '${owned.ssh.directory}/bin/herdr' --session '${owned.name}'`,'/dev/null'],
+      owned.ssh.directory,owned.ssh.environment,false);
+    let attachPrimary=false;
+    try {
+      const deadline=performance.now()+3000;
+      while((await owned.history()).rows!==23) {
+        expect(performance.now()).toBeLessThan(deadline);
+        if(!await client.liveIdentity())throw new Error('Owned Herdr attach client closed');
+        await Bun.sleep(10);
+      }
+      expect(await owned.history(8)).toMatchObject({offset:8,newTail:false});
+      await owned.run(['tab','focus',agent.tabId]);await owned.expectHistoryScrolled();
+      await owned.run(['tab','focus',history!.tabId]);
+      await expect(owned.expectHistoryScrolled()).rejects.toThrow('Owned remote history did not scroll and restore');
+      expect(await owned.history()).toMatchObject({offset:8,newTail:false});
+    } catch(error){attachPrimary=true;throw error;}
+    finally {
+      try{await client.stop();}
+      catch(error){
+        await reportOwnedTeardownFailure(client,'attach-stop');
+        if(!attachPrimary)throw error;
+        try{console.error('Owned attach cleanup failed after primary failure');}catch{/* Preserve primary. */}
+      }
+    }
+    expect(await owned.history()).toMatchObject({offset:8,newTail:false});
+    await owned.run(['tab','focus',agent.tabId]);await owned.expectHistoryScrolled();
+    await expect(owned.history(513)).rejects.toThrow('Owned history request invalid');
     await owned.expectBytes(Buffer.alloc(0));
-  } finally {await owned.stop();}
+  } catch(error){primary=true;throw error;}
+  finally {
+    try{await owned.stop();}
+    catch(error){
+      if(!primary)throw error;
+      try{console.error('Owned Herdr fixture cleanup failed after primary failure');}catch{/* Preserve primary. */}
+    }
+  }
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
 }
+
+// A real outer mouse packet must reach the independently observed raw history pane.
+// These coordinates compare the phone's candidate row with a central pane-body row;
+// neither the synthetic agent report nor a local wheel counter proves this route.
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)
+  .each([{cols:50,row:6},{cols:50,row:12},{cols:80,row:6},{cols:80,row:12}])('owned guarded Herdr mouse route at %j',async({cols,row})=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  let client:OwnedProcess|undefined,primary:unknown;
+  // Begin closed capture recognizer: never retain PTY text or guard-frame bytes.
+  const capture=(()=>{
+    const sequences=['\x1b[?1000h','\x1b[?1000l','\x1b[?1002h','\x1b[?1002l','\x1b[?1003h','\x1b[?1003l'];
+    const modes:(boolean|null)[]=[null,null,null];
+    let prefix='',available=true;
+    const write=(chunk:Buffer)=>{
+      try {
+        if(!Buffer.isBuffer(chunk)){available=false;prefix='';return;}
+        for(const byte of chunk){
+          const next=prefix+String.fromCharCode(byte),matched=sequences.indexOf(next);
+          if(matched>=0){modes[Math.floor(matched/2)]=matched%2===0;prefix='';}
+          else prefix=sequences.some(sequence=>sequence.startsWith(next))?next:byte===27?'\x1b':'';
+        }
+      } catch {available=false;prefix='';}
+    };
+    return {write,enabled:()=>available && modes.some(mode=>mode===true),
+      sample:()=>({state:!available?'unavailable':modes.some(mode=>mode!==null)?'observed':'unknown',
+        normal:modes[0],drag:modes[1],motion:modes[2]})};
+  })();
+  // End closed capture recognizer.
+  try {
+    const {history}=owned.metadata();
+    await owned.run(['tab','focus',history!.tabId]);
+    client=new OwnedProcess('/usr/bin/script',['-q','-e','-f','-c',
+      `stty rows 24 cols ${cols}; exec '${owned.ssh.directory}/bin/herdr' --session '${owned.name}' --guarded-attach`,'/dev/null'],
+      owned.ssh.directory,owned.ssh.environment,false);
+    client.child.stdout!.on('data',capture.write);
+    const deadline=performance.now()+3000;
+    while(true){
+      if(!await client.liveIdentity())throw new Error('Owned mouse client retired before admission');
+      const sample=await owned.history();
+      // No raw PTY output is retained. Measured history capacity admits row 12
+      // inside any contiguous body interval within the actual 24-row terminal.
+      if(capture.enabled() && sample.rows>0 && sample.rows<24 && 12>24-sample.rows && 12<=sample.rows)break;
+      if(performance.now()>=deadline)throw new Error('Owned mouse capture or history geometry unavailable');
+      await Bun.sleep(10);
+    }
+    expect(await owned.history()).toMatchObject({offset:0,newTail:true});
+    client.child.stdin!.write(`\x1b[<64;${Math.ceil(cols/2)};${row}M`);
+    while(true){
+      const sample=await owned.history();
+      if(sample.offset>0 && !sample.newTail && sample.oldRows>0)break;
+      if(performance.now()>=deadline){
+        if(row===6)break; // Candidate chrome/header hit is an observation, never a required pane scroll.
+        throw new Error('Owned body mouse packet did not advance remote history');
+      }
+      if(!await client.liveIdentity())throw new Error('Owned mouse client retired during observation');
+      await Bun.sleep(10);
+    }
+    // history() additionally verifies the unchanged receiver birth and zero bytes.
+    console.error('Owned mouse observation '+JSON.stringify({cols,row,capture:capture.sample(),history:await owned.historyDiagnostic()}));
+    await owned.expectBytes(Buffer.alloc(0));
+  } catch(error){primary=error;
+    try{console.error('Owned mouse failure '+JSON.stringify({cols,row,capture:capture.sample(),history:await owned.historyDiagnostic()}));}catch{/* Keep original verdict. */}
+  } finally {
+    try{client?.child.stdout?.off('data',capture.write);}catch{primary??=new Error('Owned capture observer cleanup unavailable');}
+    const failures=await Promise.allSettled([client?.stop()]);
+    try{await owned.stop();}catch(error){primary??=error;}
+    for(const result of failures)if(result.status==='rejected')primary??=result.reason;
+  }
+  if(primary)throw primary;
+  expect(await listening(owned.ssh.port)).toBe(false);
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},15_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as const)('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver over %s',async transport=>{
   const moshBinary=transport==='mosh'?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined;
@@ -239,3 +375,108 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
   } finally {await owned.stop();}
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },20_000);
+
+
+
+test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{
+  const source=process.env.LAZYSH_TEST_RECEIVER_BIN!;
+  const image=await lstat(source),bytes=await readFile(source);
+  expect(await realpath(source)===source).toBe(true);
+  const sourceAdmitted=image.isFile() && image.uid===process.getuid?.() && (image.mode&0o100)!==0 && (image.mode&0o022)===0 && bytes.length<1024*1024;
+  expect(sourceAdmitted).toBe(true);
+  const hash=createHash('sha256').update(bytes).digest('hex');
+  const groups=await readFile('/etc/group');
+  for(const ownedReceiverRoot of [false,true]) {
+    const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,ownedReceiverRoot});
+    let client:OwnedProcess|undefined,primary:unknown;
+    try {
+      const config=await readFile(join(fixture.directory,'sshd_config'),'utf8');
+      expect(config).toContain(`timeout --kill-after=1s ${ownedReceiverRoot?600:90}s`);
+      expect(config).not.toContain(`timeout --kill-after=1s ${ownedReceiverRoot?90:600}s`);
+      const binary=join(fixture.directory,'receiver'),output=join(fixture.directory,'raw');
+      await writeFile(binary,bytes,{mode:0o500,flag:'wx'});await mkdir(output,{mode:0o700});
+      const copy=await lstat(binary);
+      const copyAdmitted=copy.isFile() && copy.nlink===1 && copy.uid===process.getuid?.() && (copy.mode&0o777)===0o500;
+      expect(copyAdmitted && createHash('sha256').update(await readFile(binary)).digest('hex')===hash).toBe(true);
+      client=await fixture.client();
+      const wait=async(stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery',predicate:()=>boolean)=>{
+        const deadline=performance.now()+5000;
+        while(!predicate()) {
+          if(client!.child.exitCode!==null || performance.now()>=deadline) {
+            const primary=new Error('Owned receiver probe stage unavailable');
+            const diagnostic=async(process:OwnedProcess)=>{try{return await process.startupDiagnostic();}catch{return {state:'observation-unavailable',exitCode:null};}};
+            console.error(JSON.stringify({stage,lane:ownedReceiverRoot?'owned':'legacy',client:await diagnostic(client!),daemon:await diagnostic(fixture.daemon),
+              clientErrors:receiverProbeErrors(client!.stderr),daemonErrors:receiverProbeErrors(fixture.daemon.stderr)}));
+            throw primary;
+          }
+          await Bun.sleep(10);
+        }
+      };
+      await wait('prompt',()=>client!.stdout.includes(fixture.prompt));
+      const marker=`ROOT_${fixture.nonce}:`;
+      client.child.stdin!.write(`printf 'ROOT_%s:%s:%s:%s:%s\n' '${fixture.nonce}' "$(id -u)" "$(stat -c %u /)" "$(stat -c %u /tmp)" "$(stat -c %u '${output}')"\n`);
+      const metadata=()=>client!.stdout.match(new RegExp(marker+'([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10})\\r?\n'));
+      await wait('metadata',()=>metadata()!==null);
+      const ids=metadata()!.slice(1).map(Number),admitted=(owner:number)=>owner===0 || owner===ids[0];
+      expect(ids.every(Number.isSafeInteger)).toBe(true);
+      expect(admitted(ids[1])).toBe(ownedReceiverRoot);
+      expect(ids[3]===ids[0]).toBe(true);
+      if(ownedReceiverRoot)expect(admitted(ids[2])).toBe(true);
+      const ready=`IME_${fixture.nonce}_READY`,delivered=`IME_${fixture.nonce}_DELIVERED`;
+      const exited=`EXIT_${fixture.nonce}:1`;
+      client.child.stdin!.write(`'${binary}' '${output}' --ime-transactions '${fixture.nonce}'; printf 'EXIT_%s:%s\n' '${fixture.nonce}' "$?"\n`);
+      if(!ownedReceiverRoot) {
+        await wait('rejection',()=>client!.stdout.includes(exited));
+        expect(client.stdout.includes('Owned terminal receiver failed') && !client.stdout.includes(ready)).toBe(true);
+        for(const name of ['receiver-pid','received-bytes'])expect(await lstat(join(output,name)).then(()=>false,error=>{if(error.code==='ENOENT')return true;throw error;})).toBe(true);
+      } else {
+        await wait('ready',()=>client!.stdout.includes(ready));
+        const text=await readFile(join(output,'receiver-pid'),'utf8');
+        expect(/^[1-9][0-9]{0,9}\n$/.test(text)).toBe(true);
+        const saved=await identity(Number(text.trim()));
+        expect(saved!==undefined).toBe(true);
+        let parent=saved,owned=false;
+        for(let depth=0;parent && depth<16;depth++) {
+          if(parent.pid===fixture.daemon.child.pid){owned=true;break;}
+          parent=await identity(parent.parent);
+        }
+        expect(owned).toBe(true);
+        expect(createHash('sha256').update(await readFile(`/proc/${saved!.pid}/exe`)).digest('hex')===hash).toBe(true);
+        const wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${fixture.nonce}`);
+        client.child.stdin!.write(wire);
+        await wait('delivery',()=>client!.stdout.includes(delivered));
+        expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
+        expect((await identity(saved!.pid))?.start===saved!.start).toBe(true);
+        const admitted=await checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash);
+        expect(admitted).toEqual(saved);
+        await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!, '0'.repeat(64))).rejects.toThrow('image differs');
+        await expect(checkRawReceiverIdentity(saved,{...saved!,start:'0'},fixture.daemon.child.pid!,hash)).rejects.toThrow('replaced');
+        await expect(checkRawReceiverIdentity(saved,admitted,2147483647,hash)).rejects.toThrow('identity unavailable');
+        await client.stop();
+        const exitDeadline=performance.now()+5000;
+        while(true) {
+          const current=await identity(saved!.pid);
+          if(!current || ['Z','X'].includes(current.state))break;
+          if(performance.now()>=exitDeadline)throw new Error('Owned receiver did not exit after normal disconnect');
+          await Bun.sleep(10);
+        }
+        // The monitor already read a live snapshot; ordinary disconnect can occur
+        // before its next ancestry/executable/final identity observation.
+        await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash)).rejects.toThrow('not observed');
+        expect(await checkRawReceiverIdentity(saved,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
+        expect(await checkRawReceiverIdentity(undefined,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
+        expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
+      }
+    } catch(error){primary=error;}
+    finally {
+      for(const cleanup of [()=>client?.stop(),()=>fixture.stop()])try{await cleanup();}catch(error){if(primary)console.error('Owned receiver probe cleanup failed after original failure');else primary=error;}
+    }
+    if(primary)throw primary;
+    expect(await listening(fixture.port)).toBe(false);
+    expect(await lstat(fixture.directory).then(()=>false,error=>{if(error.code==='ENOENT')return true;throw error;})).toBe(true);
+  }
+  expect((await readFile('/etc/group')).equals(groups)).toBe(true);
+  const after=await lstat(source);
+  expect(after.dev===image.dev && after.ino===image.ino && after.nlink===image.nlink && after.mode===image.mode && after.size===image.size && after.uid===image.uid).toBe(true);
+  expect(createHash('sha256').update(await readFile(source)).digest('hex')===hash).toBe(true);
+},15_000);

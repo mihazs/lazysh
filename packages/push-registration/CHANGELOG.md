@@ -1,5 +1,171 @@
 # @lazysh/push-registration
 
+## 1.10.3
+
+No changes in this release.
+
+## 1.10.2
+
+No changes in this release.
+
+## 1.10.1
+
+No changes in this release.
+
+## 1.10.0
+
+No changes in this release.
+
+## 1.9.11
+
+No changes in this release.
+
+## 1.9.10
+
+No changes in this release.
+
+## 1.9.9
+
+No changes in this release.
+
+## 1.9.8
+
+No changes in this release.
+
+## 1.9.7
+
+No changes in this release.
+
+## 1.9.6
+
+No changes in this release.
+
+## 1.9.5
+
+No changes in this release.
+
+## 1.9.4
+
+No changes in this release.
+
+## 1.9.3
+
+No changes in this release.
+
+## 1.9.2
+
+No changes in this release.
+
+## 1.9.1
+
+No changes in this release.
+
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- fb3388c: Persist the selected Android push provider before explicit controls so late Firebase cleanup markers cannot change the chosen transport after restart.
+
+## 1.8.4
+
+No changes in this release.
+
+## 1.8.3
+
+No changes in this release.
+
+## 1.8.2
+
+No changes in this release.
+
+## 1.8.1
+
+No changes in this release.
+
+## 1.8.0
+
+No changes in this release.
+
+## 1.7.8
+
+No changes in this release.
+
+## 1.7.7
+
+No changes in this release.
+
+## 1.7.6
+
+No changes in this release.
+
+## 1.7.5
+
+No changes in this release.
+
+## 1.7.4
+
+No changes in this release.
+
+## 1.7.3
+
+No changes in this release.
+
+## 1.7.2
+
+No changes in this release.
+
+## 1.7.1
+
+No changes in this release.
+
+## 1.7.0
+
+No changes in this release.
+
+## 1.6.0
+
+No changes in this release.
+
+## 1.5.5
+
+No changes in this release.
+
+## 1.5.4
+
+No changes in this release.
+
+## 1.5.3
+
+No changes in this release.
+
+## 1.5.2
+
+No changes in this release.
+
+## 1.5.1
+
+No changes in this release.
+
+## 1.5.0
+
+No changes in this release.
+
+## 1.4.2
+
+No changes in this release.
+
+## 1.4.1
+
+No changes in this release.
+
+## 1.4.0
+
+No changes in this release.
+
 ## 1.3.3
 
 No changes in this release.

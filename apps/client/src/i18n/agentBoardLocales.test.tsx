@@ -18,7 +18,7 @@ async function languagesKeep(check:()=>void){const calls=[...vi.mocked(invoke).m
 it('preserves reported rows, unsaved switches and all child ownership while translating the complete board',async()=>{
   vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:inactiveBoardDisplay);
   const view=render(<AgentPanel sessionId={agentBoardSession}/>);
-  await screen.findByText(agentBoardRecord.summary);const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
+  await screen.findByText(agentBoardRecord.summary);fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
   const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
   await languagesKeep(()=>{
     expect(screen.getByLabelText(t('companionUsage'))).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(document.activeElement).toBe(usage);

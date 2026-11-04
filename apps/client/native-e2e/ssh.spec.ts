@@ -1,13 +1,14 @@
 import {expect,it,vi} from 'vitest';
-import {readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,lstat,mkdir,readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {OwnedSshRelay} from './sshRelay';
+import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
-import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
+import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -31,6 +32,289 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   await disconnectOwnedSsh(gui,terminal);
 });
 
+// Ordinary CI without these actual, privately captured CLI records does not qualify this flow.
+it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual owned Codex parent and fork conversations through native SSH without replacing its terminal',async()=>{
+  fixture.captureSafe=false;
+  const productSource=process.env.LAZYSH_NATIVE_CODEX_SOURCE??'';
+  expect(productSource).toMatch(/^[a-f0-9]{40}$/);
+  const digest=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
+  const protectedInput=async(path:string,limit:number)=>{
+    expect(path.startsWith('/')).toBe(true);
+    const info=await lstat(path);
+    expect(info.isFile()&&!info.isSymbolicLink()&&info.uid===process.getuid!()&&info.nlink===1&&(info.mode&0o022)===0&&info.size>0&&info.size<=limit).toBe(true);
+    const bytes=await readFile(path),after=await lstat(path);
+    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs}).toEqual({dev:info.dev,ino:info.ino,size:info.size,mtime:info.mtimeMs});
+    expect(bytes.length).toBe(info.size);return bytes;
+  };
+  const input:unknown=JSON.parse((await protectedInput(process.env.LAZYSH_NATIVE_CODEX_MANIFEST!,16384)).toString('utf8'));
+  expect(input!==null&&typeof input==='object').toBe(true);
+  const manifest=input as {source:string;clientSha256:string;companion:{path:string;sha256:string};rollouts:{path:string;sha256:string;name:string;threadId:string}[]};
+  expect(manifest.source).toBe(productSource);expect(manifest.clientSha256).toMatch(/^[a-f0-9]{64}$/);expect(manifest.rollouts).toHaveLength(2);
+  const companion=await protectedInput(manifest.companion.path,64*1024*1024);expect(digest(companion)).toBe(manifest.companion.sha256);
+  const originals=await Promise.all(manifest.rollouts.map(async(record,index)=>{
+    const expected=index===0?'01a1a04c-2f93-7231-83d2-c493c0427c27':'01a1a04c-5790-7913-9f46-63227794a710';
+    expect(record.threadId).toBe(expected);expect(record.name).toMatch(new RegExp(`^rollout-2026-11-03T[0-9-]+-${expected}\\.jsonl$`));
+    const bytes=await protectedInput(record.path,1024*1024);expect(digest(bytes)).toBe(record.sha256);
+    const metadata=JSON.parse(bytes.toString('utf8').split('\n')[0]);expect(metadata.type).toBe('session_meta');expect(metadata.payload.id).toBe(expected);
+    return bytes;
+  }));
+  expect(digest(await readFile(join(import.meta.dirname,'../../../target/release/lazysh')))).toBe(manifest.clientSha256);
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  const image=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
+  await mkdir(join(ssh.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});
+  await writeFile(image,companion,{flag:'wx',mode:0o700});await chmod(image,0o700);
+  const rolloutDirectory=join(ssh.directory,'.codex/sessions/2026/11/03');await mkdir(rolloutDirectory,{recursive:true,mode:0o700});
+  const copies=manifest.rollouts.map(record=>join(rolloutDirectory,record.name));
+  for(const [index,path]of copies.entries())await writeFile(path,originals[index],{flag:'wx',mode:0o600});
+  const before=await Promise.all(copies.map(async path=>({info:await stat(path),hash:digest(await readFile(path))})));
+  const remote=await ssh.client(true,`'${image}' --version`);
+  expect((await remote.finish('owned source-bound companion version',5000)).trim()).toBe('lazysh-agent 1.9.10');
+  const imageInfo=await stat(image);expect(imageInfo.uid===process.getuid!()&&imageInfo.nlink===1&&(imageInfo.mode&0o777)===0o700).toBe(true);
+  const parent=['Owned first prompt; reply without tools.','Owned isolated Codex answer 1.','Owned resumed prompt; reply without tools.','Owned isolated Codex answer 2.'];
+  const branch=[...parent,'Owned forked prompt; reply without tools.','Owned isolated Codex answer 3.'];
+  for(const [index,expected]of [parent,branch].entries()){
+    const control=await ssh.client(true,`'${image}' transcript --agent codex --path '${copies[index]}' --offset 0 --limit 50 --view conversation`);
+    const output=await control.finish('owned actual Codex companion conversation',5000),page=JSON.parse(output);
+    const projected=Array.isArray(page.messages)?page.messages.map((message:{role:string;blocks:{type:string;text?:string}[]})=>({role:message.role,text:message.blocks.filter(block=>block.type==='text').map(block=>block.text??'').join('\n')})):null;
+    const expectedMessages=expected.map((text,i)=>({role:i%2?'assistant':'user',text}));
+    console.info('Owned Codex SSH reader observation',JSON.stringify({source:productSource,index,agent:page.agent==='codex'?'codex':'unexpected',view:page.view==='active_branch'?'active_branch':'unexpected',schemaVersionMatches:page.schemaVersion===1,branchMatches:page.branchId===manifest.rollouts[index].threadId,messages:Array.isArray(page.messages)?page.messages.length:null,exactMatches:JSON.stringify(projected)===JSON.stringify(expectedMessages),pageSha256:digest(Buffer.from(output)),sourceSha256:before[index].hash,companionSha256:manifest.companion.sha256}));
+    expect(page.schemaVersion).toBe(1);expect(page.agent).toBe('codex');expect(page.view).toBe('active_branch');expect(page.branchId===manifest.rollouts[index].threadId).toBe(true);expect(projected?.length).toBe(expectedMessages.length);expect(JSON.stringify(projected)===JSON.stringify(expectedMessages)).toBe(true);
+  }
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
+  await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
+  gui.stage='owned actual Codex Conversation';await workspaceAction(gui,'Transcript');
+  await (await browser.$('//label[normalize-space(text())="Agent"]/select')).selectByAttribute('value','codex');
+  await (await browser.$('//label[normalize-space(text())="View"]/select')).selectByAttribute('value','conversation');
+  const pathInput=await browser.$('input[placeholder="Absolute host path to session.jsonl"]');
+  const readMessages=async()=>{
+    const articles=await browser.$$('.chat-conversation-messages .chat-message');
+    return Promise.all(Array.from(articles).map(async article=>({role:await article.$('h4').getText(),text:await article.$('p').getText()})));
+  };
+  for(const [index,expected]of [parent,branch].entries()){
+    await pathInput.setValue(copies[index]);await (await browser.$('button=Open transcript')).click();
+    try{
+    await browser.waitUntil(async()=>JSON.stringify(await readMessages())===JSON.stringify(expected.map((text,i)=>({role:i%2?'Assistant':'User',text}))),{timeout:20_000,timeoutMsg:'Actual Codex conversation did not match its captured branch'});
+    }catch(primary){
+      try{console.info('Owned Codex native DOM observation',JSON.stringify(await browser.execute(expected=>{
+        const panel=document.querySelector('.chat-panel'),regions=panel?.querySelectorAll('.chat-conversation-messages'),cards=Array.from(panel?.querySelectorAll('.chat-conversation-messages .chat-message')??[]);
+        const visible=(element:Element)=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(element).visibility!=='hidden';};
+        return {state:!panel?'missing-panel':!regions?.length?'missing-region':cards.length===0?'empty':cards.length===expected.length?'expected-count':'different-count',regions:regions?.length??0,cards:cards.length,visibleCards:cards.filter(visible).length,regionVisible:!!regions?.[0]&&visible(regions[0]),errorPresent:!!panel?.querySelector('[role="alert"]'),pending:!!Array.from(panel?.querySelectorAll('button')??[]).find(button=>button.textContent==='Reading…'),exactMatches:JSON.stringify(cards.map(card=>({role:card.querySelector('h4')?.textContent,text:card.querySelector('p')?.textContent})))===JSON.stringify(expected)};
+      },expected.map((text,i)=>({role:i%2?'assistant':'user',text})))));}catch{/* Preserve the exact primary failure if observation is unavailable. */}
+      throw primary;
+    }
+    expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  }
+  const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';await draft.setValue(text);
+  const region=await browser.$('.chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
+  expect(await region.isFocused()).toBe(true);
+  await browser.waitUntil(async()=>await region.isFocused()&&await region.getProperty('scrollTop')===0,{timeout:5000,timeoutMsg:'Owned Codex reader did not settle at Home'});
+  const position=await browser.execute(()=>{const element=document.querySelector('.chat-conversation-messages')!;return {top:element.scrollTop,height:element.clientHeight,total:element.scrollHeight};});
+  const readingOverflow=position.total>position.height;
+  console.info('Owned Codex reading baseline',JSON.stringify({...position,overflow:readingOverflow}));
+  if(readingOverflow)expect(position.top).toBe(0);
+  await (await browser.$('button=Refresh new messages')).click();
+  await browser.waitUntil(async()=>await browser.$('button=Refresh new messages').isEnabled(),{timeout:20_000});
+  expect(await readMessages()).toEqual(branch.map((value,i)=>({role:i%2?'Assistant':'User',text:value})));expect(await draft.getValue()).toBe(text);
+  const refreshedPosition=await browser.execute(()=>document.querySelector('.chat-conversation-messages')!.scrollTop);
+  if(readingOverflow)expect(refreshedPosition).toBe(position.top);
+  console.info('Owned Codex refreshed reading position',JSON.stringify({top:refreshedPosition,overflow:readingOverflow}));
+  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-readable-conversation.png'));
+  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,'../test-results/native-gui/codex-fork-conversation.png'));
+  await (await browser.$('button=Stage in terminal')).click();await terminal.waitForDisplayed();
+  expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
+  const staged=await browser.$('.terminal-compose textarea');await staged.waitForDisplayed();expect(await staged.getValue()).toBe(text);expect(await terminal.getText()).not.toContain(text);
+  await (await browser.$('button[aria-label="Close composer"]')).click();await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_WORKSPACES');
+  expect(await browser.getWindowHandles()).toHaveLength(1);
+  for(const [index,path]of copies.entries()){
+    const after=await stat(path),prior=before[index].info;
+    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs,mode:after.mode,nlink:after.nlink}).toEqual({dev:prior.dev,ino:prior.ino,size:prior.size,mtime:prior.mtimeMs,mode:prior.mode,nlink:prior.nlink});
+    expect(digest(await readFile(path))).toBe(before[index].hash);expect(digest(await protectedInput(manifest.rollouts[index].path,1024*1024))).toBe(manifest.rollouts[index].sha256);
+  }
+  expect(digest(await readFile(image))).toBe(manifest.companion.sha256);
+  console.info('Owned Codex native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,parentMessages:parent.length,forkMessages:branch.length,readingPosition:{...position,refreshedTop:refreshedPosition,overflowQualified:readingOverflow},rolloutHashes:before.map(value=>value.hash)}));
+  await disconnectOwnedSsh(gui,terminal);
+});
+
+it('pans the expanded D-pad through one native held pointer and stops bytes in its original SSH receiver',async()=>{
+  fixture.captureSafe=false;
+  const tools=herdrTools(),ssh=fixture.ssh=await SshFixture.start(tools);
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSsh(gui,ssh);
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  gui.stage='owned D-pad preference';
+  await workspaceAction(gui,'Preferences');
+  const settings=await browser.$('[role="dialog"][aria-label="Preferences"]');await settings.waitForDisplayed();
+  await (await settings.$('button[data-settings-target="input"]')).click();
+  await (await settings.$('button[data-settings-target="preferencesToolbarKeysAndOrder"]')).click();
+  await (await settings.$('button=Add dpad')).click();
+  await (await settings.$('button[aria-label="Close Preferences"]')).click();await settings.waitForDisplayed({reverse:true});
+  await (await browser.$('button=dpad')).click();
+  const up=await browser.$('.terminal-dpad button[aria-label="D-pad up"]');await up.waitForDisplayed();
+  expect(await up.getAttribute('aria-pressed')).toBeNull();
+  gui.stage='owned D-pad raw receiver';
+  const image=join(ssh.directory,'bin','owned-terminal-receiver'),imageStat=await stat(image);
+  const imageHash=createHash('sha256').update(await readFile(image)).digest('hex');
+  expect(imageHash).toBe(createHash('sha256').update(await readFile(tools.receiverBinary)).digest('hex'));
+  await terminal.click();await typeText(browser,'exec ./bin/owned-terminal-receiver .\n');
+  let receiver:OwnedPid|undefined;
+  await browser.waitUntil(async()=>{
+    const text=await readFile(join(ssh.directory,'receiver-pid'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+    if(!/^[1-9][0-9]{0,9}\n$/.test(text))return false;
+    receiver=await identity(Number(text.trim()));return !!receiver&&!['Z','X'].includes(receiver.state);
+  },{timeout:3000,timeoutMsg:'Owned D-pad receiver was not ready'});
+  const original=receiver!;
+  let ancestor:OwnedPid|undefined=original,owned=false;
+  for(let depth=0;ancestor&&depth<16;depth++){
+    if(ancestor.pid===ssh.daemon.child.pid){owned=true;break;}
+    ancestor=await identity(ancestor.parent);
+  }
+  expect(owned).toBe(true);
+  const bytes=async()=>{
+    const current=await identity(original.pid),executable=await stat(`/proc/${original.pid}/exe`);
+    if(!current||current.start!==original.start||['Z','X'].includes(current.state)||executable.dev!==imageStat.dev||executable.ino!==imageStat.ino)
+      throw new Error('Owned D-pad receiver identity changed');
+    const path=join(ssh.directory,'received-bytes'),info=await stat(path);
+    if(!info.isFile()||info.uid!==process.getuid!()||info.size>4096)throw new Error('Owned D-pad receiver output invalid');
+    const value=await readFile(path);if(value.length>4096)throw new Error('Owned D-pad receiver output exceeds bound');return value;
+  };
+  expect(await bytes()).toEqual(Buffer.alloc(0));
+  fixture.captureSafe=true;
+  await up.click();
+  await browser.waitUntil(async()=>(await bytes()).equals(Buffer.from('\x1b[A')),{timeout:3000,timeoutMsg:'Owned D-pad tap did not arrive once'});
+  const phases=[
+    {x:0,y:0,pattern:/^(?:\x1b\[A){3,32}$/},
+    {x:-24,y:0,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}$/},
+    {x:0,y:24,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}(?:\x1b\[B){2,32}$/},
+    {x:24,y:0,pattern:/^(?:\x1b\[A){3,32}(?:\x1b\[D){2,32}(?:\x1b\[B){2,32}(?:\x1b\[C){2,32}$/},
+  ];
+  const valid='\x1b[A'.repeat(3)+'\x1b[D'.repeat(2)+'\x1b[B'.repeat(2)+'\x1b[C'.repeat(2);
+  expect(phases[3].pattern.test(valid)).toBe(true);
+  for(const invalid of [valid+'\x1b[A',valid.replace('\x1b[D','\x1b[C'),valid+'\x80'])expect(phases[3].pattern.test(invalid)).toBe(false);
+  const position=await browser.execute(()=>{
+    const button=document.querySelector('.terminal-dpad button[aria-label="D-pad up"]');
+    if(!button)return null;
+    const r=button.getBoundingClientRect(),x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);
+    return {x,y,visible:r.width>0&&r.height>0&&x>24&&y>24&&x+24<innerWidth&&y+24<innerHeight&&button.contains(document.elementFromPoint(x,y))};
+  });
+  expect(position?.visible).toBe(true);const {x,y}=position!;
+  const traceKey=`__ownedDpad_${ssh.nonce}`,pointerId=`owned-dpad-${ssh.nonce}`;
+  expect(await browser.execute(key=>{
+    if(Object.hasOwn(window,key))return false;
+    const pad=document.querySelector('.terminal-dpad');if(!pad)return false;
+    const state={down:0,up:0,moves:0,cancel:0,trusted:true,samePointer:true,mouse:true,pointer:undefined as number|undefined,dispose:()=>{}};
+    const observe=(event:Event)=>{
+      if(!(event instanceof PointerEvent))return;
+      state.trusted&&=event.isTrusted;state.mouse&&=event.pointerType==='mouse';
+      if(event.type==='pointerdown'){state.down++;state.pointer??=event.pointerId;}
+      else if(event.type==='pointerup')state.up++;
+      else if(event.type==='pointercancel')state.cancel++;
+      else state.moves++;
+      if(state.pointer!==undefined)state.samePointer&&=event.pointerId===state.pointer;
+    };
+    const names=['pointerdown','pointerup','pointermove','pointercancel'];
+    for(const name of names)pad.addEventListener(name,observe,{capture:true,passive:true});
+    state.dispose=()=>{for(const name of names)pad.removeEventListener(name,observe,true);};
+    Object.defineProperty(window,key,{value:state,configurable:true});return true;
+  },traceKey)).toBe(true);
+  const pointer=()=>browser.action('pointer',{id:pointerId,parameters:{pointerType:'mouse'}});
+  let primary:unknown;
+  try{
+    gui.stage='owned D-pad held native directions';
+    for(const [index,phase]of phases.entries()){
+      const action=pointer().move({x:x+phase.x,y:y+phase.y,origin:'viewport',duration:0});
+      if(index===0)action.down({button:0});
+      await action.pause(600).perform(true);
+      expect(phase.pattern.test((await bytes()).toString('latin1'))).toBe(true);
+    }
+    gui.stage='owned D-pad dead-zone and release';
+    await pointer().move({x,y,origin:'viewport',duration:0}).pause(240).perform(true);
+    const paused=await bytes();expect(phases[3].pattern.test(paused.toString('latin1'))).toBe(true);
+    await pointer().pause(240).perform(true);expect(await bytes()).toEqual(paused);
+    expect(await browser.execute(key=>{
+      const value=(window as unknown as Record<string,{down:number;up:number;trusted:boolean;samePointer:boolean;mouse:boolean}>)[key];
+      return !!value&&value.down===1&&value.up===0&&value.trusted&&value.samePointer&&value.mouse;
+    },traceKey)).toBe(true);
+    await pointer().up({button:0}).pause(240).perform(true);expect(await bytes()).toEqual(paused);
+    expect(await browser.execute(key=>{
+      const value=(window as unknown as Record<string,{down:number;up:number;moves:number;cancel:number;trusted:boolean;samePointer:boolean;mouse:boolean}>)[key];
+      return !!value&&value.down===1&&value.up===1&&value.moves>=4&&value.cancel===0&&value.trusted&&value.samePointer&&value.mouse;
+    },traceKey)).toBe(true);
+    expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+    expect(createHash('sha256').update(await readFile(image)).digest('hex')).toBe(imageHash);
+  }catch(error){primary=error;throw error;}
+  finally{
+    const cleanup:unknown[]=[];
+    try{await browser.releaseActions();}catch(error){cleanup.push(error);}
+    try{await browser.execute(key=>{const owner=window as unknown as Record<string,{dispose():void}>;owner[key]?.dispose();delete owner[key];},traceKey);}catch(error){cleanup.push(error);}
+    if(cleanup.length)throw new AggregateError(primary?[primary,...cleanup]:cleanup,'Owned D-pad pointer observation cleanup failed');
+  }
+  await disconnectOwnedSsh(gui,terminal);
+});
+
+it('saves credentials in a disposable Secret Service and reconnects only after explicit saved-host consent',async()=>{
+  fixture.captureSafe=false;
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const gui=fixture.gui=await NativeGui.startWithDisposableVault();
+  await gui.assertDisposableCredential('empty');
+  const {browser,terminal,owner}=await openOwnedRememberedSsh(gui,ssh);
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  await gui.assertDisposableCredential('saved');
+  let savedHostId:string|undefined;
+  const catalogState=async(stored:boolean)=>{
+    const path=join(gui.directory,'config','app.lazysh.client','hosts.json');
+    if((await stat(path)).size>64*1024)throw new Error('Owned host catalog exceeds its bound');
+    const text=await readFile(path,'utf8');let records:unknown;
+    try{records=JSON.parse(text);}catch{throw new Error('Owned host catalog is invalid');}
+    if(!Array.isArray(records))throw new Error('Owned host catalog is not a list');
+    if(text.includes('PRIVATE KEY')||text.includes(JSON.stringify(ssh.privateKey).slice(1,-1))||/"(?:password|privateKey|private_key|passphrase)"\s*:/.test(text))throw new Error('Owned host catalog contains credential material');
+    const hosts=records.filter((value:unknown)=>!!value&&typeof value==='object'&&'name' in value&&value.name==='Owned SSH GUI host');
+    if(hosts.length!==1)return false;
+    const host=hosts[0] as Record<string,unknown>;
+    if(typeof host.id!=='string'||(savedHostId!==undefined&&host.id!==savedHostId))return false;
+    savedHostId=host.id;
+    return (stored?host.credentialsStored===true:host.credentialsStored===undefined||host.credentialsStored===false)&&host.hostname==='127.0.0.1'&&host.port===ssh.port&&host.username===ssh.username&&host.fingerprint===ssh.fingerprint;
+  };
+  expect(await catalogState(true)).toBe(true);
+  await disconnectOwnedSsh(gui,terminal);
+  gui.stage='owned saved-credential dialog';
+  const reopen=async()=>{
+    await (await browser.$('button[aria-label="Connect to Owned SSH GUI host"]')).click();
+    const dialog=await browser.$('[role="dialog"][aria-label="Connect to Owned SSH GUI host"]');await dialog.waitForDisplayed();return dialog;
+  };
+  const dialog=await reopen();
+  const saved=await (await dialog.$('label*=Use saved credentials')).$('input[type="checkbox"]');await saved.waitForExist();
+  expect(await saved.isSelected()).toBe(true);
+  expect(await dialog.$$('textarea,input[type="password"]')).toHaveLength(0);
+  await (await dialog.$('button=Private key')).click();
+  expect(await (await dialog.$('textarea')).getValue()==='').toBe(true);
+  expect(await (await (await dialog.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()==='').toBe(true);
+  expect(await (await (await dialog.$('label*=Save credentials on this device')).$('input')).isSelected()).toBe(false);
+  const savedAgain=await (await dialog.$('label*=Use saved credentials')).$('input[type="checkbox"]');
+  await savedAgain.click();expect(await savedAgain.isSelected()).toBe(true);
+  expect(await dialog.$$('textarea,input[type="password"]')).toHaveLength(0);
+  let activeTerminal=false;
+  for(const canvas of await browser.$$('.terminal-canvas .xterm-screen'))activeTerminal ||= await canvas.isDisplayed();
+  expect(activeTerminal).toBe(false);
+  await (await dialog.$('button=Connect')).click();
+  const second=await browser.$('.terminal-canvas .xterm-screen');await second.waitForDisplayed({timeout:20_000});
+  await challengeOwnedSsh(gui,ssh,second,owner,'AFTER_SAVED_RECONNECT');
+  await gui.assertDisposableCredential('unchanged');
+  await disconnectOwnedSsh(gui,second);
+  gui.stage='owned saved-credential explicit forget';
+  const forgotten=await reopen();
+  await (await forgotten.$('button=Forget saved credentials')).waitForDisplayed();
+  await (await forgotten.$('button=Forget saved credentials')).click();
+  await (await forgotten.$('label*=Use saved credentials')).waitForExist({reverse:true});
+  await gui.assertDisposableCredential('empty');
+  expect(await catalogState(false)).toBe(true);
+  await (await forgotten.$('button=Private key')).click();
+  expect(await (await forgotten.$('textarea')).getValue()==='').toBe(true);
+  expect(await (await (await forgotten.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()==='').toBe(true);
+  await (await forgotten.$('button=Cancel')).click();await forgotten.waitForDisplayed({reverse:true});
+  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+});
+
 it('enters the saved Herdr default through Mosh in the actual GUI and queues only confirmed input to its original receiver',async()=>{
   fixture.captureSafe=false;
   const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
@@ -44,7 +328,7 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   expect(await terminal.getText()).not.toMatch(/MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:/);
   fixture.captureSafe=true;
   gui.stage='owned Mosh Herdr transcript';
-  await (await browser.$('button=Transcript')).click();
+  await workspaceAction(gui,'Transcript');
   await (await browser.$('input[placeholder="Absolute host path to session.jsonl"]')).setValue(herdr.transcript);
   await (await browser.$('button=Open transcript')).click();
   const messages=await browser.$('.chat-messages');
@@ -97,7 +381,94 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
 });
 
-it('keeps the owned Mosh UDP daemon alive after only its attributed SSH stream closes and retires the entire namespace',async()=>{
+it('keeps real app sessions first in Workspaces and returns to the same owned terminals without reconnecting or typing',async()=>{
+  fixture.captureSafe=false;
+  const primary=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
+  if(!binary)throw new Error('Explicit pinned Mosh binary required');
+  const herdr=await HerdrFixture.start(herdrTools(),binary);
+  fixture.ssh={stop:async()=>{
+    const outcomes=await Promise.allSettled([herdr.stop(),primary.stop()]);
+    const failures=outcomes.flatMap(result=>result.status==='rejected'?[result.reason]:[]);
+    if(failures.length)throw new AggregateError(failures,'Owned Workspaces hosts cleanup failed');
+  }};
+  const gui=fixture.gui=await NativeGui.start();
+  const first=await openOwnedSsh(gui,primary);
+  await challengeOwnedSsh(gui,primary,first.terminal,first.owner);
+  const second=await openOwnedSsh(gui,herdr.ssh,'mosh',undefined,{kind:'herdr',name:herdr.name},'Owned SSH GUI second host');
+  const browser=gui.browser!;
+  const originalSockets=async()=>{
+    const table=await socketOwners.socketInventory();
+    const ports=[primary.port,herdr.ssh.port].map(port=>`0100007F:${port.toString(16).toUpperCase().padStart(4,'0')}`);
+    const rows=table.split('\n').slice(1).map(row=>row.trim().split(/\s+/)).filter(fields=>ports.includes(fields[1])&&fields[3]==='01');
+    if(rows.length!==2||ports.some(port=>rows.filter(fields=>fields[1]===port).length!==1)
+      ||rows.some(fields=>!/^0100007F:[0-9A-F]{4}$/.test(fields[2])||!/^[1-9][0-9]*$/.test(fields[9])))throw new Error('Owned Workspaces SSH socket admission failed');
+    return JSON.stringify(rows.map(fields=>[fields[1],fields[2],fields[9]]).sort());
+  };
+  const sockets=await originalSockets();
+  const modes=await browser.$('.workspace-navigation-modes');
+  const workspaces=await modes.$('button=Workspaces');
+  gui.stage='owned real Workspaces hierarchy';
+  await workspaces.click();
+  const sessions=await browser.$('.workspace-live-sessions');
+  const live=await browser.$('.herdr-navigation');
+  const setup=await live.$('.herdr-server-setup');
+  await (await live.$('.herdr-navigation-tree')).waitForDisplayed({timeout:20_000});
+  const rows=await sessions.$$('button');expect(rows).toHaveLength(2);
+  expect(await rows[1].getAttribute('aria-current')).toBe('location');
+  expect(await browser.execute((app,spaces)=>!!(app.compareDocumentPosition(spaces)&Node.DOCUMENT_POSITION_FOLLOWING),sessions,live)).toBe(true);
+  expect((await sessions.getLocation('y'))<(await live.getLocation('y'))).toBe(true);
+  const focused=async(element:typeof workspaces)=>browser.execute(target=>document.activeElement===target,element);
+  await browser.keys('\uE004');expect(await focused(await modes.$('button[aria-label="Agents navigation"]'))).toBe(true);
+  await browser.keys('\uE004');expect(await focused(rows[0])).toBe(true);
+  await browser.keys('\uE004');expect(await focused(rows[1])).toBe(true);
+  await browser.keys('\uE004');expect(await focused(await live.$('button[aria-label="Herdr server"]'))).toBe(true);
+  const focusInfo=await live.$('summary[aria-label="Changes focus for other connections."]');
+  await browser.keys('\uE004');expect(await focused(focusInfo)).toBe(true);
+  await browser.keys('\uE004');expect(await focused(await live.$('button[title="Refresh Herdr tree"]'))).toBe(true);
+  expect(await setup.isDisplayed()).toBe(false);
+  const server=await setup.$('select');expect(await server.isDisplayed()).toBe(false);
+  const warning='Shared focus changes focus for other connections to this server.';
+  await focusInfo.click();
+  const warnings=await live.$$(`p=${warning}`);expect(warnings).toHaveLength(1);
+  expect(await warnings[0].isDisplayed()).toBe(true);
+  expect(await warnings[0].getText()).toBe(warning);
+  await (await live.$('button[aria-label="Herdr server"]')).click();
+  expect(await server.isDisplayed()).toBe(true);expect(await server.getValue()).toBe(herdr.name);
+  expect(await (await setup.$(`button=Attach Herdr ${herdr.name}`)).isDisplayed()).toBe(true);
+  expect(await live.$$(`p=${warning}`)).toHaveLength(1);
+  await (await live.$('button[title="Back"]')).click();
+  await herdr.expectBytes(Buffer.alloc(0));expect(await originalSockets()===sockets).toBe(true);
+  gui.stage='owned Workspaces switches original app sessions';
+  await rows[0].click();await first.terminal.waitForDisplayed();
+  expect(await browser.execute(original=>original.isConnected,second.terminal)).toBe(true);
+  expect(await browser.execute((original,current)=>original===current,first.terminal,await browser.$('.terminal-canvas[aria-label="Terminal for Owned SSH GUI host"] .xterm-screen'))).toBe(true);
+  await workspaces.click();
+  const firstRows=await (await browser.$('.workspace-live-sessions')).$$('button');
+  expect(await firstRows[0].getAttribute('aria-current')).toBe('location');
+  await firstRows[1].click();await second.terminal.waitForDisplayed();
+  expect(await browser.execute((original,current)=>original===current,second.terminal,await browser.$(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for Owned SSH GUI second host / ${herdr.name}`)}] .xterm-screen`))).toBe(true);
+  await workspaces.click();
+  await (await browser.$('.workspace-destination-heading button[aria-label="Return to terminal"]')).click();
+  expect(await second.terminal.isDisplayed()).toBe(true);
+  await workspaces.click();
+  await (await (await browser.$('.workspace-live-sessions')).$$('button'))[0].click();
+  await first.terminal.waitForDisplayed();
+  gui.stage='owned Workspaces contextual Return';
+  await workspaceAction(gui,'Transcript');
+  await (await browser.$('.context-navigation button[aria-label="Return to terminal"]')).click();
+  await first.terminal.waitForDisplayed();
+  await challengeOwnedSsh(gui,primary,first.terminal,first.owner,'AFTER_WORKSPACES');
+  expect(await originalSockets()===sockets).toBe(true);
+  expect(await browser.$$('[role="tab"]')).toHaveLength(2);
+  expect(await gui.appOwner()).toEqual(first.owner);expect(gui.connections).toBe(0);
+  await herdr.expectBytes(Buffer.alloc(0));
+  await disconnectOwnedSsh(gui,first.terminal);
+  await second.terminal.waitForDisplayed();
+  await disconnectOwnedSsh(gui,second.terminal,`Owned SSH GUI second host / ${herdr.name}`);
+});
+
+it.each(['client','server'] as const)('keeps the owned Mosh UDP daemon alive after %s-attributed SSH closure and retires the entire namespace',async attribution=>{
   const ssh=await ownedMoshFixture();
   const relay=await OwnedSshRelay.start(ssh.port),relayPort=relay.port;
   let root:OwnedPid|undefined;
@@ -125,21 +496,54 @@ it('keeps the owned Mosh UDP daemon alive after only its attributed SSH stream c
     expect(await readlink(`/proc/${daemons[0].pid}/ns/pid`)).not.toBe(await readlink('/proc/self/ns/pid'));
     control=await ssh.client(true,undefined,relayPort);
     observer=await ssh.client(true,undefined,relayPort);
-    await vi.waitFor(()=>{expect(control!.stdout).toContain(ssh.prompt);expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+    try {
+      await vi.waitFor(()=>{expect(control!.stdout).toContain(ssh.prompt);expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+    } catch(primary) {
+      try{await reportOwnedSshPromptFailure(ssh,control,observer,relay.active);}catch{/* Preserve primary if sampling arguments are unavailable. */}
+      throw primary;
+    }
     const controlOwner=await control.liveIdentity();expect(controlOwner).toBeDefined();
     await expect(relay.closeOwned({...controlOwner!,start:'stale'})).rejects.toThrow('identity retired');
     expect(relay.active).toBe(2);
-    await relay.closeOwned(controlOwner!);
+    if(attribution==='server') {
+      await expect(relay.closeOwnedServer({...root!,start:'stale'})).rejects.toThrow('identity retired');
+      await expect(relay.closeOwnedServer(root!)).rejects.toThrow('Exactly one live owned SSH server stream required');
+      expect(relay.active).toBe(2);
+      observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer.finish('ambiguous SSH observer retires explicitly',3000)).toContain(ssh.expected);observer=undefined;
+      await vi.waitFor(()=>expect(relay.active).toBe(1),{timeout:1000,interval:10});
+      await expect(relay.closeOwnedServer(controlOwner!)).rejects.toThrow('Exactly one live owned SSH server stream required');
+      const attribute=socketOwners.acceptedConnectionOwner;let checks=0,arrived=false;
+      const recheck=vi.spyOn(socketOwners,'acceptedConnectionOwner').mockImplementation(async(...args)=>{
+        const result=await attribute(...args);
+        if(++checks===2) {
+          observer=await ssh.client(true,undefined,relayPort);
+          await vi.waitFor(()=>{expect(observer!.stdout).toContain(ssh.prompt);expect(relay.active).toBe(2);},{timeout:3000,interval:10});
+          arrived=true;console.info('Owned second SSH stream arrived during selected-server recheck');
+        }
+        return result;
+      });
+      try {await expect(relay.closeOwnedServer(root!)).rejects.toThrow('Owned SSH server stream retired');}
+      finally {recheck.mockRestore();}
+      expect(arrived).toBe(true);expect(checks).toBe(2);expect(relay.active).toBe(2);
+      expect(await control.liveIdentity()).toEqual(controlOwner);
+      observer!.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer!.finish('racing SSH observer retires explicitly',3000)).toContain(ssh.expected);observer=undefined;
+      await vi.waitFor(()=>expect(relay.active).toBe(1),{timeout:1000,interval:10});
+      await relay.closeOwnedServer(root!);
+    } else await relay.closeOwned(controlOwner!);
     await expect(control.finish('selected SSH closure',3000)).rejects.toThrow('Owned fixture failed: selected SSH closure');control=undefined;
-    expect(relay.active).toBe(1);expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
+    expect(relay.active).toBe(attribution==='server'?0:1);expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
     expect(await udp()).toBe(true);expect((await identity(daemons[0].pid))?.start).toBe(daemons[0].start);
-    observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
-    expect(await observer.finish('unselected SSH stream remains usable',3000)).toContain(ssh.expected);observer=undefined;
+    if(observer) {
+      observer.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+      expect(await observer.finish('unselected SSH stream remains usable',3000)).toContain(ssh.expected);observer=undefined;
+    }
     const fresh=await ssh.client(true,'printf RECOVERED',relayPort);
     expect(await fresh.finish('fresh owned SSH connection after closure',3000)).toBe('RECOVERED');
     expect(await udp()).toBe(true);
     members=await descendants(root!);
-    console.info('Owned Mosh lifecycle: attributed SSH pair retired; unselected and fresh SSH usable; UDP daemon retained');
+    console.info(`Owned Mosh lifecycle: ${attribution}-attributed SSH pair retired; fresh SSH usable; UDP daemon retained`);
   } finally {
     const failures:unknown[]=[];
     for(const step of [()=>control?.stop(),()=>observer?.stop(),()=>relay.stop(),()=>ssh.stop()])try{await step();}catch(error){failures.push(error);}
@@ -169,7 +573,7 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     expect(await listening(relayPort)).toBe(true);expect(await listening(ssh.port)).toBe(true);
     await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_CLOSURE');
     gui.stage='owned Mosh image selection and closed upload';
-    await (await (await browser.$('.session-toolbar')).$('button=Attach')).click();
+    await workspaceAction(gui,'Attach');
     const panel=await browser.$('.attachment-panel');await panel.waitForDisplayed();
     // Reuse the repository's authored JPEG; trailing padding models screenshot-sized bytes.
     const artwork=await readFile(new URL('../e2e/fixtures/recorded-images/regions-progressive.jpg',import.meta.url));
@@ -207,7 +611,7 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     expect([retained.ino,retained.size,retained.mtimeMs]).toEqual([uploaded.ino,uploaded.size,uploaded.mtimeMs]);
     expect(hash(await readFile(remote))).toBe(hash(image));
     gui.stage='owned Mosh original terminal after upload recovery';
-    await (await (await browser.$('.session-toolbar')).$('button=Terminal')).click();
+    await workspaceAction(gui,'Terminal');
     expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
     expect((await browser.$('[role="tab"][aria-selected="true"]')).elementId).toBe(tabId);
     await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_RECOVERY');

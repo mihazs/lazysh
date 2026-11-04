@@ -2,7 +2,15 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 
-export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null};
+export type ReportedSessionRef={source:string;agent:'codex'|'claude'|'opencode';kind:'id';value:string};
+function reportedSession(value:unknown,agent:unknown):ReportedSessionRef|undefined {
+  if(!value || typeof value!=='object')return;
+  const v=value as Record<string,unknown>;
+  if(!['codex','claude','opencode'].includes(v.agent as string) || v.agent!==agent || v.source!==`herdr:${v.agent}` || v.kind!=='id'
+    || !boundedText(v.value,256) || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.value))return;
+  return {source:v.source as string,agent:v.agent as ReportedSessionRef['agent'],kind:'id',value:v.value};
+}
+export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null;agent_session?:ReportedSessionRef};
 export type HerdrTree = {
   workspaces: {workspace_id:string;label:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   tabs: {workspace_id:string;tab_id:string;label:string;number:number;focused:boolean;agent_status:LiveAgent['agent_status']}[];
@@ -36,7 +44,8 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
     const key=JSON.stringify([row.terminal_id,row.pane_id]);
     if(!pane || seen.has(key) || (pane.cwd!=null && !boundedText(pane.cwd,4096)))throw invalid();
     seen.add(key);
-    return {terminal_id:row.terminal_id,pane_id:row.pane_id,workspace_id:row.workspace_id,tab_id:row.tab_id,agent_status:row.agent_status as LiveAgent['agent_status'],agent:(row.agent??null) as string|null,name:(row.name??null) as string|null,cwd:(pane.cwd??null) as string|null};
+    const reference=reportedSession(row.agent_session,row.agent);
+    return {...(reference?{agent_session:reference}:{}),terminal_id:row.terminal_id,pane_id:row.pane_id,workspace_id:row.workspace_id,tab_id:row.tab_id,agent_status:row.agent_status as LiveAgent['agent_status'],agent:(row.agent??null) as string|null,name:(row.name??null) as string|null,cwd:(pane.cwd??null) as string|null};
   });
 }
 

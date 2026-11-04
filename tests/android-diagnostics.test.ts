@@ -6,14 +6,57 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string } }[] }>;
+  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; if?: string; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string; 'disk-size'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
-const commands = decoded.trim().split(/\r\n|\n|\r/).map(line => line.trim()).filter(line => !line.startsWith('#') && line.length > 0);
+function emulatorCommands(script:string) {return script.trim().split(/\r\n|\n|\r/).map(line=>line.trim()).filter(line=>!line.startsWith('#') && line.length>0);}
+const commands=emulatorCommands(decoded);
 
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+test('Google ntfy reclaims only unused host toolchains before APK and system-image provisioning',()=>{
+  const name='Reclaim unused host toolchains for Google ntfy';
+  const job=workflow.jobs['native-android-ntfy'],steps=job.steps;
+  const cleanup=steps.findIndex(step=>step.name===name);
+  expect(cleanup).toBeGreaterThanOrEqual(0);
+  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(steps[cleanup].if).toBe("matrix.push-variant == 'google'");
+  expect(emulatorCommands(steps[cleanup].run!)).toEqual([
+    'df -h /','sudo rm -rf -- /usr/share/dotnet /usr/local/.ghcup','df -h /',
+  ]);
+  const build=steps.findIndex(step=>step.name==='Build current Google APK for Firebase-free push acceptance');
+  expect(cleanup).toBe(build-1);
+  expect(steps.findIndex(step=>step.name==='Real ntfy encrypted native enrollment')).toBeGreaterThan(build);
+  for(const [key,other] of Object.entries(workflow.jobs))
+    if(key!=='native-android-ntfy')expect(other.steps?.some(step=>step.name===name)??false).toBe(false);
+});
+
+test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google',23],['fdroid',23]] as const)('ntfy %s dispatch executes complete runner lines and preserves enrollment argv/environment with exit %i',async (variant,exit)=>{
+  const job=workflow.jobs['native-android-ntfy'];
+  const step=job.steps.find(step=>step.name==='Real ntfy encrypted native enrollment')!;
+  expect(step.uses).toBe('mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b');
+  expect(step.with?.['disk-size']).toBe('4G');
+  expect(job['timeout-minutes']).toBe(35);
+  expect(job.env).toEqual({ANDROID_SERIAL:'emulator-5580'});
+  const lines=emulatorCommands(step.with!.script!.replaceAll('${{ matrix.push-variant }}',variant));
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ntfy-dispatch-'));temporary.push(directory);
+  const bin=join(directory,'bin'),receipt=join(directory,'invocation');await mkdir(bin);
+  await writeFile(join(bin,'bun'),"#!/bin/sh\nprintf '%s\\n' \"$LAZYSH_ANDROID_QR_EMULATOR_PID_FILE\" \"$LAZYSH_NTFY_ANDROID_VARIANT\" \"$@\" >> \"$INVOCATION\"\nexit \"$NATIVE_EXIT\"\n",{mode:0o700});
+  const runnerTemp=join(directory,'owned temporary directory');
+  for(const line of lines){
+    const child=new OwnedProcess('/bin/sh',['-c',line],directory,{PATH:bin,RUNNER_TEMP:runnerTemp,INVOCATION:receipt,NATIVE_EXIT:String(exit)});
+    const result=child.finish('decoded ntfy enrollment dispatch',5000);
+    if(exit===0)await result;else await expect(result).rejects.toThrow('Owned fixture failed: decoded ntfy enrollment dispatch; exit=23');
+    expect(child.stdout).toBe('');expect(child.stderr).toBe('');
+  }
+  expect(lines).toHaveLength(1);
+  expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
+    join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
+    ...(variant==='google'?['run','--cwd','apps/client','test:android-ntfy']:['run','test:android-ntfy']),'',
+  ]);
 });
 
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
@@ -51,16 +94,33 @@ test('independent Android auxiliary owners have their own finite native job and 
   for(const name of ['Grant this runner access to KVM','Run native Android instrumentation'])
     expect(auxiliary.steps.find(step=>step.name===name)).toEqual(guarded.steps.find(step=>step.name===name));
   expect(auxiliary.steps.some(step=>step.name==='Install native Mosh fixture dependencies'||step.name==='Verify native GUI namespace prerequisites'||step.name==='Build the pinned official Mosh fixture outside the checkout'||step.name==='Build real companion and receiver for owned Android cases'||step.uses==='actions/download-artifact@v4')).toBe(false);
-  const outputs=[guarded,auxiliary,workflow.jobs['native-android-herdr-navigation']].map(job=>job.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!);
-  expect(new Set(outputs.map(output=>output.name)).size).toBe(3);
+  const outputs=[guarded,auxiliary,workflow.jobs['native-android-herdr-navigation'],workflow.jobs['native-android-mosh']].map(job=>{const output=job.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!;return {...output,name:job.env?.LAZYSH_ANDROID_RUNTIME_ARTIFACT??output.name};});
+  expect(new Set(outputs.map(output=>output.name)).size).toBe(4);
   expect(outputs[1].name).toBe('lazysh-android-auxiliary-results');
   expect(outputs[1].path).toBe(outputs[0].path);
+});
+
+test('standalone native Mosh has its own bounded emulator owner without a client or Herdr prerequisite',()=>{
+  const mosh=workflow.jobs['native-android-mosh'],guarded=workflow.jobs['native-android-runtime'];
+  expect(mosh.needs).toBeUndefined();
+  expect(guarded.needs).toBe('herdr-native');
+  expect(guarded.env?.GUARDED_HERDR_SHA256).toBe('${{ needs.herdr-native.outputs.guarded-sha256 }}');
+  expect(mosh['timeout-minutes']).toBe(30);
+  expect(mosh['runs-on']).toBe(guarded['runs-on']);
+  expect(mosh.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'mosh',LAZYSH_ANDROID_RUNTIME_ARTIFACT:'lazysh-android-mosh-results'});
+  expect(mosh.steps).toBe(guarded.steps);
+  for(const name of ['Verify native GUI namespace prerequisites','Build the pinned official Mosh fixture outside the checkout','Fingerprint Android native build tools','Grant this runner access to KVM','Run native Android instrumentation'])
+    expect(mosh.steps.find(step=>step.name===name)).toEqual(guarded.steps.find(step=>step.name===name));
+  for(const step of mosh.steps.filter(step=>step.name==='Verify same-run guarded Herdr'||step.uses==='actions/download-artifact@v4'))
+    expect(step.if).toBe("env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'");
+  expect(mosh.steps.find(step=>step.name==='Build real companion and receiver for owned Android cases')!.if).toBe("env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh'");
+  expect(mosh.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!.name).toBe('${{ env.LAZYSH_ANDROID_RUNTIME_ARTIFACT }}');
 });
 
 test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
   const name='Fingerprint Android native build tools';
   const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
-  for(const job of ['native-android','native-android-runtime','native-android-herdr-navigation','native-android-auxiliary','native-android-ntfy']) {
+  for(const job of ['native-android','native-android-runtime','native-android-mosh','native-android-herdr-navigation','native-android-auxiliary','native-android-ntfy']) {
     const steps=workflow.jobs[job].steps;
     const fingerprint=steps.findIndex(step=>step.name===name);
     const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
@@ -137,28 +197,32 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   for(const task of ['test:android-ssh','test:native-gui'])expect(tasks[task].passThroughEnv).toContain('LAZYSH_NATIVE_MOSH_SERVER');
 });
 
-test('actual Turbo task forwards pinned Mosh path, companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+for(const {taskName,keys,values,required} of [
+  {taskName:'test:android-ssh',keys:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'],values:['1','/owned/pinned/mosh-server','true','github-hosted'],required:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER']},
+  {taskName:'test:native-gui',keys:['LAZYSH_NATIVE_GUI_SECRET_SERVICE'],values:['/owned/pinned/gnome-keyring-daemon'],required:['LAZYSH_NATIVE_GUI_SECRET_SERVICE']},
+])test(`actual Turbo ${taskName} forwards admitted native fixture environment and filters unrelated values`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
   const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
   const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
   const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
   await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
-  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
-  const keys=['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{[taskName]:'bun env-probe.ts'}}));
   await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
   for(const admitted of [true,false]) {
-    const task={...config.tasks['test:android-ssh']};
-    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER'].includes(key));
-    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
+    const task={...config.tasks[taskName]};
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!required.includes(key));
+    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,[taskName]:task}}));
     await rm(join(directory,'observed.json'),{force:true});
-    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
-      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',LAZYSH_NATIVE_MOSH_SERVER:'/owned/pinned/mosh-server',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run',taskName,'--filter=@lazysh/client','--only'],directory,
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',...Object.fromEntries(keys.map((key,index)=>[key,values[index]])),LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
     await child.finish('actual Turbo task environment',10_000);
-    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,admitted?'/owned/pinned/mosh-server':null,'true','github-hosted'],unrelatedFiltered:true});
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:values.map((value,index)=>admitted||!required.includes(keys[index])?value:null),unrelatedFiltered:true});
   }
 },25_000);
 
 test.each([
+  { owner:'mosh', mosh:0, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:false },
+  { owner:'mosh', mosh:37, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'guarded', mosh:0, instrumentation:0, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:false },
   { mosh:37, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
@@ -230,18 +294,16 @@ exit "$SDK_EXIT"
     stdout: 'pipe', stderr: 'pipe',
   });
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const expectedExit = owner==='guarded' ? mosh || instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : owner==='herdr-navigation' ? instrumentation : 1;
+  const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : owner==='herdr-navigation' ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
   expect(stdout).toBe('');
-  if (!overflow) expect(stderr).toBe(['guarded','auxiliary','herdr-navigation'].includes(owner)?'':'Unknown Android runtime owner\n');
+  if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation'].includes(owner)?'':'Unknown Android runtime owner\n');
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
-  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='guarded'?[
-    'run test:android-mosh',...(mosh===0?['run test:android-ssh']:[]),
-  ]:owner==='auxiliary'?[
+  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
     'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),
     ...(sdkExpected?['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture']:[]),
   ]:[]);
@@ -266,7 +328,7 @@ exit "$SDK_EXIT"
   expect(status).toContain(`test exit=${expectedExit}`);
   expect(status).toContain('collector exit=143');
   if (diagnosticFailure) {
-    for (const name of ['start-load', 'lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load']) {
+    for (const name of ['start-load', ...(expectedExit ? ['lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load'] : [])]) {
       expect(status).toContain(`${name} exit=79`);
     }
   }

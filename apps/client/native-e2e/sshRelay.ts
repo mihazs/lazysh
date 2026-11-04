@@ -1,6 +1,6 @@
 import {connect,createServer,type Socket} from 'node:net';
 import {acceptedConnectionOwner} from './socketOwner';
-import {sameIdentity,type OwnedPid} from '../../../tests/support/ownedProcess';
+import {descendants,sameIdentity,type OwnedPid} from '../../../tests/support/ownedProcess';
 
 /** Close an attributed SSH byte stream without touching its listener or UDP peer. */
 export class OwnedSshRelay {
@@ -33,6 +33,21 @@ export class OwnedSshRelay {
     if(matches.length!==1 || !await sameIdentity(owner))throw new Error('Exactly one live owned SSH relay peer required');
     const peer=matches[0],upstream=this.pairs.get(peer);
     if(!upstream)throw new Error('Owned SSH relay pair retired');
+    peer.destroy();upstream.destroy();this.pairs.delete(peer);
+  }
+  // Android PIDs are not host identities; attribute the opposite end to the owned sshd subtree.
+  async closeOwnedServer(owner:OwnedPid) {
+    if(!await sameIdentity(owner))throw new Error('Owned SSH server identity retired');
+    if(this.pairs.size!==1)throw new Error('Exactly one live owned SSH server stream required');
+    const members=()=>descendants(owner);
+    const [peer,upstream]=[...this.pairs][0];
+    if(upstream.destroyed || upstream.remoteAddress!=='127.0.0.1' || upstream.localAddress!=='127.0.0.1' || upstream.remotePort!==this.target)throw new Error('Owned SSH server stream retired');
+    const attributed=await acceptedConnectionOwner(upstream,members);
+    if(!attributed || !await sameIdentity(owner))throw new Error('Exactly one live owned SSH server stream required');
+    const server=attributed.identity;
+    const current=await acceptedConnectionOwner(upstream,members);
+    if(current?.identity.pid!==server.pid || current.identity.start!==server.start || !await sameIdentity(server) || !await sameIdentity(owner)
+      || this.pairs.size!==1 || this.pairs.get(peer)!==upstream || peer.destroyed || upstream.destroyed)throw new Error('Owned SSH server stream retired');
     peer.destroy();upstream.destroy();this.pairs.delete(peer);
   }
   async stop() {

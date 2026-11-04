@@ -71,7 +71,7 @@ val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { p
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
-    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshSwiftkeyAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance")
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshSwiftkeyAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance")
         .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
     val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
         "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
@@ -80,9 +80,12 @@ val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAccepta
         gradle.startParameter.taskNames.all { it.substringAfterLast(':') in allowed }) {
         "UnifiedPush acceptance trust requires an explicit debug acceptance task"
     }
-    val expected = rootProject.file("../../../../../packages/push-registration/android-unifiedpush").canonicalFile
+    val distribution = providers.gradleProperty("lazyshUnifiedPushAcceptanceVariant").orElse("fdroid").get()
+    check(distribution in setOf("fdroid", "google")) { "UnifiedPush acceptance distribution is unsupported" }
+    val provider = if (distribution == "fdroid") "android-unifiedpush" else "android"
+    val expected = rootProject.file("../../../../../packages/push-registration/$provider").canonicalFile
     check(rootProject.findProject(":tauri-plugin-lazysh-push")?.projectDir?.canonicalFile == expected) {
-        "UnifiedPush acceptance trust requires the F-Droid native provider"
+        "UnifiedPush acceptance distribution must match the native provider"
     }
     check(File(path).isAbsolute) { "UnifiedPush acceptance requires an absolute owned CA path" }
     file(path).also {
@@ -180,6 +183,24 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-ui"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshSshImeAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-ime-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ime-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshSshDpadAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-dpad-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-dpad-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshAttachmentAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/attachment-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/attachment-ui"
         }
     }
     if (providers.gradleProperty("lazyshCompanionAcceptance").orNull == "true") {

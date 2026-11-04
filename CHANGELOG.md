@@ -2,6 +2,125 @@
 
 ## [Unreleased]
 
+- Preserve owned IME corrections across zero-code Process keys and keep subsequent hardware keypresses ordered and sent once; retain focus, access and unsupported-edit protections.
+
+- Keep owned ASCII forward deletions without key229 synchronized with later terminal suggestions and typing; preserve composition fallback and review for edits outside the locally owned input.
+
+- Preserve the visible scrollback line during height-only terminal resizing, including keyboard-sized viewport changes; keep bottom-following and the separate Mosh rendering path.
+
+- Simplify workspace navigation with focused Workspaces and Agents screens, compact session context and clearer work-state rows. Changed default: desktop tools now open from Workspace tools instead of a permanent tab strip; all existing tools remain reachable. Preserve the compact phone terminal, existing sessions and contextual return.
+
+- Keep owned Android IME fallback edits from repeating earlier text or dropping ASCII deletions, while preserving cancellation and explicit review for unsupported edits.
+
+- Keep Mosh repaint geometry synchronized with complete server frames during keyboard, composer and viewport resizes, avoiding duplicated screen rows in scrollback. Existing history cells retain their original width and can be clipped in narrower views until widened.
+- Increase custom-theme glass opacity only when its selected chrome colors need more backing for readable text; bundled theme glass and solid accessibility fallbacks remain unchanged.
+
+- Keep Compose and the expanded D-pad mutually exclusive so the draft stays editable above a mobile keyboard; switching tools preserves the unsent draft.
+
+- Compact the terminal draft editor, prioritize uploaded attachment paths and explicit use, and guide push setup through relay enrollment. Agents opens Live by default; recorded Activity and setup stay available separately, with pending approvals reachable in both views. Connected sessions, drafts, upload protections and notification consent remain intact.
+
+- Keep recorded Conversation messages readable in constrained workspaces instead of letting the reading region collapse behind its controls.
+
+- Add an explicit recorded Codex Conversation view with turn rollback, canonical item updates and protected fork/revert prefixes; Records remains the default and recorded history does not grant live-agent or approval authority.
+
+- Prevent the browser touch default on owned expanded D-pad direction gestures; ordinary clicks, corner shortcuts and accessibility controls remain available.
+- Change toolbar Shift to one-shot: it clears after the next completed key, while a held arrow or D-pad gesture keeps its initial Shift for that hold. Tapping Shift again turns it off without sending pending IME text. Explicit Control and Alt locks are unchanged.
+
+- Start mobile Workspaces with compact selected-session context and a session count; expand all connected app sessions on request. Desktop keeps the expanded session list.
+
+
+- Preserve fractional scroll distance between short finger drags in the same active terminal, making small gestures responsive without amplifying repeated movement; navigation, cancellation and connection changes retire pending travel.
+
+- Allow vertical finger scrolling after selecting terminal text, using xterm’s normal wheel selection behavior; horizontal gestures, taps and accessibility safeguards remain unchanged.
+- Keep unavailable Home Screen icon settings compact without hiding errors or explicit refresh recovery.
+- Keep sidebar mode labels whole and reachable across narrow layouts, translations and enlarged text.
+
+- Preserve slow sub-row finger movement in terminal scrollback instead of losing travel between xterm redraws.
+
+- Expanded terminal D-pad controls now suppress their browser context menu by default.
+
+- Run each Google/FOSS ntfy acceptance branch as a complete emulator-runner shell command, preserving the existing native checks and deadlines.
+
+- Keep browser acceptance aligned with dedicated Preferences screens and compare attachment file-picker styling in a settled normal state; application behavior and defaults are unchanged.
+
+- Persist the selected Android push provider before explicit registration or cleanup so late previous-provider token callbacks cannot change it after restart. Status inspection remains read-only, and failed persistence prevents the control action.
+
+- Add Firebase-free UnifiedPush setup to Google Android builds alongside explicit FCM. New/off Google installations select UnifiedPush without registering; existing active FCM registrations remain selected. Provider changes require paused/revoked registration. Add opt-in Gotify relay delivery to the separate Gotify client; encrypted lazysh event display remains behind its original private enrollment and consent gates.
+
+- Keep vertically dominant finger drags responsive and preserve complete coalesced scroll motion before finger lift.
+
+- Replace mobile Preferences disclosures with category navigation and contextual Back; simplify workspace and agent controls, refine theme-derived glass navigation chrome, and honor reduced motion for short navigation transitions. Settings values, credentials and transport defaults are unchanged.
+
+- Keep Android autocomplete corrections editable when the keyboard leaves the caret inside an owned composing range.
+
+- Preserve physical and toolbar Shift+Enter as a distinct modified Enter key for agent newline bindings, instead of submitting an ordinary Enter. Plain Enter and other modifier combinations retain their existing behavior.
+
+- Add held-pointer panning to the expanded terminal D-pad, with paced arrow repeats, a pause zone and cancellation when input ownership or session availability changes. Existing arrow taps, keyboard activation, corner shortcuts and toolbar defaults remain unchanged.
+
+- Organize documentation by learning, tasks, reference and explanation; add a guided first SSH session and separate companion setup, settings and event-storage contracts. Preserve established links, security limits and platform acceptance boundaries. No application defaults change.
+
+- Prioritize connected app sessions above discovered Herdr spaces and refine compact themed navigation. Healthy Herdr server setup in Workspaces is now collapsed by default. Missing selections and unhealthy readers still reveal setup automatically. Keep shared-focus warnings visible and preserve session identity, reader drafts, contextual return, authentication and transport defaults.
+
+- Keep delayed terminal, composer and search focus inside their pane from taking focus away from an open credential or other modal dialog. Preserve terminal protocol replies, sessions and explicit input after dismissal; no authentication or transport defaults change.
+
+- Add explicit V3 discovery and inspected managed Amp system-plugin setup with absolute companion binding. Setup tries V3 metadata with one bounded V2 compatibility fallback; V1/V2 provider mappings stay unchanged. Same-name foreign plugins block installation while fresh exact-owned removal remains available; settings, trust and live reporting are not enabled or verified.
+
+- Add an owned Android manual Mosh attachment checkpoint for a large valid protected-clipboard PNG and exclusive creation against a pre-existing destination. Closed-control recovery and physical-device/file-picker/camera acceptance remain unverified; no upload defaults change.
+
+- Add explicit version-2 hook discovery and inspected managed Copilot setup for selected existing Linux profiles, with shell-free absolute companion handlers and protected file ownership. Default version-1 discovery keeps its seven managed providers and Copilot manual; settings, disabled hooks, trust and live reporting remain unchanged.
+
+- Keep touch scrolling continuous when terminal output redraws under a held finger on coarse-pointer screens. Preserve screen-reader mode and desktop hit testing; no input, connection or permission defaults change.
+
+- Make touch scrolling in mouse-tracking terminals depend on finger travel rather than touch-event frequency. Accumulate partial movement, keep the original pane and clear pending distance when the gesture ends.
+- Keep the terminal canvas anchored when the keyboard resizes the available space and the browser reveals its input. Terminal history continues to scroll inside xterm's viewport.
+
+- Stop the updated Amp plugin from reporting completion for an initially idle thread or treating error-to-idle as recovery. It reports idle only after observing that thread running. Replace previously copied manual Amp plugin files to receive the fix; existing historical reports, legacy ingestion and trust defaults remain unchanged.
+
+- Complete independently identified Copilot child reports while preserving the parent's state and ignoring ambiguous child completion callbacks. No installation, permission or input defaults change.
+
+- Document Linux Copilot CLI 1.0.105 manual-hook completion and unanswered elicitation attention qualification, with explicit runtime limits (#704).
+
+- Give mobile Agents and Workspaces full-width working views, compact Herdr navigation actions and selectable reported-activity rows with focused details. Reduce repeated navigation chrome while preserving terminal space, session state, setup disclosure and explicit live/reported distinctions. Label recorded attention neutrally instead of implying a valid pending request, and visibly return focus to the selected row when closing its details. No connection, permission or input defaults change.
+
+- Discover separate current Kimi Code and legacy Kimi CLI profile candidates without executing agents or reading configuration. Preserve literal overrides, manual-only setup and legacy hook output; clarify the printer targets Kimi CLI 1.52 and current lifecycle remains unqualified. No setup or trust defaults change.
+
+- Correct packaged agent-reporting guidance for read-only discovery and explicit managed Cline setup. Preserve plugin restrictions and separate installation from loaded reporting; no installation or trust defaults change.
+
+- Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.
+
+- Document Obtainium as the preferred Android installation/update method, with explicit APK flavor filters, signature-channel caveats and manual SHA256 verification. No application default changes.
+
+- Correct README download availability and link to the public roadmap and installation guidance.
+
+- Add direct Live agents and Activity jump controls at the top of the Agents drawer. Move focus and only the drawer scroll position while preserving mounted readers, drafts, approvals and Back behavior; no agent data or connection settings change.
+- Add explicit managed Cline root lifecycle plugin setup for a selected existing profile, with protected absolute companion binding, inspected install/remove plans and profile discovery. Existing plugin restrictions and settings are preserved; a new Cline session must load the profile, and setup does not verify live reporting.
+
+- Detect installed host agents and known profile locations when opening Agent hook setup, with no provider preselected. Select a detected target or enter a manual profile before inspecting and installing hooks; discovery does not install hooks, create profiles or change trust settings. Executable discovery and live activity remain separate.
+
+- Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
+
+- Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+- Restore the mobile Agents drawer scroll offset once when returning from a tool to the same session and mode. Discard stale offsets after source, mode, server, access or layout changes; focus, navigation history, provider readers and connection defaults are unchanged.
+
+- Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
+
+- Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.
+
+
+- Distinguish a full terminal input queue from a closed input channel, and record content-free write-caller and ownership diagnostics for investigating Android session navigation failures. Input delivery, queue capacity and error visibility are unchanged.
+- Open Preferences at the top with collapsed categories for appearance, language, terminal behavior, keyboard controls, security and connection settings. Preserve mounted drafts, async operations and safety text; opening settings no longer focuses Font size or requests text input. Saved settings and permission defaults are unchanged.
+
+- Prioritize Connect when opening a saved host: connection options now start collapsed with the effective transport shown. Focus required credentials when needed or Connect when saved credentials are available, without stealing focus from a manual entry. Advanced Mosh/ET settings, saved defaults and validation remain available.
+- Keep the native branded startup cover until the current renderer acknowledges its first workspace commit when app lock is disabled, including after renderer recreation. Confirmed locks retain their native unlock controls.
+
+- Offer Agent hook setup directly from empty Activity, opening the existing inspected setup workflow for the selected host. Hook installation and provider trust remain explicit; an empty list does not establish whether live reporting is configured.
+
+- Refine theme-aware frosted navigation and short action sheets, keeping long forms and terminal output opaque and preserving reduced-transparency and forced-color fallbacks. No theme defaults change.
+
+- Prioritize live agents and reported activity over optional configuration. Healthy Agents setup and single-server Herdr selection now start collapsed; explicit setup preserves mounted drafts and operations, while companion repair and pending approvals remain visible. Connection, permission and collection defaults are unchanged.
+
+- Classify failed companion installer tag rechecks with closed diagnostics while preserving localized errors, provenance verification and installation defaults.
+
 - Add explicit managed Droid hook setup for an existing standalone `.factory/hooks.json`, including the connected Agents selector. Preserve foreign event groups and fallback/settings policy, bind the inspected absolute companion, and refuse missing files rather than shadowing legacy hooks. Fresh-profile migration and native Droid runtime qualification remain unsupported; no defaults or trust settings change.
 
 - Display native terminal failure messages instead of `[object Object]`, preserving localized errors.

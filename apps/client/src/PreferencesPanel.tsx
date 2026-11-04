@@ -1,3 +1,4 @@
+import SettingsNavigation,{type SettingsPage} from "./SettingsNavigation";
 import {t, useUi, formatNumber} from './i18n/core';
 import { useEffect, useRef, useState } from "react";
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
@@ -10,7 +11,7 @@ import ChordBuilder from "./ChordBuilder";
 import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, toolbarKeyLabel, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
-export default function PreferencesPanel() {
+export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsPage[];after?:SettingsPage[]}={}) {
   useUi();
   const preferences = usePreferences();
   const locale=useNativeLocale();
@@ -54,14 +55,19 @@ export default function PreferencesPanel() {
     </div>;
   }
   return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
-    <h2>{t("preferencesTerminalPreferences")}</h2>
-    <p>{t("preferencesChangesApplyToEveryOpenTerminal")}</p>
     {error && <p role="alert">{uiErrorText(error)}</p>}
     {languageError && <p role="alert">{t(languageError==='settings'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed')}</p>}
+    <SettingsNavigation pages={[...before,
+{id:"language",title:t("preferencesCategoryLanguage"),content:<>
+
     <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
       <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
       <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
     </select></label>
+
+</>},
+{id:"appearance",title:t("preferencesCategoryAppearance"),content:<>
+
     <AppIconPanel />
     <label>{t("preferencesSessionSwitcherLayout")}<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">{t("preferencesList")}</option><option value="cards">{t("preferencesCards")}</option></select></label>
     <label>{t("preferencesAppTheme")}<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme === "forest" ? "lazysh" : t(({forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const)[theme as keyof typeof themes])}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
@@ -87,35 +93,52 @@ export default function PreferencesPanel() {
       <ul>{fonts.fonts.map(font => <li key={font.id}><span>{font.name} ({formatNumber(font.size / 1024 / 1024, {minimumFractionDigits:2, maximumFractionDigits:2})}{" "}{t("preferencesMiB")}</span><button disabled={fontBusy} aria-label={t("preferencesDeleteFontValue1", {value1: font.name})} onClick={() => void fontAction(() => deleteFont(font.id))}>{t("preferencesDelete")}</button></li>)}</ul>
       <button disabled={fontBusy} onClick={() => void fontAction(deleteAllFonts)}>{t("preferencesDeleteAllImportedFonts")}</button>
     </details>
+    <ThemeImportPanel preferences={preferences} apply={update} />
+
+</>},
+{id:"terminal",title:t("preferencesCategoryTerminal"),content:<>
+
     <label>{t("preferencesCursor")}<select value={preferences.cursorStyle} onChange={e => update({cursorStyle: e.target.value as Preferences["cursorStyle"]})}>{["bar", "block", "underline"].map(value => <option key={value} value={value}>{t(({bar:"cursorBar",block:"cursorBlock",underline:"cursorUnderline"} as const)[value as Preferences["cursorStyle"]])}</option>)}</select></label>
     <label><input type="checkbox" checked={preferences.cursorBlink} onChange={e => update({cursorBlink: e.target.checked})} />{t("preferencesBlinkCursor")}</label>
     <label>{t("preferencesHistoryLines")}<input type="number" min={100} max={20000} step={100} value={preferences.scrollback} onChange={e => { if (e.target.value) update({scrollback: Number(e.target.value)}); }} /></label>
     <p>{t("preferencesReducingHistoryRemovesOlderLocalLines")}</p>
-    <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
     <label><input type="checkbox" checked={preferences.screenReader} onChange={e => update({screenReader: e.target.checked})} />{t("preferencesScreenReaderAnnouncements")}</label>
     <label><input type="checkbox" checked={preferences.pinchZoom} onChange={e => update({pinchZoom: e.target.checked})} />{t("preferencesPinchWithTwoFingersToResizeTerminalText")}</label>
     <label><input type="checkbox" checked={preferences.autoHideToolbar} onChange={e => update({autoHideToolbar: e.target.checked})} />{t("preferencesAutoHideToolbarInDesktopPointerLayouts")}</label>
-    <details><summary>{t("preferencesTerminalTouchGestures")}</summary>
+
+</>},
+{id:"input",title:t("preferencesCategoryInput"),content:<>
+
+    <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
+
+</>},
+{id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>
+
       <p>{t("preferencesBindingsAreOptionalSelectionCompositionAndScreenReaderGestures")}</p>
       {bodyGestureSlots.map(slot => binding(slot, {tap: t("gestureSingleTap"), doubleTap: t("gestureDoubleTap"), tripleTap: t("gestureTripleTap"), swipeLeft: t("gestureSwipeLeft"), swipeRight: t("gestureSwipeRight")}[slot], preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}})))}
       {gestureDirections.map(direction => binding(`two${direction[0].toUpperCase()}${direction.slice(1)}` as GestureSlot, t(({left:"gestureTwoLeft",right:"gestureTwoRight",up:"gestureTwoUp",down:"gestureTwoDown"} as const)[direction]), preferences.gestures[direction], action => update({gestures: {...preferences.gestures, [direction]: action}})))}
       <p>{t("preferencesAddTheDPadItemUnderToolbarKeysTo")}</p>
       {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", t(corner === "left" ? "gestureDpadLeft" : "gestureDpadRight"), preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
       <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom})}>{t("preferencesResetGestures")}</button>
-    </details>
-    <ThemeImportPanel preferences={preferences} apply={update} />
-    <details><summary>{t("preferencesToolbarKeysAndOrder")}</summary>
+
+</>},
+{id:"preferencesToolbarKeysAndOrder",title:t("preferencesToolbarKeysAndOrder"),parent:"input",content:<>
+
       <ul>{preferences.toolbar.map((key, index) => <li key={key}><span>{toolbarKeyLabel(key)}</span><button aria-label={t("preferencesMoveValue1Earlier", {value1: key})} disabled={index === 0} onClick={() => move(key, -1)}>↑</button><button aria-label={t("preferencesMoveValue1Later", {value1: key})} disabled={index === preferences.toolbar.length - 1} onClick={() => move(key, 1)}>↓</button><button aria-label={t("preferencesRemoveValue1", {value1: key})} onClick={() => update({toolbar: preferences.toolbar.filter(item => item !== key)})}>{t("appRemove")}</button></li>)}</ul>
       {toolbarKeys.filter(key => !preferences.toolbar.includes(key)).map(key => <button key={key} onClick={() => update({toolbar: [...preferences.toolbar, key]})}>{t("preferencesAdd")}{" "}{toolbarKeyLabel(key)}</button>)}
-    </details>
-    <details><summary>{t("preferencesTextSnippets")}</summary>
+
+</>},
+{id:"preferencesTextSnippets",title:t("preferencesTextSnippets"),parent:"input",content:<>
+
       <p>{t("preferencesSnippetsPasteLiteralTextIntoTheActiveProgramReview")}</p>
       <ul>{preferences.snippets.map((snippet, index) => <li key={index}><span>{snippet.label}</span><button aria-label={t("preferencesRemoveSnippetValue1", {value1: snippet.label})} onClick={() => update({snippets: preferences.snippets.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
       <label>{t("preferencesSnippetName")}<input maxLength={32} value={label} onChange={e => setLabel(e.target.value)} /></label>
       <label>{t("preferencesSnippetText")}<textarea maxLength={2048} value={text} onChange={e => setText(e.target.value)} /></label>
       <button disabled={!label.trim() || !text} onClick={() => { if (update({snippets: [...preferences.snippets, {label: label.trim(), text}]})) { setLabel(""); setText(""); } }}>{t("preferencesAddSnippet")}</button>
-    </details>
-    <details><summary>{t("preferencesKeyboardChords")}</summary>
+
+</>},
+{id:"preferencesKeyboardChords",title:t("preferencesKeyboardChords"),parent:"input",content:<>
+
       <p>{t("preferencesSendUpTo8StepsCBST")}</p>
       <ul>{preferences.chords.map((chord, index) => <li key={index}><span>{chord.label}: {chord.keys}</span><button aria-label={t("preferencesRemoveChordValue1", {value1: chord.label})} onClick={() => update({chords: preferences.chords.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
       <label>{t("preferencesChordName")}<input maxLength={32} value={chordLabel} onChange={e => setChordLabel(e.target.value)} /></label>
@@ -123,10 +146,16 @@ export default function PreferencesPanel() {
         if (!update({chords: [...preferences.chords, {label: chordLabel.trim(), keys}]})) return false;
         setChordLabel(''); return true;
       }} />
-    </details>
+
+</>},
+{id:"reset",title:t("preferencesCategoryReset"),content:<>
+
     <button disabled={languageBusy} onClick={() => {void languageAction(async()=>{
       await applyPreferenceIntent({...defaults,toolbar:[...defaults.toolbar],snippets:[],customTheme:undefined,customThemeInfo:undefined},true,current);
       if(current())await fontAction(resetFontSelection);
     });}}>{t("preferencesResetPreferences")}</button>
+
+</>},
+...after]}/>
   </section>;
 }

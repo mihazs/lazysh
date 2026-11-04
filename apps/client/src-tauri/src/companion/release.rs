@@ -86,6 +86,57 @@ fn rejected() -> SshError {
         "No compatible verified companion installer is published",
     )
 }
+// Codes contain only local classifications, never request or response text.
+fn recheck_error(code: &str) -> SshError {
+    SshError::new(
+        "companion_release_unavailable",
+        format!("lazysh-tag-recheck-v1:{code}"),
+    )
+}
+fn recheck_transport(error: reqwest::Error) -> SshError {
+    let category = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "other"
+    };
+    recheck_error(&format!("transport:{category}"))
+}
+async fn recheck_body(response: reqwest::Response) -> Result<Reference> {
+    if response.status() != reqwest::StatusCode::OK {
+        let status = response.status().as_u16();
+        return Err(recheck_error(&if (100..=599).contains(&status) {
+            format!("status:{status}")
+        } else {
+            "status:other".into()
+        }));
+    }
+    let bytes = read_body(response, 16_384, None)
+        .await
+        .map_err(|_| recheck_error("body"))?;
+    serde_json::from_slice(&bytes).map_err(|_| recheck_error("json"))
+}
+fn recheck_reference(reference: Reference, selection: &Selection) -> Result<()> {
+    let code = if reference.r#ref != format!("refs/tags/v{}", selection.version) {
+        "ref"
+    } else if reference.object.r#type != "commit" {
+        "type"
+    } else if reference.object.sha != selection.sha {
+        "sha"
+    } else {
+        return Ok(());
+    };
+    Err(recheck_error(code))
+}
 fn asset_digest(asset: &Asset) -> Result<&str> {
     let digest = asset
         .digest
@@ -308,15 +359,8 @@ impl Publisher {
             fixture: None,
         })
     }
-    async fn get(
-        &self,
-        path: &str,
-        maximum: u64,
-        expected: Option<u64>,
-        binary: bool,
-    ) -> Result<Vec<u8>> {
-        let response = self
-            .client
+    fn request(&self, path: &str, binary: bool) -> reqwest::RequestBuilder {
+        self.client
             .get(format!("{REPOSITORY}{path}"))
             .header(
                 "Accept",
@@ -327,6 +371,16 @@ impl Publisher {
                 },
             )
             .header("Accept-Encoding", "identity")
+    }
+    async fn get(
+        &self,
+        path: &str,
+        maximum: u64,
+        expected: Option<u64>,
+        binary: bool,
+    ) -> Result<Vec<u8>> {
+        let response = self
+            .request(path, binary)
             .send()
             .await
             .map_err(|_| rejected())?;
@@ -403,14 +457,12 @@ impl Publisher {
         if self.fixture.is_some() {
             return Ok(());
         }
-        let reference = self.reference(&selection.version).await?;
-        if reference.r#ref != format!("refs/tags/v{}", selection.version)
-            || reference.object.r#type != "commit"
-            || reference.object.sha != selection.sha
-        {
-            return Err(rejected());
-        }
-        Ok(())
+        let response = self
+            .request(&format!("git/ref/tags/v{}", selection.version), false)
+            .send()
+            .await
+            .map_err(recheck_transport)?;
+        recheck_reference(recheck_body(response).await?, selection)
     }
 }
 #[cfg(test)]
@@ -461,6 +513,75 @@ mod tests {
             serde_json::from_value(reference).unwrap(),
             "linux-agent-x64",
         )
+    }
+    fn diagnostic(error: SshError) -> String {
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["kind"], "companion_release_unavailable");
+        assert_eq!(value.as_object().unwrap().len(), 2);
+        value["message"].as_str().unwrap().to_owned()
+    }
+    #[tokio::test]
+    async fn recheck_failures_classify_status_body_and_json_without_remote_text() {
+        for (status, code) in [(403, "403"), (429, "429"), (599, "599"), (600, "other")] {
+            let response = hyper::http::Response::builder()
+                .status(status)
+                .header("x-private-header", "private-value")
+                .body("private response body")
+                .unwrap();
+            assert_eq!(
+                diagnostic(
+                    recheck_body(reqwest::Response::from(response))
+                        .await
+                        .err()
+                        .unwrap()
+                ),
+                format!("lazysh-tag-recheck-v1:status:{code}")
+            );
+        }
+        for (body, length, code) in [("private-not-json", "16", "json"), ("{}", "17000", "body")] {
+            let response = hyper::http::Response::builder()
+                .header("content-length", length)
+                .body(body)
+                .unwrap();
+            assert_eq!(
+                diagnostic(
+                    recheck_body(reqwest::Response::from(response))
+                        .await
+                        .err()
+                        .unwrap()
+                ),
+                format!("lazysh-tag-recheck-v1:{code}")
+            );
+        }
+    }
+    #[test]
+    fn recheck_provenance_failures_are_closed_and_still_rejected() {
+        let selection = chosen(fixture()).unwrap();
+        for (field, code) in [("ref", "ref"), ("type", "type"), ("sha", "sha")] {
+            let (_, _, mut reference) = fixture();
+            if field == "ref" {
+                reference[field] = json!("private-ref");
+            } else {
+                reference["object"][field] = json!("private-value");
+            }
+            assert_eq!(
+                diagnostic(
+                    recheck_reference(serde_json::from_value(reference).unwrap(), &selection)
+                        .unwrap_err()
+                ),
+                format!("lazysh-tag-recheck-v1:{code}")
+            );
+        }
+        let (_, _, reference) = fixture();
+        assert!(recheck_reference(serde_json::from_value(reference).unwrap(), &selection).is_ok());
+        let invalid = Client::new()
+            .get("http://[private-invalid-url")
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            diagnostic(recheck_transport(invalid)),
+            "lazysh-tag-recheck-v1:transport:other"
+        );
     }
     #[test]
     fn selected_receipt_source_tag_and_api_digest_must_agree() {

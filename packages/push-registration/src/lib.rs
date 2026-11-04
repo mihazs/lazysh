@@ -5,6 +5,8 @@ use tauri::{plugin::TauriPlugin, AppHandle, Manager, Runtime};
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationStatus {
     pub provider: String,
+    #[serde(default)]
+    pub available_providers: Vec<String>,
     pub supported: bool,
     pub configured: bool,
     pub enabled: bool,
@@ -35,6 +37,14 @@ struct Control {
 
 #[cfg(mobile)]
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderControl {
+    operation_epoch: u64,
+    provider: String,
+}
+
+#[cfg(mobile)]
+#[derive(Serialize)]
 struct DisplayControl {
     permit: String,
 }
@@ -43,6 +53,7 @@ struct DisplayControl {
 fn unsupported() -> RegistrationStatus {
     RegistrationStatus {
         provider: "none".into(),
+        available_providers: vec![],
         supported: false,
         configured: false,
         enabled: false,
@@ -115,11 +126,57 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub async fn push_registration_provider<R: Runtime>(
+        app: AppHandle<R>,
+        provider: String,
+    ) -> Result<RegistrationStatus, String> {
+        if !cfg!(target_os = "android") || !["unifiedpush", "fcm"].contains(&provider.as_str()) {
+            return Err("Push provider selection requires a supported Android service".into());
+        }
+        if cfg!(feature = "fdroid") {
+            return if provider == "unifiedpush" {
+                call(&app, "status", 0)
+            } else {
+                Err("The FOSS build supports UnifiedPush only".into())
+            };
+        }
+        let epoch = app
+            .state::<ControlSequence>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        #[cfg(mobile)]
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Push<R>>()
+                .handle
+                .run_mobile_plugin(
+                    "selectProvider",
+                    ProviderControl {
+                        operation_epoch: epoch,
+                        provider,
+                    },
+                )
+                .map_err(|_| {
+                    "Cannot change native push provider; pause registration first".to_owned()
+                })
+        })
+        .await
+        .map_err(|_| "Native push provider selection interrupted".to_owned())?;
+        #[cfg(desktop)]
+        {
+            let _ = (app, epoch);
+            Err("Push provider selection requires Android".into())
+        }
+    }
+
+    #[tauri::command]
     pub async fn push_registration_enroll<R: Runtime>(
         app: AppHandle<R>,
     ) -> Result<RegistrationStatus, String> {
-        if !cfg!(all(target_os = "android", feature = "fdroid")) {
-            return Err("Private relay enrollment requires the F-Droid Android build".into());
+        if !cfg!(target_os = "android") {
+            return Err(
+                "Private relay enrollment requires the Android UnifiedPush provider".into(),
+            );
         }
         change(app, "enroll", "Native private enrollment interrupted").await
     }
@@ -136,8 +193,10 @@ pub mod commands {
         app: AppHandle<R>,
         permit: String,
     ) -> Result<RegistrationStatus, String> {
-        if !cfg!(all(target_os = "android", feature = "fdroid")) {
-            return Err("Remote notification display requires the F-Droid Android build".into());
+        if !cfg!(target_os = "android") {
+            return Err(
+                "Remote notification display requires the Android UnifiedPush provider".into(),
+            );
         }
         #[cfg(mobile)]
         return tauri::async_runtime::spawn_blocking(move || {
@@ -151,7 +210,7 @@ pub mod commands {
         #[cfg(desktop)]
         {
             let _ = (app, permit);
-            unreachable!("F-Droid Android only")
+            unreachable!("Android only")
         }
     }
 }
@@ -219,6 +278,16 @@ mod tests {
         assert!(tauri::async_runtime::block_on(push_registration_display(
             app.handle().clone(),
             String::new()
+        ))
+        .is_err());
+        assert!(tauri::async_runtime::block_on(push_registration_provider(
+            app.handle().clone(),
+            "unifiedpush".into()
+        ))
+        .is_err());
+        assert!(tauri::async_runtime::block_on(push_registration_provider(
+            app.handle().clone(),
+            "private-invalid".into()
         ))
         .is_err());
         assert_eq!(call(app.handle(), "status", 0).unwrap().provider, "none");

@@ -135,7 +135,14 @@ fn read_provider(
     if !missing_parent {
         return files::read(provider, current.provider_name(), false, json::MAXIMUM);
     }
-    match current.profile.child("plugins", false) {
+    match current.profile.child(
+        current
+            .target
+            .agent
+            .asset_directory()
+            .expect("whole-file agent"),
+        false,
+    ) {
         Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(files::ReadFile {
                 state: FileState::Missing,
@@ -162,6 +169,8 @@ fn verify(
         || actual_provider.state != plan.provider
         || actual_provider.group != plan.provider_group
         || files::binary(&plan.binary.path)? != plan.binary
+        || files::amp_shadows(current.target.agent, (!missing_parent).then_some(provider))?
+            != plan.amp_shadows
     {
         return Err(rejected("HooksStalePlan"));
     }
@@ -223,25 +232,37 @@ pub(super) fn apply(
     {
         return Err(rejected("HooksReadOnlyConfiguration"));
     }
-    let new_plugins = if current.target.agent == record::Agent::Opencode
-        && current.plugins.is_none()
-        && after.is_some()
-    {
-        files::directory_admission(&current.profile)?;
-        current.profile.mkdir("plugins")?;
-        current.profile.file.sync_all()?;
-        Some(current.profile.child("plugins", false)?)
-    } else {
-        None
-    };
+    let new_plugins =
+        if current.target.agent.is_whole_file() && current.plugins.is_none() && after.is_some() {
+            files::directory_admission(&current.profile)?;
+            current.profile.mkdir(
+                current
+                    .target
+                    .agent
+                    .asset_directory()
+                    .expect("whole-file agent"),
+            )?;
+            current.profile.file.sync_all()?;
+            Some(
+                current.profile.child(
+                    current
+                        .target
+                        .agent
+                        .asset_directory()
+                        .expect("whole-file agent"),
+                    false,
+                )?,
+            )
+        } else {
+            None
+        };
     let provider = current
         .plugins
         .as_ref()
         .or(new_plugins.as_ref())
         .unwrap_or(&current.profile);
-    let missing_parent = current.target.agent == record::Agent::Opencode
-        && current.plugins.is_none()
-        && new_plugins.is_none();
+    let missing_parent =
+        current.target.agent.is_whole_file() && current.plugins.is_none() && new_plugins.is_none();
     let receipt = String::from_utf8(record.encode().map_err(rejected)?)
         .map_err(|_| rejected("HooksInvalidRecord"))?;
     let mut staged_record = Stage::new(&current.profile, &receipt)?;

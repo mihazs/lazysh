@@ -1,5 +1,290 @@
 # @lazysh/notification-service
 
+## 1.10.3
+
+### Patch Changes
+
+- @lazysh/common@1.10.3
+  - @lazysh/notification-client@1.10.3
+
+## 1.10.2
+
+### Patch Changes
+
+- @lazysh/common@1.10.2
+  - @lazysh/notification-client@1.10.2
+
+## 1.10.1
+
+### Patch Changes
+
+- @lazysh/common@1.10.1
+  - @lazysh/notification-client@1.10.1
+
+## 1.10.0
+
+### Patch Changes
+
+- @lazysh/common@1.10.0
+  - @lazysh/notification-client@1.10.0
+
+## 1.9.11
+
+### Patch Changes
+
+- @lazysh/common@1.9.11
+  - @lazysh/notification-client@1.9.11
+
+## 1.9.10
+
+### Patch Changes
+
+- @lazysh/common@1.9.10
+  - @lazysh/notification-client@1.9.10
+
+## 1.9.9
+
+### Patch Changes
+
+- @lazysh/common@1.9.9
+  - @lazysh/notification-client@1.9.9
+
+## 1.9.8
+
+### Patch Changes
+
+- @lazysh/common@1.9.8
+  - @lazysh/notification-client@1.9.8
+
+## 1.9.7
+
+### Patch Changes
+
+- @lazysh/common@1.9.7
+  - @lazysh/notification-client@1.9.7
+
+## 1.9.6
+
+### Patch Changes
+
+- @lazysh/common@1.9.6
+  - @lazysh/notification-client@1.9.6
+
+## 1.9.5
+
+### Patch Changes
+
+- @lazysh/common@1.9.5
+  - @lazysh/notification-client@1.9.5
+
+## 1.9.4
+
+### Patch Changes
+
+- @lazysh/common@1.9.4
+  - @lazysh/notification-client@1.9.4
+
+## 1.9.3
+
+### Patch Changes
+
+- @lazysh/common@1.9.3
+  - @lazysh/notification-client@1.9.3
+
+## 1.9.2
+
+### Patch Changes
+
+- 3fd9542: Qualify finite relay events against an owned real Gotify server over verified TLS.
+- @lazysh/common@1.9.2
+  - @lazysh/notification-client@1.9.2
+
+## 1.9.1
+
+### Patch Changes
+
+- @lazysh/common@1.9.1
+  - @lazysh/notification-client@1.9.1
+
+## 1.9.0
+
+### Minor Changes
+
+- eb37ec3: Offer Firebase-free UnifiedPush enrollment and authenticated event display in Google Android builds with explicit provider selection, and add opt-in Gotify delivery through the self-hosted notification relay.
+
+### Patch Changes
+
+- @lazysh/common@1.9.0
+  - @lazysh/notification-client@1.9.0
+
+## 1.8.4
+
+### Patch Changes
+
+- @lazysh/common@1.8.4
+  - @lazysh/notification-client@1.8.4
+
+## 1.8.3
+
+### Patch Changes
+
+- @lazysh/common@1.8.3
+  - @lazysh/notification-client@1.8.3
+
+## 1.8.2
+
+### Patch Changes
+
+- @lazysh/common@1.8.2
+  - @lazysh/notification-client@1.8.2
+
+## 1.8.1
+
+### Patch Changes
+
+- @lazysh/common@1.8.1
+  - @lazysh/notification-client@1.8.1
+
+## 1.8.0
+
+### Patch Changes
+
+- @lazysh/common@1.8.0
+  - @lazysh/notification-client@1.8.0
+
+## 1.7.8
+
+### Patch Changes
+
+- @lazysh/common@1.7.8
+  - @lazysh/notification-client@1.7.8
+
+## 1.7.7
+
+### Patch Changes
+
+- @lazysh/common@1.7.7
+  - @lazysh/notification-client@1.7.7
+
+## 1.7.6
+
+### Patch Changes
+
+- @lazysh/common@1.7.6
+  - @lazysh/notification-client@1.7.6
+
+## 1.7.5
+
+### Patch Changes
+
+- @lazysh/common@1.7.5
+  - @lazysh/notification-client@1.7.5
+
+## 1.7.4
+
+### Patch Changes
+
+- @lazysh/common@1.7.4
+  - @lazysh/notification-client@1.7.4
+
+## 1.7.3
+
+### Patch Changes
+
+- @lazysh/common@1.7.3
+  - @lazysh/notification-client@1.7.3
+
+## 1.7.2
+
+### Patch Changes
+
+- @lazysh/common@1.7.2
+  - @lazysh/notification-client@1.7.2
+
+## 1.7.1
+
+### Patch Changes
+
+- @lazysh/common@1.7.1
+  - @lazysh/notification-client@1.7.1
+
+## 1.7.0
+
+### Patch Changes
+
+- @lazysh/common@1.7.0
+  - @lazysh/notification-client@1.7.0
+
+## 1.6.0
+
+### Patch Changes
+
+- @lazysh/common@1.6.0
+  - @lazysh/notification-client@1.6.0
+
+## 1.5.5
+
+### Patch Changes
+
+- @lazysh/common@1.5.5
+  - @lazysh/notification-client@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- @lazysh/common@1.5.4
+  - @lazysh/notification-client@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- @lazysh/common@1.5.3
+  - @lazysh/notification-client@1.5.3
+
+## 1.5.2
+
+### Patch Changes
+
+- @lazysh/common@1.5.2
+  - @lazysh/notification-client@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- @lazysh/common@1.5.1
+  - @lazysh/notification-client@1.5.1
+
+## 1.5.0
+
+### Patch Changes
+
+- @lazysh/common@1.5.0
+  - @lazysh/notification-client@1.5.0
+
+## 1.4.2
+
+### Patch Changes
+
+- @lazysh/common@1.4.2
+  - @lazysh/notification-client@1.4.2
+
+## 1.4.1
+
+### Patch Changes
+
+- @lazysh/common@1.4.1
+  - @lazysh/notification-client@1.4.1
+
+## 1.4.0
+
+### Patch Changes
+
+- @lazysh/common@1.4.0
+  - @lazysh/notification-client@1.4.0
+
 ## 1.3.3
 
 ### Patch Changes

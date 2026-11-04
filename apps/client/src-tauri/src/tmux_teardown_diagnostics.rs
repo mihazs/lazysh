@@ -94,16 +94,27 @@ mod linux {
             parent,
         }
     }
+    enum Field {
+        Stat,
+        Wchan,
+    }
+    fn owned_file(pid: i32, field: Field) -> io::Result<Option<std::fs::File>> {
+        let name = match field {
+            Field::Stat => "stat",
+            Field::Wchan => "wchan",
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(format!("/proc/{pid}/{name}"))?;
+        let metadata = file.metadata()?;
+        Ok((metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() }).then_some(file))
+    }
     fn read(pid: i32) -> Sample {
         let sample = || -> io::Result<Sample> {
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(format!("/proc/{pid}/stat"))?;
-            let metadata = file.metadata()?;
-            if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+            let Some(file) = owned_file(pid, Field::Stat)? else {
                 return Ok(Sample::Unowned);
-            }
+            };
             let mut bytes = Vec::new();
             file.take(4097).read_to_end(&mut bytes)?;
             Ok(parse(&bytes, pid))
@@ -235,6 +246,65 @@ mod linux {
             } if !matches!(state, 'Z' | 'X' | 'x') => Some((start, parent)),
             _ => None,
         }
+    }
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum WaitKind {
+        PipeRead,
+        PipeWrite,
+        EventWait,
+        Other,
+        #[default]
+        Unavailable,
+    }
+    fn parse_wait(bytes: &[u8]) -> WaitKind {
+        if bytes.is_empty() || bytes.len() > 128 {
+            return WaitKind::Unavailable;
+        }
+        match bytes.strip_suffix(b"\n").unwrap_or(bytes) {
+            b"0" => WaitKind::Unavailable,
+            b"pipe_read" => WaitKind::PipeRead,
+            b"pipe_write" => WaitKind::PipeWrite,
+            b"do_epoll_wait" | b"ep_poll" | b"poll_schedule_timeout.constprop.0" => {
+                WaitKind::EventWait
+            }
+            _ => WaitKind::Other,
+        }
+    }
+    fn read_wait(pid: i32) -> WaitKind {
+        let read = || -> io::Result<WaitKind> {
+            let Some(file) = owned_file(pid, Field::Wchan)? else {
+                return Ok(WaitKind::Unavailable);
+            };
+            let mut bytes = Vec::new();
+            file.take(129).read_to_end(&mut bytes)?;
+            Ok(parse_wait(&bytes))
+        };
+        read().unwrap_or(WaitKind::Unavailable)
+    }
+    // Observe only an already-attributed identity. Never publish the kernel symbol,
+    // and reject a changed parent, UID, lifetime or dead process around the read.
+    fn wait_probe(
+        identity: ClientIdentity,
+        mut sample: impl FnMut(i32) -> Sample,
+        read: impl FnOnce(i32) -> WaitKind,
+    ) -> WaitKind {
+        if identity.pid <= 1 {
+            return WaitKind::Unavailable;
+        }
+        let before = relation(sample(identity.pid));
+        if !before.is_some_and(|(start, _)| start == identity.start) {
+            return WaitKind::Unavailable;
+        }
+        let wait = read(identity.pid);
+        if relation(sample(identity.pid)) != before {
+            return WaitKind::Unavailable;
+        }
+        wait
+    }
+    #[derive(Clone, Copy, Debug, Default)]
+    struct Waits {
+        server: WaitKind,
+        fresh_control: WaitKind,
     }
     fn fd_kind(bytes: &[u8]) -> FdKind {
         let number = |value: &[u8]| !value.is_empty() && value.iter().all(u8::is_ascii_digit);
@@ -811,6 +881,7 @@ mod linux {
         Option<Clients>,
         Lifetimes,
         Option<ClientIdentity>,
+        Waits,
     );
     impl Processes {
         pub(super) async fn remember_clients(
@@ -920,6 +991,7 @@ mod linux {
                 None,
                 Lifetimes::default(),
                 None,
+                Waits::default(),
             )
         }
         pub(super) fn remember_ssh_anchor(&mut self, pid: i32) {
@@ -943,8 +1015,30 @@ mod linux {
             format!("{peer:?}")
         }
         pub(super) fn before_stop(&mut self) {
+            self.4 = self.waits();
             for (pid, _, before) in &mut self.0 {
                 *before = read(*pid);
+            }
+        }
+        fn waits(&self) -> Waits {
+            let server = self
+                .0
+                .first()
+                .and_then(|(pid, original, _)| match original {
+                    Sample::Observed { start, .. } => Some(ClientIdentity {
+                        pid: *pid,
+                        start: *start,
+                    }),
+                    _ => None,
+                });
+            let fresh = self
+                .1
+                .as_ref()
+                .and_then(|clients| fresh_client(clients, &self.2));
+            let observe = |identity| wait_probe(identity, read, read_wait);
+            Waits {
+                server: server.map(observe).unwrap_or_default(),
+                fresh_control: fresh.map(observe).unwrap_or_default(),
             }
         }
         pub(super) fn same_state(&self, index: usize) -> Option<char> {
@@ -962,8 +1056,9 @@ mod linux {
         pub(super) fn failure(&self) -> String {
             // Only ordinal, finite state, identity comparison and I/O kind leave
             // this module. Never format comm, raw stat bytes, paths or errors.
+            let after = self.waits();
             format!(
-                "{:?}; remaining={}",
+                "{:?}; remaining={}; waits(before,after):server={:?},fresh_control={:?}",
                 self.0
                     .iter()
                     .enumerate()
@@ -976,9 +1071,88 @@ mod linux {
                 self.1
                     .as_ref()
                     .map(|clients| clients.failure(&self.0[0], &self.2))
-                    .unwrap_or_else(|| "NotObserved".into())
+                    .unwrap_or_else(|| "NotObserved".into()),
+                (self.4.server, after.server),
+                (self.4.fresh_control, after.fresh_control)
             )
         }
+    }
+    #[test]
+    fn wait_categories_never_publish_symbols_or_oversized_input() {
+        for (input, expected) in [
+            (b"pipe_read".as_slice(), WaitKind::PipeRead),
+            (b"pipe_write\n", WaitKind::PipeWrite),
+            (b"do_epoll_wait", WaitKind::EventWait),
+            (b"ep_poll", WaitKind::EventWait),
+            (b"poll_schedule_timeout.constprop.0", WaitKind::EventWait),
+            (b"0", WaitKind::Unavailable),
+            (b"", WaitKind::Unavailable),
+            (b"private-symbol/path/12345", WaitKind::Other),
+            (&[b'x'; 129], WaitKind::Unavailable),
+        ] {
+            let result = parse_wait(input);
+            assert_eq!(result, expected);
+            assert!(!format!("{result:?}").contains("private"));
+        }
+    }
+    #[test]
+    fn wait_probe_requires_a_stable_live_owned_identity_around_the_read() {
+        let identity = ClientIdentity {
+            pid: 100,
+            start: 20,
+        };
+        let observed = |start, parent, state| Sample::Observed {
+            start,
+            parent,
+            state,
+        };
+        let valid = observed(20, 30, 'S');
+        for changed in [
+            Sample::Missing,
+            Sample::Unowned,
+            Sample::Invalid,
+            Sample::Unavailable(io::ErrorKind::PermissionDenied),
+            observed(21, 30, 'S'),
+            observed(20, 31, 'S'),
+            observed(20, 30, 'Z'),
+        ] {
+            let mut snapshots = [valid, changed].into_iter();
+            assert_eq!(
+                wait_probe(
+                    identity,
+                    |_| snapshots.next().unwrap(),
+                    |_| WaitKind::PipeRead
+                ),
+                WaitKind::Unavailable
+            );
+        }
+        for rejected in [
+            Sample::Missing,
+            Sample::Unowned,
+            observed(21, 30, 'S'),
+            observed(20, 30, 'Z'),
+        ] {
+            assert_eq!(
+                wait_probe(identity, |_| rejected, |_| panic!("unadmitted wait read")),
+                WaitKind::Unavailable
+            );
+        }
+        assert_eq!(
+            wait_probe(identity, |_| valid, |_| WaitKind::PipeRead),
+            WaitKind::PipeRead
+        );
+        assert_eq!(
+            wait_probe(identity, |_| valid, |_| WaitKind::Unavailable),
+            WaitKind::Unavailable
+        );
+        assert_eq!(
+            wait_probe(
+                ClientIdentity { pid: 1, ..identity },
+                |_| panic!("PID one must not be read"),
+                |_| panic!("PID one must not be opened")
+            ),
+            WaitKind::Unavailable
+        );
     }
     #[test]
     fn lifetime_ordinals_require_unique_verified_control_identities() {

@@ -238,7 +238,22 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                     .get("agent_id")
                     .is_some_and(|value| !value.is_null())
             {
-                return Ok(None);
+                // A tagged completion can own a separate child report.
+                let child = payload
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| text(id, 256).is_ok());
+                let parent = payload
+                    .get("parent_agent_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| text(id, 256).is_ok());
+                if child.is_none()
+                    || payload.get("session_id").and_then(Value::as_str) != child
+                    || parent.is_none()
+                    || parent == child
+                {
+                    return Ok(None);
+                }
             }
             let (state, default_summary) = match kind {
                 "UserPromptSubmit" if !matches!(agent, Agent::Gemini) => {
