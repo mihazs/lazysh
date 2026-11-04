@@ -2938,7 +2938,7 @@ class NativeWorkspaceTest {
                 "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun selectOwnedOption(selector: String, value: String) {
+        fun selectOwnedOption(selector: String, value: String, recordedSourceIndex: Int? = null) {
             closeSoftKeyboard()
             assertEquals("Owned select control must be unique", "1", evaluate(scenario,
                 "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
@@ -2951,9 +2951,22 @@ class NativeWorkspaceTest {
               return [x,y,innerWidth,innerHeight,r.width,r.height,document.elementFromPoint(x,y)===target];
             })()"""))
             val values = (0..5).map { geometry.getDouble(it) }
-            assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
-                values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
-                values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            try {
+                assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
+                    values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
+                    values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            } catch (failure: Throwable) {
+                runCatching {
+                    val cached = JSONObject().put("finite", values.all { it.isFinite() })
+                        .put("positiveViewport", values[2] > 0 && values[3] > 0)
+                        .put("nonzeroControl", values[4] > 0 && values[5] > 0)
+                        .put("centerInside", values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3])
+                        .put("hitOwned", geometry.getBoolean(6))
+                        .put("recordedSourceIndex", recordedSourceIndex?.takeIf { it in 0..2 } ?: "unavailable")
+                    failure.addSuppressed(AssertionError("Owned select cached geometry: $cached"))
+                }
+                throw failure
+            }
             val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
                 .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
             val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
@@ -3085,8 +3098,8 @@ class NativeWorkspaceTest {
                     require(messages.length() == 2)
                     require(source.getString("agent") == if (index == 0) "codex" else "opencode")
                     require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/recorded-conversations/(recorded[.]jsonl|opencode-v[12][.]db)").matches(source.getString("path")))
-                    selectOwnedOption(".chat-panel select:has(option[value='codex'])", source.getString("agent"))
-                    selectOwnedOption(".chat-panel select:has(option[value='conversation'])", "conversation")
+                    selectOwnedOption(".chat-panel select:has(option[value='codex'])", source.getString("agent"), recordedSourceIndex = index)
+                    selectOwnedOption(".chat-panel select:has(option[value='conversation'])", "conversation", recordedSourceIndex = index)
                     val fields = listOfNotNull(path to source.getString("path"),
                         if (index > 0) ".chat-panel input[required]:not([placeholder])" to source.getString("sessionId") else null)
                     for ((selector, value) in fields) replaceNativeText(scenario, selector, value)
