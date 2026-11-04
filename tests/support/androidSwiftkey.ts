@@ -265,6 +265,15 @@ export async function copySwiftkeyClosure(root:string,destination:string) {
   return files;
 }
 
+export function swiftkeyOwnerFailure(stderr:string) {
+  if (/^bwrap:.*(?:Operation not permitted|Permission denied)/m.test(stderr)) return 'namespace-denied';
+  if (/^bwrap:.*No such file or directory/m.test(stderr)) return 'namespace-path-missing';
+  if (/^bwrap:/m.test(stderr)) return 'namespace-other';
+  if (/^error: (?:Cannot find module|Failed to resolve)/m.test(stderr)) return 'child-module-load';
+  if (/^bun test v/m.test(stderr)) return 'child-test-started';
+  return 'unknown';
+}
+
 export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../..')) {
   if(process.platform!=='linux'||process.arch!=='x64'||process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Explicit disposable hosted SwiftKey owner required');
   const profile=process.env.LAZYSH_SWIFTKEY_PROFILE??'play-splits';
@@ -324,7 +333,7 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
     args.push('--proc','/proc','--dev','/dev','--dev-bind','/dev/kvm','/dev/kvm','--tmpfs','/dev/shm','--tmpfs','/tmp','--ro-bind',sdk,'/sdk','--bind',directory,'/work','--ro-bind',join(directory,'bundle'),'/work/bundle','--ro-bind',join(directory,'closure'),'/work/closure','--ro-bind',join(directory,'vendor'),'/work/vendor','--bind',join(directory,'home'),home,'--chdir','/work/closure','--clearenv');
     for(const [name,value] of Object.entries({...quietEnvironment(home),LAZYSH_ANDROID_SWIFTKEY_CHILD:'1',LAZYSH_SWIFTKEY_PROFILE:profile,LAZYSH_SWIFTKEY_PARENT_NS:JSON.stringify(parentNamespaces)}))args.push('--setenv',name,value);
     args.push('--','/work/bundle/bun','test','tests/android-ssh.test.ts','--test-name-pattern','isolated SwiftKey native discovery');
-    child=new OwnedProcess('/usr/bin/bwrap',args,directory,quietEnvironment(join(directory,'home')),false);
+    child=new OwnedProcess('/usr/bin/bwrap',args,directory,quietEnvironment(join(directory,'home')));
     const owner=await child.liveIdentity();if(!owner)throw new Error('Namespace owner identity absent');
     membership=setInterval(()=>{void descendants(owner).then(rows=>{for(const row of rows){const key=row.pid+':'+row.start;if(seen.has(key)||seen.size<256)seen.set(key,{pid:row.pid,start:row.start});else inventoryOverflow=true;}}).catch(()=>{});},200);
     await child.finish('original 340s isolated SwiftKey gate',340_000);
@@ -336,6 +345,7 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
       const load=async(name:string)=>{try{return JSON.parse(await readFile(join(directory,name),'utf8'));}catch{return {state:'unavailable'};}};
       const receipt=await load('receipt.json');
       receipt.preparation=preparation;
+      receipt.ownerFailure=child ? swiftkeyOwnerFailure(child.stderr) : 'not-started';
       receipt.nativeFailure=await load('native-failure.json');
       receipt.parentCanariesProven=parentCanariesProven;
       receipt.qualified=false;receipt.scope='intermediate vendor discovery, not typing acceptance';

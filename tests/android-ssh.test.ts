@@ -1238,6 +1238,19 @@ test('SwiftKey post-runtime integrity detects rewritten or missing copied inputs
   } finally {await rm(directory,{recursive:true,force:true});}
 });
 
+test('SwiftKey owner failure reports only fixed startup categories',async()=>{
+  const {swiftkeyOwnerFailure}=await import('./support/androidSwiftkey');
+  const secret='private-token-url-and-path';
+  for(const [input,expected] of [
+    [`bwrap: ${secret}: Operation not permitted`,'namespace-denied'],
+    [`bwrap: ${secret}: No such file or directory`,'namespace-path-missing'],
+    [`bwrap: ${secret}`,'namespace-other'],
+    [`error: Cannot find module ${secret}`,'child-module-load'],
+    [`bun test v1.3.14\n${secret}`,'child-test-started'],
+    [secret,'unknown'],
+  ]) {const result=swiftkeyOwnerFailure(input);expect(result).toBe(expected);expect(result).not.toContain(secret);}
+});
+
 test('SwiftKey native failure summary retains fixed source frames without private assertion content',async()=>{
   const {swiftkeyNativeFailure}=await import('./support/androidSsh');
   const output=`INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeWorkspaceTest
