@@ -253,6 +253,18 @@ input[type="search"] {
 .herdr-navigation .herdr-agent-row > .herdr-report-reference[open] > :not(summary) { margin: 0 14px 12px; font-size: 13px; color: var(--theme-muted); }
 .herdr-status-groups > .status-group:first-child > h4 { margin-top: 8px; }
 
+/* One control row: search, server and refresh share a line; the host becomes a caption. */
+.sidebar .herdr-navigation:not([data-setup-view]):not([hidden]) { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-content: start; column-gap: 2px; }
+.sidebar .herdr-navigation:not([data-setup-view]) > *, .sidebar .herdr-navigation:not([data-setup-view]) > div:not([hidden]) > * { grid-column: 1 / -1; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header, .sidebar .herdr-navigation:not([data-setup-view]) > div:not([hidden]):has(> label) { display: contents; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > div { grid-row: 1; margin: -6px 4px 6px; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > .icon-button:first-of-type { grid-row: 2; grid-column: 2; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > .herdr-shared-focus-note { grid-row: 2; grid-column: 3; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > .herdr-shared-focus-note { position: relative; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > .herdr-shared-focus-note p { top: 46px; right: -48px; width: min(320px, calc(100vw - 32px)); max-width: none; }
+.sidebar .herdr-navigation:not([data-setup-view]) > header > .icon-button:not(:first-of-type):not(.herdr-navigation-back) { grid-row: 2; grid-column: 4; }
+.sidebar .herdr-navigation:not([data-setup-view]) > div > label:first-child { grid-row: 2; grid-column: 1; align-self: center; margin: 0 4px 0 0; }
+
 /* Herdr spaces: a quiet outline, not a grid of bordered toggles. */
 .herdr-navigation[data-mode=spaces] .herdr-navigation-heading > .subtle-button {
   flex: 0 0 36px; min-width: 36px; padding: 0; border: 1px solid transparent; background: transparent; color: var(--theme-muted); font-size: 12px;
@@ -263,7 +275,8 @@ input[type="search"] {
 .herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul { margin-left: 18px; padding-left: 10px; border-left: 1px solid var(--ui-hairline); }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-row { border-radius: var(--ui-radius-sm); background: transparent; }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-row:hover:not(:disabled) { background: var(--ui-row-pressed); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row[data-current=true] { outline: 0; background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-row[data-current=true] { outline: 0; background: transparent; }
+.herdr-navigation[data-mode=spaces] .herdr-navigation-row[data-current=true] strong { color: var(--accent); }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-row > small { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-row > small::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--status-idle); }
 .herdr-navigation[data-mode=spaces] [data-agent-status=working] > small::before { background: var(--status-working); }
@@ -346,6 +359,16 @@ input[type="search"] {
 .agent-panel .agent-setup h3 { margin: 8px 0 6px; font-size: 18px; }
 .agent-panel .agent-setup p { margin: 0 0 6px; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
 .workspace-navigation-agents .agent-note { margin-inline: 0; }
+
+/* ---------- Welcome: brand light on the black canvas, chips instead of prose rows ---------- */
+.welcome { background: radial-gradient(110% 55% at 50% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 62%), radial-gradient(80% 40% at 100% 100%, color-mix(in srgb, var(--theme-purple) 10%, transparent), transparent 70%), var(--theme-bg); }
+.welcome-kicker { display: inline-block; margin-bottom: 18px; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--theme-text) 7%, transparent); color: var(--theme-muted); font-size: 12px; }
+.welcome h1 { font-weight: 650; letter-spacing: -1.6px; }
+.welcome-features { flex-wrap: wrap; justify-content: center; gap: 8px; }
+.welcome-features span { padding: 7px 12px; border-radius: 999px; background: var(--theme-control); color: var(--theme-text); font-size: 12px; }
+.welcome-features svg { color: var(--accent); }
+.welcome-connect { min-height: 52px; padding-inline: 24px; box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 28%, transparent); }
+@media (max-width: 600px) { .welcome h1 { font-size: 38px; } }
 
 /* ---------- Workspace header and terminal chrome ---------- */
 .workspace-header { border-bottom: 1px solid var(--ui-hairline); }
