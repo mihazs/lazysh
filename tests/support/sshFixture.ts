@@ -133,8 +133,14 @@ export class SshFixture {
     if(!this.toolNamespace || !this.environment)throw new Error(`Owned ${name==='herdr'?'Herdr':'tmux'} namespace required`);
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin',name),...args],this.directory,this.environment);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string}={}) {
-    if(options.tmuxBinary && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
+  /** Observe the system tmux of a `tmux:true` fixture through only its private socket directory. */
+  tmux(args:string[]) {
+    if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
+    return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
+  }
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean}={}) {
+    if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
+    if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
     const ownedRoot=!!tools || options.ownedReceiverRoot===true;
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
@@ -143,7 +149,7 @@ export class SshFixture {
     if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
     // tmux socket paths must stay below the Unix socket path limit.
-    const directory=await mkdtemp(join(tools||options.companion||options.tmuxBinary?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
+    const directory=await mkdtemp(join(tools||options.companion||options.tmuxBinary||options.tmux?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
     try {
       await chmod(directory,0o700);
@@ -176,6 +182,8 @@ export class SshFixture {
         environment=await privateEnvironment(directory,bin+':/usr/bin:/bin',toolDirectories);
       }
       if(options.tmuxBinary)environment=await privateEnvironment(directory,await installOwnedBinary(directory,'tmux',options.tmuxBinary)+':/usr/bin:/bin',toolDirectories);
+      // A private socket directory keeps every system tmux command away from the account's own servers.
+      if(options.tmux)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['TMUX_TMPDIR','tmux']]);
       if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
@@ -230,7 +238,9 @@ export class SshFixture {
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
         // tmux keeps the host root view, including the host /proc, so pane PIDs stay directly verifiable.
         else if(options.tmuxBinary)toolNamespace=namespace;
-        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
+        // System tmux daemonizes out of the SSH tree; unlike the pinned tmuxBinary server, it lives
+        // in sshd's private PID namespace, so retiring sshd also retires that server.
+        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary||options.tmux?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,privateTtyGroup,toolNamespace);
