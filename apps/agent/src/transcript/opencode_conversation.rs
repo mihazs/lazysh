@@ -1,6 +1,6 @@
 //! Read the selected OpenCode projection, never the model-context replay log.
 use super::{
-    block, database, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
+    block, database, interaction, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
     TranscriptPage, MAX_PAGE,
 };
 use rusqlite::Connection;
@@ -198,6 +198,11 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         }
     }
     messages.reverse();
+    let activity = if kind == Schema::V1 {
+        activity(&rows, &parts)
+    } else {
+        None
+    };
     verify_source(path, &identity, &db)?;
     Ok(TranscriptPage {
         schema_version: 1,
@@ -209,7 +214,46 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         branch_id: Some(session.into()),
         truncated,
         checkpoint: None,
+        activity,
     })
+}
+
+/// V1 turn state from the latest retained row, as OpenCode records it:
+/// assistant `time.completed`, `finish` and `MessageAbortedError`, plus a
+/// pending or running `question` tool part.
+fn activity(rows: &[Row], parts: &HashMap<String, Vec<Value>>) -> Option<&'static str> {
+    let last = rows.last()?;
+    match last.role.as_str() {
+        "user" => return Some("working"),
+        "assistant" => {}
+        _ => return None,
+    }
+    let waiting = parts.get(&last.id).into_iter().flatten().any(|part| {
+        part["type"] == "tool"
+            && part["tool"]
+                .as_str()
+                .is_some_and(|name| interaction::awaits_answer(TranscriptAgent::Opencode, name))
+            && matches!(
+                part["state"]["status"].as_str(),
+                Some("pending" | "running")
+            )
+    });
+    let data = &last.data;
+    if waiting {
+        Some("waiting")
+    } else if data["error"]["name"] == "MessageAbortedError" {
+        Some("stopped")
+    } else if !data["error"].is_null() {
+        None
+    } else if data["time"]["completed"].is_null() {
+        Some("working")
+    } else {
+        match data["finish"].as_str() {
+            Some("stop") => Some("idle"),
+            Some("tool-calls") => Some("working"),
+            _ => None,
+        }
+    }
 }
 
 fn verify_source(path: &Path, identity: &SourceSnapshot, db: &Connection) -> Result<()> {
@@ -396,6 +440,12 @@ fn tool(part: &Value, blocks: &mut Vec<Value>) -> Result<()> {
         id.clone(),
         name.clone(),
     ));
+    if let Some(card) = name
+        .as_deref()
+        .and_then(|name| interaction::card(TranscriptAgent::Opencode, name, input))
+    {
+        blocks[first]["card"] = card;
+    }
     if status == "completed" || status == "error" {
         if let Some(content) = state.get("content") {
             for item in content.as_array().ok_or(Error::InvalidEvent)? {
@@ -529,6 +579,7 @@ pub(super) fn records(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        activity: None,
     })
 }
 

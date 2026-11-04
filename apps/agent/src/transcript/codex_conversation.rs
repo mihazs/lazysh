@@ -1,9 +1,13 @@
 //! Recorded UI history, qualified against Codex 0.166.0. Not model context.
 use super::{
-    codex_lineage, message_size, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
+    codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
+    MAX_PAGE,
 };
 use serde_json::{json, Value};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 #[derive(Default)]
 struct Turn {
@@ -154,7 +158,7 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
             if value.is_empty() {
                 Vec::new()
             } else {
-                vec![text("text", value)]
+                vec![json!({"type":"text","text":value,"card":{"kind":"proposed_plan"}})]
             }
         }),
         "CommandExecution" => {
@@ -273,14 +277,40 @@ fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> 
     Ok(message(&id, role, blocks, timestamp))
 }
 
+/// Track recorded `request_user_input` calls that have no output yet.
+fn pending_question(payload: &Value, asked: &mut HashSet<String>) {
+    let Some(call) = payload["call_id"].as_str() else {
+        return;
+    };
+    match payload["type"].as_str() {
+        Some("function_call")
+            if payload["name"]
+                .as_str()
+                .is_some_and(|name| interaction::awaits_answer(TranscriptAgent::Codex, name)) =>
+        {
+            asked.insert(call.to_owned());
+        }
+        Some("function_call_output") => {
+            asked.remove(call);
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
     let history = codex_lineage::read(path)?;
     let mut projection = Projection::default();
+    let mut activity = None;
+    let mut asked = HashSet::new();
     for record in &history.records {
         let value = &record.value;
+        if value["type"] == "response_item" {
+            // Turn state only: model-context items never become messages here.
+            pending_question(&value["payload"], &mut asked);
+        }
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
             continue;
@@ -291,6 +321,7 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         let event = &value["payload"];
         match required(event, "type")? {
             "task_started" | "turn_started" => {
+                activity = Some("working");
                 projection.finish();
                 projection.current = Some(Turn {
                     id: required(event, "turn_id")?.to_owned(),
@@ -299,7 +330,14 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
                 });
                 continue;
             }
+            "turn_aborted" => {
+                activity = Some("stopped");
+                asked.clear();
+                continue;
+            }
             "task_complete" | "turn_complete" => {
+                activity = Some("idle");
+                asked.clear();
                 if event["turn_id"]
                     .as_str()
                     .is_some_and(|id| projection.turns.iter().any(|turn| turn.id == id))
@@ -392,5 +430,9 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         branch_id: Some(history.thread),
         truncated,
         checkpoint: None,
+        activity: match activity {
+            Some("working") if !asked.is_empty() => Some("waiting"),
+            other => other,
+        },
     })
 }

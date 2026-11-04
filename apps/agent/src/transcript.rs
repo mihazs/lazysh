@@ -22,6 +22,7 @@ mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
 mod inline_image;
+mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
 mod opencode_conversation;
@@ -99,6 +100,9 @@ pub struct TranscriptPage {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
+    /// Recorded turn state: working, waiting, idle or stopped. Absent is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<&'static str>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -267,6 +271,7 @@ fn read_records(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        activity: None,
     })
 }
 
@@ -480,7 +485,7 @@ fn normalize_options(
         TranscriptAgent::GrokAcp => return grok_acp::normalize(record, offset),
         _ => {}
     }
-    let (role, blocks, id, usage) = match agent {
+    let (role, mut blocks, id, usage) = match agent {
         TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => {
             if record["type"] != "message" {
                 return None;
@@ -623,6 +628,9 @@ fn normalize_options(
     };
     if blocks.is_empty() {
         return None;
+    }
+    if matches!(agent, TranscriptAgent::Claude | TranscriptAgent::Codex) {
+        interaction::annotate(agent, &mut blocks);
     }
     let mut message =
         json!({"id":id.unwrap_or_else(||format!("record-{offset}")),"role":role,"blocks":blocks});

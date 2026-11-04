@@ -7,9 +7,9 @@ import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import Markdown from "react-markdown";
+import {ChatActivity,ChatCard,ChatMarkdown,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
@@ -23,6 +23,7 @@ type Block = {
   status?: 'pending' | 'in_progress' | 'completed' | 'failed';
   isError?: boolean;
   imagePreview?: RecordedImage;
+  card?: Card;
 };
 type Message = {
   id: string;
@@ -42,6 +43,7 @@ type Page = {
   truncated?: boolean;
   checkpoint?: string;
   branchId?: string;
+  activity?: Activity;
 };
 
 
@@ -67,6 +69,7 @@ export function parseTranscript(value: unknown): Page {
     || typeof page.branchId !== 'string' || !page.branchId || /[\x00-\x1f\x7f-\x9f]/.test(page.branchId)
     || new TextEncoder().encode(page.branchId).length > 256
   )) throw new LocalUiError('chatUnsupportedResponse');
+  page.activity = parseActivity(page.activity, page.agent, page.view);
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -106,6 +109,7 @@ export function parseTranscript(value: unknown): Page {
         )
       )
         throw new LocalUiError('chatInvalidBlock');
+      if (block.card !== undefined) block.card = parseCard(block.card, {agent:page.agent, view:page.view, type:block.type});
       for (const field of ["text", "id", "name"] as const)
         if (
           block[field] !== undefined &&
@@ -186,6 +190,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   },[opened]);
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [activity, setActivity] = useState<Activity>();
+  const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
+    .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
+    .map(block => block.id!))), [messages]);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
   useEffect(()=>{if(preview && !previewRetained)setPreview(undefined);},[preview,previewRetained]);
   const [offset, setOffset] = useState(0);
@@ -248,7 +256,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setActivity(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -366,6 +374,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
+      if (replace) setActivity(page.activity);
       setMessages((previous) => {
         const combined = replace
           ? page.messages
@@ -527,6 +536,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}
         {!atLatest && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
       </div>}
+      {conversation && sourceMatches && <ChatActivity activity={activity} />}
       <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
@@ -541,19 +551,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
               {message.record.errorCode !== undefined && ` · ${t("chatErrorCode", {code:message.record.errorCode})}`}
               {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
             </p>}
-            {message.blocks.map((block, index) =>
-              block.type === "text" ? (
-                <Markdown
-                  key={index}
-                  components={{
-                    img: () => <span>{t("chatImagePlaceholder")}</span>,
-                    a: ({ children }) => <span>{children}</span>,
-                  }}
-                >
-                  {block.text || ""}
-                </Markdown>
+            {message.blocks.map((block, index) => {
+              const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
+              return block.type === "text" ? (
+                <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
               ) : (
-                <details key={index}>
+                <Fragment key={index}>{card}<details>
                   <summary>
                     {block.name || t(({text:"chatBlockText",thinking:"chatBlockThinking",tool_use:"chatBlockToolUse",tool_result:"chatBlockToolResult",image:"chatBlockImage"} as const)[block.type])}
                     {block.status && ` · ${t("chatToolStatus", {status:block.status, id:block.id!})}`}
@@ -563,9 +566,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
                     {block.text || t("chatViewInTerminal")}
                   </pre>
                   {block.imagePreview && opened?.inlineImages && <button type="button" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('chatImageView')}</button>}
-                </details>
-              ),
-            )}
+                </details></Fragment>
+              );
+            })}
             {message.usage && (
               <small>
                 {Object.entries(message.usage)

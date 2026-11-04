@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show plan, question and turn-state cards in native Chat for Claude Code, Codex and OpenCode. Plans show each step with its recorded status. Questions list their options and point to the terminal for the answer, since Chat cannot choose options in an agent prompt. Conversation views show whether the agent is working, waiting for an answer, idle or stopped, based on recorded lifecycle records; other cases show an unknown state. Display only: the raw tool cards remain and no defaults change.
+
 - Show the Chat attachment editor as a focused mobile view, preserving the draft and reading position when returning.
 
 - Compact recorded-conversation drafts into one editor with named attachment, refresh and terminal controls. Changed default: staging guidance opens on request from How staging works; explicit staging and confirmed terminal input remain intact.

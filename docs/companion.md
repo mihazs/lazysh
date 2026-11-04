@@ -170,6 +170,24 @@ serializes the full entry. Native/component fixtures are synthetic; installed
 Pi compatibility, provider execution and physical WebView behavior are not
 established by these tests.
 
+### Plan and question cards and turn state
+
+Recognized tool calls carry an optional display-only `card` on the normalized `tool_use` block. The raw tool text is unchanged:
+
+- `{"kind":"plan","entries":[{"text","status"}],"explanation"?}`. Sources are Claude `TodoWrite`, Codex `update_plan` and OpenCode `todowrite`. Status is `pending`, `in_progress` or `completed`, and OpenCode can also report `cancelled`.
+- `{"kind":"proposed_plan","text"}`, from Claude `ExitPlanMode`. A Codex plan-mode `Plan` item keeps its text block and carries `{"kind":"proposed_plan"}` with no text.
+- `{"kind":"question","questions":[{"question","header"?,"options":[{"label","description"?}],"multiple"}]}`. Sources are Claude `AskUserQuestion`, Codex `request_user_input` and OpenCode `question`.
+
+Inputs that do not match these shapes exactly get no card. Cards never contain answers. The client shows a question as answered only when the loaded transcript holds its tool result. It never selects an option: the user answers in the terminal.
+
+Conversation (`active_branch`) responses for Claude, Codex and OpenCode V1 can include `activity`. Its value is `working`, `waiting` (an unanswered question or plan approval), `idle` or `stopped`, derived from recorded records:
+
+- Claude: `system/turn_duration` under the leaf, the leaf record's type and `stop_reason`.
+- Codex: `task_started`, `task_complete` and `turn_aborted`, plus `request_user_input` calls that have no output yet.
+- OpenCode V1: the latest message's `time.completed`, `finish` and `MessageAbortedError`, plus a running `question` part.
+
+When `activity` is absent, the state is unknown. Records pages never carry it. A crashed agent can leave a recorded turn reading `working`. Provenance and sample shapes are in `apps/agent/tests/fixtures/interaction-cards/README.md`.
+
 ### Claude current branch
 
 Use `lazysh-agent transcript --agent claude --view conversation --path /absolute/path/session.jsonl --limit 100` to reconstruct the current main conversation branch. This reads a bounded complete snapshot, picks the latest main user/assistant leaf, follows `parentUuid`, and recovers sibling tool calls and results belonging to responses on that branch. Compaction follows the new summary chain without reconnecting `logicalParentUuid` to obsolete context. Duplicate UUIDs use their latest record; cycles fail closed.

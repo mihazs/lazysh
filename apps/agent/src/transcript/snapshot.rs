@@ -80,5 +80,6 @@ pub(super) fn page(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        activity: None,
     })
 }
