@@ -934,6 +934,10 @@ test('normal scrollback finger scrolling preserves selected text',async({page},t
   await testInfo.attach('selected-scrollback',{body:JSON.stringify({beforeWheel,beforeTouch,afterTouch:await viewport.evaluate(node=>node.scrollTop),selected,writes:await page.evaluate(()=>window.simpleShortcutWrites)}),contentType:'application/json'});
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeTouch);
   await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  const top=await screen.locator('.xterm-rows > div').first().innerText(),size=page.viewportSize()!;
+  await page.setViewportSize({width:size.width,height:size.height-150});
+  await expect(screen.locator('.xterm-rows > div').first()).toHaveText(top);
+  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
   await input.detach();
 });
@@ -1042,4 +1046,58 @@ for(const android of [false,true])test.describe(`owned D-pad touchstart ${androi
     await up.focus();await page.keyboard.press('Enter');
     expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([...writes,'\x1b[A']);
   });
+});
+
+
+for(const route of ['history','mouse'] as const)test(`finger scrolling remains responsive during and after resize in ${route}`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Requires touchscreen input.');
+  await openShortcutTerminal(page);
+  const screen=page.locator('.terminal-canvas:visible .xterm-screen');
+  await expect(screen).toBeVisible();
+  await page.evaluate(route=>window.simpleShortcutOutput(route==='history'
+    ? Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')
+    : '\x1b[?1049h\x1b[?1000h\x1b[?1006h'),route);
+  const viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
+  if(route==='history')await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(1000);
+  else await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);
+  const box=(await screen.boundingBox())!, start={x:box.x+60,y:box.y+120};
+  const input=await page.context().newCDPSession(page);
+  const count=()=>route==='history'?viewport.evaluate(node=>-node.scrollTop):page.evaluate(()=>window.simpleShortcutWrites.length);
+  const move=async(y:number)=>input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x,y}]});
+  const before=await count();
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
+  try {
+    await move(start.y+40);
+    await expect.poll(count).toBeGreaterThan(before);
+    const top=route==='history'?await screen.locator('.xterm-rows > div').first().innerText():'';
+    await page.setViewportSize({width:390,height:550});
+    await expect.poll(async()=> (await screen.boundingBox())!.height).toBeLessThan(box.height);
+    if(route==='history')await expect(screen.locator('.xterm-rows > div').first()).toHaveText(top);
+    const resized=await count();
+    await move(start.y+80);
+    await expect.poll(count).toBeGreaterThan(resized);
+  } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+  const beforeFresh=await count();
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
+  await move(start.y+40);
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await expect.poll(count).toBeGreaterThan(beforeFresh);
+  const top=route==='history'?await screen.locator('.xterm-rows > div').first().innerText():'';
+  await page.setViewportSize({width:390,height:844});
+  await expect.poll(async()=> (await screen.boundingBox())!.height).toBeGreaterThan(box.height-40);
+  if(route==='history')await expect(screen.locator('.xterm-rows > div').first()).toHaveText(top);
+  if(route==='history')expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  else expect(await page.evaluate(()=>window.simpleShortcutWrites.every(value=>/^\x1b\[<6[45];\d+;\d+M$/.test(value)))).toBe(true);
+});
+
+
+test('resizing at the bottom keeps following terminal output',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Keyboard-sized viewport.');
+  await openShortcutTerminal(page);
+  const screen=page.locator('.terminal-canvas:visible .xterm-screen');await expect(screen).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`tail ${i}\r\n`).join('')));
+  await expect(screen).toContainText('tail 199');
+  await page.setViewportSize({width:390,height:550});
+  await page.evaluate(()=>window.simpleShortcutOutput('FOLLOWED_OUTPUT\r\n'));
+  await expect(screen).toContainText('FOLLOWED_OUTPUT');
 });
