@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.11.0
+
+### Minor Changes
+
+- aa1e2f3: Add explicitly selected OpenCode recorded conversations with current projection refresh and unchanged confirmed terminal input boundaries.
+
+### Patch Changes
+
+- 24123ed: Never pause terminal typing when a keyboard edit cannot be sent safely; skip that edit and show a fading, non-blocking review notice instead.
+- cd197f9: Preserve terminal Enter input delivered as an input-only line break, including the explicit toolbar Shift modifier.
+- f05a3ce: Preserve owned terminal corrections delivered as paired keyless composition-text input events.
+- @lazysh/account-usage@1.11.0
+  - @lazysh/common@1.11.0
+  - @lazysh/display-idle@1.11.0
+  - @lazysh/et-transport@1.11.0
+  - @lazysh/mosh-transport@1.11.0
+
 ## 1.10.4
 
 ### Patch Changes

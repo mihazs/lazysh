@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.11.0
+
+### Minor Changes
+
+- aa1e2f3: Add explicitly selected OpenCode recorded conversations with current projection refresh and unchanged confirmed terminal input boundaries.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.11.0
+  - @lazysh/common@1.11.0
+  - @lazysh/notification-client@1.11.0
+
 ## 1.10.4
 
 ### Patch Changes
