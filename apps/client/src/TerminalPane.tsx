@@ -13,6 +13,7 @@ import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, 
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
+import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
@@ -297,13 +298,38 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (!element || preferences.screenReader) return;
     let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
     let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean} | null = null;
-    const cancel = () => {scroll = null; remainder = null;};
+    // A finger held still and lifted selects the word beneath it; a later
+    // long-press elsewhere extends that selection. Moving first always scrolls.
+    let hold: {x: number; y: number; timer?: ReturnType<typeof setTimeout>; ready?: true} | null = null;
+    let touched: TouchSelection | null = null;
+    const release = () => {if (hold?.timer) clearTimeout(hold.timer); hold = null;};
+    const cancel = () => {scroll = null; remainder = null; release();};
     const start = (event: TouchEvent) => {
       const point = event.touches.length === 1 ? event.touches[0] : undefined;
       if (!point) {cancel(); return;}
       scroll = {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, direction: 0, mode: null, height: 0, active: false};
+      release();
+      const pending: NonNullable<typeof hold> = {x: point.clientX, y: point.clientY};
+      pending.timer = setTimeout(() => {pending.timer = undefined; pending.ready = true;}, TOUCH_SELECTION_DELAY);
+      hold = pending;
     };
-    const end = () => {
+    // The platform's long-press menu would otherwise compete with terminal selection.
+    const menu = (event: Event) => {if (hold) event.preventDefault();};
+    const selectHeld = () => {
+      const cell = hold?.ready && !scroll?.active && !imeComposing.current && activeRef.current ? terminalCellAt(session.terminal, hold.x, hold.y) : undefined;
+      if (!cell) return false;
+      touched = nextTouchSelection(touched && session.terminal.hasSelection() ? touched : null, terminalWordAt(session.terminal, cell));
+      selectTerminalRange(session.terminal, touched.range);
+      press.current = null; gesture.current = null; pointers.current.clear(); cancelTaps();
+      return true;
+    };
+    const end = (event: TouchEvent) => {
+      if (selectHeld()) {
+        // Without the follow-up compatibility click, xterm keeps the new selection.
+        if (event.cancelable) event.preventDefault();
+        cancel(); return;
+      }
+      release();
       remainder = scroll?.active && scroll.mode && activeRef.current && session.connected ? {mode: scroll.mode, height: scroll.height, pending: scroll.pending % scroll.height, direction: scroll.direction} : null;
       scroll = null;
     };
@@ -311,6 +337,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       if (!activeRef.current) {cancel(); return;}
       if (event.touches.length === 1) {
         const point = event.touches[0];
+        if (hold && Math.hypot(point.clientX - hold.x, point.clientY - hold.y) > 10) release();
         if (scroll) {
           const dx = point.clientX - scroll.x, dy = point.clientY - scroll.y;
           if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx))) {
@@ -377,7 +404,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     element.addEventListener("touchmove", multitouch, {capture: true, passive: false});
     element.addEventListener('touchend', end, {capture: true});
     element.addEventListener('touchcancel', cancel, {capture: true});
+    element.addEventListener('contextmenu', menu, {capture: true});
     return () => {
+      release();
+      element.removeEventListener('contextmenu', menu, {capture: true});
       element.removeEventListener('touchstart', start, {capture: true});
       element.removeEventListener('touchmove', multitouch, {capture: true});
       element.removeEventListener('touchend', end, {capture: true});
