@@ -1,9 +1,9 @@
-import {ArrowLeft,RefreshCw,Settings2,Info} from 'lucide-react';
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {ArrowLeft,RefreshCw,Settings2,Info,ChevronDown,ChevronRight} from 'lucide-react';
+import {useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
-import {t,useUi} from './i18n/core';
+import {formatNumber,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
 import './HerdrNavigation.css';
@@ -24,6 +24,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const model=useHerdrNavigation({sessionId,herdrSession,visible});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
+  const [statusToggles,setStatusToggles]=useState<Set<string>>(()=>new Set());
+  const statusId=useId();
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();
   const setupTrigger=useRef<HTMLButtonElement>(null);
   const setupHeading=useRef<HTMLHeadingElement>(null);
@@ -124,7 +126,9 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         })}</ul>}
         {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div>{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</section>;
+          const key=JSON.stringify([data.server,status]),closed=!term && (status==='done'?!statusToggles.has(key):statusToggles.has(key));
+          const groupId=`${statusId}-${status}`;
+          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{term?<span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>:<button type="button" className="herdr-status-toggle" aria-expanded={!closed} aria-controls={groupId} onClick={()=>setStatusToggles(previous=>{const next=new Set(previous);if(!next.delete(key))next.add(key);return next;})}><span>{t(herdrStatusKeys[status])} · {formatNumber(matching.length)}</span>{closed?<ChevronRight size={16} aria-hidden="true"/>:<ChevronDown size={16} aria-hidden="true"/>}</button>}</h4><div id={groupId} hidden={closed}>{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div></section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
       </div>

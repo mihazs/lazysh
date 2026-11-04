@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Group live Herdr agents in collapsible status sections; completed agents start collapsed and remain searchable.
+
 - Preserve owned IME corrections across zero-code Process keys and keep subsequent hardware keypresses ordered and sent once; retain focus, access and unsupported-edit protections.
 
 - Keep owned ASCII forward deletions without key229 synchronized with later terminal suggestions and typing; preserve composition fallback and review for edits outside the locally owned input.

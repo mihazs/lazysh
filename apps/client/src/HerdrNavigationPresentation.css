@@ -20,7 +20,9 @@
 .herdr-navigation [data-agent-status=working] > span::before { background: var(--accent); }
 .herdr-navigation [data-agent-status=blocked] > span::before { background: var(--theme-warning); }
 .herdr-navigation .herdr-navigation-row[data-current=true] { outline: 1px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: -1px; }
-.herdr-navigation[data-mode=agents] h4 { margin: 18px 2px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.herdr-navigation[data-mode=agents] h4 { margin: 4px 2px 0; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.herdr-navigation[data-mode=agents] .herdr-status-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; text-transform: inherit; cursor: pointer; }
+.herdr-navigation[data-mode=agents] .herdr-status-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-tree { margin: 8px 0; }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-tree > li { margin-bottom: 16px; }
 .herdr-navigation[data-mode=spaces] .herdr-navigation-heading { border-bottom: 1px solid color-mix(in srgb, var(--theme-border) 45%, transparent); }

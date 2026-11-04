@@ -404,6 +404,23 @@ it('keeps the companion empty state stable during polling and retains an error u
 
 describe('live Herdr discovery',()=>{
 
+  it('keeps completed agents compact, searchable and expandable across refreshes',()=>pollingClock(async invoke=>{
+    const completed={...tree,panes:[...tree.panes,{...tree.panes[0],terminal_id:'term-done',pane_id:'done-pane',focused:false,agent_status:'done'}],agents:[...tree.agents,{...tree.agents[0],terminal_id:'term-done',pane_id:'done-pane',name:'finished task',agent_status:'done'}]};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:completed);
+    render(<HerdrNavigation sessionId="grouped-host" hostLabel="Owned host" visible mode="agents" onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    const done=browser.getByRole('button',{name:/^Done · 1/});
+    expect(done.getAttribute('aria-expanded')).toBe('false');expect(browser.queryByRole('button',{name:/^finished task/})).toBeNull();
+    const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'finished'}});
+    expect(browser.getByRole('button',{name:/^finished task/})).toBeTruthy();
+    fireEvent.change(search,{target:{value:''}});const restored=browser.getByRole('button',{name:/^Done · 1/});fireEvent.click(restored);
+    expect(restored.getAttribute('aria-expanded')).toBe('true');expect(browser.getByRole('button',{name:/^finished task/})).toBeTruthy();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(browser.getByRole('button',{name:/^Done · 1/}).getAttribute('aria-expanded')).toBe('true');
+    expect(browser.getByRole('button',{name:/^finished task/})).toBeTruthy();
+  }));
+
   it('reports only DOM-committed current Herdr reads and preserves receipt identity across visibility',()=>pollingClock(async invoke=>{
     const pending=deferredRead();let held=false;
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:held?pending.promise:tree);
