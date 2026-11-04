@@ -803,6 +803,32 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
+test('reopened phone hosts expose touchable host actions immediately and a closed drawer takes no hits',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone drawer geometry');
+  await page.setViewportSize({width:412,height:915});
+  await installWorkspaceNavigation(page);await page.goto('/');
+  for(const name of ['Navigation host','Other navigation host']){await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(2);
+  await (await workspaceControl(page,'End Other navigation host connection')).click();
+  await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(1);
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  // Sampled without waiting for motion: every host action must already be on screen and own its centre.
+  const actions=await page.evaluate(()=>['Edit Navigation host','Edit Other navigation host','Delete Other navigation host'].map(label=>{
+    const button=document.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!,box=button.getBoundingClientRect();
+    const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+    return {label,inside:box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight,size:box.width>=44&&box.height>=44,owned:hit===button||button.contains(hit),disabled:button.disabled};
+  }));
+  expect(actions).toEqual(['Edit Navigation host','Edit Other navigation host','Delete Other navigation host'].map(label=>({label,inside:true,size:true,owned:true,disabled:false})));
+  await expect(page.getByRole('button',{name:'Delete Navigation host',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'Delete Other navigation host',exact:true}).tap();
+  const confirm=page.getByRole('dialog',{name:'Delete host',exact:true});
+  await expect(confirm).toBeVisible();await page.keyboard.press('Escape');await expect(confirm).toHaveCount(0);
+  await page.getByRole('button',{name:'Close hosts',exact:true}).tap();
+  expect(await page.evaluate(()=>[0.25,0.5,0.9].every(fraction=>!document.elementFromPoint(innerWidth/2,innerHeight*fraction)?.closest('.sidebar')))).toBe(true);
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='delete_host'||command==='write_stdin')).toEqual([]);
+});
+
 test('Workspace tools is a short default sheet with explicit reachable expansions at 393px',async({page},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Measured mobile sheet');
   await page.setViewportSize({width:393,height:852});

@@ -553,6 +553,19 @@ input[type="search"] {
   .sidebar-scrim { background: rgb(0 0 0 / 70%); }
 }
 
+/* ---------- Phone drawer motion ----------
+ * Opening places the drawer immediately and settles it with a short slide, so host actions
+ * are on screen and hit-testable from the first frame. Closing keeps the full slide-out, but a
+ * closed drawer never takes pointer hits while it leaves. */
+@keyframes drawer-settle { from { transform: translateX(-8%); } to { transform: translateX(0); } }
+@media (max-width: 600px) {
+  .sidebar:not(.sidebar-open) { pointer-events: none; }
+  .sidebar.sidebar-open { transition: none; animation: drawer-settle 220ms var(--ui-ease); }
+}
+@media (max-width: 600px) and (prefers-reduced-motion: reduce) {
+  .sidebar.sidebar-open { animation: none; }
+}
+
 /* ---------- Desktop layout ---------- */
 @media (min-width: 801px) {
   .sidebar[data-navigation="connections"] { width: 300px; }
