@@ -467,7 +467,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
           catch {reportError(t('appUnavailableInThisAppBuild'));}
         }
-      } else addon.fit();
+      } else {
+        const buffer = terminal.buffer.active, cols = terminal.cols;
+        // Stock height-only resize moves scrolled-back history with the cursor.
+        const anchor = buffer.type === 'normal' && buffer.viewportY < buffer.baseY
+          ? terminal.registerMarker(buffer.viewportY - buffer.baseY - buffer.cursorY) : undefined;
+        try {addon.fit();
+          if (anchor && !anchor.isDisposed && terminal.cols === cols && terminal.buffer.active === buffer) terminal.scrollToLine(anchor.line);
+        } finally {anchor?.dispose();}
+      }
     };
     fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);

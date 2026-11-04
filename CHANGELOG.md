@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve the visible scrollback line during height-only terminal resizing, including keyboard-sized viewport changes; keep bottom-following and the separate Mosh rendering path.
+
 - Simplify workspace navigation with focused Workspaces and Agents screens, compact session context and clearer work-state rows. Changed default: desktop tools now open from Workspace tools instead of a permanent tab strip; all existing tools remain reachable. Preserve the compact phone terminal, existing sessions and contextual return.
 
 - Keep owned Android IME fallback edits from repeating earlier text or dropping ASCII deletions, while preserving cancellation and explicit review for unsupported edits.
