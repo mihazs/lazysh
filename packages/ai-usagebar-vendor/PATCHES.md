@@ -57,5 +57,11 @@ unavailable credential source yields an error rather than an invented quota.
   default. Preserve ECMAScript trimming, configured auth paths and API-key
   precedence; selected stores never fall through to a different default login.
   Paths are bounded and invalid encodings/NUL fail without exposing the input.
+  Restrict shared-store credentials to `cline`/legacy `cline-pass` entries before
+  extracting tokens; reject an explicit settings.provider from another family.
+  Cline 3.0.74's `sdk/packages/core/src/auth/provider-auth-registry.ts` stores
+  `openai-codex` and `oca` credentials separately and maps `cline-pass` to `cline`.
+  Preserve older Cline-family records without settings.provider. Unrelated tokens
+  cannot outrank Cline credentials or select another account's quota cache.
   Factor its two identical existing test-store constructors for zero duplication.
   This file is adapted and scanned normally, not an unchanged-source exclusion.

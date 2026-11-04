@@ -20,7 +20,10 @@ Cline CLI 3.0.74 store selection follows `CLINE_PROVIDER_SETTINGS_PATH`, then
 `~/.cline/data/settings/providers.json`. Overrides use Cline's JavaScript trim
 rules, including relative paths against the companion's working directory.
 Explicit `[cline].auth_paths` and API keys take precedence. A missing or malformed
-selected store never silently reads another default login. This routes the
+selected store never silently reads another default login. Shared stores only
+supply Cline credentials from `cline` or legacy `cline-pass` entries; records
+explicitly naming another provider are ignored. Other providers' newer OAuth
+records cannot replace the Cline credential or select its quota cache. This routes the
 existing supported credential format; it does not establish a valid subscription
 or successful provider quota request. Primary path contract:
 [Cline 3.0.74 source](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/shared/src/storage/paths.ts).

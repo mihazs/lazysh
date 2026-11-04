@@ -104,8 +104,9 @@ pub fn read_from(path: &Path) -> Option<Credential> {
 
 /// The live credential with the most life left in it.
 ///
-/// The store keeps one entry per configured provider (`cline`, `cline-pass`,
-/// …) and they are refreshed independently, so the file routinely holds a
+/// Only Cline-family entries may supply a Cline API credential; this shared
+/// store also contains unrelated providers' OAuth credentials.
+/// Supported `cline` and legacy `cline-pass` entries may hold a
 /// lapsed token beside a current one. Picking the furthest-from-expiry entry
 /// is what keeps the widget on the copy the CLI is actually maintaining.
 fn best_candidate(text: &str, now_ms: i64) -> Option<Candidate> {
@@ -114,8 +115,9 @@ fn best_candidate(text: &str, now_ms: i64) -> Option<Candidate> {
     // A live token always wins; the freshest lapsed one is the fallback, and
     // carries the account id the cache is keyed on.
     providers
-        .values()
-        .filter_map(candidate)
+        .iter()
+        .filter(|(id, _)| matches!(id.as_str(), "cline" | "cline-pass"))
+        .filter_map(|(_, provider)| candidate(provider))
         .max_by_key(|found| {
             let expires = found.expires_ms.unwrap_or(i64::MAX);
             (expires > now_ms, expires)
@@ -123,7 +125,14 @@ fn best_candidate(text: &str, now_ms: i64) -> Option<Candidate> {
 }
 
 fn candidate(provider: &Value) -> Option<Candidate> {
-    let auth = provider.get("settings")?.get("auth")?;
+    let settings = provider.get("settings")?;
+    if settings
+        .get("provider")
+        .is_some_and(|id| !matches!(id.as_str(), Some("cline" | "cline-pass")))
+    {
+        return None;
+    }
+    let auth = settings.get("auth")?;
     let token = auth
         .get("accessToken")
         .and_then(Value::as_str)

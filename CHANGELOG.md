@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Discover Cline quota credentials from the CLI-selected provider store, data directory or profile instead of always reading the home-directory default. Preserve explicit usage paths and API-key priority; missing or malformed selected stores do not fall back to another login.
+- Discover Cline quota credentials from the CLI-selected provider store, data directory or profile instead of always reading the home-directory default. Preserve explicit usage paths and API-key priority; missing or malformed selected stores do not fall back to another login. Ignore other providers' OAuth entries in shared Cline stores so they cannot replace Cline credentials or select the wrong quota cache.
 
 - Honor host `CODEX_HOME/auth.json` during automatic AI account discovery when no usage profile exists. Invalid nonempty paths report usage unavailable instead of selecting another account; explicit profiles, paths and disabled providers remain authoritative.
 

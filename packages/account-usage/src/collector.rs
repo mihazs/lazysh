@@ -232,6 +232,32 @@ mod tests {
             std::env::var("LAZYSH_OWNED_CLINE_EXPECTED").as_deref() == Ok("present"),
             "Cline availability must follow its selected credential store"
         );
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("LAZYSH_OWNED_CLINE_CACHE").is_some() {
+            let mut only =
+                load_config_with(None, |vendor, _| vendor == core::VendorId::Cline).unwrap();
+            only.cline = config.cline;
+            only.cline.enabled = true;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let json = runtime
+                .block_on(collect_json(&only, Duration::from_secs(1)))
+                .unwrap();
+            runtime.shutdown_background();
+            let response =
+                serde_json::to_value(crate::normalize(json.as_bytes(), "builtin")).unwrap();
+            let entry = &response["report"]["entries"][0];
+            assert_eq!(entry["id"], "cline");
+            assert_eq!(
+                entry["stale"], true,
+                "expired synthetic tokens can only serve stale owned cache"
+            );
+            assert!(entry["rows"].as_array().unwrap().iter().any(|row|row["percent"]==37.0),"the selected Cline account must retain its own cached quota when a foreign token is newer");
+            assert!(!json.contains("owned-cline-cache-token"));
+            assert!(!json.contains("owned-foreign-fake-token"));
+        }
         std::fs::write(
             std::env::var_os("LAZYSH_OWNED_CLINE_RECEIPT").expect("owned completion receipt"),
             if available { "present" } else { "missing" },
@@ -242,6 +268,60 @@ mod tests {
     async fn selected_cline_stores_preserve_cli_precedence_without_network_or_alternate_fallback() {
         use std::{ffi::OsString, process::Stdio};
         for (case, default_valid, overrides, expected) in [
+            (
+                "cache-control",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@current"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "mixed-cache",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@mixed"),
+                    ("LAZYSH_OWNED_CLINE_CACHE", "1"),
+                ],
+                true,
+            ),
+            (
+                "foreign-only",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@foreign")],
+                false,
+            ),
+            (
+                "other-foreign",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@other")],
+                false,
+            ),
+            (
+                "invalid-cline-with-foreign",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@invalid-cline")],
+                false,
+            ),
+            (
+                "mismatched-settings",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@mismatched")],
+                false,
+            ),
+            (
+                "legacy-cline-pass",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@legacy")],
+                true,
+            ),
+            (
+                "current-with-foreign",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@mixed")],
+                true,
+            ),
             ("profile", false, vec![("CLINE_DIR", "@profile")], true),
             (
                 "data",
@@ -312,6 +392,9 @@ mod tests {
                 true,
             ),
         ] {
+            if matches!(case, "cache-control" | "mixed-cache") && !cfg!(target_os = "linux") {
+                continue;
+            }
             let directory = tempfile::tempdir().unwrap();
             let home = directory.path().join("home");
             let profile = directory.path().join("profile");
@@ -340,6 +423,51 @@ mod tests {
             )
             .unwrap();
             std::fs::write(&malformed, "malformed-owned-store").unwrap();
+            let cline = serde_json::json!({"settings":{"provider":"cline","auth":{"accessToken":"owned-cline-cache-token","accountId":"owned-cline-cache-account","expiresAt":1}}});
+            let foreign = serde_json::json!({"settings":{"provider":"openai-codex","auth":{"accessToken":"owned-foreign-fake-token","accountId":"owned-foreign-account","expiresAt":2}}});
+            let mut legacy = cline.clone();
+            legacy["settings"]
+                .as_object_mut()
+                .unwrap()
+                .remove("provider");
+            let mut invalid_cline = cline.clone();
+            invalid_cline["settings"]["auth"]["accessToken"] = serde_json::json!("");
+            let mut other = foreign.clone();
+            other["settings"]["provider"] = serde_json::json!("oca");
+            for (name, providers) in [
+                ("current", serde_json::json!({"cline":cline})),
+                ("foreign", serde_json::json!({"openai-codex":foreign})),
+                ("other", serde_json::json!({"oca":other})),
+                (
+                    "mixed",
+                    serde_json::json!({"cline":cline,"openai-codex":foreign}),
+                ),
+                (
+                    "invalid-cline",
+                    serde_json::json!({"cline":invalid_cline,"openai-codex":foreign}),
+                ),
+                ("mismatched", serde_json::json!({"cline":foreign})),
+                ("legacy", serde_json::json!({"cline-pass":legacy})),
+            ] {
+                std::fs::write(
+                    directory.path().join(format!("{name}.json")),
+                    serde_json::to_vec(&serde_json::json!({"version":1,"providers":providers}))
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+            if matches!(case, "cache-control" | "mixed-cache") {
+                let cache = directory.path().join("cache/ai-usagebar/cline");
+                std::fs::create_dir_all(&cache).unwrap();
+                // SHA256 identifiers belong only to the fixed synthetic account/token above.
+                let payload = serde_json::json!({"target":"https://api.cline.bot|user:d2dd244c787353bcfbd337e190ed80e4864a50d822a440691bbc3a4fcb330680|v3","credential":"b3a8a0e5d87a0913272a234bb81578f4da3c75406efa7fc54ef8828738b5ffe0","plan":{"name":"Owned cached plan","period_end":null},"windows":[{"percent":37.0,"reset":null},null,null]});
+                std::fs::write(
+                    cache.join("usage.json"),
+                    serde_json::to_vec(&payload).unwrap(),
+                )
+                .unwrap();
+            }
+
             let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
             command
                 .args([
@@ -350,6 +478,7 @@ mod tests {
                 .env_clear()
                 .env("HOME", &home)
                 .env("USERPROFILE", &home)
+                .env("XDG_CACHE_HOME", directory.path().join("cache"))
                 .env("LAZYSH_OWNED_CLINE_PROBE", "1")
                 .env(
                     "LAZYSH_OWNED_CLINE_RECEIPT",
@@ -375,6 +504,11 @@ mod tests {
                     }
                     "@nel-file" => OsString::from(format!("\u{85}{}", file.display())),
                     "@oversized" => OsString::from("x".repeat(4097)),
+                    "@current" | "@foreign" | "@other" | "@mixed" | "@invalid-cline"
+                    | "@mismatched" | "@legacy" => directory
+                        .path()
+                        .join(format!("{}.json", &value[1..]))
+                        .into_os_string(),
                     value => value.into(),
                 };
                 command.env(name, value);
