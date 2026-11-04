@@ -1102,6 +1102,7 @@ export const english = {
   chatRefreshMessages: "Refresh new messages",
   chatDraft: "Transcript draft",
   chatDraftLabel: "Draft for this terminal",
+  chatDraftHelp: "How staging works",
   chatDraftExplanation: "Stage the text, then verify the intended agent pane and paste it from the terminal composer. Permissions, plans, questions, and stop actions use the live terminal.",
   chatStage: "Stage in terminal",
   chatOpenTerminal: "Open terminal",

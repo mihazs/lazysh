@@ -1111,6 +1111,7 @@ const translations = {
   chatRefreshMessages: ["Atualizar novas mensagens", "Actualizar mensajes nuevos"],
   chatDraft: ["Rascunho da transcrição", "Borrador de la transcripción"],
   chatDraftLabel: ["Rascunho para este terminal", "Borrador para este terminal"],
+  chatDraftHelp: ["Como preparar o rascunho", "Cómo preparar el borrador"],
   chatDraftExplanation: ["Prepare o texto, confira o painel do agente desejado e cole pelo editor do terminal. Permissões, planos, perguntas e ações de parada usam o terminal ativo.", "Prepara el texto, verifica el panel del agente deseado y pégalo desde el editor del terminal. Los permisos, los planes, las preguntas y las acciones de parada usan el terminal activo."],
   chatStage: ["Preparar no terminal", "Preparar en el terminal"],
   chatOpenTerminal: ["Abrir terminal", "Abrir terminal"],

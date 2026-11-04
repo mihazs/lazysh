@@ -1,0 +1,48 @@
+.chat-panel .chat-draft {
+  min-width: 0;
+  margin: 0 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--theme-panel, var(--surface));
+}
+
+.chat-panel .chat-draft-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 10px 10px 0 0;
+  background: var(--theme-panel, var(--surface));
+}
+
+.chat-panel .chat-draft-header label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.chat-panel .chat-draft-tools { display: flex; flex-shrink: 0; }
+.chat-panel .chat-draft-help { margin: 6px 12px; font-size: 12px; }
+.chat-panel .chat-draft-tools .icon-button,
+.chat-panel .chat-draft-commands .icon-button {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+
+.chat-panel .chat-composer { padding: 8px 12px 12px; gap: 8px; }
+.chat-panel .chat-draft-commands { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chat-panel .chat-stage { margin-inline-start: auto; min-height: 44px; }
+
+@media (max-width: 600px) {
+  .chat-panel .chat-draft { margin-inline: 12px; }
+  .chat-panel .chat-draft-commands { gap: 4px; }
+}
+
+@supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
+  .chat-panel .chat-draft-header {
+    background: color-mix(in srgb, var(--theme-panel, var(--surface)) max(86%, var(--theme-glass-opacity-floor, 0%)), transparent);
+    backdrop-filter: blur(16px) saturate(120%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .chat-panel .chat-draft-header { background: var(--theme-panel, var(--surface)); backdrop-filter: none; }
+}

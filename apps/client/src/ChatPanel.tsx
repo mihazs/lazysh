@@ -1,11 +1,13 @@
 import AttachmentPanel from './AttachmentPanel';
+import {Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import './ChatPanel.css';
 import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
@@ -193,6 +195,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [error, setError] = useState<UiErrorCause>("");
   const [draft, setDraft] = useState("");
   const [attachmentOpen,setAttachmentOpen]=useState(false);
+  const [draftHelpOpen,setDraftHelpOpen]=useState(false);
+  const draftId=useId(),draftHelpId=useId();
   const currentSession=useRef(sessionId);currentSession.current=sessionId;
   const draftRevision=useRef(0);
   const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged" | "chatAttachmentTooLong">("");
@@ -209,7 +213,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
-    setAttachmentOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
+    setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
     setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
@@ -539,38 +543,38 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         ))}
       </div>
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      {opened && (
-        <button disabled={busy} onClick={() => void read(false)}>
-          {busy
-            ? t("chatReading")
-            : more
-              ? t("chatNextMessages")
-              : t("chatRefreshMessages")}
-        </button>
-      )}
-      <button type="button" disabled={!access.current()} aria-expanded={attachmentOpen} onClick={()=>setAttachmentOpen(value=>!value)}>{t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')}</button>
-      {attachmentOpen && access.current() && <div>
-        <p>{t('chatAttachmentScope')}</p>
-        <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={path=>{
-          if(!mounted.current || !access.current() || currentSession.current!==sessionId || composing.current)return;
-          const next=draft?`${draft}\n${shellPath(path)}`:shellPath(path);
-          if(next.length>65536){setDraftStatus('chatAttachmentTooLong');return;}
-          draftRevision.current++;setDraft(next);setDraftStatus('');setAttachmentOpen(false);
-        }}/>
-      </div>}
-      <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
-        <label>{t("chatDraftLabel")}<textarea rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} /></label>
-        <p>{t("chatDraftExplanation")}</p>
-        <div className="button-row"><button type="submit" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>{onOpenTerminal && <button type="button" onClick={onOpenTerminal}>{t("chatOpenTerminal")}</button>}<button type="button" disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}>{t("chatClearDraft")}</button></div>
-        {terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
-          key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
-          access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
-          onSent={(text,revision)=>{
-            if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}
-          }}
-        />}
-        {draftStatus && <p role="status">{t(draftStatus)}</p>}
-      </form>
+      <div className="chat-draft">
+        <div className="chat-draft-header">
+          <label htmlFor={draftId}>{t("chatDraftLabel")}</label>
+          <div className="chat-draft-tools">
+            {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
+            <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(value=>!value)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
+            <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>
+          </div>
+        </div>
+        <p id={draftHelpId} className="chat-draft-help" hidden={!draftHelpOpen}>{t("chatDraftExplanation")}</p>
+        {attachmentOpen && access.current() && <div>
+          <p>{t('chatAttachmentScope')}</p>
+          <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={path=>{
+            if(!mounted.current || !access.current() || currentSession.current!==sessionId || composing.current)return;
+            const next=draft?`${draft}\n${shellPath(path)}`:shellPath(path);
+            if(next.length>65536){setDraftStatus('chatAttachmentTooLong');return;}
+            draftRevision.current++;setDraft(next);setDraftStatus('');setAttachmentOpen(false);
+          }}/>
+        </div>}
+        <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
+          <textarea id={draftId} rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
+          <div className="chat-draft-commands">{onOpenTerminal && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button><button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button></div>
+          {terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
+            key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
+            access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
+            onSent={(text,revision)=>{
+              if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}
+            }}
+          />}
+          {draftStatus && <p role="status">{t(draftStatus)}</p>}
+        </form>
+      </div>
     </section>
   );
 }

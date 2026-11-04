@@ -1169,6 +1169,17 @@ test('recorded Codex conversation stays readable in a constrained connected work
     await page.screenshot({path:testInfo.outputPath(`conversation-${count}-readable.png`)});
   }
   const draft=page.getByRole('textbox',{name:'Draft for this terminal',exact:true});await draft.fill('Recorded conversation draft remains unsubmitted');
+  if(phone) {
+    await page.setViewportSize({width:393,height:550});await page.evaluate(()=>{document.documentElement.style.zoom='1.35';});
+    try {
+      await draft.scrollIntoViewIfNeeded();
+      const stage=(await page.getByRole('button',{name:'Stage in terminal',exact:true}).boundingBox())!;
+      const footer=(await page.locator('.workspace-footer').boundingBox())!;
+      expect(stage.y+stage.height).toBeLessThanOrEqual(footer.y);
+    } finally {
+      await page.evaluate(()=>{document.documentElement.style.zoom='';});await page.setViewportSize({width:393,height:852});
+    }
+  }
   await region.evaluate(e=>{e.scrollTop=0;e.dispatchEvent(new Event('scroll'));});
   await page.getByRole('button',{name:'Refresh new messages',exact:true}).click();
   await expect(page.getByRole('button',{name:'Refresh new messages',exact:true})).toBeEnabled();
