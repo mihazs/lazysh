@@ -171,6 +171,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+    // Pure test-only helpers run on the JVM and inside instrumentation; never in the app.
+    sourceSets {
+        getByName("test").java.srcDir("src/sharedTest/java")
+        getByName("androidTest").java.srcDir("src/sharedTest/java")
+    }
     // Keep first-Activity link receipts when the ordinary instrumentation task
     // executes afterward. Both paths use Gradle's native connected-test reports.
     if (providers.gradleProperty("lazyshThemeLinkAcceptance").orNull == "true") {

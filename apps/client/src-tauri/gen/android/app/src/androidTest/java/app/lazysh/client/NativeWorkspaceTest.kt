@@ -1807,8 +1807,15 @@ class NativeWorkspaceTest {
                   root.contains(document.elementFromPoint(innerWidth/2,innerHeight/2)))};
             })()
         """.trimIndent()
-        fun awaitPhase(stage: String, keyboard: Boolean?, accept: (JSONObject) -> Boolean): JSONObject {
+        fun awaitPhase(stage: String, keyboard: Boolean?, dismissKeyboard: Boolean = false, accept: (JSONObject) -> Boolean): JSONObject {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            // Mosh can paint a resized frame before Herdr repaints it, and IME
+            // animations dispatch intermediate layouts. Admit only a settled sample.
+            val settled = SettledPhase(500)
+            // A setup phase may still be racing the connection's own keyboard
+            // request; dismiss it only after the native IME stays visible.
+            val shown = SettledPhase(500)
+            var dismissals = 0
             var last = "unavailable"
             while (true) {
                 val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
@@ -1825,10 +1832,19 @@ class NativeWorkspaceTest {
                 }
                 val state = JSONObject(evaluate(scenario, observation, remaining.coerceAtMost(1000)))
                 require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "painted", "editable", "centerOwned"))
-                last = state.toString().also { require(it.length <= 256) }
-                if (ready && state.getBoolean("owned") && state.getBoolean("valid") && state.getBoolean("painted") &&
-                    (history < 0 || state.getInt("historyRows") == history) && accept(state) && System.nanoTime() < deadline) {
-                    println("lazysh Mosh resize: phase=$stage rows=${state.getInt("rows")} history=${state.getInt("historyRows")} keyboard=$imeVisible")
+                last = state.toString().also { require(it.length <= 256) } + " ime=$imeVisible ready=$ready dismissals=$dismissals"
+                val now = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+                if (dismissKeyboard && keyboard == false && dismissals < 3 && shown.admit(now, imeVisible == true, "ime")) {
+                    dismissals++
+                    shown.reset()
+                    settled.reset()
+                    device.pressBack()
+                    continue
+                }
+                val matches = ready && state.getBoolean("owned") && state.getBoolean("valid") && state.getBoolean("painted") &&
+                    (history < 0 || state.getInt("historyRows") == history) && accept(state)
+                if (settled.admit(now, matches, "$state ime=$imeVisible") && System.nanoTime() < deadline) {
+                    println("lazysh Mosh resize: phase=$stage rows=${state.getInt("rows")} cursor=${state.opt("cursorRow")} history=${state.getInt("historyRows")} keyboard=$imeVisible")
                     return state
                 }
                 val pause = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtMost(50)
@@ -1845,7 +1861,7 @@ class NativeWorkspaceTest {
             """) == "true"
             assertTrue("Mosh resize owns only its original document and terminal", installed)
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
-            val baseline = awaitPhase("baseline", false) { it.getBoolean("editable") && it.getBoolean("centerOwned") && !it.isNull("cursorRow") }
+            val baseline = awaitPhase("baseline", false, dismissKeyboard = true) { it.getBoolean("editable") && it.getBoolean("centerOwned") && !it.isNull("cursorRow") }
             history = baseline.getInt("historyRows")
             // Espresso's ordinary native center tap is admitted only when the
             // current document proves that center belongs to its original xterm.
@@ -1858,7 +1874,7 @@ class NativeWorkspaceTest {
             button("Close composer")
             awaitPhase("compose-grow", null) { it.getInt("rows") > composed.getInt("rows") }
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
-            val portrait = awaitPhase("portrait", false) { true }
+            val portrait = awaitPhase("portrait", false, dismissKeyboard = true) { true }
             scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
             val landscape = awaitPhase("orientation-shrink", false) { activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && it.getInt("rows") < portrait.getInt("rows") }
             scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
