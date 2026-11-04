@@ -1238,6 +1238,17 @@ test('SwiftKey post-runtime integrity detects rewritten or missing copied inputs
   } finally {await rm(directory,{recursive:true,force:true});}
 });
 
+test('SwiftKey host probe emits only finite outcomes',async()=>{
+  const {swiftkeyHostProbe}=await import('./support/androidSwiftkey');
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-host-probe-'));
+  try {
+    expect(await swiftkeyHostProbe(process.execPath,['-e','process.exit(0)'],directory)).toEqual({state:'passed',cleanup:'passed'});
+    expect(await swiftkeyHostProbe(process.execPath,['-e',"console.error('private-path');process.exit(3)"],directory)).toEqual({state:'failed',cleanup:'passed'});
+    expect(await swiftkeyHostProbe(join(directory,'missing'),[],directory)).toEqual({state:'unavailable',cleanup:'passed'});
+    expect(await swiftkeyHostProbe(process.execPath,['-e','setInterval(()=>{},1000)'],directory,100)).toEqual({state:'unavailable',cleanup:'passed'});
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
 test('SwiftKey owner failure reports only fixed startup categories',async()=>{
   const {swiftkeyOwnerFailure}=await import('./support/androidSwiftkey');
   const secret='private-token-url-and-path';

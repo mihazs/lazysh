@@ -274,6 +274,21 @@ export function swiftkeyOwnerFailure(stderr:string) {
   return 'unknown';
 }
 
+export async function swiftkeyHostProbe(program:string,args:string[],directory:string,milliseconds=5000) {
+  const owned=new OwnedProcess(program,args,directory,quietEnvironment(directory),false);
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  let state:'passed'|'failed'|'unavailable'='unavailable',cleanup:'passed'|'failed'='passed';
+  try {
+    const code=await Promise.race([owned.done,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('probe deadline')),milliseconds);})]);
+    state=code===0?'passed':'failed';
+  } catch {/* A deadline or unavailable launcher does not prove a capability. */}
+  finally {
+    if(timer)clearTimeout(timer);
+    if(owned.child.pid)try {await owned.stop();}catch {cleanup='failed';}
+  }
+  return {state,cleanup};
+}
+
 export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../..')) {
   if(process.platform!=='linux'||process.arch!=='x64'||process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Explicit disposable hosted SwiftKey owner required');
   const profile=process.env.LAZYSH_SWIFTKEY_PROFILE??'play-splits';
@@ -282,9 +297,10 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
   const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-'));await chmod(directory,0o700);
   const home=userInfo().homedir;
   if(!/^\/home\/[A-Za-z0-9_-]+$/.test(home))throw new Error('Private canonical home mount unavailable');
-  let child:OwnedProcess|undefined;let membership:ReturnType<typeof setInterval>|undefined;let inventoryOverflow=false;
+  let child:OwnedProcess|undefined;let membership:ReturnType<typeof setInterval>|undefined;let inventoryOverflow=false,primary=false;
   const preparation:SwiftkeyPreparation={phase:'not-started',state:'not-started',exitCode:null,reason:'none'};
   const immutablePaths:Record<string,string>={};let inputHashes:Record<string,string>={};
+  const hostProbe:Record<string,Awaited<ReturnType<typeof swiftkeyHostProbe>>>={};
   const seen=new Map<string,{pid:number;start:string}>();const canaries:Awaited<ReturnType<typeof ownedSwiftkeyCanary>>[]=[];let parentCanariesProven=false;
   try {
     for(const name of ['home','android','emulator','avd','keys','config','cache','data','runtime','tmp','bundle','closure/tests','closure/apps/client/published-native-e2e','closure/apps/client/native-e2e'])await mkdir(join(directory,name),{recursive:true,mode:0o700});
@@ -326,6 +342,11 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
     const ini=join(directory,'avd/lazysh-swiftkey.ini');await writeFile(ini,(await readFile(ini,'utf8')).replaceAll(directory,'/work'),{mode:0o600});
     for(const host of ['127.0.0.1','::1']) {const canary=await ownedSwiftkeyCanary(host,14406);canaries.push(canary);await swiftkeyCanaryConnect(host,14406,canary.nonce);}
     parentCanariesProven=true;
+    const probeHome=join(directory,'home');
+    const probeArgs=['--die-with-parent','--unshare-all','--ro-bind','/usr','/usr','--ro-bind','/bin','/bin','--ro-bind','/lib','/lib','--ro-bind','/lib64','/lib64','--proc','/proc','--dev','/dev'];
+    hostProbe.userNamespace=await swiftkeyHostProbe('/usr/bin/unshare',['--user','--map-root-user','--','/usr/bin/true'],probeHome);
+    hostProbe.bubblewrap=await swiftkeyHostProbe('/usr/bin/bwrap',[...probeArgs,'--','/usr/bin/true'],probeHome);
+    hostProbe.kvmBind=await swiftkeyHostProbe('/usr/bin/bwrap',[...probeArgs,'--dev-bind','/dev/kvm','/dev/kvm','--','/usr/bin/true'],probeHome);
     const parentNamespaces=await swiftkeyNamespaceIds();
     const args=['--die-with-parent','--unshare-all','--new-session'];
     for(const path of ['/usr','/bin','/lib','/lib64'])args.push('--ro-bind',path,path);
@@ -337,14 +358,15 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
     const owner=await child.liveIdentity();if(!owner)throw new Error('Namespace owner identity absent');
     membership=setInterval(()=>{void descendants(owner).then(rows=>{for(const row of rows){const key=row.pid+':'+row.start;if(seen.has(key)||seen.size<256)seen.set(key,{pid:row.pid,start:row.start});else inventoryOverflow=true;}}).catch(()=>{});},200);
     await child.finish('original 340s isolated SwiftKey gate',340_000);
-  } finally {
+  } catch(error) {primary=true;throw error;}
+  finally {
     if(membership)clearInterval(membership);
     const cleanup=await Promise.allSettled([child?.stop(),...canaries.map(canary=>new Promise<void>(yes=>canary.server.close(()=>yes())))]);
     try {
       // Partial writes after an outer kill are inconclusive, not a success.
       const load=async(name:string)=>{try{return JSON.parse(await readFile(join(directory,name),'utf8'));}catch{return {state:'unavailable'};}};
       const receipt=await load('receipt.json');
-      receipt.preparation=preparation;
+      receipt.preparation=preparation;receipt.hostProbe=hostProbe;
       receipt.ownerFailure=child ? swiftkeyOwnerFailure(child.stderr) : 'not-started';
       receipt.nativeFailure=await load('native-failure.json');
       receipt.parentCanariesProven=parentCanariesProven;
@@ -356,7 +378,10 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
       if(process.env.LAZYSH_SWIFTKEY_RECEIPT)await writeFile(process.env.LAZYSH_SWIFTKEY_RECEIPT,JSON.stringify(receipt)+'\n',{mode:0o600});
       const ax=await readFile(join(directory,'vendor-discovery.json'),'utf8').catch(()=>'');
       if(process.env.LAZYSH_SWIFTKEY_AX && ax)await writeFile(process.env.LAZYSH_SWIFTKEY_AX,ax,{mode:0o600});
-      if((child&&receipt.inputIntegrity.state!=='unchanged')||inventoryOverflow||receipt.surviving.length||cleanup.some(x=>x.status==='rejected'))throw new Error('Owned namespace process cleanup unqualified');
+      if((child&&receipt.inputIntegrity.state!=='unchanged')||inventoryOverflow||receipt.surviving.length||Object.values(hostProbe).some(x=>x.cleanup==='failed')||cleanup.some(x=>x.status==='rejected')) {
+        if(primary)console.error('Owned namespace cleanup unqualified after original failure');
+        else throw new Error('Owned namespace process cleanup unqualified');
+      }
     } finally {await rm(directory,{recursive:true,force:true});}
   }
 }
