@@ -17,6 +17,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   let previous = area.value, start = previous.length;
   let composing = false, ending = false, hardware = false, sending = false, key229 = false;
   let generation = 0, deferred: KeyboardEvent | undefined, replaying = false;
+  let keypressEvent: Event | undefined;
   let completion: ReturnType<typeof setTimeout> | undefined;
   let fallbackPending: {owner:number; delta:string} | undefined;
   const cancelComposition = () => {
@@ -72,7 +73,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   };
   const output = terminal.onData(() => {
     if (userInput() && !sending && !composing && !ending) {
-      const physical = hardware; reset(); hardware = physical;
+      const physical = hardware || !!keypressEvent?.eventPhase; reset(); hardware = physical;
     }
   });
   const replay = (event: KeyboardEvent) => {
@@ -105,6 +106,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     resume();
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
     if (!composing && !ending) commitFallback();
+    if (event.key === 'Process' && !event.code && event.keyCode === 0 && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      hardware = false; event.stopImmediatePropagation(); return;
+    }
     if (event.keyCode === 229) {
       hardware = false;
       // xterm's key229 timeout treats an equal-length correction as another word.
@@ -150,7 +154,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     };
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
-    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)) {fallback(delta); return;}
+    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
+      && (event.inputType !== 'deleteContentForward' || key229)) {fallback(delta); return;}
     event.stopImmediatePropagation(); key229 = false; previous = value;
     send(delta);
   };
@@ -176,6 +181,14 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const paste = (event: Event) => {if (event.target === area) flush();};
   const activate = () => {commitFallback(); resume();};
   const keyup = () => {hardware = false;};
+  const keypress = (event: Event) => {
+    if (event.target !== area) return;
+    if (!focused()) {event.preventDefault(); event.stopImmediatePropagation(); revoke(); return;}
+    keypressEvent = event;
+    if ((composing || ending) && event instanceof KeyboardEvent && (event.charCode || event.which || event.keyCode)
+      && !flush()) {event.preventDefault(); event.stopImmediatePropagation();}
+  };
+  element.addEventListener('keypress', keypress, true);
   element.addEventListener('keydown', keydown, true);
   element.addEventListener('keyup', keyup, true);
   element.addEventListener('beforeinput', before, true);
@@ -188,6 +201,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   element.addEventListener('click', activate, true);
   return {get blocked() {return !!unapplied;}, reset() {unapplied = null; onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
     unapplied = null; onUnappliedEdit(null); revoke(); output.dispose();
+    element.removeEventListener('keypress', keypress, true);
     element.removeEventListener('keydown', keydown, true);
     element.removeEventListener('keyup', keyup, true);
     element.removeEventListener('beforeinput', before, true);

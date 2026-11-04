@@ -233,8 +233,27 @@ test('actual App installs Mosh framing before early output and fits only remote 
   const state=()=>page.evaluate(()=>Reflect.get(window,'nativeMoshApp') as {resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number});
   await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(0);
   const firstSize=(await state()).resizes.at(-1)!;expect(firstSize).not.toEqual({cols:40,rows:12});
-  await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit(data),bytes(captured.frames[1].bytesHex));
-  await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
+  if ((page.viewportSize()?.width??1280)<=600) {
+    await page.evaluate(()=>Reflect.get(window,'nativeMoshApp').emit(Array.from(new TextEncoder().encode('\x1b[?1000h\x1b[?1006h'))));
+    await expect(page.locator('.terminal-canvas .xterm')).toHaveClass(/enable-mouse-events/);
+    const box=(await page.locator('.xterm-screen').boundingBox())!,origin={x:box.x+30,y:box.y+40};
+    const input=await page.context().newCDPSession(page);
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+    try {
+      await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+30}]});
+      await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(0);
+      const before=(await state()).writes.length;
+      await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit([...data,...new TextEncoder().encode('\x1b[?1000h\x1b[?1006h')]),bytes(captured.frames[1].bytesHex));
+      await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
+      await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+60}]});
+      await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(before);
+    } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await input.detach();}
+    expect((await state()).writes.every(value=>/^\x1b\[<6[45];\d+;\d+M$/.test(value))).toBe(true);
+    await page.evaluate(()=>{Reflect.get(window,'nativeMoshApp').writes=[];});
+  } else {
+    await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit(data),bytes(captured.frames[1].bytesHex));
+    await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
+  }
   const beforeCompose=(await state()).resizes.length;await page.getByRole('button',{name:'Compose',exact:true}).click();
   await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeCompose);await expect(rows).toHaveCount(6);
   await page.getByRole('button',{name:'Close composer',exact:true}).click();

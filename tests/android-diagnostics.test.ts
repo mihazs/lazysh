@@ -17,6 +17,23 @@ afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
+test('Google ntfy reclaims only unused host toolchains before APK and system-image provisioning',()=>{
+  const name='Reclaim unused host toolchains for Google ntfy';
+  const job=workflow.jobs['native-android-ntfy'],steps=job.steps;
+  const cleanup=steps.findIndex(step=>step.name===name);
+  expect(cleanup).toBeGreaterThanOrEqual(0);
+  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(steps[cleanup].if).toBe("matrix.push-variant == 'google'");
+  expect(emulatorCommands(steps[cleanup].run!)).toEqual([
+    'df -h /','sudo rm -rf -- /usr/share/dotnet /usr/local/.ghcup','df -h /',
+  ]);
+  const build=steps.findIndex(step=>step.name==='Build current Google APK for Firebase-free push acceptance');
+  expect(cleanup).toBe(build-1);
+  expect(steps.findIndex(step=>step.name==='Real ntfy encrypted native enrollment')).toBeGreaterThan(build);
+  for(const [key,other] of Object.entries(workflow.jobs))
+    if(key!=='native-android-ntfy')expect(other.steps?.some(step=>step.name===name)??false).toBe(false);
+});
+
 test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google',23],['fdroid',23]] as const)('ntfy %s dispatch executes complete runner lines and preserves enrollment argv/environment with exit %i',async (variant,exit)=>{
   const job=workflow.jobs['native-android-ntfy'];
   const step=job.steps.find(step=>step.name==='Real ntfy encrypted native enrollment')!;

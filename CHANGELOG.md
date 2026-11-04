@@ -4,6 +4,12 @@
 
 - Add explicitly selected OpenCode recorded Conversation views for V1 and V2 databases, with current tool updates, revert handling and recorded token counters. Records remains the default; recorded history does not establish live agent identity or enable unconfirmed input.
 
+- Preserve owned IME corrections across zero-code Process keys and keep subsequent hardware keypresses ordered and sent once; retain focus, access and unsupported-edit protections.
+
+- Keep owned ASCII forward deletions without key229 synchronized with later terminal suggestions and typing; preserve composition fallback and review for edits outside the locally owned input.
+
+- Preserve the visible scrollback line during height-only terminal resizing, including keyboard-sized viewport changes; keep bottom-following and the separate Mosh rendering path.
+
 - Simplify workspace navigation with focused Workspaces and Agents screens, compact session context and clearer work-state rows. Changed default: desktop tools now open from Workspace tools instead of a permanent tab strip; all existing tools remain reachable. Preserve the compact phone terminal, existing sessions and contextual return.
 
 - Keep owned Android IME fallback edits from repeating earlier text or dropping ASCII deletions, while preserving cancellation and explicit review for unsupported edits.

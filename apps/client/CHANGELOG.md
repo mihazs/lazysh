@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.10.4
+
+### Patch Changes
+
+- 8e3f647: Keep the visible scrollback line anchored when the terminal height changes.
+  Keep validated forward deletions synchronized with subsequent terminal input without changing the deferred composition fallback.
+  Preserve zero-code Process corrections and order subsequent hardware keypresses without duplicate input.
+- 1ebc76a: Reclaim unused host .NET and Haskell toolchains before Google ntfy APK and system-image provisioning, preserving the active Android SDK/NDK and native acceptance gates.
+- @lazysh/account-usage@1.10.4
+  - @lazysh/common@1.10.4
+  - @lazysh/display-idle@1.10.4
+  - @lazysh/et-transport@1.10.4
+  - @lazysh/mosh-transport@1.10.4
+
 ## 1.10.3
 
 ### Patch Changes
