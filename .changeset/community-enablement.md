@@ -2,4 +2,4 @@
 "@lazysh/client": patch
 ---
 
-Add public contributor onboarding, support policies, capture and launch procedures, and a lightweight repository landing artifact without changing runtime behavior.
+Add support, security and code-of-conduct policies and a first-contribution walkthrough without changing runtime behavior.

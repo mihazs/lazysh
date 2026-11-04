@@ -29,7 +29,7 @@ include unverified testimonials. The maintainer preparing a release owns this ch
 ## Validation
 
 Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
-Playwright, Gradle/JUnit and XCTest tasks. See the [README contributor checks](README.md).
+Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.

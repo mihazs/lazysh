@@ -14,10 +14,9 @@ If **Report a vulnerability** is available, use that private GitHub form with th
 affected version, impact, minimal reproduction using an owned test host, and
 suggested mitigation. Do not include real secrets even in a private report.
 
-Private reporting enablement has not been verified by this documentation change.
-If that button is unavailable, open only a minimal public request asking the
-maintainer to enable private vulnerability reporting, without vulnerability
-details. Wait for a verified private channel before sending sensitive evidence.
+If that button is unavailable, private reporting is not enabled yet: open only
+a minimal public request asking the maintainer to enable private vulnerability
+reporting, without vulnerability details. Wait for a verified private channel before sending sensitive evidence.
 No security email address or response-time guarantee is asserted here.
 
 ## Connection and distribution boundaries

@@ -16,7 +16,7 @@ without repeating private information, and consider corrections and context.
 For non-sensitive concerns, ask a maintainer for moderation on the relevant
 thread. For sensitive conduct, use GitHub's **Report content** mechanism rather
 than posting private evidence. A dedicated private project conduct channel has
-not yet been established; see the [maintainer checklist](docs/community/maintainer-setup.md).
+not yet been established.
 Do not use security advisories for unrelated conduct reports. No response-time
 commitment is promised. This policy applies to project spaces and representation
 of the project, including maintainers' conduct toward contributors.
