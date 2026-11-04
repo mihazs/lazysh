@@ -6,6 +6,19 @@ or the application's mouse/alternate-screen behavior for Herdr and similar tools
 It does not require enabling a custom gesture. Screen-reader gestures and text
 selection retain their existing handling.
 
+To hide the keyboard past the bottom of local history, open Preferences → Keyboard
+and gestures → Terminal touch gestures and enable **Hide keyboard when scrolling
+past local history bottom**. It defaults off. At the bottom, swipe upward toward
+newer output. The option applies only with an idle, empty terminal editor; it never
+flushes or clears a pending edit. Remote mouse-reporting and
+alternate-screen applications keep their normal scrolling. **Reset gestures**
+turns the option off again. Native Android CI verifies the dismissal on an
+emulator with the stock AOSP keyboard; physical devices and other keyboards are
+not covered by automated checks.
+Settings snapshots from this version always include this preference, even when it
+is off, so older clients reject every settings import from this version until they
+are updated. Updated clients still accept older settings snapshots.
+
 An active phone terminal uses a compact header. Open **More** (Workspace tools)
 for session views, connection actions, Preferences and workspace restoration.
 The session switcher stays in the header; multiple connections retain their tabs.

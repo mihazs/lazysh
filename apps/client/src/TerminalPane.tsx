@@ -73,7 +73,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const inputLane = useRef<"keyboard" | "literal" | null>(null);
   const literalPaste = useRef(false);
   const literalCapture = useRef<string[] | null>(null);
-  const imeInput = useRef<{reset(): void; flush(): void; resume(): void; dismiss(): void} | null>(null);
+  const imeInput = useRef<{readonly idle:boolean;reset(): void; flush(): void; resume(): void; dismiss(): void} | null>(null);
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
@@ -302,7 +302,17 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const element = container.current;
     if (!element || preferences.screenReader) return;
     let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
-    let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean} | null = null;
+    let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean; dismiss:InputOwner|null} | null = null;
+    const safeDismiss=(owner:InputOwner|null)=>{
+      const terminal=session.terminal,area=terminal.textarea,buffer=terminal.buffer.active,view=pasteView.current;
+      return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.terminal===terminal
+        &&view.id===session.id&&view.terminal===terminal&&view.connected&&activeRef.current&&mounted.current&&access.current()
+        &&!document.hidden&&document.hasFocus()&&!imeComposing.current&&imeInput.current?.idle===true&&!terminal.hasSelection()
+        &&area===document.activeElement&&!area?.readOnly&&area?.value===''
+        &&terminal.modes.mouseTrackingMode==='none'&&buffer.type==='normal'&&Number.isInteger(buffer.baseY)&&buffer.baseY>=0&&buffer.viewportY===buffer.baseY
+        &&!document.querySelector('[role="dialog"][aria-modal="true"]');
+    };
+    const retireDismiss=()=>{if(scroll)scroll.dismiss=null;};
     // A finger held still and lifted selects the word beneath it; a later
     // long-press elsewhere extends that selection. Moving first always scrolls.
     let hold: {x: number; y: number; timer?: ReturnType<typeof setTimeout>; ready?: true} | null = null;
@@ -312,7 +322,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const start = (event: TouchEvent) => {
       const point = event.touches.length === 1 ? event.touches[0] : undefined;
       if (!point) {cancel(); return;}
-      scroll = {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, direction: 0, mode: null, height: 0, active: false};
+      scroll = {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, direction: 0, mode: null, height: 0, active: false, dismiss:preferences.dismissKeyboardOnOverscroll&&Number.isFinite(point.clientX)&&Number.isFinite(point.clientY)&&safeDismiss(inputOwner.current)?inputOwner.current:null};
       release();
       const pending: NonNullable<typeof hold> = {x: point.clientX, y: point.clientY};
       pending.timer = setTimeout(() => {pending.timer = undefined; pending.ready = true;}, TOUCH_SELECTION_DELAY);
@@ -348,10 +358,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         if (hold && Math.hypot(point.clientX - hold.x, point.clientY - hold.y) > 10) release();
         if (scroll) {
           const dx = point.clientX - scroll.x, dy = point.clientY - scroll.y;
+          if(scroll.dismiss&&(!safeDismiss(scroll.dismiss)||!Number.isFinite(dx)||!Number.isFinite(dy)||point.clientY>scroll.lastY||Math.abs(dx)>Math.max(10,Math.abs(dy)/1.5)))retireDismiss();
           if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx))) {
             const deltaY = scroll.lastY - point.clientY;
             scroll.active = true; scroll.lastY = point.clientY;
             press.current = null; cancelTaps();
+            // An upward finger moves toward the bottom of local history.
+            if(scroll.dismiss&&-dy>=48){
+              retireDismiss();session.terminal.blur();event.stopPropagation();if(event.cancelable)event.preventDefault();return;
+            }
             const tracking = session.terminal.modes.mouseTrackingMode;
             const pixelWheel = tracking === 'none' || tracking === 'x10';
             const viewportScroll = pixelWheel && session.terminal.buffer.active.type !== 'alternate' && session.terminal.options.scrollback !== 0;
@@ -408,6 +423,12 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       event.stopPropagation();
       if (event.cancelable) event.preventDefault();
     };
+    const visibility=()=>{if(document.hidden)retireDismiss();};
+    const selection=()=>{if(session.terminal.hasSelection())retireDismiss();};
+    const accessChanged=subscribeAccess(()=>{if(!access.current())retireDismiss();});
+    const bufferChanged=session.terminal.buffer.onBufferChange?.(retireDismiss);
+    document.addEventListener('visibilitychange',visibility);document.addEventListener('selectionchange',selection);window.addEventListener('blur',retireDismiss);
+    for(const name of ['compositionstart','input','focusout'])element.addEventListener(name,retireDismiss,true);
     element.addEventListener('touchstart', start, {capture: true, passive: true});
     element.addEventListener("touchmove", multitouch, {capture: true, passive: false});
     element.addEventListener('touchend', end, {capture: true});
@@ -416,12 +437,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     return () => {
       release();
       element.removeEventListener('contextmenu', menu, {capture: true});
+      accessChanged();bufferChanged?.dispose();
+      document.removeEventListener('visibilitychange',visibility);document.removeEventListener('selectionchange',selection);window.removeEventListener('blur',retireDismiss);
+      for(const name of ['compositionstart','input','focusout'])element.removeEventListener(name,retireDismiss,true);
       element.removeEventListener('touchstart', start, {capture: true});
       element.removeEventListener('touchmove', multitouch, {capture: true});
       element.removeEventListener('touchend', end, {capture: true});
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
-  }, [active, customTouch, preferences.screenReader, session.id, session.connected, preferences.bodyGestures]);
+  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.terminal, session.connected, preferences.bodyGestures]);
 
   useEffect(() => {
     const element = container.current;
