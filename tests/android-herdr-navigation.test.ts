@@ -94,7 +94,7 @@ test('CI actually invokes the stock two-display native case through its own unca
   expect(job.needs).toEqual(['changes','herdr-native']);expect(job['timeout-minutes']).toBe(30);
   expect(job.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('herdr-navigation');
   const download=job.steps.find((step:any)=>step.uses==='actions/download-artifact@v4');
-  expect(download.with.name).toBe('stock-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
+  expect(download.with['artifact-ids']).toBe('${{ needs.herdr-native.outputs.stock-id }}');
   const emulator=job.steps.find((step:any)=>step.uses?.startsWith('mihazs/lazysh-android-emulator-runner@'));
   expect(emulator.with.script).toContain('bun run test:android-herdr-navigation');
   expect(emulator.with.script).toContain('Unknown Android runtime owner');
