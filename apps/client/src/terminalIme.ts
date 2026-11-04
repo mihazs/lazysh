@@ -13,7 +13,6 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   if (!helper || typeof helper._isComposing !== 'boolean' || typeof helper._isSendingComposition !== 'boolean'
     || !(helper._compositionView instanceof HTMLElement)) return;
   const originalReadOnly = area.readOnly;
-  let unapplied: UnappliedTerminalEdit | null = null;
   let previous = area.value, start = previous.length;
   let composing = false, ending = false, hardware = false, sending = false, key229 = false;
   let generation = 0, deferred: KeyboardEvent | undefined, replaying = false;
@@ -49,16 +48,17 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     // This is local IME context, not an editable remote command line. Never log or persist it.
     let end = Math.min(value.length, 65536);
     if (end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1])) end--;
-    unapplied = {text:value.slice(0, end),truncated:end !== value.length};
-    area.value = ''; reset(); area.readOnly = true;
-    onUnappliedEdit(unapplied);
+    // Skip the unsafe edit and resynchronize the editor without pausing typing:
+    // the terminal is unchanged and the next keyboard input is sent normally.
+    area.value = ''; reset();
+    onUnappliedEdit({text:value.slice(0, end),truncated:end !== value.length});
   };
-  const dismiss = () => {revoke(); unapplied = null; onUnappliedEdit(null); resume();};
+  const dismiss = () => {onUnappliedEdit(null); resume();};
   // Blink can refocus a blurred editor when a retained native composition commits.
   const revoke = () => {area.value = ''; reset(); area.readOnly = true; area.blur();};
-  const resume = () => {if (!unapplied && foreground()) area.readOnly = originalReadOnly;};
+  const resume = () => {if (foreground()) area.readOnly = originalReadOnly;};
   const send = (value: string) => {
-    if (!value || unapplied) return;
+    if (!value) return;
     if (!focused()) {revoke(); return;}
     sending = true;
     try {terminal.input(value, true);} finally {sending = false;}
@@ -95,11 +95,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   };
   const flush = () => {
     commitFallback();
-    if (unapplied) return false;
     const value = composing || ending ? ownedDelta(area.value) : '';
-    if (value === undefined) {stage(area.value); return false;}
-    reset(); send(value);
-    return !unapplied;
+    if (value === undefined) stage(area.value);
+    else {reset(); send(value);}
   };
   const keydown = (event: KeyboardEvent) => {
     if (event.target !== area || replaying) return;
@@ -122,7 +120,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
       return;
     }
     if (!['Shift','Control','Alt','Meta'].includes(event.key)) {
-      if (!flush()) {event.preventDefault(); event.stopImmediatePropagation(); return;}
+      flush();
       hardware = true;
     }
   };
@@ -185,8 +183,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (event.target !== area) return;
     if (!focused()) {event.preventDefault(); event.stopImmediatePropagation(); revoke(); return;}
     keypressEvent = event;
-    if ((composing || ending) && event instanceof KeyboardEvent && (event.charCode || event.which || event.keyCode)
-      && !flush()) {event.preventDefault(); event.stopImmediatePropagation();}
+    if ((composing || ending) && event instanceof KeyboardEvent && (event.charCode || event.which || event.keyCode)) flush();
   };
   element.addEventListener('keypress', keypress, true);
   element.addEventListener('keydown', keydown, true);
@@ -199,8 +196,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   element.addEventListener('paste', paste, true);
   element.addEventListener('pointerdown', activate, true);
   element.addEventListener('click', activate, true);
-  return {get blocked() {return !!unapplied;}, reset() {unapplied = null; onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
-    unapplied = null; onUnappliedEdit(null); revoke(); output.dispose();
+  return {reset() {onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
+    onUnappliedEdit(null); revoke(); output.dispose();
     element.removeEventListener('keypress', keypress, true);
     element.removeEventListener('keydown', keydown, true);
     element.removeEventListener('keyup', keyup, true);

@@ -210,35 +210,19 @@ for(const boundary of ['reset','dispose'] as const)test(`unapplied context is cl
   expect(result).toEqual({before:{text:'èy',truncated:false},after:null,writes:['éx']});
 });
 
-test('unapplied review blur retains context, blocks user input and preserves protocol until explicit dismissal',async({page,context})=>{
-  await page.evaluate(async()=>{
+test('a skipped edit keeps the focused editor typing without dismissal',async({page,context})=>{
+  const skipped=await page.evaluate(async()=>{
     const owner=window.ownedIme;
-    await owner.replace('éx');await owner.replace('èy');
-    owner.textarea.blur();owner.observation.resume();
-    owner.terminal.input('stale-user-commit',true);
-    owner.terminal.input('protocol-reply',false);
+    await owner.replace('éx');await owner.replace('èy');
+    return {proposal:owner.proposal,readOnly:owner.textarea.readOnly,focused:document.activeElement===owner.textarea,value:owner.textarea.value};
   });
-  expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,readOnly:window.ownedIme.textarea.readOnly,writes:window.ownedIme.writes})))
-    .toEqual({proposal:{text:'èy',truncated:false},readOnly:true,writes:['éx','protocol-reply']});
-  await page.evaluate(()=>{window.ownedIme.observation.dismiss();window.ownedIme.terminal.focus();});
+  expect(skipped).toEqual({proposal:{text:'èy',truncated:false},readOnly:false,focused:true,value:''});
   const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'new'});await cdp.detach();
-  expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,writes:window.ownedIme.writes})))
-    .toEqual({proposal:null,writes:['éx','protocol-reply','new']});
-});
-
-test('direct unapplied dismissal retires the focused readonly editor before fresh typing',async({page,context})=>{
-  const boundary=await page.evaluate(async()=>{
-    const owner=window.ownedIme;
-    await owner.replace('éx');await owner.replace('èy');
-    const focused=document.activeElement===owner.textarea;
-    let blurs=0;owner.textarea.addEventListener('blur',()=>blurs++,{once:true});
-    owner.observation.dismiss();
-    return {focused,blurs,readOnly:owner.textarea.readOnly,stillFocused:document.activeElement===owner.textarea,proposal:owner.proposal};
-  });
-  expect(boundary).toEqual({focused:true,blurs:1,readOnly:false,stillFocused:false,proposal:null});
-  await page.evaluate(()=>window.ownedIme.terminal.focus());
-  const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'fresh'});await cdp.detach();
-  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['éx','fresh']);
+  await page.evaluate(()=>window.ownedIme.terminal.input('protocol-reply',false));
+  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['éx','new','protocol-reply']);
+  await page.evaluate(()=>window.ownedIme.observation.dismiss());
+  expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,readOnly:window.ownedIme.textarea.readOnly,focused:document.activeElement===window.ownedIme.textarea})))
+    .toEqual({proposal:null,readOnly:false,focused:true});
 });
 
 test('unapplied context is bounded without splitting a supplementary character',async({page})=>{
@@ -552,7 +536,7 @@ test('forward deletion without key229 keeps owned suggestions and subsequent typ
   expect(result).toEqual({writes:['abc def','\x7f\x7f\x7f','\x7f\x7f\x7f\x7fxyz ','tail'],proposal:null,readOnly:false});
 });
 
-for(const boundary of ['unicode','cursor'] as const)test(`forward deletion without key229 retains ${boundary} edits for review`,async({page,context})=>{
+for(const boundary of ['unicode','cursor'] as const)test(`forward deletion without key229 skips ${boundary} edits without blocking`,async({page,context})=>{
   await commitNativeComposition(page,context,boundary==='unicode'?'éx':'abc');
   if(boundary==='cursor')await page.keyboard.press('ArrowLeft');
   const result=await page.evaluate(()=>{
@@ -565,7 +549,7 @@ for(const boundary of ['unicode','cursor'] as const)test(`forward deletion witho
   });
   expect(result.writes).toEqual(boundary==='unicode'?['éx']:['abc','\x1b[D']);
   expect(result.proposal).toEqual({text:boundary==='unicode'?'x':'bc',truncated:false});
-  expect(result.readOnly).toBe(true);
+  expect(result.readOnly).toBe(false);
 });
 
 
@@ -652,7 +636,7 @@ for(const preedit of [false,true])test(`a hardware keypress after Process sends 
   expect(writes).toEqual(['teh','x']);await cdp.detach();
 });
 
-test('an unsafe Process composition blocks a hardware keypress for review',async({page,context})=>{
+test('an unsafe Process composition is skipped without blocking a hardware keypress',async({page,context})=>{
   await commitNativeComposition(page,context,'éx');
   await page.evaluate(()=>window.ownedIme.textarea.setSelectionRange(0,1));
   const cdp=await context.newCDPSession(page);
@@ -663,7 +647,7 @@ test('an unsafe Process composition blocks a hardware keypress for review',async
     area.dispatchEvent(new KeyboardEvent('keypress',{key:'x',charCode:120,keyCode:120,which:120,bubbles:true,composed:true,cancelable:true}));
     return {writes:o.writes,proposal:o.proposal,readOnly:area.readOnly};
   });
-  expect(result).toEqual({writes:['éx'],proposal:{text:'ax',truncated:false},readOnly:true});await cdp.detach();
+  expect(result).toEqual({writes:['éx','x'],proposal:{text:'ax',truncated:false},readOnly:false});await cdp.detach();
 });
 
 

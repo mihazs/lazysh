@@ -44,8 +44,8 @@ export function observeTerminalInput(terminal: Terminal, listener: (data: string
   catch { /* Unknown internals disable only virtual modifiers. */ }
   const available = !!marker && typeof marker.dispose === "function";
   const ime = available ? observeTerminalIme(terminal, () => userInput, acceptsInput, onUnappliedEdit) : undefined;
-  const output = terminal.onData(data => {const user = userInput; userInput = false; if (!(available && user && ime?.blocked)) listener(data, available && user);});
-  return {available, reset: () => ime?.reset(), clear: () => ime?.clear(), resume: () => ime?.resume(), flush: () => ime?.flush() ?? true, dismiss: () => ime?.dismiss(), dispose() {
+  const output = terminal.onData(data => {const user = userInput; userInput = false; listener(data, available && user);});
+  return {available, reset: () => ime?.reset(), clear: () => ime?.clear(), resume: () => ime?.resume(), flush: () => ime?.flush(), dismiss: () => ime?.dismiss(), dispose() {
     ime?.dispose(); output.dispose(); if (available) marker!.dispose();
     if (completionArea) {
       if (previousAutocomplete == null) completionArea.removeAttribute('autocomplete');

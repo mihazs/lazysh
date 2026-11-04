@@ -69,6 +69,11 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+function installCompositionHelper(){Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});}
+function skipLocalCorrection(textarea:HTMLTextAreaElement){act(()=>{
+  textarea.value='local correction';textarea.setSelectionRange(16,16);
+  textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));
+});}
 it('preserves physical and toolbar Shift+Enter without submitting an ordinary Enter',()=>{
   savePreferences({...defaults,toolbar:['shift','enter']});
   const owner=mountInputOwner();owner.textarea.focus();
@@ -108,19 +113,19 @@ it('consumes one-shot toolbar Shift after a named key and a literal keyboard key
     expect(mocks.write).toHaveBeenLastCalledWith('ssh','a');expect(shift.getAttribute('aria-pressed')).toBe('false');
   } finally {focused.mockRestore();}
 });
-it.each(['unapplied','composing'] as const)('disarms Shift locally while %s IME text remains guarded',mode=>{
+it.each(['unapplied','composing'] as const)('disarms Shift locally while %s IME text is outstanding',mode=>{
   const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
-  Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+  installCompositionHelper();
   try {
     const owner=mountInputOwner(mode==='unapplied'?'previous':'');Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
     const shift=screen.getByRole('button',{name:'Shift'});fireEvent.click(shift);
     if(mode==='composing')fireEvent.compositionStart(owner.textarea);
     else act(()=>{owner.textarea.value='previous';owner.textarea.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertReplacementText',bubbles:true,cancelable:true}));});
     act(()=>{owner.textarea.value='local correction';owner.textarea.setSelectionRange(16,16);if(mode==='unapplied')fireEvent.input(owner.textarea,{data:'local correction',inputType:'insertReplacementText'});});
-    if(mode==='unapplied')expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+    if(mode==='unapplied')expect(screen.getByText('Keyboard edit skipped · Review')).toBeDefined();
     terminal.focus.mockClear();const currentShift=screen.getByRole('button',{name:'Shift'});expect(currentShift).toHaveProperty('disabled',false);fireEvent.click(currentShift);
     expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('false');expect(mocks.write).not.toHaveBeenCalled();expect(terminal.focus).not.toHaveBeenCalled();
-    if(mode==='unapplied'){expect(screen.getByText('Edit not sent · Review')).toBeDefined();expect(owner.textarea.readOnly).toBe(true);}
+    if(mode==='unapplied'){expect(screen.getByText('Keyboard edit skipped · Review')).toBeDefined();expect(owner.textarea.readOnly).toBe(false);}
     else expect(owner.textarea.value).toBe('local correction');
   } finally {focused.mockRestore();}
 });
@@ -265,7 +270,7 @@ describe('expanded D-pad pointer ownership',()=>{
   });
   it('flushes the owned IME composition once before repeating named arrows',()=>{
     const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
-    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    installCompositionHelper();
     try {
       const pad=dpadFixture();screen.getByLabelText('Terminal for Host').append(pad.textarea.parentElement!);pad.textarea.focus();
       Object.assign(terminal,{input:(data:string)=>pad.emit(data)});
@@ -275,14 +280,14 @@ describe('expanded D-pad pointer ownership',()=>{
       pad.advance(160);pad.up();expect(pad.bytes()).toEqual(['owned composition','\x1b[A','\x1b[A','\x1b[A']);
     } finally {focused.mockRestore();}
   });
-  it('stops rather than bypassing an unapplied IME edit',()=>{
+  it('keeps the D-pad working after a skipped IME edit without sending it',()=>{
     const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
-    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    installCompositionHelper();
     try {
       const pad=dpadFixture('previous');
-      act(()=>{pad.textarea.value='local correction';pad.textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));});
-      expect(screen.getByText('Edit not sent · Review')).toBeDefined();
-      pad.down();pad.advance(800);pad.up();fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual([]);
+      skipLocalCorrection(pad.textarea);
+      expect(screen.getByText('Keyboard edit skipped · Review')).toBeDefined();
+      fireEvent.click(pad.arrow('up'),{detail:0});expect(pad.bytes()).toEqual(['\x1b[A']);
     } finally {focused.mockRestore();}
   });
   it('rejects a secondary finger that arrives before any D-pad-owned pointer',()=>{
@@ -405,26 +410,38 @@ describe("terminal interactions", () => {
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
     const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(false);
     try {
-      Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+      installCompositionHelper();
       const owner=mountInputOwner('previous');
       const announcement=screen.getByRole('status');expect(announcement.textContent).toBe('');
-      act(()=>{
-        owner.textarea.value='local correction';owner.textarea.setSelectionRange(16,16);
-        owner.textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));
-      });
-      expect(screen.getByText('Edit not sent · Review')).toBeDefined();
-      expect(announcement.textContent).toBe('Edit not sent');
+      skipLocalCorrection(owner.textarea);
+      expect(screen.getByText('Keyboard edit skipped · Review')).toBeDefined();
+      expect(announcement.textContent).toBe('Keyboard edit skipped');
       expect(document.activeElement).toBe(owner.textarea);
-      expect(owner.textarea.readOnly).toBe(true);expect(mocks.write).not.toHaveBeenCalled();
+      expect(owner.textarea.readOnly).toBe(false);expect(mocks.write).not.toHaveBeenCalled();
       if(boundary==='hidden'){hidden.mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
       else if(boundary==='lock')act(()=>access(true));
       else if(boundary==='dispose')owner.view.unmount();
       else owner.view.rerender(<TerminalPane session={boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={vi.fn()} />);
-      expect(screen.queryByText('Edit not sent · Review')).toBeNull();
+      expect(screen.queryByText('Keyboard edit skipped · Review')).toBeNull();
       if(boundary==='dispose')expect(announcement.isConnected).toBe(false);
       else expect(announcement.textContent).toBe('');
       expect(owner.textarea.value).toBe('');expect(mocks.write).not.toHaveBeenCalled();
     } finally {windowFocus.mockRestore();hidden.mockRestore();}
+  });
+  it.each([false,true])('fades a skipped edit notice after typing resumes unless it is being reviewed (expanded=%s)',expanded=>{
+    vi.useFakeTimers();
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      installCompositionHelper();
+      const owner=mountInputOwner('previous');Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
+      skipLocalCorrection(owner.textarea);
+      const review=screen.getByText('Keyboard edit skipped · Review').closest('details')!;
+      if(expanded)review.open=true;
+      act(()=>{owner.textarea.value='a';fireEvent.input(owner.textarea,{data:'a',inputType:'insertText'});});
+      expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['a']);
+      act(()=>vi.advanceTimersByTime(8000));
+      expect(screen.queryByText('Keyboard edit skipped · Review')===null).toBe(!expanded);
+    } finally {windowFocus.mockRestore();vi.useRealTimers();}
   });
   it.each(['hidden','inactive','unfocused window','unfocused editor'] as const)('rejects user input for an %s context while preserving protocol replies',boundary=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
