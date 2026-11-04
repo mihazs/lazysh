@@ -159,6 +159,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     };
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
+    if (event.inputType === 'insertLineBreak' && delta === '\n' && !key229) {
+      event.stopImmediatePropagation(); previous = value; send('\r'); return;
+    }
     if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
       && (event.inputType !== 'deleteContentForward' || key229)
       && (event.inputType !== 'insertCompositionText' || key229 || !keyless)) {fallback(delta); return;}

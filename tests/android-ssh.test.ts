@@ -1453,7 +1453,7 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
 
 test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
-  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
   const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
   try {
     for(const bytes of samples) {
@@ -1525,7 +1525,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const names=['herdr','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}`);
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
   const logger=spyOn(console,'error').mockImplementation(()=>{});
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
@@ -1547,16 +1547,30 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   } finally {logger.mockRestore();await rm(directory,{recursive:true,force:true});}
 });
 
+test('native keyless Enter observer filters foreign targets, records closed event facts and retires listeners',async()=>{
+  const path=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt');
+  const native=await readFile(path,'utf8'),body=native.split('fun commitOwnedLineBreak(')[1].split('var primary: Throwable? = null\n        try {\n            toolbarPreferences()')[0];
+  const source=body.split('val installed = evaluate(scenario, """')[1].split('""")')[0].replaceAll('$key',JSON.stringify('owned'));
+  const area={isConnected:true},handlers=new Map<string,(event:any)=>void>();
+  const document={activeElement:area,querySelectorAll:()=>[area],addEventListener:(type:string,fn:(event:any)=>void)=>handlers.set(type,fn),removeEventListener:(type:string,fn:(event:any)=>void)=>{if(handlers.get(type)===fn)handlers.delete(type);}};
+  const window:Record<string,any>={};expect(new Function('document','window',`return (${source})`)(document,window)).toBe(true);
+  const foreign={target:{},get type(){throw new Error('foreign event read');}};expect(()=>handlers.get('input')!(foreign)).not.toThrow();
+  handlers.get('input')!({target:area,type:'input',inputType:'insertLineBreak',isTrusted:true,isComposing:false,data:'private'});
+  const result=window.owned.stop();expect(result).toEqual({overflow:false,original:true,events:[{kind:'line-break',trusted:true,composing:false}]});
+  expect(JSON.stringify(result)).not.toContain('private');expect(handlers.size).toBe(0);expect(window.owned).toBeUndefined();
+});
+
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
-  const expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2u${current}`);
+  const expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`);
   expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
   for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
     Buffer.from(`there\x7f\x7ftheowned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
     Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2u${current}`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}`)]) {
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u`),
+    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')])]) {
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');

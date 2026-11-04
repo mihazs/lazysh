@@ -4902,6 +4902,48 @@ class NativeWorkspaceTest {
             imeOrderMark("afterTap")
             terminalEditor()
         }
+        fun commitOwnedLineBreak(generation: Long) {
+            terminalEditor()
+            val state = ime.call("state")
+            ime.editor(state)
+            assertEquals("Original active native IME generation retained", generation, state.getLong("generation"))
+            val key = JSONObject.quote("__lazyshOwnedLineBreak_$nonce")
+            val installed = evaluate(scenario, """
+                (()=>{const key=$key,areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                  if(areas.length!==1||Object.hasOwn(window,key))return false;
+                  const area=areas[0],types=['keydown','beforeinput','input','compositionstart','compositionend'];
+                  const events=[];let overflow=false;
+                  const listener=event=>{if(event.target!==area)return;if(events.length>=24){overflow=true;return;}
+                    events.push({kind:event.type==='keydown'?(event.key==='Enter'?'enter':'other-key'):
+                      event.type==='input'?(event.inputType==='insertLineBreak'?'line-break':'other-input'):
+                      event.type==='beforeinput'?'beforeinput':'composition',trusted:event.isTrusted===true,
+                      composing:event.isComposing===true});};
+                  for(const type of types)document.addEventListener(type,listener,true);
+                  Object.defineProperty(window,key,{configurable:true,value:{stop:()=>{
+                    for(const type of types)document.removeEventListener(type,listener,true);
+                    delete window[key];const current=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
+                    return {overflow,events,original:current.length===1&&current[0]===area&&area.isConnected&&document.activeElement===area};}}});return true;})()
+            """) == "true"
+            assertTrue("Owned line-break observer installed", installed)
+            var observed: JSONObject? = null
+            var primary: Throwable? = null
+            try {
+                val result = ime.call("lineBreak")
+                assertTrue("Fixed native line break accepted", result.getBoolean("accepted"))
+                assertTrue("Fixed native line break read barrier returned", result.getBoolean("readReturned"))
+            } catch (failure: Throwable) { primary = failure; throw failure }
+            finally {
+                try { observed = JSONObject(evaluate(scenario, "window[$key]?.stop() ?? {overflow:true,events:[],original:false}")) }
+                catch (cleanup: Throwable) { if (primary != null) primary!!.addSuppressed(cleanup) else throw cleanup }
+            }
+            val result = checkNotNull(observed)
+            val events = result.getJSONArray("events")
+            val facts = (0 until events.length()).map { events.getJSONObject(it) }
+            assertTrue("INCONCLUSIVE: native IME did not deliver one trusted input-only line break",
+                !result.getBoolean("overflow") && result.getBoolean("original") &&
+                    facts.count { it.getString("kind") == "line-break" && it.getBoolean("trusted") && !it.getBoolean("composing") } == 1 &&
+                    facts.none { it.getString("kind") in listOf("enter", "composition", "other-input") || !it.getBoolean("trusted") || it.getBoolean("composing") })
+        }
         var primary: Throwable? = null
         try {
             toolbarPreferences()
@@ -4966,6 +5008,11 @@ class NativeWorkspaceTest {
             assertTrue("Current actual connection readback confirms fixed marker", current.getBoolean("readMatched"))
             terminalEditor()
             awaitDocument(scenario, "actual receiver wrote the exact transaction stream before disconnect", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_DELIVERED')")
+            commitOwnedLineBreak(second.getLong("generation"))
+            tapToolbar("Shift")
+            assertTrue("Native Shift tap arms line break",toolbarSnapshot("Shift").getBoolean("pressed"))
+            commitOwnedLineBreak(second.getLong("generation"))
+            assertToolbarReleased("Shift",shiftBaseline)
             android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
         } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
