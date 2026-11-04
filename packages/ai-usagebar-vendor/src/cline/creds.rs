@@ -51,9 +51,40 @@ struct Candidate {
     expires_ms: Option<i64>,
 }
 
-/// Default search path, resolved against the OS home convention.
+/// Store precedence from Cline CLI 3.0.74's `resolveProviderSettingsPath`.
 pub fn default_paths() -> Result<Vec<PathBuf>> {
-    Ok(vec![home_dir()?.join(AUTH_FILE)])
+    let path = if let Some(path) = cli_path("CLINE_PROVIDER_SETTINGS_PATH")? {
+        path
+    } else if let Some(path) = cli_path("CLINE_DATA_DIR")? {
+        path.join("settings/providers.json")
+    } else if let Some(path) = cli_path("CLINE_DIR")? {
+        path.join("data/settings/providers.json")
+    } else {
+        home_dir()?.join(AUTH_FILE)
+    };
+    if path.as_os_str().len() > 4096 {
+        return Err(AppError::Credentials(
+            "Cline credential store path is invalid".into(),
+        ));
+    }
+    Ok(vec![path])
+}
+fn cli_path(name: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    let invalid = || AppError::Credentials("Cline credential store path is invalid".into());
+    let value = value.to_str().ok_or_else(invalid)?;
+    // ECMAScript trim includes BOM and excludes Unicode White_Space's NEL.
+    let value =
+        value.trim_matches(|c: char| c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}'));
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 4096 || value.contains('\0') {
+        return Err(invalid());
+    }
+    Ok(Some(value.into()))
 }
 
 /// Read whichever credential the CLI wrote into `path`.
@@ -118,12 +149,15 @@ pub fn resolve(
     env_var_name: &str,
     inline_key: Option<&str>,
 ) -> Result<Credential> {
+    let env_key = crate::config::optional_api_key(env_var_name, inline_key);
+    if env_key.is_some() {
+        return resolve_from(env_key.as_deref(), &[]);
+    }
     let paths = match configured {
         Some(paths) if !paths.is_empty() => paths.to_vec(),
         _ => default_paths()?,
     };
-    let env_key = crate::config::optional_api_key(env_var_name, inline_key);
-    resolve_from(env_key.as_deref(), &paths)
+    resolve_from(None, &paths)
 }
 
 /// Resolve one credential from the environment, then each path in turn.
@@ -171,6 +205,13 @@ mod tests {
         )
     }
 
+    fn saved_store(token: &str, expires: i64) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let path = directory.path().join("providers.json");
+        std::fs::write(&path, store(&entry("cline", token, expires))).expect("write store");
+        (directory, path)
+    }
+
     #[test]
     fn picks_the_token_with_the_most_life_left() {
         let text = store(&format!(
@@ -198,9 +239,7 @@ mod tests {
 
     #[test]
     fn a_lapsed_token_is_returned_flagged_not_withheld() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("providers.json");
-        std::fs::write(&path, store(&entry("cline", "lapsed", 1))).expect("write store");
+        let (_dir, path) = saved_store("lapsed", 1);
 
         let credential = read_from(&path).expect("a lapsed credential is still a credential");
         assert!(credential.expired);
@@ -257,9 +296,7 @@ mod tests {
 
     #[test]
     fn an_expired_store_resolves_to_a_flagged_credential() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("providers.json");
-        std::fs::write(&path, store(&entry("cline", "lapsed", 1))).expect("write store");
+        let (_dir, path) = saved_store("lapsed", 1);
 
         let credential = resolve_from(None, &[path]).expect("a lapsed credential resolves");
         assert!(credential.expired);

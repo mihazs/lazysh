@@ -212,6 +212,200 @@ mod tests {
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
     #[test]
+    #[ignore = "private owned subprocess selected only by its fixture"]
+    fn owned_cline_store_probe() {
+        assert_eq!(
+            std::env::var("LAZYSH_OWNED_CLINE_PROBE").as_deref(),
+            Ok("1")
+        );
+        let mut config = Config::default();
+        config.cline.api_key_env.clear();
+        if let Some(path) = std::env::var_os("LAZYSH_OWNED_CLINE_AUTH_PATH") {
+            config.cline.auth_paths = Some(vec![path.into()]);
+        }
+        if std::env::var_os("LAZYSH_OWNED_CLINE_INLINE_KEY").is_some() {
+            config.cline.api_key = Some("owned-inline-fixture".into());
+        }
+        let available = core::has_local_credentials(core::VendorId::Cline, &config);
+        assert_eq!(
+            available,
+            std::env::var("LAZYSH_OWNED_CLINE_EXPECTED").as_deref() == Ok("present"),
+            "Cline availability must follow its selected credential store"
+        );
+        std::fs::write(
+            std::env::var_os("LAZYSH_OWNED_CLINE_RECEIPT").expect("owned completion receipt"),
+            if available { "present" } else { "missing" },
+        )
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn selected_cline_stores_preserve_cli_precedence_without_network_or_alternate_fallback() {
+        use std::{ffi::OsString, process::Stdio};
+        for (case, default_valid, overrides, expected) in [
+            ("profile", false, vec![("CLINE_DIR", "@profile")], true),
+            (
+                "data",
+                false,
+                vec![("CLINE_DATA_DIR", "@data"), ("CLINE_DIR", "missing")],
+                true,
+            ),
+            (
+                "file",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@file"),
+                    ("CLINE_DATA_DIR", "missing"),
+                    ("CLINE_DIR", "missing"),
+                ],
+                true,
+            ),
+            (
+                "missing-selected",
+                true,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "missing")],
+                false,
+            ),
+            (
+                "malformed-selected",
+                true,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@malformed")],
+                false,
+            ),
+            (
+                "js-whitespace",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", " \u{feff}\t "),
+                    ("CLINE_DATA_DIR", "@trimmed-data"),
+                ],
+                true,
+            ),
+            (
+                "nel-is-not-js-whitespace",
+                true,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "@nel-file")],
+                false,
+            ),
+            (
+                "relative-selected",
+                false,
+                vec![("CLINE_PROVIDER_SETTINGS_PATH", "relative/providers.json")],
+                true,
+            ),
+            ("blank-default", true, vec![("CLINE_DIR", "  ")], true),
+            (
+                "explicit-path",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@oversized"),
+                    ("LAZYSH_OWNED_CLINE_AUTH_PATH", "@file"),
+                ],
+                true,
+            ),
+            (
+                "inline-key",
+                false,
+                vec![
+                    ("CLINE_PROVIDER_SETTINGS_PATH", "@oversized"),
+                    ("LAZYSH_OWNED_CLINE_INLINE_KEY", "1"),
+                ],
+                true,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let home = directory.path().join("home");
+            let profile = directory.path().join("profile");
+            let data = directory.path().join("data");
+            let file = directory.path().join("selected.json");
+            let malformed = directory.path().join("malformed.json");
+            let default = home.join(".cline/data/settings/providers.json");
+            let input = r#"{"version":1,"providers":{"cline":{"settings":{"auth":{"accessToken":"owned-cline-fixture","accountId":"owned-account","expiresAt":1}}}}}"#;
+            for path in [
+                &file,
+                &profile.join("data/settings/providers.json"),
+                &data.join("settings/providers.json"),
+                &directory.path().join("relative/providers.json"),
+            ] {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, input).unwrap();
+            }
+            std::fs::create_dir_all(default.parent().unwrap()).unwrap();
+            std::fs::write(
+                &default,
+                if default_valid {
+                    input
+                } else {
+                    "malformed-owned-store"
+                },
+            )
+            .unwrap();
+            std::fs::write(&malformed, "malformed-owned-store").unwrap();
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "collector::tests::owned_cline_store_probe",
+                    "--ignored",
+                ])
+                .env_clear()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("LAZYSH_OWNED_CLINE_PROBE", "1")
+                .env(
+                    "LAZYSH_OWNED_CLINE_RECEIPT",
+                    directory.path().join("probe.result"),
+                )
+                .env(
+                    "LAZYSH_OWNED_CLINE_EXPECTED",
+                    if expected { "present" } else { "missing" },
+                )
+                .current_dir(directory.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            for (name, value) in overrides {
+                let value = match value {
+                    "@profile" => profile.as_os_str().to_owned(),
+                    "@data" => data.as_os_str().to_owned(),
+                    "@file" => file.as_os_str().to_owned(),
+                    "@malformed" => malformed.as_os_str().to_owned(),
+                    "@trimmed-data" => {
+                        OsString::from(format!("\u{feff} {} \t\u{feff}", data.display()))
+                    }
+                    "@nel-file" => OsString::from(format!("\u{85}{}", file.display())),
+                    "@oversized" => OsString::from("x".repeat(4097)),
+                    value => value.into(),
+                };
+                command.env(name, value);
+            }
+            let mut child = command.spawn().unwrap();
+            let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(status) => status.unwrap(),
+                Err(_) => {
+                    child.kill().await.unwrap();
+                    let _ = child.wait().await;
+                    panic!("owned Cline probe exceeded its deadline");
+                }
+            };
+            assert!(status.success(), "selected Cline store case failed: {case}");
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join("probe.result"))
+                    .expect("the selected private helper must actually execute"),
+                if expected { "present" } else { "missing" }
+            );
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), input);
+            assert_eq!(
+                std::fs::read_to_string(&default).unwrap(),
+                if default_valid {
+                    input
+                } else {
+                    "malformed-owned-store"
+                }
+            );
+        }
+    }
+    #[test]
     fn explicit_config_preserves_disabled_providers_without_probing_or_writing() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("usage.toml");

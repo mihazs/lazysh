@@ -14,6 +14,17 @@ It does not change provider settings, install hooks, log in, scan transcripts, s
 
 To choose providers explicitly, create `account-usage.toml` in the host's platform `lazysh` config directory: `$XDG_CONFIG_HOME/lazysh/` or `~/.config/lazysh/` on Linux, `~/Library/Application Support/lazysh/` on macOS, or `%APPDATA%\\lazysh\\config\\` on Windows. Existing ai-usagebar configuration is read when no lazysh usage configuration exists. Explicit disabled providers stay disabled. On Unix hosts, configuration containing inline credentials must be private to its owner; the companion refuses unsafe ownership/permissions and never changes them. External-CLI profiles containing inline keys are not used on Windows because that preflight does not establish Windows ACL privacy; built-in host collectors remain available.
 
+Cline CLI 3.0.74 store selection follows `CLINE_PROVIDER_SETTINGS_PATH`, then
+`CLINE_DATA_DIR/settings/providers.json`, then
+`CLINE_DIR/data/settings/providers.json`, otherwise
+`~/.cline/data/settings/providers.json`. Overrides use Cline's JavaScript trim
+rules, including relative paths against the companion's working directory.
+Explicit `[cline].auth_paths` and API keys take precedence. A missing or malformed
+selected store never silently reads another default login. This routes the
+existing supported credential format; it does not establish a valid subscription
+or successful provider quota request. Primary path contract:
+[Cline 3.0.74 source](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/sdk/packages/shared/src/storage/paths.ts).
+
 Configuration follows the pinned [ai-usagebar schema](https://github.com/akitaonrails/ai-usagebar/blob/7b0da9a774358283328850620509404e29262431/docs/configuration.md). For example:
 
 ```toml

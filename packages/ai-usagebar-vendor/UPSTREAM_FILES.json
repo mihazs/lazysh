@@ -57,7 +57,6 @@
     "src/antigravity/mod.rs": "f44487b2a254dd0b01186b7607f537513d2aa07f4fb3034578eda104cfe88417",
     "src/antigravity/statusline.rs": "a10db106eef9f8d7c2b2c302d0e28a8e97f07f6c97b9faf3401a599c5595bee0",
     "src/antigravity/vendor.rs": "eab5d51c77cf5bde313a53962a312a5c4fa4a7c69ba08a9f77e02d127a83b7e9",
-    "src/cline/creds.rs": "a71b7250d945c3b16ce1d8dfb427b9977205e792474a1fd62c45fde7222d6a36",
     "src/cline/fetch.rs": "b28af192a6284673c75aa7baf2065568952aefd46985a9923b3c6c7cc16cb3aa",
     "src/cline/mod.rs": "5f343ccf237f0d55654e09b08858fd371bbe38d7c4c07b469700ffc5dc4d751e",
     "src/cline/types.rs": "31b74f3c2fe9a4c3ff55ef3c85401d9ca5e0dd7701b373a91844872ad4bca24b",

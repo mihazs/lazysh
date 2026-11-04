@@ -49,3 +49,13 @@ locking, private-cache and refresh behavior remain traceable to upstream.
 No provider endpoint or authentication protocol is replaced by a mock in
 production. Platform limitations of upstream credential stores remain; an
 unavailable credential source yields an error rather than an invented quota.
+
+- `src/cline/creds.rs`: adapt default store selection to Cline CLI 3.0.74,
+  source `071e1b25b48f9ef5dff7fc32085e6a16f02bf02e`,
+  `sdk/packages/shared/src/storage/paths.ts`: provider-settings file override,
+  data-directory override, then profile-directory override and the normal home
+  default. Preserve ECMAScript trimming, configured auth paths and API-key
+  precedence; selected stores never fall through to a different default login.
+  Paths are bounded and invalid encodings/NUL fail without exposing the input.
+  Factor its two identical existing test-store constructors for zero duplication.
+  This file is adapted and scanned normally, not an unchanged-source exclusion.
