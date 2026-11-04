@@ -15,6 +15,10 @@ export const accountUsageMessages = {
 } as const satisfies Record<Exclude<AccountUsageResponse['state'],'ready'>,UiKey>;
 export function accountUsagePercent(percent:number,reading:'used'|'left') {return t('accountUsagePercent',{percent:formatNumber(percent),reading:t(reading==='used'?'accountUsageUsed':'accountUsageLeft')});}
 
+export function accountUsageSpendPercent(row:AccountUsageText):number|null {
+  return row.usedCents!==null&&row.limitCents!==null&&row.limitCents>0?row.percent:null;
+}
+
 export function accountUsageHeadline(entry:AccountUsageEntry):{text:string;percent:number|null} {
   const metrics=entry.rows.filter((row):row is AccountUsageMetric=>row.type==='metric');
   const shared=metrics.filter(row=>!row.modelPool);
@@ -23,8 +27,9 @@ export function accountUsageHeadline(entry:AccountUsageEntry):{text:string;perce
   const consumed=(row:AccountUsageMetric)=>row.reading==='left'?100-row.percent:row.percent;
   const metric=quotas.reduce<AccountUsageMetric|undefined>((highest,row)=>!highest||consumed(row)>consumed(highest)?row:highest,undefined)??candidates[0];
   if(metric) return {text:metric.headline==='value'?metric.value:accountUsagePercent(metric.percent,metric.reading),percent:metric.percent};
-  const text=entry.rows.find(row=>row.type==='text');
-  return {text:text?.value??(t(entry.status==='error'?'accountUsageProviderUnavailable':'accountUsageNoQuota')),percent:null};
+  const texts=entry.rows.filter((row):row is AccountUsageText=>row.type==='text');
+  const text=texts.find(row=>accountUsageSpendPercent(row)!==null)??texts[0];
+  return {text:text?.value??(t(entry.status==='error'?'accountUsageProviderUnavailable':'accountUsageNoQuota')),percent:text?accountUsageSpendPercent(text):null};
 }
 export function accountUsageStale(entry:AccountUsageEntry,now=Date.now()):boolean {
   const fetched=entry.fetchedAt?Date.parse(entry.fetchedAt):NaN;
