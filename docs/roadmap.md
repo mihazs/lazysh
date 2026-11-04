@@ -6,6 +6,8 @@ remaining work; merged code is not proof of release publication or full native
 parity. See [installation and acceptance status](install-and-update.md) for the
 current distribution limits. No release dates are promised.
 
+The [parity matrix](reference/parity-matrix.md) records verified reference-client behaviors per platform and links each gap to its issue.
+
 Anyone can follow the public issues or propose a focused contribution without
 private project access. Maintainers also use the private
 [GitHub Project](https://github.com/users/mihazs/projects/2) to coordinate work;

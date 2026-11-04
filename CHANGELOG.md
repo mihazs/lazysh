@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a reference-client parity matrix for Android and desktop that records each sub-behavior as verified, implemented, partial, missing or not applicable, with test and CI evidence and the issue that owns each gap. Documentation only; no application defaults change.
+
 - Preserve terminal Enter delivered as an input-only line break, including an explicitly selected toolbar Shift modifier.
 
 - Preserve owned terminal corrections delivered as paired keyless composition-text input events.
