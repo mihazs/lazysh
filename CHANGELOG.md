@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep a terminal reader in history while output streams and across resizes: a finger scroll that starts at the live bottom no longer snaps back to new output, width changes keep the same logical line after reflow, and a taller viewport (for example, closing the on-screen keyboard) no longer moves a Mosh reader or stops a Mosh session at the bottom from following output.
+
 - Add a reference-client parity matrix for Android and desktop that records each sub-behavior as verified, implemented, partial, missing or not applicable, with test and CI evidence and the issue that owns each gap. Documentation only; no application defaults change.
 
 - Preserve terminal Enter delivered as an input-only line break, including an explicitly selected toolbar Shift modifier.

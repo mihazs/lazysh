@@ -30,6 +30,16 @@ export type LiveSession = {
   attached?: import('./workspace').SessionAttachment;
 };
 
+/** xterm 5.5 viewport seam. A container resize can clamp the DOM viewport
+ * before xterm records the new geometry, queuing a scroll event that would move
+ * a reader to wherever the clamp landed (and stop a following reader from
+ * following). Re-deriving the scroll area now makes that event a no-op.
+ */
+export function syncTerminalViewport(terminal: Terminal) {
+  const viewport = (terminal as unknown as {_core?: {viewport?: {_refresh?: (immediate: boolean) => void}}})._core?.viewport;
+  if (typeof viewport?._refresh === 'function') viewport._refresh(true);
+}
+
 /** xterm 5.5 fires this private event synchronously before user-originated onData.
  * This marker is read-only; the IME adapter below is separately version-pinned.
  */
