@@ -150,7 +150,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     };
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
-    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)) {fallback(delta); return;}
+    if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
+      && (event.inputType !== 'deleteContentForward' || key229)) {fallback(delta); return;}
     event.stopImmediatePropagation(); key229 = false; previous = value;
     send(delta);
   };

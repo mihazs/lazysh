@@ -532,3 +532,38 @@ test('beforeinput and the next key229 flush each pending fallback exactly once',
   });
   expect(writes).toEqual(['teh','\x7f\x7fhe','re',' the']);
 });
+
+
+test('forward deletion without key229 keeps owned suggestions and subsequent typing in sync',async({page,context})=>{
+  await commitNativeComposition(page,context,'abc def');
+  const result=await page.evaluate(()=>{
+    const o=window.ownedIme,area=o.textarea;
+    const edit=(start:number,end:number,text:string,inputType:string)=>{
+      area.setSelectionRange(start,end);
+      area.dispatchEvent(new InputEvent('beforeinput',{inputType,data:text||null,bubbles:true,composed:true,cancelable:true}));
+      area.setRangeText(text,start,end,'end');
+      area.dispatchEvent(new InputEvent('input',{inputType,data:text||null,bubbles:true,composed:true}));
+    };
+    edit(4,7,'','deleteContentForward');
+    edit(0,4,'xyz ','insertReplacementText');
+    edit(4,4,'tail','insertText');
+    return {writes:o.writes,proposal:o.proposal,readOnly:area.readOnly};
+  });
+  expect(result).toEqual({writes:['abc def','\x7f\x7f\x7f','\x7f\x7f\x7f\x7fxyz ','tail'],proposal:null,readOnly:false});
+});
+
+for(const boundary of ['unicode','cursor'] as const)test(`forward deletion without key229 retains ${boundary} edits for review`,async({page,context})=>{
+  await commitNativeComposition(page,context,boundary==='unicode'?'éx':'abc');
+  if(boundary==='cursor')await page.keyboard.press('ArrowLeft');
+  const result=await page.evaluate(()=>{
+    const o=window.ownedIme,area=o.textarea;
+    area.setSelectionRange(0,1);
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentForward',bubbles:true,composed:true,cancelable:true}));
+    area.setRangeText('',0,1,'end');
+    area.dispatchEvent(new InputEvent('input',{inputType:'deleteContentForward',bubbles:true,composed:true}));
+    return {writes:o.writes,proposal:o.proposal,readOnly:area.readOnly};
+  });
+  expect(result.writes).toEqual(boundary==='unicode'?['éx']:['abc','\x1b[D']);
+  expect(result.proposal).toEqual({text:boundary==='unicode'?'x':'bc',truncated:false});
+  expect(result.readOnly).toBe(true);
+});
