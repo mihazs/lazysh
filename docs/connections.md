@@ -222,4 +222,12 @@ Each connection permits at most four forwarding channels, with 256 KiB frames an
 
 The real OpenSSH interoperability test checks `ssh-add -L`, verifies a challenge using `ssh-add -T`, and checks that the default connection has no remote agent socket. No test accesses the user's local agent.
 
+## Identify lazysh to the host
+
+Hosts do not receive a client marker by default. Enable **Identify lazysh to this host** for a host when remote shells or agents need to detect that they run in lazysh. From the next SSH connection to that host, each SSH terminal and each tmux, Herdr or Zellij attachment asks the server to set `LC_TERMINAL=lazysh` before its shell or command starts. The value is fixed and contains no secret or device information.
+
+The server decides whether to apply it. OpenSSH sets the variable only when `AcceptEnv` admits `LC_TERMINAL`; the common distribution default `AcceptEnv LANG LC_*` already does. A server that does not accept it ignores the request, and the terminal still opens normally. To check, run `echo "$LC_TERMINAL"` in a new SSH terminal.
+
+The marker is part of a new SSH terminal's environment only. Mosh and ET sessions do not send it, and panes that a multiplexer server started earlier keep that server's environment. The flag does not change the saved credential binding. The real OpenSSH test `ssh::tests::openssh_client_environment_reaches_remote_shell` checks that an interactive shell and a remote command receive the value when the host opts in, and that an interactive shell does not receive it otherwise.
+
 Native Cargo tests establish a real nested SSH connection between two temporary loopback servers and verify that each receives only its own password. Tests also establish that an unknown bastion key and changed destination key receive no credentials for that peer. Physical-device lifecycle, VPN changes, and interrupted-network recovery require native acceptance testing.

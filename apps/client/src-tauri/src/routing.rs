@@ -214,6 +214,7 @@ mod tests {
             jump_host_id: None,
             forward_agent: false,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
         };
         let config = Arc::new(server::Config {
@@ -256,6 +257,7 @@ mod tests {
             jump_host_id: jump.map(str::to_owned),
             forward_agent: false,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
         }
     }

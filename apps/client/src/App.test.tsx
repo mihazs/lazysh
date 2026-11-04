@@ -1532,11 +1532,15 @@ it('forced ET fails visibly without falling back to SSH',async()=>{
   expect(mocks.api.connectMosh).not.toHaveBeenCalled();
   expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
 });
-it('edits the named host transport and helper options through the native host API',async()=>{
+async function editHome() {
   mocks.api.saveHost.mockResolvedValue(host);
   const user=userEvent.setup();
   render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Edit Home'}));
+  return user;
+}
+it('edits the named host transport and helper options through the native host API',async()=>{
+  const user=await editHome();
   await user.selectOptions(screen.getByLabelText('Preferred transport'),'auto');
   await user.clear(screen.getByLabelText('Mosh server path'));
   await user.type(screen.getByLabelText('Mosh server path'),'/opt/mosh-server');
@@ -1544,6 +1548,16 @@ it('edits the named host transport and helper options through the native host AP
   await user.type(screen.getByLabelText('ET server port'),'2122');
   await user.click(screen.getByRole('button',{name:'Save host'}));
   await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledWith({...host,transport:'auto',mosh:{...autoOptions.mosh,serverPath:'/opt/mosh-server'},et:{...autoOptions.et,port:2122}}));
+});
+it('sends the client environment marker only after the host opts in',async()=>{
+  const user=await editHome();
+  const marker=screen.getByRole('checkbox',{name:'Identify lazysh to this host (LC_TERMINAL=lazysh)'});
+  expect((marker as HTMLInputElement).checked).toBe(false);
+  expect(screen.queryByText(/AcceptEnv/)).toBeNull();
+  await user.click(marker);
+  expect(screen.getByText(/only when its AcceptEnv admits LC_TERMINAL/)).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledWith({...host,clientEnvironment:true}));
 });
 it('restores Auto by probing transports again rather than restoring its last SSH fallback',async()=>{
   enableTransports();

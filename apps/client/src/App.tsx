@@ -625,6 +625,15 @@ function HostEditor({
               setHost({ ...host, biometricUnlock: event.target.checked })
             }
           />{t("appRequireBiometricsForSavedCredentials")}</label>
+        <label>
+          <input
+            type="checkbox"
+            checked={host.clientEnvironment === true}
+            onChange={(event) =>
+              setHost({ ...host, clientEnvironment: event.target.checked })
+            }
+          />{t("appSendClientEnvironment")}</label>
+        {host.clientEnvironment && <p className="security-note">{t("appClientEnvironmentNote")}</p>}
         <p className="security-note">{protection.reason}</p>
         {host.forwardAgent && (
           <p className="security-note">{t("appProgramsOnThisHostCanRequestSignaturesWithYour")}</p>

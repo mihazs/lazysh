@@ -27,6 +27,7 @@ export type Host = {
   credentialsStored?: boolean;
   forwardAgent?: boolean;
   biometricUnlock?: boolean;
+  clientEnvironment?: boolean;
   defaultMultiplexer?: {kind: MultiplexerKind; name: string} | null;
   transport?: TransportMode | null;
   mosh?: MoshOptions | null;

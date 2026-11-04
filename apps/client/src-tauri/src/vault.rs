@@ -484,6 +484,7 @@ mod tests {
             jump_host_id: None,
             forward_agent: false,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
         }
     }
