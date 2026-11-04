@@ -855,7 +855,7 @@ test('terminal completion hints stay distinct from the normal Compose editor',as
 
 });
 
-for(const truncated of [false,true])test(`unapplied inline input review preserves Compose and copy safety with truncated=${truncated}`,async({page,context})=>{
+for(const truncated of [false,true])test(`skipped inline input review keeps Compose usable and copy safe with truncated=${truncated}`,async({page,context})=>{
   await openShortcutTerminal(page);
   await page.evaluate(()=>{
     window.simpleShortcutCopies=[];
@@ -877,19 +877,20 @@ for(const truncated of [false,true])test(`unapplied inline input review preserve
   const review=page.locator('.terminal-edit-review');
   await expect(review).toBeVisible();await expect(review.locator('pre')).not.toBeVisible();
   await review.locator('summary').click();
-  await expect(review.getByText('Unapplied local input context. The terminal is unchanged.',{exact:true})).toBeVisible();
+  await expect(review.getByText('This keyboard edit could not be sent safely, so the terminal is unchanged. Typing continues normally.',{exact:true})).toBeVisible();
   const copy=review.getByRole('button',{name:'Copy context',exact:true});
   if(truncated){await expect(copy).toBeDisabled();await expect(review.getByRole('status')).toHaveText('Context exceeds the review limit. Copy is unavailable.');}
   else {await copy.click();await expect.poll(()=>page.evaluate(()=>window.simpleShortcutCopies)).toEqual(['èy']);}
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('keep my draft');
-  await expect(page.getByRole('button',{name:'Paste draft',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Paste draft',exact:true})).toBeEnabled();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx']);
-  await review.getByRole('button',{name:'Dismiss and resume typing',exact:true}).click();
-  await expect(review).toHaveCount(0);
-  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('keep my draft');
+  await page.getByRole('button',{name:'Close composer',exact:true}).click();
+  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
   const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'new'});await cdp.detach();
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx','new']);
+  await review.getByRole('button',{name:'Dismiss',exact:true}).click();
+  await expect(review).toHaveCount(0);
   if(truncated)expect(await page.evaluate(()=>window.simpleShortcutCopies)).toEqual([]);
 });
 
