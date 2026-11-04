@@ -9,7 +9,7 @@ Use trunk-based development.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
 - Every completed milestone must lead to a published version. Follow the release policy in `CONTRIBUTING.md`; version preparation or a merge alone is not delivery. Verify the public release and its assets before reporting the milestone released.
-- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes, then verify the published GitHub release and its assets before reporting the issue released. Hold test-only or tooling PRs that would restart the version PR's checks until that release is published.
+- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes, then verify the published GitHub release and its assets before reporting the issue released. While that version PR is open, hold test-only or tooling PRs, because each merge to `main` regenerates the version PR and restarts its checks; merge them once the version PR has merged.
 - Create every Git worktree under `~/dev/.worktrees/`.
 
 # Continuing implementation
