@@ -1218,7 +1218,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   },[]);
   useEffect(()=>{
     if(wideSidebar || !sidebar)return;
-    navigationRef.current?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus();
+    navigationRef.current?.querySelector<HTMLButtonElement>('.workspace-destination-heading > button, .brand:not([hidden]) .sidebar-close')?.focus();
     const keydown=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setSidebar(false);}
       else cycleFocus(event,focusableWithin(navigationRef.current));
@@ -1906,12 +1906,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         className={`sidebar ${sidebar ? "sidebar-open" : ""}`}
         aria-label={t("appHostsAndConnections")}
       >
-        <div className="brand">
+        {navigationEntry.mode!=='connections' && <header className="workspace-destination-heading">
+          <button type="button" className="icon-button" aria-label={t('navigationReturnTerminal')} title={t('navigationReturnTerminal')} onClick={()=>{if(wideSidebar){showNavigation('connections');navigationRef.current?.querySelector<HTMLButtonElement>('[data-workspace-mode=connections]')?.focus();}else setSidebar(false);setView('terminal');}}><ArrowLeft size={20} aria-hidden="true"/></button>
+          <h2>{t(navigationEntry.mode==='workspaces'?'navigationWorkspaces':'appAgents')}</h2>
+          {active?.connected && <button type="button" className="icon-button" aria-label={t('navigationUsageShortcut')} title={t('appUsage')} onClick={()=>visitView('usage')}><Activity size={18} aria-hidden="true"/></button>}
+        </header>}
+        <div className="brand" hidden={navigationEntry.mode!=='connections'}>
           <img className="brand-mark" src={bedModeMark} alt="" aria-hidden="true" width={35} height={35}/>
           <span>
             lazysh<small>{t("appYourAgentsWithinReach")}</small>
           </span>
-          {active?.connected && navigationEntry.mode!=='connections' && <button type="button" className="icon-button" aria-label={t('navigationUsageShortcut')} title={t('appUsage')} onClick={()=>visitView('usage')}><Activity size={18} aria-hidden="true"/></button>}
           <button
             className="icon-button sidebar-close"
             aria-label={t("appCloseHosts")}
@@ -1921,7 +1925,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </button>
         </div>
         <nav className="workspace-navigation-modes" aria-label={t('navigationTitle')}>
-          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</button>)}
+          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
         </nav>
         <div className="navigation-connections" hidden={navigationEntry.mode!=='connections'}>
         <button className="search-button" onClick={() => setPalette(true)}>
@@ -2068,7 +2072,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div className="header-right">
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
-              className="icon-button mobile-tools"
+              className="icon-button mobile-tools workspace-tools-trigger"
               aria-label={t("appWorkspaceTools")}
               onClick={() => setMobileTools(true)}
             >
@@ -2188,30 +2192,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {active ? (
           <>
-            <div className="session-toolbar">
-              <nav className="view-tabs" aria-label={t("appSessionViews")}>
-                {sessionViews.map(({ id, label, Icon }) => (
-                  <button
-                    key={id}
-                    aria-current={(id==='agents'?agentsVisible:view===id) ? "page" : undefined}
-                    disabled={id==='agents' && pendingMuxRequest}
-                    onClick={() => id==='agents'?showNavigation('agents'):visitView(id)}
-                  >
-                    <Icon size={15} />
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </nav>
-              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => showNavigation('workspaces')}>{t("appJumpTo")}</button>}
-              <button
-                className="icon-button disconnect-button"
-                aria-label={t("appEndValue1Connection", {value1: active.name})}
-                disabled={closingIds.includes(active.id)}
-                onClick={() => void closeSession(active)}
-              >
-                <Unplug size={16} />
-              </button>
-            </div>
             {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
             {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
             {view!=='terminal' && <nav className="context-navigation" aria-label={t('navigationContext')}>
@@ -2467,6 +2447,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div className="workspace-tools-content">
             {active && <>
               <nav className="mobile-session-views workspace-primary-tools" aria-label={t('appSessionViews')}>
+                <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
                 {primaryTools.map(mobileToolButton)}
               </nav>
               {secondaryTools.length>0 && <details className="workspace-more-tools">

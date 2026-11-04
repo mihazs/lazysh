@@ -456,7 +456,7 @@ describe('live Herdr discovery',()=>{
     expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
     const spacesSetup=browser.getByRole('combobox',{name:t('herdrAgentsServer'),hidden:true}).closest('section')!;
     expect(spacesSetup.hidden).toBe(true);
-    const focusConsequence=browser.getByText(t('herdrSharedFocusShort'));
+    const focusConsequence=browser.getByLabelText(t('herdrSharedFocusShort'));
     expect(focusConsequence.closest('summary')).not.toBeNull();
     expect(focusConsequence.closest('details')).toHaveProperty('open',false);
     fireEvent.click(focusConsequence);

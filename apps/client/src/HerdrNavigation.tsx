@@ -1,4 +1,4 @@
-import {ArrowLeft,RefreshCw,Settings2} from 'lucide-react';
+import {ArrowLeft,RefreshCw,Settings2,Info} from 'lucide-react';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
@@ -60,8 +60,9 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     finally {action.current=false;if(current.current.sessionId===sessionId)setActionBusy(false);}
   }
   function row(target:HerdrNavigationTarget,label:string,status:LiveAgent['agent_status'],context?:string) {
-    return <button className="herdr-navigation-row" disabled={working} onClick={()=>void open(target)}>
-      <span><strong>{label}</strong>{context && <small>{context}</small>}</span><small>{t(herdrStatusKeys[status])}</small>
+    const selected=target.kind==='workspace'?tree?.workspaces.some(item=>item.workspace_id===target.workspace&&item.focused):target.kind==='tab'?tree?.tabs.some(item=>item.tab_id===target.tab&&item.focused):tree?.panes.some(item=>item.pane_id===target.pane&&item.terminal_id===target.terminal&&item.focused);
+    return <button className="herdr-navigation-row" data-agent-status={status} data-current={selected||undefined} disabled={working} onClick={()=>void open(target)}>
+      <span><strong>{label}</strong>{context && <small title={context}>{context}</small>}</span><small className={mode==='agents'?'sr-only':undefined}>{t(herdrStatusKeys[status])}</small>
     </button>;
   }
   function panes(tab:HerdrTree['tabs'][number],workspaceLabel:string) {
@@ -90,15 +91,15 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const rows=data?.rows.filter(agent=>match(agent.name,agent.agent,agent.cwd,agent.pane_id,
     tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,
     tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label))??[];
-  return <section className="herdr-navigation" hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy} onKeyDownCapture={event=>{if(event.key==='Escape' && setupRequested){event.preventDefault();event.stopPropagation();showSetup(false);}}}>
-    <header><div><h3 ref={setupHeading} tabIndex={-1}>{t(setupOpen?'herdrAgentsServer':mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small>{hostLabel}</small></div>{!setupOpen && <button className="icon-button" ref={setupTrigger} title={t('herdrAgentsServer')} aria-label={t('herdrAgentsServer')} onClick={()=>showSetup(true)}><Settings2 size={18} aria-hidden="true"/></button>}<button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button" title={t(setupRequested?'navigationBack':'herdrNavigationBack')} onClick={()=>setupRequested?showSetup(false):onClose()}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t(setupRequested?'navigationBack':'herdrNavigationBack')}</span></button></header>
+  return <section className="herdr-navigation" data-mode={mode} data-setup-view={setupOpen||undefined} hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy} onKeyDownCapture={event=>{if(event.key==='Escape' && setupRequested){event.preventDefault();event.stopPropagation();showSetup(false);}}}>
+    <header><div><h3 ref={setupHeading} tabIndex={-1}>{t(setupOpen?'herdrAgentsServer':mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small>{hostLabel}</small></div>{!setupOpen && <button className="icon-button" ref={setupTrigger} title={t('herdrAgentsServer')} aria-label={t('herdrAgentsServer')} onClick={()=>showSetup(true)}><Settings2 size={18} aria-hidden="true"/></button>}{data?.server && mode==='spaces' && <details className="herdr-shared-focus-note muted" onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))event.currentTarget.open=false;}} onKeyDownCapture={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary aria-label={t('herdrSharedFocusShort')} title={t('herdrSharedFocusShort')}><Info size={17} aria-hidden="true"/></summary><p>{t('herdrNavigationShared')}</p></details>}<button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button herdr-navigation-back" title={t(setupRequested?'navigationBack':'herdrNavigationBack')} onClick={()=>setupRequested?showSetup(false):onClose()}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t(setupRequested?'navigationBack':'herdrNavigationBack')}</span></button></header>
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
     {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
-      {data.server && mode==='spaces' && <details className="herdr-shared-focus-note muted"><summary>{t('herdrSharedFocusShort')}</summary><p>{t('herdrNavigationShared')}</p></details>}
+
       <section className="herdr-server-setup" hidden={!setupOpen} aria-label={t('herdrAgentsServer')}>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>

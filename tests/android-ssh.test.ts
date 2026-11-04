@@ -1287,14 +1287,15 @@ async function herdrVisualFixture() {
   const rectangle=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
   const labels=Array.from({length:3},(_,i)=>({bounds:rectangle(10,10+i*30,80,30+i*30),glyphs:[] as object[],contains:(hit:unknown)=>(hit as {ownedLabel?:number})?.ownedLabel===i,textContent:'private terminal text'}));
   labels.forEach(label=>label.glyphs=[label.bounds]);
-  const card={getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
+  const group={getAttribute:()=>labels[1].textContent,querySelector:(selector:string)=>selector===':scope > h4'?labels[1]:null};
+  const card={closest:(selector:string)=>selector==='section[aria-label]'?group:null,getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
     querySelector:(selector:string)=>labels[['strong',':scope > small','span > small'].indexOf(selector)]};
   const state={cards:[card],blockers:[] as object[],hit:undefined as object|undefined,live:true};
   const window={visualViewport:{offsetLeft:0,offsetTop:0,width:411,height:659,scale:1}};
   const document={querySelectorAll:(selector:string)=>selector.includes('.herdr-navigation-row')?state.cards:state.blockers,
     elementFromPoint:(_x:number,y:number)=>state.hit??labels.find(label=>y>=label.bounds.top&&y<=label.bounds.bottom),
     createRange:()=>{let selected=labels[0];return {selectNodeContents:(label:typeof selected)=>{selected=label;},getClientRects:()=>selected.glyphs,getBoundingClientRect:()=>selected.bounds};}};
-  return {labels,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
+  return {labels,group,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
 }
 
 test('Herdr visual failure observations distinguish viewport and glyph-hit clauses without changing admission',async()=>{
@@ -1305,6 +1306,9 @@ test('Herdr visual failure observations distinguish viewport and glyph-hit claus
   f.state.live=false;f.labels[0].bounds.left=-10;
   expect(f.observe()).toMatchObject({liveReady:false,viewportReady:false});
   f.state.cards=[];expect(f.observe()).toMatchObject({cards:0,cardShown:false,cardRect:null,viewportReady:false});
+  const wrongGroup=await herdrVisualFixture();expect(wrongGroup.observe().viewportReady).toBe(true);
+  wrongGroup.group.getAttribute=()=> 'different status';
+  expect(wrongGroup.observe()).toMatchObject({state:'observed',viewportReady:false});expect(wrongGroup.observe().labels[1].present).toBe(false);
 });
 
 test('Herdr visual observations bound rectangles and counts and discard private DOM and exceptions',async()=>{
@@ -2312,12 +2316,12 @@ async function nativeImeEventFixture() {
   const source=kotlin.match(/val imeEventsInstall = """([\s\S]*?)"""\.trimIndent\(\)/)![1]
     .replaceAll('${JSONObject.quote(nonce)}',JSON.stringify('owned-fixture'));
   const listeners=new Map<string,(event:Record<string,unknown>)=>void>();
-  const area={isConnected:true,addEventListener(name:string,callback:(event:Record<string,unknown>)=>void,options:unknown){
-    expect(options).toEqual({capture:true,passive:true});listeners.set(name,callback);
-  },removeEventListener(name:string,callback:unknown,capture:unknown){expect(capture).toBe(true);expect(listeners.get(name)).toBe(callback);listeners.delete(name);}};
+  const area={isConnected:true};
   for(const key of ['value','textContent','innerHTML','selectionStart','selectionEnd'])Object.defineProperty(area,key,{get(){throw new Error('private editor read');}});
-  const state={current:[area] as unknown[],throws:false};
-  const document={querySelectorAll(selector:string){expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');if(state.throws)throw new Error('private failure');return state.current;}};
+  const state={current:[area] as unknown[],throws:false,queries:0};
+  const document={querySelectorAll(selector:string){state.queries++;expect(selector).toBe('.terminal-canvas .xterm-helper-textarea');if(state.throws)throw new Error('private failure');return state.current;},
+    addEventListener(name:string,callback:(event:Record<string,unknown>)=>void,options:unknown){expect(options).toEqual({capture:true,passive:true});listeners.set(name,callback);},
+    removeEventListener(name:string,callback:unknown,capture:unknown){expect(capture).toBe(true);expect(listeners.get(name)).toBe(callback);listeners.delete(name);}};
   const window={} as Record<string,any>;
   const install=()=>new Function('document','window',`return (${source})`)(document,window);
   const emit=(type:string,extra:Record<string,unknown>={})=>{
@@ -2325,7 +2329,7 @@ async function nativeImeEventFixture() {
     for(const key of ['data','dataTransfer','clipboardData'])Object.defineProperty(event,key,{get(){throw new Error('private event read');}});
     listeners.get(type)?.(event);return event;
   };
-  return {state,area,window,listeners,install,emit,stop:()=>window.__lazyshOwnedImeEvents.stop()};
+  return {state,area,window,listeners,install,emit,source,stop:()=>window.__lazyshOwnedImeEvents.stop()};
 }
 
 test('native IME event candidates retain only closed trusted/type/composition facts, never editing data',async()=>{
@@ -2347,13 +2351,13 @@ test('native IME event candidates retain only closed trusted/type/composition fa
   expect(f.listeners.size).toBe(0);expect(f.window.__lazyshOwnedImeEvents).toBeUndefined();
 });
 
-test.each(['foreign','replacement','disconnected','throwing'] as const)('native IME event candidates retire on %s owner without following replacement',async reason=>{
+test.each(['replacement','disconnected','throwing'] as const)('native IME event candidates retire on %s owner without following replacement',async reason=>{
   const f=await nativeImeEventFixture();expect(f.install()).toBe(true);
   const saved=f.listeners.get('input')!;
   if(reason==='replacement')f.state.current=[{}];
   if(reason==='disconnected')f.area.isConnected=false;
   if(reason==='throwing')f.state.throws=true;
-  f.emit('input',{inputType:'deleteContentForward',...(reason==='foreign'?{target:{}}:{})});
+  f.emit('input',{inputType:'deleteContentForward'});
   f.state.current=[f.area];f.area.isConnected=true;f.state.throws=false;
   f.emit('input',{inputType:'insertText'});
   const result=f.stop();expect(result.retired).toBe(true);expect(result.state).toBe(reason==='throwing'?'unavailable':'observed');
@@ -2361,6 +2365,27 @@ test.each(['foreign','replacement','disconnected','throwing'] as const)('native 
   if(result.events.length)expect(result.events[0].originalOwner).toBe(false);
   saved({type:'input',target:f.area,inputType:'insertText'});expect(result.events).toHaveLength(reason==='throwing'?0:1);
   expect(f.listeners.size).toBe(0);
+});
+
+test('native IME observation ignores foreign targets before querying or reading event fields',async()=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);
+  const queries=f.state.queries;
+  const event={target:{}};
+  for(const key of ['type','isTrusted','inputType','isComposing'])Object.defineProperty(event,key,{get(){throw new Error('foreign event read');}});
+  f.listeners.get('input')!(event);expect(f.state.queries).toBe(queries);
+  expect(f.stop()).toEqual({state:'observed',retired:false,overflow:false,events:[]});
+});
+
+test('native IME observation fails closed when target identity is unreadable',async()=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);
+  const event={};Object.defineProperty(event,'target',{get(){throw new Error('private target failure');}});
+  f.listeners.get('input')!(event);
+  expect(f.stop()).toEqual({state:'unavailable',retired:true,overflow:false,events:[]});expect(f.listeners.size).toBe(0);
+});
+
+test('native IME observation retires a removed owner even without another event',async()=>{
+  const f=await nativeImeEventFixture();expect(f.install()).toBe(true);f.state.current=[];f.area.isConnected=false;
+  expect(f.stop()).toEqual({state:'observed',retired:true,overflow:false,events:[]});expect(f.listeners.size).toBe(0);
 });
 
 test('native IME event candidates cap evidence and remain quiet after cleanup without touching event defaults',async()=>{
@@ -2371,4 +2396,20 @@ test('native IME event candidates cap evidence and remain quiet after cleanup wi
   saved({type:'input',target:f.area});expect(result.events).toHaveLength(64);expect(f.listeners.size).toBe(0);
   expect(JSON.stringify(result)).not.toContain('private');
   const unavailable=await nativeImeEventFixture();unavailable.state.current=[];expect(unavailable.install()).toBe(false);expect(unavailable.listeners.size).toBe(0);
+});
+
+
+test('native IME observation precedes the terminal capture interceptor',async()=>{
+  const {JSDOM}=await import('jsdom');
+  const dom=new JSDOM('<div class="terminal-canvas"><div id="xterm"><textarea class="xterm-helper-textarea"></textarea></div></div><input id="foreign">');
+  const {window}=dom,document=window.document,area=document.querySelector('textarea')!,xterm=document.querySelector('#xterm')!;
+  let intercepted=0;
+  xterm.addEventListener('input',event=>{intercepted++;event.stopImmediatePropagation();},true);
+  const {source}=await nativeImeEventFixture();
+  expect(new Function('document','window',`return (${source})`)(document,window)).toBe(true);
+  document.querySelector('#foreign')!.dispatchEvent(new window.Event('input',{bubbles:true}));
+  area.dispatchEvent(new window.InputEvent('input',{inputType:'insertText',data:'private',bubbles:true}));
+  const result=(window as unknown as {__lazyshOwnedImeEvents:{stop:()=>{events:unknown[]}}}).__lazyshOwnedImeEvents.stop();
+  expect(intercepted).toBe(1);expect(result.events).toEqual([{event:'input',trusted:false,key229:null,inputType:'insertText',composing:false,originalOwner:true}]);
+  dom.window.close();
 });

@@ -1374,7 +1374,7 @@ class NativeWorkspaceTest {
     }
 
     private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
-        val closeHosts = "button[aria-label='Close hosts']"
+        val closeHosts = ".workspace-destination-heading button[aria-label='Return to terminal'], .sidebar > .brand:not([hidden]) button[aria-label='Close hosts']"
         if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
             awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
@@ -1510,7 +1510,8 @@ class NativeWorkspaceTest {
                 val visualObservation = """
                     (()=>{try {
                       const cards=document.querySelectorAll('.herdr-navigation:not([hidden]) .herdr-navigation-row'), card=cards[0];
-                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const group=card?.closest('section[aria-label]');
+                      const labels=[card?.querySelector('strong'),group?.getAttribute('aria-label')===card?.querySelector(':scope > small')?.textContent?group?.querySelector(':scope > h4'):null,card?.querySelector('span > small')];
                       const bounded=value=>Number.isFinite(value)?Math.max(-65535,Math.min(65535,value)):null;
                       const box=rect=>rect?[rect.left,rect.top,rect.right,rect.bottom].map(bounded):null;
                       const viewport=window.visualViewport;
@@ -1540,7 +1541,8 @@ class NativeWorkspaceTest {
                     (()=>{
                       if(!($liveHerdr)) return false;
                       const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
-                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
+                      const group=card?.closest('section[aria-label]');
+                      const labels=[card?.querySelector('strong'),group?.getAttribute('aria-label')===card?.querySelector(':scope > small')?.textContent?group?.querySelector(':scope > h4'):null,card?.querySelector('span > small')];
                       if(!card || labels.some(label=>!label)) return false;
                       const ranges=labels.map(label=>{
                         const range=document.createRange(); range.selectNodeContents(label); return range;
@@ -4581,9 +4583,10 @@ class NativeWorkspaceTest {
               const flag=value=>typeof value==='boolean'?value:null;
               const observe=event=>{
                 if(closed||retired)return;
-                if(events.length>=64){overflow=true;return;}
-                try {const current=document.querySelectorAll(selector);
-                  const originalOwner=area.isConnected===true&&current.length===1&&current[0]===area&&event.target===area;
+                try {if(event.target!==area)return;
+                  if(events.length>=64){overflow=true;return;}
+                  const current=document.querySelectorAll(selector);
+                  const originalOwner=area.isConnected===true&&current.length===1&&current[0]===area;
                   events.push({event:names.includes(event.type)?event.type:'unknown',trusted:flag(event.isTrusted),
                     key229:event.type==='keydown'&&typeof event.keyCode==='number'?event.keyCode===229:null,
                     inputType:['beforeinput','input'].includes(event.type)?(types.includes(event.inputType)?event.inputType:'unknown'):null,
@@ -4592,11 +4595,14 @@ class NativeWorkspaceTest {
                 }catch{unavailable=true;retired=true;}
               };
               const cleanup=()=>{closed=true;
-                for(const name of names)try{area.removeEventListener(name,observe,true);}catch{unavailable=true;}
+                for(const name of names)try{document.removeEventListener(name,observe,true);}catch{unavailable=true;}
                 try{if(window[key]===owned)delete window[key];}catch{unavailable=true;}
               };
-              try {for(const name of names)area.addEventListener(name,observe,{capture:true,passive:true});
-                window[key]=owned={owner,stop(){cleanup();return {state:unavailable?'unavailable':'observed',retired,overflow,events};}};
+              try {for(const name of names)document.addEventListener(name,observe,{capture:true,passive:true});
+                window[key]=owned={owner,stop(){
+                  try{const current=document.querySelectorAll(selector);if(!area.isConnected||current.length!==1||current[0]!==area)retired=true;}
+                  catch{unavailable=true;retired=true;}
+                  cleanup();return {state:unavailable?'unavailable':'observed',retired,overflow,events};}};
                 return true;
               }catch{cleanup();return false;}
             })()

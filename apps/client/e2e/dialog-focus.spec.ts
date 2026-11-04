@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import clientPackage from '../package.json' with {type:'json'};
 import {installNativeBridge} from './fixtures/nativeBridge';
@@ -21,7 +22,9 @@ test('closed About notices wrap through visible summaries and restore their open
 });
 
 test('Preferences trap excludes hidden, inert and disabled controls while following natural links and summaries',async({page})=>{
-  await page.goto('/');const opener=page.getByRole('button',{name:'Preferences',exact:true});await opener.click();
+  await page.goto('/');const control=await workspaceControl(page,'Preferences');
+  const opener=await page.getByRole('dialog',{name:'Workspace tools',exact:true}).isVisible()?page.getByRole('button',{name:'Workspace tools',exact:true}):control;
+  await control.click();
   const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
   await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
   await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();

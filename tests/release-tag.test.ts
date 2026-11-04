@@ -256,6 +256,23 @@ test('current-main admission accepts same-version first-parent progress, rejects
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('source build frees only unused host toolchains before pulling the pinned container', async () => {
+  const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
+  const job = workflow.jobs['source-build'], steps = job.steps;
+  const cleanup = steps.find((step: any) => step.name === 'Reclaim unused host toolchains for container build');
+  expect(job['runs-on']).toBe('ubuntu-24.04');
+  expect(cleanup?.run?.split('\n').map((line: string) => line.trim()).filter((line: string) => line && !line.startsWith('#'))).toEqual([
+    'df -h /',
+    'sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup',
+    'df -h /',
+  ]);
+  const provision = steps.find((step: any) => step.name === 'Provision owned official buildserver container');
+  expect(steps.indexOf(cleanup)).toBe(steps.indexOf(provision) - 1);
+  expect(provision.run).toContain('registry.gitlab.com/fdroid/fdroidserver@sha256:1ea8bef1820bff06c2974e31b4fc4c79c364cd24231b86e71fa4b926797e0dac');
+  expect(provision.run).toContain('--env ANDROID_HOME=/opt/android-sdk');
+  expect(provision.run).toContain('sdkmanager "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"');
+});
+
 test('workflow isolates write token after successful source and binary acceptance', async () => {
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
   expect(workflow.concurrency.group).toBe('verified-stable-tag-${{ github.sha }}');
