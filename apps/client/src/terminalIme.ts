@@ -15,6 +15,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const originalReadOnly = area.readOnly;
   let previous = area.value, start = previous.length;
   let composing = false, ending = false, hardware = false, sending = false, key229 = false;
+  let keylessComposition: InputEvent | undefined;
   let generation = 0, deferred: KeyboardEvent | undefined, replaying = false;
   let keypressEvent: Event | undefined;
   let completion: ReturnType<typeof setTimeout> | undefined;
@@ -27,7 +28,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const reset = () => {
     generation++; clearTimeout(completion); deferred = undefined; fallbackPending = undefined;
     if (composing || ending) {cancelComposition(); area.value = '';}
-    composing = false; ending = false; key229 = false;
+    composing = false; ending = false; key229 = false; keylessComposition = undefined;
     previous = area.value; start = previous.length; hardware = false;
   };
   const foreground = () => acceptsInput() && document.hasFocus() && !document.hidden;
@@ -103,6 +104,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (event.target !== area || replaying) return;
     resume();
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
+    keylessComposition = undefined;
     if (!composing && !ending) commitFallback();
     if (event.key === 'Process' && !event.code && event.keyCode === 0 && !event.ctrlKey && !event.altKey && !event.metaKey) {
       hardware = false; event.stopImmediatePropagation(); return;
@@ -130,11 +132,16 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (event.target === area && !composing && !ending && !hardware && previous !== area.value) {
       const blocked = key229; reset(); key229 = blocked;
     }
+    if (event.target === area) {
+      keylessComposition = !composing && !ending && !hardware && event.inputType === 'insertCompositionText' ? event : undefined;
+      queueMicrotask(() => {if (keylessComposition === event) keylessComposition = undefined;});
+    }
   };
   const input = (event: Event) => {
     if (!(event instanceof InputEvent)) return;
     if (event.target !== area) return;
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
+    const keyless = keylessComposition && !keylessComposition.defaultPrevented; keylessComposition = undefined;
     if (composing || ending) {event.stopImmediatePropagation(); return;}
     commitFallback();
     if (hardware) {reset(); return;}
@@ -153,7 +160,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
     if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
-      && (event.inputType !== 'deleteContentForward' || key229)) {fallback(delta); return;}
+      && (event.inputType !== 'deleteContentForward' || key229)
+      && (event.inputType !== 'insertCompositionText' || key229 || !keyless)) {fallback(delta); return;}
     event.stopImmediatePropagation(); key229 = false; previous = value;
     send(delta);
   };

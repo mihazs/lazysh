@@ -660,3 +660,60 @@ for(const boundary of ['blur','access'] as const)test(`keypress after ${boundary
   },boundary);
   expect(result,testInfo.title).toEqual({writes:[],readOnly:true});
 });
+
+test('keyless composition-text replacement preserves an owned ASCII suffix',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const owner=window.ownedIme;await owner.replace('teh');
+    const area=owner.textarea;
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertCompositionText',data:'the',bubbles:true,composed:true}));
+    area.value='the';area.setSelectionRange(3,3);
+    area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',data:'the',bubbles:true,composed:true}));
+    await new Promise(resolve=>setTimeout(resolve,5));
+    return {writes:owner.writes,proposal:owner.proposal,readOnly:area.readOnly};
+  });
+  expect(result).toEqual({writes:['teh','\x7f\x7fhe'],proposal:null,readOnly:false});
+});
+
+
+test('synthetic clipboard paste follows the xterm paste owner once',async({page})=>{
+  const writes=await page.evaluate(()=>{
+    const owner=window.ownedIme, data=new DataTransfer();data.setData('text/plain','owned paste');
+    owner.textarea.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,composed:true}));
+    return owner.writes;
+  });
+  expect(writes).toEqual(['owned paste']);
+});
+
+test('keyless composition-text correction refuses unowned Unicode erasure',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const owner=window.ownedIme;await owner.replace('éx');const area=owner.textarea;
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertCompositionText',bubbles:true,composed:true}));
+    area.value='èy';area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',bubbles:true,composed:true}));
+    return {writes:owner.writes,proposal:owner.proposal,readOnly:area.readOnly};
+  });
+  expect(result).toEqual({writes:['éx'],proposal:{text:'èy',truncated:false},readOnly:false});
+});
+
+for(const abandoned of ['canceled','intervening input','intervening keydown','aborted'] as const)test(`${abandoned} retires a keyless composition beforeinput`,async({page})=>{
+  const writes=await page.evaluate(async abandoned=>{
+    const owner=window.ownedIme;await owner.replace('teh');const area=owner.textarea;
+    if(abandoned==='canceled')area.addEventListener('beforeinput',event=>event.preventDefault(),{once:true});
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertCompositionText',bubbles:true,composed:true,cancelable:true}));
+    if(abandoned==='aborted')await Promise.resolve();
+    if(abandoned==='intervening keydown')area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',bubbles:true,composed:true}));
+    if(abandoned==='intervening input')area.dispatchEvent(new InputEvent('input',{inputType:'insertFromPaste',bubbles:true,composed:true}));
+    area.value='the';area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',bubbles:true,composed:true}));
+    return owner.writes;
+  },abandoned);
+  expect(writes).toEqual(['teh']);
+});
+
+test('revocation retires a pending keyless composition beforeinput',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const owner=window.ownedIme;await owner.replace('teh');const area=owner.textarea;
+    area.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertCompositionText',bubbles:true,composed:true}));
+    owner.setAcceptsInput(false);area.value='the';area.dispatchEvent(new InputEvent('input',{inputType:'insertCompositionText',bubbles:true,composed:true}));
+    return {writes:owner.writes,proposal:owner.proposal};
+  });
+  expect(result).toEqual({writes:['teh'],proposal:null});
+});
