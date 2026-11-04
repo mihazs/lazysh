@@ -1,0 +1,29 @@
+name: conventional-commits
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conventional-commits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  headers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      # Squash merges use the PR title as the commit on main; every PR commit must also comply.
+      - name: Validate the PR title and every commit headline
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: sh .githooks/conventional-check "$TITLE" "$BASE" "$HEAD"
