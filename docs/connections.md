@@ -23,8 +23,10 @@ The remote multiplexer must be installed and runnable. For Herdr, the remote
 command PATH takes precedence. On a positively identified Linux or macOS SSH
 host, lazysh can also use the official per-user `$HOME/.local/bin/herdr` location
 when that PATH has no Herdr. The executable and its parent directories must pass
-ownership, permission and no-symlink checks. An unavailable Unix probe retains
-the original PATH-only behavior; custom install directories must be on PATH.
+ownership, permission and no-symlink checks. The fallback requires trusted
+`/usr/bin/uname`, `/usr/bin/id` and `/usr/bin/stat`; hosts without them, including
+standard non-FHS NixOS layouts, retain PATH-only behavior. An unavailable Unix
+probe also retains PATH-only behavior; custom install directories must be on PATH.
 The capability result belongs to the current SSH connection, and a reconnect
 probes again. Selection is repeated per command and does not pin binary identity.
 
