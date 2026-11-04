@@ -1,5 +1,5 @@
 import AttachmentPanel from './AttachmentPanel';
-import {Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
@@ -7,7 +7,7 @@ import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
@@ -195,9 +195,43 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [error, setError] = useState<UiErrorCause>("");
   const [draft, setDraft] = useState("");
   const [attachmentOpen,setAttachmentOpen]=useState(false);
+  const chatRoot=useRef<HTMLElement>(null),attachmentButton=useRef<HTMLButtonElement>(null),attachmentBack=useRef<HTMLButtonElement>(null);
+  const attachmentReturn=useRef<{session:string;scroller:HTMLElement|null;top:number}|null>(null);
   const [draftHelpOpen,setDraftHelpOpen]=useState(false);
   const draftId=useId(),draftHelpId=useId();
   const currentSession=useRef(sessionId);currentSession.current=sessionId;
+  function toggleAttachment(open:boolean) {
+    if(open && window.matchMedia?.('(max-width: 600px)').matches) {
+      let scroller=chatRoot.current?.parentElement??null;
+      while(scroller && (!/^(auto|scroll)$/.test(getComputedStyle(scroller).overflowY) || scroller.scrollHeight<=scroller.clientHeight))scroller=scroller.parentElement;
+      attachmentReturn.current={session:sessionId,scroller,top:scroller?.scrollTop??window.scrollY};
+    }
+    setAttachmentOpen(open);
+  }
+  useLayoutEffect(()=>{
+    const saved=attachmentReturn.current;
+    if(saved && saved.session!==sessionId){attachmentReturn.current=null;return;}
+    if(!saved || !mounted.current || !chatRoot.current?.getClientRects().length || !access.current() || document.hidden || !document.hasFocus() || !window.matchMedia?.('(max-width: 600px)').matches)return;
+    const active=document.activeElement;
+    if(active!==document.body && active!==attachmentButton.current && active!==attachmentBack.current && !chatRoot.current.contains(active))return;
+    if(attachmentOpen) {
+      if(saved.scroller)saved.scroller.scrollTop=0;else window.scrollTo(window.scrollX,0);
+      attachmentBack.current?.focus({preventScroll:true});
+    } else {
+      attachmentReturn.current=null;
+      if(attachmentButton.current?.isConnected)attachmentButton.current.focus({preventScroll:true});
+      if(saved.scroller?.isConnected)saved.scroller.scrollTop=saved.top;else if(!saved.scroller)window.scrollTo(window.scrollX,saved.top);
+    }
+  },[attachmentOpen,sessionId,access]);
+  useEffect(()=>{
+    const back=(event:Event)=>{
+      if(!attachmentOpen || !access.current() || document.hidden || !document.hasFocus() || !window.matchMedia?.('(max-width: 600px)').matches || !chatRoot.current?.getClientRects().length || document.querySelector('[role="dialog"][aria-modal="true"]'))return;
+      event.preventDefault();event.stopImmediatePropagation();toggleAttachment(false);
+    };
+    const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')back(event);};
+    window.addEventListener('lazysh-workspace-back',back,true);window.addEventListener('keydown',keydown,true);
+    return()=>{window.removeEventListener('lazysh-workspace-back',back,true);window.removeEventListener('keydown',keydown,true);};
+  },[attachmentOpen,sessionId,access]);
   const draftRevision=useRef(0);
   const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged" | "chatAttachmentTooLong">("");
   const composing = useRef(false);
@@ -359,7 +393,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     setDraftStatus("chatDraftStaged");
   }
   return (
-    <section className="tool-panel chat-panel" aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
       <h3>{t("chatTitle")}</h3>
       <p>
         {t("chatExplanation")}
@@ -548,12 +582,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           <label htmlFor={draftId}>{t("chatDraftLabel")}</label>
           <div className="chat-draft-tools">
             {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
-            <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(value=>!value)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
+            <button ref={attachmentButton} type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>toggleAttachment(!attachmentOpen)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
             <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>
           </div>
         </div>
         <p id={draftHelpId} className="chat-draft-help" hidden={!draftHelpOpen}>{t("chatDraftExplanation")}</p>
-        {attachmentOpen && access.current() && <div>
+        {attachmentOpen && access.current() && <div className="chat-attachment-view">
+          <button ref={attachmentBack} type="button" className="subtle-button chat-attachment-back" onClick={()=>toggleAttachment(false)}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
           <p>{t('chatAttachmentScope')}</p>
           <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={path=>{
             if(!mounted.current || !access.current() || currentSession.current!==sessionId || composing.current)return;

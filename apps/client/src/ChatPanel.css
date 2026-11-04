@@ -30,10 +30,16 @@
 .chat-panel .chat-composer { padding: 8px 12px 12px; gap: 8px; }
 .chat-panel .chat-draft-commands { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .chat-panel .chat-stage { margin-inline-start: auto; min-height: 44px; }
+.chat-panel .chat-attachment-back { display: none; }
 
 @media (max-width: 600px) {
   .chat-panel .chat-draft { margin-inline: 12px; }
   .chat-panel .chat-draft-commands { gap: 4px; }
+  .chat-panel[data-attachment-open] > :not(.chat-draft),
+  .chat-panel[data-attachment-open] .chat-draft > :not(.chat-attachment-view) { display: none; }
+  .chat-panel[data-attachment-open] .chat-draft { margin: 0; border: 0; background: transparent; }
+  .chat-panel .chat-attachment-view { padding: 0 18px 18px; }
+  .chat-panel .chat-attachment-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
 }
 
 @supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
