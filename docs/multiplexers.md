@@ -156,8 +156,10 @@ The [public Zellij commands](https://zellij.dev/documentation/commands) were ver
 With tmux, Herdr and Zellij installed on PATH:
 
 ```sh
-cargo test --locked -p lazysh '::tests::real_' -- --ignored
+bun run test:multiplexers
 ```
+
+The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run stock Herdr build and the checksum-verified official Zellij 0.45.1 release. The Zellij case waits for the attached client's first render before it probes `list-sessions`: Zellij 0.45.1's server panics when a probe disconnects before its first client has created the session, and each later action is observed until its tab or pane state appears, because Zellij applies CLI actions asynchronously.
 
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 

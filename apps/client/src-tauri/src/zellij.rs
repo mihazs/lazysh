@@ -189,15 +189,34 @@ mod tests {
         let mut reader = pty.master.try_clone_reader().unwrap();
         let child = pty.slave.spawn_command(builder).unwrap();
         drop(pty.slave);
+        let (rendered, first_render) = std::sync::mpsc::channel();
         let drain = std::thread::spawn(move || {
+            // The client clears the screen only for the server's first render,
+            // after the session exists. The search keeps a boundary-spanning tail.
+            const CLEAR: &[u8] = b"\x1b[2J";
+            let mut tail = Vec::new();
+            let mut rendered = Some(rendered);
             let mut bytes = [0u8; 8192];
             while let Ok(count) = reader.read(&mut bytes) {
                 if count == 0 {
                     break;
                 }
+                if rendered.is_some() {
+                    tail.extend_from_slice(&bytes[..count]);
+                    if tail.windows(CLEAR.len()).any(|window| window == CLEAR) {
+                        let _ = rendered.take().unwrap().send(());
+                    }
+                    tail.drain(..tail.len().saturating_sub(CLEAR.len() - 1));
+                }
             }
         });
         let _client = Client(child, Some(drain), Some(server));
+        // Zellij 0.45.1 panics if a `list-sessions` probe disconnects from a
+        // server that has not created its session yet, so probe only after the
+        // attached client's first render.
+        first_render
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("attached Zellij client renders its new session");
         let mut names = String::new();
         for _ in 0..100 {
             let output = execute("zellij list-sessions --short --no-formatting".into());
@@ -208,6 +227,42 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(names.lines().any(|line| line == name), "{names:?}");
+        // Zellij applies CLI actions asynchronously and lists a session before its
+        // attached client reports tab state. Observe each state change within a
+        // bounded deadline instead of reading it once.
+        let wait = |description: &str,
+                    probe: &dyn Fn() -> std::result::Result<u64, String>,
+                    matches: &dyn Fn(u64) -> bool| {
+            let mut last = String::new();
+            for _ in 0..250 {
+                match probe() {
+                    Ok(value) if matches(value) => return value,
+                    Ok(value) => last = format!("observed {value}"),
+                    Err(error) => last = error,
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("Attached Zellij client did not reach {description}: {last}");
+        };
+        let query = |subcommand: &str| -> std::result::Result<serde_json::Value, String> {
+            let output = execute(format!(
+                "zellij --session={} action {subcommand} --json",
+                quote(&name)
+            ));
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+            serde_json::from_slice(&output.stdout)
+                .map_err(|error| format!("{error}: {}", String::from_utf8_lossy(&output.stdout)))
+        };
+        let active_tab = || {
+            let tabs = query("list-tabs")?;
+            tabs.as_array()
+                .and_then(|tabs| tabs.iter().find(|tab| tab["active"] == true))
+                .and_then(|tab| tab["position"].as_u64())
+                .ok_or_else(|| format!("attached client has no active tab: {tabs}"))
+        };
+        wait("attached first tab", &active_tab, &|position| position == 0);
         let directory = temp.path().to_str().unwrap().to_owned();
         run(command(
             &name,
@@ -217,62 +272,28 @@ mod tests {
             },
         )
         .unwrap());
+        wait("new tab focus", &active_tab, &|position| position == 1);
         run(command(&name, &ZellijAction::GoToTab { index: 1 }).unwrap());
-        let active_tab = || {
-            let tabs: serde_json::Value = serde_json::from_str(&run(format!(
-                "zellij --session={} action list-tabs --json",
-                quote(&name)
-            )))
-            .unwrap();
-            tabs.as_array()
-                .unwrap()
-                .iter()
-                .find(|tab| tab["active"] == true)
-                .expect("attached client has an active tab")["position"]
-                .as_u64()
-                .unwrap()
-        };
-        assert_eq!(active_tab(), 0);
+        wait("first tab by index", &active_tab, &|position| position == 0);
         run(command(&name, &ZellijAction::NextTab).unwrap());
-        assert_eq!(active_tab(), 1);
+        wait("next tab", &active_tab, &|position| position == 1);
         run(command(&name, &ZellijAction::PreviousTab).unwrap());
-        assert_eq!(active_tab(), 0);
+        wait("previous tab", &active_tab, &|position| position == 0);
         let focused_pane = || {
-            let panes: serde_json::Value = serde_json::from_str(&run(format!(
-                "zellij --session={} action list-panes --json",
-                quote(&name)
-            )))
-            .unwrap();
+            let panes = query("list-panes")?;
             panes
                 .as_array()
-                .unwrap()
-                .iter()
-                .find(|pane| {
-                    pane["is_focused"] == true
-                        && pane["is_plugin"] == false
-                        && pane["tab_position"] == 0
+                .and_then(|panes| {
+                    panes.iter().find(|pane| {
+                        pane["is_focused"] == true
+                            && pane["is_plugin"] == false
+                            && pane["tab_position"] == 0
+                    })
                 })
-                .expect("active tab has a focused terminal pane")["id"]
-                .as_u64()
-                .unwrap()
+                .and_then(|pane| pane["id"].as_u64())
+                .ok_or_else(|| format!("active tab has no focused terminal pane: {panes}"))
         };
-        let wait_focus = |description: &str, matches: &dyn Fn(u64) -> bool| {
-            for _ in 0..100 {
-                let id = focused_pane();
-                if matches(id) {
-                    return id;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            panic!(
-                "Attached Zellij client did not reach {description}: {}",
-                run(format!(
-                    "zellij --session={} action list-panes --json",
-                    quote(&name)
-                ))
-            );
-        };
-        let first = focused_pane();
+        let first = wait("initial pane focus", &focused_pane, &|_| true);
         run(command(
             &name,
             &ZellijAction::NewPane {
@@ -281,12 +302,11 @@ mod tests {
             },
         )
         .unwrap());
-        // Pane startup is asynchronous; observe its focus before testing navigation.
-        let second = wait_focus("new pane focus", &|id| id != first);
+        let second = wait("new pane focus", &focused_pane, &|id| id != first);
         run(command(&name, &ZellijAction::NextPane).unwrap());
-        wait_focus("next pane focus", &|id| id == first);
+        wait("next pane focus", &focused_pane, &|id| id == first);
         run(command(&name, &ZellijAction::PreviousPane).unwrap());
-        wait_focus("previous pane focus", &|id| id == second);
+        wait("previous pane focus", &focused_pane, &|id| id == second);
         run(command(&name, &ZellijAction::ZoomPane).unwrap());
         let tabs = run(format!(
             "zellij --session={} action list-tabs --json",
