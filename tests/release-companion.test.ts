@@ -57,6 +57,11 @@ test('native matrix is complete and candidates cannot upload publication receipt
   const windowsOwner = steps.find((step: any) => step.id === 'windows_storage_owner');
   expect(windowsOwner?.if).toBe("runner.os == 'Windows'");
   expect(windowsOwner?.run).toContain('--test cli --test settings --test storage_wal --test installation');
+  expect(windowsOwner?.run).toContain('LAZYSH_BOOTSTRAP_OBSERVATION=1 cargo test --locked --package lazysh-agent --features storage-observation');
+  const plainInitialization = steps.find((step: any) => step.name === 'Check uninstrumented Windows initialization owner');
+  expect(plainInitialization?.if).toBe("${{ !cancelled() && runner.os == 'Windows' && (steps.windows_storage_owner.outcome == 'success' || steps.windows_storage_owner.outcome == 'failure') }}");
+  expect(plainInitialization?.run).toBe('cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact');
+  expect(plainInitialization?.['continue-on-error']).toBeUndefined();
   expect(windowsOwner?.run).toContain('if [ "$original" -ne 0 ]; then exit "$original"; fi');
   const profile = steps.find((step: any) => step.name === 'Measure Windows storage writer phases');
   expect(profile?.if).toBe("${{ !cancelled() && runner.os == 'Windows' && (steps.windows_storage_owner.outcome == 'success' || steps.windows_storage_owner.outcome == 'failure') }}");
