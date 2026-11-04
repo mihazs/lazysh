@@ -1,0 +1,24 @@
+#!/bin/sh
+# Validate Conventional Commits headers (https://www.conventionalcommits.org/en/v1.0.0/).
+# Usage: commit-msg <message-file>     (Git commit-msg hook)
+#        commit-msg --header '<text>'  (one PR title or commit headline, used by CI)
+set -eu
+
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+pattern="^($types)(\\([a-z0-9][a-z0-9._/-]*\\))?!?: [^[:space:]].*"
+
+if [ "${1-}" = "--header" ]; then
+  header=${2-}
+else
+  # The first line that is neither empty nor a Git comment is the header.
+  header=$(sed -e '/^#/d' -e '/^[[:space:]]*$/d' "${1:?usage: commit-msg <message-file>}" | head -n 1)
+fi
+
+if printf '%s\n' "$header" | grep -Eq "$pattern"; then
+  exit 0
+fi
+
+printf 'Not a Conventional Commits header: %s\n' "$header" >&2
+printf '%s\n' "Use '<type>[optional scope][!]: <description>' with type one of: $(printf '%s' "$types" | tr '|' ' ')." >&2
+printf '%s\n' "Examples: 'fix(ssh): preserve the original host binding', 'docs: clarify setup'. Rebase instead of creating merge commits; write 'revert: ...' for reverts." >&2
+exit 1

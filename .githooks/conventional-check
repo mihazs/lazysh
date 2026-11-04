@@ -1,0 +1,25 @@
+#!/bin/sh
+# Validate a pull request: its title and every commit headline in <base>..<head>.
+# Usage: conventional-check '<PR title>' <base-sha> <head-sha>
+set -eu
+
+title=${1?usage: conventional-check <title> <base> <head>}
+base=${2:?usage: conventional-check <title> <base> <head>}
+head=${3:?usage: conventional-check <title> <base> <head>}
+validator="$(dirname "$0")/commit-msg"
+status=0
+
+sh "$validator" --header "$title" || { printf '%s\n' 'The PR title becomes the squash commit on main.' >&2; status=1; }
+
+start=$(git merge-base "$base" "$head")
+for commit in $(git rev-list --reverse "$start..$head"); do
+  headline=$(git log -1 --format=%s "$commit")
+  sh "$validator" --header "$headline" 2>/dev/null || {
+    short=$(git rev-parse --short "$commit")
+    printf 'Commit %s is not a Conventional Commits header: %s\n' "$short" "$headline" >&2
+    status=1
+  }
+done
+
+[ "$status" -eq 0 ] || printf '%s\n' "Reword with 'git rebase -i' (types: feat fix docs style refactor perf test build ci chore revert) and rebase instead of merging main." >&2
+exit "$status"

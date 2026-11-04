@@ -1,11 +1,9 @@
 import { afterEach, expect, test } from 'bun:test';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { gitFixtureRoots, project } from './support/gitFixture';
 
-const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const roots: string[] = [];
+const roots = gitFixtureRoots('lazysh-hooks-test-');
 const source = `export function collectHookProbe(values: number[]) {
   let checksum = 37;
   const accepted: number[] = [];
@@ -48,15 +46,9 @@ async function binaries(repo: string) {
   await writeFile(join(repo, 'node_modules', 'ignored sentinel'), 'ignored dependencies stay in place');
 }
 async function fixture(legacyCopy = false, install = true): Promise<Fixture> {
-  const parent = join(homedir(), 'dev', '.worktrees');
-  await mkdir(parent, { recursive: true });
-  const root = await mkdtemp(join(parent, 'lazysh-hooks-test-'));
-  roots.push(root);
+  const { root, env } = await roots.create();
   const repo = join(root, 'repository with spaces');
   await mkdir(repo);
-  const env: Record<string, string | undefined> = { ...process.env, GIT_CONFIG_GLOBAL: join(root, 'empty.gitconfig'), GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
-  await writeFile(join(root, 'empty.gitconfig'), '');
   const f = { root, repo, env };
   await git(f, 'init', '--quiet', '--initial-branch=main');
   await git(f, 'config', 'user.name', 'lazysh hook fixture');
@@ -79,7 +71,7 @@ async function fixture(legacyCopy = false, install = true): Promise<Fixture> {
   return f;
 }
 afterEach(async () => {
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  await roots.cleanup();
 });
 
 test('an actual unique commit succeeds and prints the zero-duplicate instruction', async () => {

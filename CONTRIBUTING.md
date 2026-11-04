@@ -13,6 +13,17 @@ Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.
 
+## Conventional Commits
+
+Every commit and PR title must follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+as described in [AGENTS.md](AGENTS.md#naming). `bun run hooks:install` also enables
+`.githooks/commit-msg`, which rejects a non-conforming header before the commit is
+created. The `conventional-commits` workflow checks the PR title, which becomes the
+squash commit on `main`, and every commit headline in the PR. Sync a branch with
+`main` by rebasing; merge commits and Git's default `Revert "..."` headers fail the
+check, so write `revert: ...` instead. Validate a header manually with
+`sh .githooks/commit-msg --header 'fix(ssh): preserve the host binding'`.
+
 ## Pre-commit duplicate detection
 
 After `bun install --frozen-lockfile`, run `bun run hooks:install` to enable the
