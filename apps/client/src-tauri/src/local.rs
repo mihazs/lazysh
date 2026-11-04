@@ -1051,11 +1051,14 @@ mod desktop {
         session.credits.add_permits(bytes as usize);
         Ok(())
     }
+    /// Outstanding bytes plus the zero-credit and over-credit acknowledgment results.
+    #[cfg(test)]
+    pub(super) type RejectedOutputAcks = (u32, Result<(), String>, Result<(), String>);
     #[cfg(test)]
     pub(super) fn rejected_output_acks(
         state: &LocalState,
         id: &str,
-    ) -> Result<(u32, Result<(), String>, Result<(), String>), String> {
+    ) -> Result<RejectedOutputAcks, String> {
         let session = state.0.session(id)?;
         session
             .creation
