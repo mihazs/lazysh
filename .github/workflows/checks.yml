@@ -540,6 +540,56 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      # Last: the stock verification replaces LAZYSH_TEST_HERDR for any later step.
+      - &pinned-zellij
+        name: Install the pinned official Zellij 0.45.1 release outside the checkout
+        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
+        run: |
+          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
+          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
+          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
+          echo "$zellij_root" >> "$GITHUB_PATH"
+          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
+      - &stock-herdr-guard
+        name: Validate producer artifact ID
+        env:
+          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.stock-id }}
+        run: *herdr-artifact-id-guard
+      - &stock-herdr-download
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.herdr-native.outputs.stock-id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/lazysh-stock-herdr
+      - &stock-herdr-verify
+        name: Verify same-run stock Herdr
+        env:
+          STOCK_HERDR_SHA256: ${{ needs.herdr-native.outputs.stock-sha256 }}
+        run: |
+          cd "$RUNNER_TEMP/lazysh-stock-herdr"
+          test -f herdr
+          test -s herdr
+          test "$(stat -c%s herdr)" -le 536870912
+          printf '%s  herdr\n' "$STOCK_HERDR_SHA256" | sha256sum --check --strict
+          bun -e '
+          const receipt=await Bun.file("source.json").json();
+          const expected={schemaVersion:1,sourceCommit:"7b116c05bfda646af39d2524c54e70c751f57ee8",archiveSha256:"a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124",
+            manifestSha256:"1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9",sourceFiles:1828,binarySha256:process.env.STOCK_HERDR_SHA256,checkout:process.env.GITHUB_SHA};
+          if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
+          chmod 700 herdr
+          printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
+      - name: Exercise ordinary Mosh Herdr entries from PATH and the default user installation
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: &exact-ignored-case |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact
 
   native-desktop:
     needs: changes
@@ -605,6 +655,9 @@ jobs:
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Exercise native desktop launch parsing and original-lease admission
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
+      - name: Exercise the remote Herdr user-install admission script with Darwin stat
+        if: runner.os == 'macOS'
+        run: "cargo test --locked -p lazysh --lib herdr_path::"
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
       - name: Verify uploaded paths through the owned Mac host clipboard
@@ -858,35 +911,9 @@ jobs:
       - *android-cache-identity
       - *android-owned-cache
       - run: bun install --frozen-lockfile
-      - &stock-herdr-guard
-        name: Validate producer artifact ID
-        env:
-          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.stock-id }}
-        run: *herdr-artifact-id-guard
-      - &stock-herdr-download
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.herdr-native.outputs.stock-id }}
-          github-token: ${{ github.token }}
-          merge-multiple: true
-          path: ${{ runner.temp }}/lazysh-stock-herdr
-      - &stock-herdr-verify
-        name: Verify same-run stock Herdr
-        env:
-          STOCK_HERDR_SHA256: ${{ needs.herdr-native.outputs.stock-sha256 }}
-        run: |
-          cd "$RUNNER_TEMP/lazysh-stock-herdr"
-          test -f herdr
-          test -s herdr
-          test "$(stat -c%s herdr)" -le 536870912
-          printf '%s  herdr\n' "$STOCK_HERDR_SHA256" | sha256sum --check --strict
-          bun -e '
-          const receipt=await Bun.file("source.json").json();
-          const expected={schemaVersion:1,sourceCommit:"7b116c05bfda646af39d2524c54e70c751f57ee8",archiveSha256:"a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124",
-            manifestSha256:"1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9",sourceFiles:1828,binarySha256:process.env.STOCK_HERDR_SHA256,checkout:process.env.GITHUB_SHA};
-          if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
-          chmod 700 herdr
-          printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
+      - *stock-herdr-guard
+      - *stock-herdr-download
+      - *stock-herdr-verify
       - *android-owned-companion
       - *android-owned-kvm
       - *android-runtime-emulator
@@ -941,15 +968,7 @@ jobs:
           cmake --build "$et_root/build" --parallel 4 --target etserver etterminal
           test "$("$et_root/build/etserver" --version)" = 'et version 7.0.0'
           printf '%s\n' "ET_SERVER_BIN=$et_root/build/etserver" "ET_TERMINAL_BIN=$et_root/build/etterminal" >> "$GITHUB_ENV"
-      - name: Install the pinned official Zellij 0.45.1 release outside the checkout
-        # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
-        run: |
-          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
-          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
-          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
-          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
-          echo "$zellij_root" >> "$GITHUB_PATH"
+      - *pinned-zellij
       - *stock-herdr-guard
       - *stock-herdr-download
       - *stock-herdr-verify
@@ -1008,6 +1027,13 @@ jobs:
         env:
           LAZYSH_REQUIRE_FISH: '1'
         run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib herdr_create::tests::"
+      - name: Exercise discovery, attach, tree and actions on a user-installed stock Herdr over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: *exact-ignored-case
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et

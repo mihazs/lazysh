@@ -342,6 +342,10 @@ pub async fn herdr_tree(
         .run(async {
             let command = command(&name, "api snapshot".into())?;
             let session = state.session(&session_id).await?;
+            let command = crate::herdr_path::select(
+                &command,
+                crate::herdr_path::admit(&session, &access).await?,
+            );
             parse(&crate::ssh::exec_for_access(&session, command, &access).await?)
         })
         .await
@@ -367,6 +371,7 @@ pub async fn herdr_action(
             } else {
                 command
             };
+            let command = crate::herdr_path::select(&command, crate::herdr_path::admit(&session, &access).await?);
             let focus = matches!(
                 action,
                 HerdrAction::FocusWorkspace { .. }

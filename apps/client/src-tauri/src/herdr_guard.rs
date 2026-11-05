@@ -228,7 +228,10 @@ pub(crate) fn attach_command(name: &str) -> String {
     command(name, true)
 }
 pub(crate) fn attach_receipt(name: &str) -> String {
-    format!("{} --startup-fd 3", attach_command(name))
+    crate::herdr_path::with_path(&format!(
+        "herdr --session {} --guarded-attach --startup-fd 3",
+        ssh::quote(name)
+    ))
 }
 fn startup_fd_capability(output: &str) -> bool {
     #[derive(Deserialize)]
@@ -244,7 +247,7 @@ fn startup_fd_capability(output: &str) -> bool {
 pub(crate) async fn require_startup_fd(session: &ssh::Session, lease: &AccessLease) -> Result<()> {
     let output = ssh::exec_bounded(
         session,
-        "herdr --guarded-attach-capabilities".into(),
+        crate::herdr_path::with_path("herdr --guarded-attach-capabilities"),
         lease,
         DEADLINE,
         256,
@@ -317,7 +320,13 @@ async fn rpc<T: Serialize>(
     let work = async {
         lease.check().map_err(|_| Fault::Stale)?;
         channel
-            .exec(true, command(name, false))
+            .exec(
+                true,
+                crate::herdr_path::select(
+                    &command(name, false),
+                    crate::herdr_path::cached(handle) == Some(true),
+                ),
+            )
             .await
             .map_err(|_| Fault::Unavailable)?;
         lease.check().map_err(|_| Fault::Stale)?;
@@ -372,6 +381,9 @@ struct Probe<'a> {
 }
 pub(crate) async fn available(session: &ssh::Session, name: &str, lease: &AccessLease) -> bool {
     // The invalid number is rejected before actor lookup/mutation. This is not authority.
+    if crate::herdr_path::admit(session, lease).await.is_err() {
+        return false;
+    }
     let zero = "0".repeat(64);
     matches!(
         rpc(

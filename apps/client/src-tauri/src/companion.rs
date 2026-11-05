@@ -11,6 +11,9 @@ mod install;
 mod release;
 mod resolve;
 mod transfer;
+pub(crate) async fn positive_unix(session: &Session, lease: &AccessLease) -> Result<bool> {
+    Ok(resolve::detect(session, lease).await?.is_some())
+}
 fn error(kind: &'static str, message: &'static str) -> SshError {
     SshError::new(kind, message)
 }
