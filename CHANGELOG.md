@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix companion hook events failing on Windows with `StorageError: operation failed (sqlite_code=5)` when many agent hooks open the companion store at once, including the first run that creates it. Opening a store that is already set up no longer waits behind other openers or their durable commits; only creating or upgrading the store is exclusive. WAL mode, full commit durability, private sidecar checks and the 3-second wait budget are unchanged. No defaults change.
+
 - Keep an opened Chat transcript reader when switching to the terminal or another session view and back: its messages, reading position and unsent draft stay as they were instead of resetting to an empty reader. Following pauses while the reader is out of view, a confirmed terminal destination is still released on leaving, and a reader opened from reported agent history still retires when left.
 
 - Add terminal text selection for copying, including selections longer than the screen. On touch screens, hold a finger still on a word and lift to select it. Then drag the start and end handles across rows; holding a handle past the top or bottom edge scrolls local history, faster the further past the edge. With a mouse, xterm's drag selection keeps scrolling past the edges; when the remote app uses mouse reporting, hold Shift to select locally. A floating bar offers Copy, Select all and Copy screen. Copy keeps the raw buffer rows, line breaks included, and the selection stays put through finger scrolling and streaming output. Moving the finger before lifting still scrolls. Remote clipboard writes (OSC 52), including ones forwarded through tmux or screen passthrough, still need explicit consent.

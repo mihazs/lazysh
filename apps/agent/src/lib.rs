@@ -414,7 +414,16 @@ fn validate_sidecar_with(
     lazysh_common::test_support::observe_sidecar(sidecar_kind(path), observe).map_err(Error::from)
 }
 
-fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {
+/// How an opener holds the native bootstrap lock.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bootstrap {
+    /// Shared: adopt an initialized WAL store without writing to it.
+    Adopt,
+    /// Exclusive: create the database, switch it to WAL and apply the schema.
+    Initialize,
+}
+
+fn open_store_bootstrap(directory: &Path) -> Result<fs::File> {
     let path = directory.join("events.sqlite3-init-lock");
     validate_sidecar(&path)?;
     let mut options = fs::OpenOptions::new();
@@ -428,20 +437,62 @@ fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File>
     }
     let lock = options.open(&path)?;
     validate_sidecar(&path)?;
+    Ok(lock)
+}
+
+/// Initializers exclude every opener; adopters exclude only initializers, so
+/// warm opens never queue behind each other. A warm open can stall in the
+/// filesystem while it holds the lock (on Windows, opening, stat-ing or reading
+/// the WAL can wait for another connection's FlushFileBuffers); one exclusive
+/// queue turned that stall into one durable commit per waiting opener.
+fn lock_store_bootstrap(
+    lock: &fs::File,
+    deadline: Instant,
+    mut mode: Bootstrap,
+) -> Result<Bootstrap> {
     loop {
-        match lock.try_lock() {
-            Ok(()) => return Ok(lock),
-            Err(fs::TryLockError::WouldBlock) if wait_for_storage_until(deadline) => {}
+        let attempt = match mode {
+            Bootstrap::Adopt => lock.try_lock_shared(),
+            Bootstrap::Initialize => lock.try_lock(),
+        };
+        match attempt {
+            Ok(()) => return Ok(mode),
             Err(fs::TryLockError::WouldBlock) => {
-                return Err(rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
-                    None,
-                )
-                .into())
+                // An exclusive holder is initializing: adopt its result once it
+                // releases instead of queueing to initialize the store again.
+                if mode == Bootstrap::Initialize {
+                    match lock.try_lock_shared() {
+                        Ok(()) => lock.unlock()?,
+                        Err(fs::TryLockError::WouldBlock) => mode = Bootstrap::Adopt,
+                        Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+                    }
+                }
+                if !wait_for_storage_until(deadline) {
+                    return Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                        None,
+                    )
+                    .into());
+                }
             }
             Err(fs::TryLockError::Error(error)) => return Err(error.into()),
         }
     }
+}
+
+fn apply_schema(
+    transaction: &rusqlite::Transaction<'_>,
+) -> std::result::Result<(), (StoragePhase, Error)> {
+    for schema in [
+        storage_schema::V1_SESSIONS,
+        reported_history::SCHEMA,
+        hooks::AIDER_HEALTH_SCHEMA,
+    ] {
+        transaction
+            .execute_batch(schema)
+            .map_err(|e| (StoragePhase::SessionsSchema, e.into()))?;
+    }
+    relay::initialize(transaction).map_err(|e| (StoragePhase::RelaySchema, e))
 }
 
 fn initialize_schema(connection: &mut Connection) -> Result<()> {
@@ -449,19 +500,63 @@ fn initialize_schema(connection: &mut Connection) -> Result<()> {
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
         .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-    transaction
-        .execute_batch(storage_schema::V1_SESSIONS)
-        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-    transaction
-        .execute_batch(reported_history::SCHEMA)
-        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-    transaction
-        .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
-        .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
-    relay::initialize(&transaction).map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
+    apply_schema(&transaction).map_err(|(phase, e)| storage_failure(phase, e))?;
     transaction
         .commit()
         .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))
+}
+
+/// Adopt an initialized WAL store under the shared bootstrap lock. `query_only`
+/// makes the probe unable to write, so `false` (rollback journal mode or a
+/// missing schema object) sends the opener to exclusive initialization.
+fn adopt_initialized(connection: &mut Connection) -> Result<bool> {
+    let configuration =
+        |e: rusqlite::Error| storage_failure(StoragePhase::SqliteConfiguration, e.into());
+    connection
+        .pragma_update(None, "query_only", true)
+        .map_err(configuration)?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+        .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
+    // The first read makes SQLite adopt the file's persistent journal mode.
+    let mode = transaction
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(()))
+        .and_then(|()| {
+            transaction.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+        })
+        .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
+    if mode != "wal" {
+        return Ok(false);
+    }
+    match apply_schema(&transaction) {
+        Ok(()) => {}
+        Err((_, Error::Storage(rusqlite::Error::SqliteFailure(code, _))))
+            if code.code == rusqlite::ErrorCode::ReadOnly =>
+        {
+            return Ok(false)
+        }
+        Err((phase, error)) => return Err(storage_failure(phase, error)),
+    }
+    transaction
+        .commit()
+        .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
+    connection
+        .pragma_update(None, "query_only", false)
+        .map_err(configuration)?;
+    Ok(true)
+}
+
+fn set_journal_size_limit(connection: &Connection) -> Result<()> {
+    connection
+        .execute_batch("PRAGMA journal_size_limit=1048576;")
+        .map_err(|e| storage_failure(StoragePhase::JournalSize, e.into()))
+}
+
+fn state_file_present(path: &Path, nonempty: bool) -> bool {
+    fs::symlink_metadata(path).map_or_else(
+        |error| error.kind() != io::ErrorKind::NotFound,
+        |metadata| !nonempty || metadata.len() > 0,
+    )
 }
 
 impl Store {
@@ -506,75 +601,112 @@ impl Store {
         let bootstrap_deadline = Instant::now() + Duration::from_secs(3);
         #[cfg(feature = "storage-observation")]
         let mut observation = storage_observation::Observation::new();
-        let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)
+        let bootstrap = open_store_bootstrap(&directory)
             .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e))?;
-        #[cfg(feature = "storage-observation")]
-        observation.mark(0);
-        // Inspect ephemeral paths inside the same lock as initialization: another
-        // initializer must not unlink its rollback journal during these checks.
-        // SQLite owns sidecar descriptors; never open/close them here because
-        // POSIX locks belong to the process/inode.
-        for suffix in ["-journal", "-wal", "-shm"] {
-            check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))
-                .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
-        }
-        #[cfg(feature = "storage-observation")]
-        observation.mark(1);
-        let mut connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )
-        .map_err(|e| storage_failure(StoragePhase::SqliteOpen, e.into()))?;
-        #[cfg(feature = "storage-observation")]
-        observation.mark(2);
-        // Short-lived hooks must not checkpoint/unlink shared WAL state when
-        // another Store is admitting its sidecars. FULL commit synchronization
-        // and SQLite's normal automatic checkpoints remain unchanged.
-        if !connection
-            .set_db_config(
-                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
-                true,
+        // An existing database is usually initialized: adopt it under the shared
+        // lock and fall back to exclusive initialization only when it is not.
+        let mut mode = if state_file_present(&path, true) {
+            Bootstrap::Adopt
+        } else {
+            Bootstrap::Initialize
+        };
+        let mut connection = loop {
+            mode = lock_store_bootstrap(&bootstrap, bootstrap_deadline, mode)
+                .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e))?;
+            #[cfg(feature = "storage-observation")]
+            observation.mark(0);
+            // Inspect ephemeral paths inside the same lock as initialization: an
+            // initializer must not unlink its rollback journal during these checks.
+            // SQLite owns sidecar descriptors; never open/close them here because
+            // POSIX locks belong to the process/inode.
+            for suffix in ["-journal", "-wal", "-shm"] {
+                check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))
+                    .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
+            }
+            #[cfg(feature = "storage-observation")]
+            observation.mark(1);
+            // A rollback journal belongs to interrupted initialization; only an
+            // exclusive holder may let SQLite replay it.
+            if mode == Bootstrap::Adopt
+                && state_file_present(&directory.join("events.sqlite3-journal"), false)
+            {
+                bootstrap
+                    .unlock()
+                    .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e.into()))?;
+                mode = Bootstrap::Initialize;
+                continue;
+            }
+            let mut connection = Connection::open_with_flags(
+                &path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | OpenFlags::SQLITE_OPEN_CREATE
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
             )
-            .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?
-        {
-            return Err(storage_failure(
-                StoragePhase::SqliteConfiguration,
-                io::Error::other("Cannot retain companion WAL on close").into(),
-            ));
-        }
-        validate_state_file(&path)
-            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
-        connection
-            .busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))
-            .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
-        connection
-            .pragma_update(None, "synchronous", "FULL")
-            .map_err(|e| storage_failure(StoragePhase::Synchronous, e.into()))?;
-        #[cfg(feature = "storage-observation")]
-        observation.mark(3);
-        let mode: String = connection
-            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
-            .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
-        if mode != "wal" {
-            return Err(storage_failure(
-                StoragePhase::JournalMode,
-                io::Error::other("WAL unavailable for companion state").into(),
-            ));
-        }
-        connection
-            .execute_batch("PRAGMA journal_size_limit=1048576;")
-            .map_err(|e| storage_failure(StoragePhase::JournalSize, e.into()))?;
-        #[cfg(feature = "storage-observation")]
-        observation.mark(4);
-        initialize_schema(&mut connection)?;
-        #[cfg(feature = "storage-observation")]
-        observation.mark(5);
+            .map_err(|e| storage_failure(StoragePhase::SqliteOpen, e.into()))?;
+            #[cfg(feature = "storage-observation")]
+            observation.mark(2);
+            // Short-lived hooks must not checkpoint/unlink shared WAL state when
+            // another Store is admitting its sidecars. FULL commit synchronization
+            // and SQLite's normal automatic checkpoints remain unchanged.
+            if !connection
+                .set_db_config(
+                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                    true,
+                )
+                .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?
+            {
+                return Err(storage_failure(
+                    StoragePhase::SqliteConfiguration,
+                    io::Error::other("Cannot retain companion WAL on close").into(),
+                ));
+            }
+            validate_state_file(&path)
+                .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
+            connection
+                .busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))
+                .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
+            connection
+                .pragma_update(None, "synchronous", "FULL")
+                .map_err(|e| storage_failure(StoragePhase::Synchronous, e.into()))?;
+            #[cfg(feature = "storage-observation")]
+            observation.mark(3);
+            if mode == Bootstrap::Adopt {
+                if !adopt_initialized(&mut connection)? {
+                    // Close through SQLite (it retains the WAL) before upgrading.
+                    drop(connection);
+                    bootstrap
+                        .unlock()
+                        .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e.into()))?;
+                    mode = Bootstrap::Initialize;
+                    continue;
+                }
+                set_journal_size_limit(&connection)?;
+                #[cfg(feature = "storage-observation")]
+                observation.mark(4);
+            } else {
+                let journal: String = connection
+                    .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+                    .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
+                if journal != "wal" {
+                    return Err(storage_failure(
+                        StoragePhase::JournalMode,
+                        io::Error::other("WAL unavailable for companion state").into(),
+                    ));
+                }
+                set_journal_size_limit(&connection)?;
+                #[cfg(feature = "storage-observation")]
+                observation.mark(4);
+                initialize_schema(&mut connection)?;
+            }
+            #[cfg(feature = "storage-observation")]
+            observation.mark(5);
+            break connection;
+        };
         connection
             .busy_handler(Some(wait_for_storage))
             .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
+        drop(bootstrap);
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
@@ -765,10 +897,7 @@ mod tests {
     fn ephemeral_sidecar_admission_holds_the_native_bootstrap_lock() {
         let (directory, _path, removed) = unlinked_sidecar(0o600);
         // Create only the real private bootstrap lock, not a SQLite sidecar FD.
-        drop(
-            lock_store_bootstrap(directory.path(), Instant::now() + Duration::from_secs(3))
-                .unwrap(),
-        );
+        drop(open_store_bootstrap(directory.path()).unwrap());
         let lock_path = directory.path().join("events.sqlite3-init-lock");
         let mut protected_checks = 0;
         let mut unprotected_observations = 0;
@@ -800,6 +929,89 @@ mod tests {
         // Admission and successful open must release the native lock again.
         fs::File::open(lock_path).unwrap().try_lock().unwrap();
         drop(store);
+    }
+    fn fixture_event(session_id: &str) -> Event {
+        normalize(
+            &json!({
+                "schemaVersion": 1, "sessionId": session_id, "agent": "Fixture",
+                "project": "/synthetic", "state": "working", "summary": "Synthetic fixture"
+            }),
+            Agent::Generic,
+            None,
+        )
+        .unwrap()
+        .unwrap()
+    }
+    #[test]
+    fn stalled_bootstrap_admission_does_not_queue_simultaneous_openers() {
+        // Model Windows, where a stat or read of the WAL stalls behind another
+        // connection's FlushFileBuffers: every opener stalls 300 ms while it
+        // holds the bootstrap lock. Sixteen of them queued on one exclusive
+        // lock need 4.8 s, past the shared 3 s wait budget.
+        let directory = tempfile::tempdir().unwrap();
+        let event = fixture_event("stalled-admission");
+        let barrier = std::sync::Barrier::new(16);
+        let results = std::thread::scope(|scope| {
+            let workers = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let mut store = Store::open_with_storage_checks(
+                            directory.path(),
+                            storage_filesystem::require_local,
+                            |sidecar| {
+                                std::thread::sleep(Duration::from_millis(100));
+                                validate_sidecar(sidecar)
+                            },
+                        )?;
+                        store.ingest(&event, Utc::now())
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for result in &results {
+            assert!(result.is_ok(), "simultaneous open or ingest: {result:?}");
+        }
+        let snapshot = Store::open(directory.path())
+            .unwrap()
+            .snapshot(50, Utc::now())
+            .unwrap();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].event_count, 16);
+    }
+    #[test]
+    fn adoption_completes_a_wal_store_that_lacks_current_schema_objects() {
+        let directory = tempfile::tempdir().unwrap();
+        drop(Store::open(directory.path()).unwrap());
+        let legacy = Connection::open(directory.path().join("events.sqlite3")).unwrap();
+        legacy
+            .execute_batch(
+                "DROP INDEX relay_due; DROP TABLE relay_outbox; DROP TABLE relay_policy;",
+            )
+            .unwrap();
+        drop(legacy);
+        let mut store = Store::open(directory.path()).unwrap();
+        store
+            .ingest(&fixture_event("completed-schema"), Utc::now())
+            .unwrap();
+        let relay_objects: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name IN ('relay_policy','relay_outbox','relay_due')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(relay_objects, 3);
+        let journal: String = store
+            .connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "wal");
     }
     #[cfg(unix)]
     #[test]
