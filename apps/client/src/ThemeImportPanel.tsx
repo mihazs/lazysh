@@ -1,7 +1,8 @@
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
-import { useRef,useState } from 'react';
+import { useEffect,useRef,useState } from 'react';
 import { chromeColors, exportTheme, parseThemeImport, type ImportedTheme } from './themeImport';
+import { readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import ThemeQrPanel from './ThemeQrPanel';
 import type { Preferences } from './preferences';
 
@@ -15,6 +16,9 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
   const qrIntent=useRef(0),qrCancel=useRef<(()=>void)|null>(null);
   const invalidateQr=()=>{qrIntent.current++;qrCancel.current?.();};
   const [preview,setPreview]=useState<ImportedTheme>(),[output,setOutput]=useState(''),[message,setMessage]=useState<ImportMessage>();
+  // Same platform path as terminal Paste: Android reads natively, other targets use the browser API.
+  const clipboardPlatform=useClipboardPlatform(),clipboardRead=useRef<AbortController|null>(null),[reading,setReading]=useState(false);
+  useEffect(()=>()=>{clipboardRead.current?.abort();clipboardRead.current=null;},[]);
   function review(input=source) {
     invalidateQr();
     setPreview(undefined);setMessage(undefined);
@@ -31,7 +35,18 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
   }
   async function paste() {
     invalidateQr();
-    try {const value=await navigator.clipboard.readText();setSource(value.slice(0,16384));review(value);} catch {setMessage({kind:'error',cause:new LocalUiError('themeClipboardCouldNotBeReadPasteTheThemeInto')});}
+    if (clipboardRead.current) return;
+    // Platform metadata is never fetched inside this gesture; a retry needs a new click.
+    if (clipboardPlatform.phase!=='ready') {void clipboardPlatform.retry();return;}
+    const read=new AbortController();clipboardRead.current=read;setReading(true);
+    try {
+      const value=await readClipboardText(read.signal);
+      if (read.signal.aborted) return;
+      // Oversized input never replaces the draft; validation still reports the size error.
+      if (value.length<=16384) setSource(value);
+      review(value);
+    } catch {if(!read.signal.aborted)setMessage({kind:'error',cause:new LocalUiError('themeClipboardCouldNotBeReadPasteTheThemeInto')});}
+    finally {if(clipboardRead.current===read){clipboardRead.current=null;setReading(false);}}
   }
   return <details ref={details} onToggle={event=>{if(!event.currentTarget.open)invalidateQr();}}><summary onClick={()=>{if(details.current?.open)invalidateQr();}}>{t("themeImportAndShareTheme")}</summary>
     <p>{t("themePasteJSONOrALazyshThemeShareCodeNothing")}</p>
@@ -39,7 +54,7 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
     <label>{t("themeThemeMode")}<select value={mode} onChange={event=>{invalidateQr();setMode(event.target.value as 'dark'|'light');setPreview(undefined);}}><option value="dark">{t("themeDark")}</option><option value="light">{t("themeLight")}</option></select></label>
     <label>{t("themeThemeJSONOrShareCode")}<textarea aria-label={t("themeThemeJSONOrShareCode")} maxLength={16384} value={source} onChange={event=>{invalidateQr();setSource(event.target.value);setPreview(undefined);}} /></label>
     <button type="button" onClick={()=>review()}>{t("themePreviewTheme")}</button>
-    <button type="button" onClick={()=>void paste()}>{t("themeReadThemeFromClipboard")}</button>
+    <button type="button" disabled={reading || clipboardPlatform.phase==='loading'} onClick={()=>void paste()}>{t("themeReadThemeFromClipboard")}</button>
     {preferences.customTheme && <button type="button" onClick={()=>review(JSON.stringify(preferences.customThemeInfo ? {v:1,...preferences.customThemeInfo,colors:preferences.customTheme} : preferences.customTheme))}>{t("themeReviewSavedPalette")}</button>}
     <ThemeQrPanel intent={qrIntent} cancelRef={qrCancel} onDecoded={payload=>review(payload)}/>
     {preview && <section className="theme-preview" aria-label={t("themeThemePreview")} style={chromeColors(preview)}>
