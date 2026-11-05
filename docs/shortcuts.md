@@ -171,13 +171,15 @@ their shortcut panel (Ctrl+b by default) and the default binding. tmux has no
 default previous-pane key, so that action types `select-pane -t :.-` at tmux's
 command prompt; Herdr focuses panes by direction, so next and previous move right
 and left. On a terminal without a multiplexer these actions report an error and
-send nothing. **Pinch in tmux, Herdr or Zellij** can also be set to **Resize
-terminal text** or **No action**.
+send nothing. Zoom is a toggle in all three multiplexers, so pinching in or out
+zooms an unzoomed pane and restores a zoomed one. **Pinch in tmux, Herdr or
+Zellij** can also be set to **Resize terminal text** or **No action**.
 
 A header pull is a one-finger downward drag that starts on the session header. A
 label names the action once the pull reaches the short depth (56 CSS pixels) and
 changes at the long depth (144); release runs it, while pulling back above the
-short depth or dragging sideways cancels it.
+short depth or dragging sideways cancels it. With both pull slots set to **No
+action**, lazysh leaves touches on the header alone.
 
 Select a toolbar key in **Toolbar keys and order** to give it a **Long-press**
 action. Holding that key for half a second, right-clicking it or pressing the

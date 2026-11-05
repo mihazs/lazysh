@@ -39,6 +39,14 @@ async function pinchOut(page:Page,touch:Awaited<ReturnType<typeof touchscreen>>)
   const {x,y}=await canvasCenter(page);
   await touch.gesture([{x:x-40,y},{x:x+40,y}],[{x:x-110,y},{x:x+110,y}]);
 }
+/** Lines the harness terminal's viewport sits above the live screen. */
+const scrolledBack=(page:Page)=>page.evaluate(()=>{const buffer=window.gestures.terminal.buffer.active;return buffer.baseY-buffer.viewportY;});
+/** Fills the scrollback and leaves the reader 50 lines up in history. */
+async function readHistory(page:Page) {
+  await page.evaluate(()=>new Promise<void>(done=>window.gestures.terminal.write(Array.from({length:200},(_,line)=>`history ${line}\r\n`).join(''),done)));
+  await page.evaluate(()=>window.gestures.terminal.scrollLines(-50));
+  expect(await scrolledBack(page)).toBe(50);
+}
 async function swipe(page:Page,touch:Awaited<ReturnType<typeof touchscreen>>,dx:number,dy:number) {
   const {x,y}=await canvasCenter(page);
   await touch.gesture([{x:x-40,y},{x:x+40,y}],[{x:x-40+dx,y:y+dy},{x:x+40+dx,y:y+dy}]);
@@ -87,7 +95,11 @@ test('double tap and one-finger swipes run their configured actions on a real to
   await mount(page);
   const touch=await touchscreen(page,testInfo);
   const at=await canvasCenter(page);
+  // A gesture that sends a key returns the reader to the live screen, as keyboard input does.
+  await readHistory(page);
   await touch.gesture([at],[{x:at.x-120,y:at.y}]);
+  await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b']]);
+  expect(await scrolledBack(page)).toBe(0);
   await touch.gesture([at],[{x:at.x+120,y:at.y}]);
   await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\x1b[6~']]);
   for(let tap=0;tap<2;tap++){await touch.send('touchStart',[at]);await touch.send('touchEnd',[]);}
@@ -155,6 +167,19 @@ test('pulling the session header shows the release action and runs the short or 
   await touch.send('touchEnd',[]);
   await page.waitForTimeout(150);
   expect(await recorded(page)).toEqual({steps:[['\x02','n']],zellij:[],sessions:['nextSession'],errors:[]});
+  // With both pulls off the header keeps the browser's own touch handling.
+  await page.evaluate(async()=>{
+    const {getPreferences,savePreferences}=await import('/src/preferences.ts');
+    const current=getPreferences();
+    savePreferences({...current,bodyGestures:{...current.bodyGestures,pullShallow:'none',pullDeep:'none'}});
+    Reflect.set(window,'headerMovesPrevented',0);
+    window.addEventListener('touchmove',event=>{if(event.defaultPrevented)Reflect.set(window,'headerMovesPrevented',Number(Reflect.get(window,'headerMovesPrevented'))+1);});
+  });
+  await pull(200);
+  await touch.send('touchEnd',[]);
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(()=>Reflect.get(window,'headerMovesPrevented'))).toBe(0);
+  expect(await recorded(page)).toEqual({steps:[['\x02','n']],zellij:[],sessions:['nextSession'],errors:[]});
   await touch.cdp.detach();
 });
 
@@ -195,8 +220,11 @@ test('a toolbar key runs its long-press action from the keys editor while other 
     if(touch){await touch.send('touchStart',[at]);await page.waitForTimeout(ms);await touch.send('touchEnd',[]);}
     else {await page.mouse.move(at.x,at.y);await page.mouse.down();await page.waitForTimeout(ms);await page.mouse.up();}
   };
+  // A reader scrolled into history returns to the live screen, where the multiplexer answers the action.
+  await readHistory(page);
   await hold('esc',700);
   await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x02','z']]);
+  expect(await scrolledBack(page)).toBe(0);
   await hold('tab',700);
   await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x02','z'],['\x02','T']]);
   // A quick press still sends the key itself.

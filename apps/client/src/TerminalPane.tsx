@@ -478,9 +478,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   runPull.current = depth => {
     if (activeRef.current && mounted.current && access.current() && !document.hidden && !document.querySelector('[role="dialog"][aria-modal="true"]')) runGesture(preferences.bodyGestures[depth], depth);
   };
+  // Without a pull action the header keeps its native touch scrolling.
+  const pulls = (['pullShallow', 'pullDeep'] as const).some(depth => resolveGesture(preferences.bodyGestures[depth], depth, multiplexer) !== "none");
   useEffect(() => {
     const header = controlsTarget?.closest('header');
-    if (!header || !active || preferences.screenReader) return;
+    if (!header || !active || preferences.screenReader || !pulls) return;
     let start: {x: number; y: number; id: number; pulling: boolean; depth: PullDepth | null} | null = null;
     const reset = () => {start = null; setPull(null);};
     const down = (event: TouchEvent) => {
@@ -518,7 +520,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       header.removeEventListener('touchcancel', reset);
       setPull(null);
     };
-  }, [controlsTarget, active, preferences.screenReader, session.id]);
+  }, [controlsTarget, active, preferences.screenReader, session.id, pulls]);
   const pullAction = pull ? resolveGesture(preferences.bodyGestures[pull], pull, multiplexer) : "none";
 
   useEffect(() => {
@@ -814,6 +816,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (!validPrefix(prefix)) {reportError(new LocalUiError('muxShortcutInvalid')); return;}
     imeInput.current?.flush();
     void writeInput('gesture', multiplexerSteps(multiplexer, action, prefix)).catch(error => reportError(captureUiError(error)));
+    followLive();
   }
   function runGesture(requested: GestureAction, slot?: GestureSlot, keys = slot ? preferences.gestureChords[slot] : undefined) {
     const action = resolveGesture(requested, slot, multiplexer);
@@ -835,7 +838,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     else if (action === "custom") sendChord(keys);
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
-      if (keys && session.connected) {imeInput.current?.flush(); void writeInput('gesture', keys).catch(error => reportError(captureUiError(error)));}
+      if (keys && session.connected) {imeInput.current?.flush(); void writeInput('gesture', keys).catch(error => reportError(captureUiError(error))); followLive();}
     }
   }
   function cancelTaps() {
