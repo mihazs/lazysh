@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # The default merge checkout contains the base branch's validator even when the PR
+      # branch predates it, and its history includes every PR commit in BASE..HEAD.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
       # Squash merges use the PR title as the commit on main; every PR commit must also comply.
       - name: Validate the PR title and every commit headline
         env:
