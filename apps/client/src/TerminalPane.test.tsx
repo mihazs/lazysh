@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), scrollToBottom: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -88,6 +88,16 @@ it('preserves physical and toolbar Shift+Enter without submitting an ordinary En
   fireEvent.click(screen.getByRole('button',{name:'Shift'}));
   fireEvent.click(screen.getByRole('button',{name:'enter'}));
   expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[13;2u','\x1b[13;2u']);
+});
+it.each([[undefined,2],[false,0]] as const)('returns toolbar keys and chord buttons to the live screen unless scrollOnUserInput is %s',(scrollOnUserInput,follows)=>{
+  savePreferences({...defaults,toolbar:['enter'],chords:[{label:'Confirm',keys:'Enter'}]});
+  mount();
+  Object.assign(terminal.options,{scrollOnUserInput});
+  fireEvent.click(screen.getByRole('button',{name:'enter'}));
+  fireEvent.click(screen.getByRole('button',{name:'Confirm'}));
+  expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\r']);
+  expect(mocks.writeSequence.mock.calls.map(call=>call[1])).toEqual([['\r']]);
+  expect(terminal.scrollToBottom).toHaveBeenCalledTimes(follows);
 });
 it('applies one-shot Shift to keyless keyboard Enter without rewriting paste or terminal replies',()=>{
   const owner=mountInputOwner();owner.textarea.focus();
