@@ -46,12 +46,23 @@ function parseToolbar(value: unknown): ToolbarEntry[] {
     return true;
   });
 }
-export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
+export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
+/** Actions that need a slot-specific meaning: level-aware defaults and pinch text sizing. */
+const slotOnlyActions: readonly GestureAction[] = ["auto", "fontSize"];
+/** Actions any discrete gesture, D-pad corner or toolbar long-press can run. */
+export const discreteGestureActions = gestureActions.filter(action => !slotOnlyActions.includes(action));
+/** Two-finger swipes and header pulls also offer the level-aware default. */
+export const levelAwareGestureActions = gestureActions.filter(action => action !== "fontSize");
 export const gestureDirections = ["left", "right", "up", "down"] as const;
 export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
-export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight"] as const;
+/** Multiplexer pinch and header pull depths; stored with the body gestures, which older clients ignore. */
+export const levelGestureSlots = ["pinch", "pullShallow", "pullDeep"] as const;
+export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight", ...levelGestureSlots] as const;
 export type GestureSlot = typeof gestureSlots[number];
-export const gestureLabelKeys = {"none":"gestureNoAction","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
+export type ToolbarAlternate = {action: GestureAction; keys?: string};
+/** Modifier keys keep their tap and lock cycle; every other key can carry a long-press action. */
+export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr"; }
+export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
@@ -75,8 +86,10 @@ export type Preferences = {
   chords: { label: string; keys: string }[];
   pinchZoom: boolean;
   gestures: Record<typeof gestureDirections[number], GestureAction>;
-  bodyGestures: Record<typeof bodyGestureSlots[number], GestureAction>;
+  bodyGestures: Record<typeof bodyGestureSlots[number] | typeof levelGestureSlots[number], GestureAction>;
   gestureChords: Partial<Record<GestureSlot, string>>;
+  /** Long-press actions per toolbar key; omitted when empty so older sync peers accept the snapshot. */
+  toolbarAlternates?: Partial<Record<ToolbarKey, ToolbarAlternate>>;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -90,8 +103,8 @@ export const defaults: Preferences = {
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
   toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
-  chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false, composerSendEnter: true,
-  bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
+  chords: [], pinchZoom: true, gestures: {left: "auto", right: "auto", up: "auto", down: "auto"}, autoHideToolbar: false, composerSendEnter: true,
+  bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none", pinch: "auto", pullShallow: "auto", pullDeep: "auto"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
 const key = "lazysh.preferences.v1";
 const event = "lazysh-preferences";
@@ -112,10 +125,23 @@ export function parsePreferences(value: unknown): Preferences {
       try {if (typeof keys === "string") {parseChord(keys); gestureChords[slot] = keys;}} catch { /* Invalid imported chords never become gesture input. */ }
     }
   }
-  const action = (source: unknown, slot: string, fallback: GestureAction): GestureAction => {
+  const action = (source: unknown, slot: string, fallback: GestureAction, allowed: readonly GestureAction[] = discreteGestureActions): GestureAction => {
     const value = source && typeof source === "object" ? (source as Record<string, unknown>)[slot] : undefined;
-    return gestureActions.includes(value as GestureAction) ? value as GestureAction : fallback;
+    return allowed.includes(value as GestureAction) ? value as GestureAction : fallback;
   };
+  const toolbarAlternates: Partial<Record<ToolbarKey, ToolbarAlternate>> = {};
+  if (p.toolbarAlternates && typeof p.toolbarAlternates === "object" && !Array.isArray(p.toolbarAlternates)) {
+    for (const [name, value] of Object.entries(p.toolbarAlternates as Record<string, unknown>)) {
+      const key = name as ToolbarKey;
+      if (!toolbarKeys.includes(key) || !toolbarKeyHasAlternate(key)) continue;
+      const alternate = action(value, "action", "none");
+      const keys = alternate === "custom" ? (value as Record<string, unknown>).keys : undefined;
+      if (alternate === "none") continue;
+      toolbarAlternates[key] = {action: alternate};
+      // Like a gesture slot, a custom action keeps waiting for a valid saved chord.
+      try {if (typeof keys === "string") {parseChord(keys); toolbarAlternates[key] = {action: alternate, keys};}} catch { /* Invalid imported chords never become toolbar input. */ }
+    }
+  }
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   return {
@@ -138,13 +164,14 @@ export function parsePreferences(value: unknown): Preferences {
     composerSendEnter: p.composerSendEnter !== false,
     dismissKeyboardOnOverscroll: p.dismissKeyboardOnOverscroll === true,
     pinchZoom: p.pinchZoom !== false,
-    bodyGestures: Object.fromEntries(bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])])) as Preferences["bodyGestures"],
+    bodyGestures: Object.fromEntries([
+      ...bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])]),
+      ...levelGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot], slot === "pinch" ? gestureActions : levelAwareGestureActions)]),
+    ]) as Preferences["bodyGestures"],
     gestureChords,
+    ...(Object.keys(toolbarAlternates).length ? {toolbarAlternates} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
-    gestures: Object.fromEntries(gestureDirections.map(direction => {
-      const action = p.gestures && typeof p.gestures === "object" ? (p.gestures as Record<string, unknown>)[direction] : undefined;
-      return [direction, gestureActions.includes(action as GestureAction) ? action : defaults.gestures[direction]];
-    })) as Preferences["gestures"],
+    gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
       if (!chord || typeof chord !== "object" || typeof chord.label !== "string" || chord.label.length < 1 || chord.label.length > 32 || typeof chord.keys !== "string") return false;
       try { parseChord(chord.keys); return true; } catch { return false; }

@@ -9,7 +9,8 @@ import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLo
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
-import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
+import GestureBindingField from "./GestureBindingField";
+import { bodyGestureSlots, defaults, discreteGestureActions, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsPage[];after?:SettingsPage[]}={}) {
@@ -42,10 +43,8 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
     try {await action();if(current())setLanguageError(undefined);}
     catch (error) {if(current())setLanguageError(error instanceof PreferenceStorageError?'settings':'language');}
   }
-  function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = gestureActions) {
-    return <div key={slot}><label>{label}<select value={action} onChange={event => change(event.target.value as GestureAction)}>{allowed.map(item => <option key={item} value={item}>{t(gestureLabelKeys[item])}</option>)}</select></label>
-      {action === "custom" && <ChordBuilder key={preferences.gestureChords[slot] ?? ''} label={label} binding={preferences.gestureChords[slot]} onSave={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />}
-    </div>;
+  function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = discreteGestureActions) {
+    return <GestureBindingField key={slot} label={label} action={action} keys={preferences.gestureChords[slot]} allowed={allowed} onAction={change} onKeys={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />;
   }
   return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
     {error && <p role="alert">{uiErrorText(error)}</p>}
@@ -111,7 +110,9 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
       <p>{t("preferencesBindingsAreOptionalSelectionCompositionAndScreenReaderGestures")}</p>
       <label><input type="checkbox" checked={preferences.dismissKeyboardOnOverscroll} onChange={e=>update({dismissKeyboardOnOverscroll:e.target.checked})} />{t("preferencesDismissKeyboardOnOverscroll")}</label>
       {bodyGestureSlots.map(slot => binding(slot, {tap: t("gestureSingleTap"), doubleTap: t("gestureDoubleTap"), tripleTap: t("gestureTripleTap"), swipeLeft: t("gestureSwipeLeft"), swipeRight: t("gestureSwipeRight")}[slot], preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}})))}
-      {gestureDirections.map(direction => binding(`two${direction[0].toUpperCase()}${direction.slice(1)}` as GestureSlot, t(({left:"gestureTwoLeft",right:"gestureTwoRight",up:"gestureTwoUp",down:"gestureTwoDown"} as const)[direction]), preferences.gestures[direction], action => update({gestures: {...preferences.gestures, [direction]: action}})))}
+      {gestureDirections.map(direction => binding(`two${direction[0].toUpperCase()}${direction.slice(1)}` as GestureSlot, t(({left:"gestureTwoLeft",right:"gestureTwoRight",up:"gestureTwoUp",down:"gestureTwoDown"} as const)[direction]), preferences.gestures[direction], action => update({gestures: {...preferences.gestures, [direction]: action}}), levelAwareGestureActions))}
+      <p>{t("preferencesLevelAwareGestures")}</p>
+      {levelGestureSlots.map(slot => binding(slot, t(({pinch:"gesturePinch",pullShallow:"gesturePullShallow",pullDeep:"gesturePullDeep"} as const)[slot]), preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}}), slot === "pinch" ? gestureActions : levelAwareGestureActions))}
       <p>{t("preferencesAddTheDPadItemUnderToolbarKeysTo")}</p>
       {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", t(corner === "left" ? "gestureDpadLeft" : "gestureDpadRight"), preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
       <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll})}>{t("preferencesResetGestures")}</button>

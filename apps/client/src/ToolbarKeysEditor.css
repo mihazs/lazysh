@@ -63,6 +63,8 @@
 .toolbar-key-actions > strong { font-family: monospace; margin-inline-end: 4px; }
 .preferences-panel .toolbar-key-actions button { min-height: 44px; }
 .preferences-panel .toolbar-key-actions button[aria-disabled="true"] { opacity: .5; }
+.toolbar-key-alternate { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+.toolbar-key-alternate p { margin: 0; color: var(--theme-muted, #8d9b84); font-size: 13px; }
 
 .toolbar-palette { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 10px; border: 1px solid transparent; }
 .toolbar-palette h3 { margin: 0; font-size: 13px; font-weight: 600; }

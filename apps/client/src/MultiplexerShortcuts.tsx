@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { api as nativeApi } from './bridge';
 import { useMountedAccess, useProtectedApi } from './access';
-import { parseChordSteps } from './preferences';
+import { prefixedSteps, savePrefix, storedPrefix, validPrefix } from './multiplexerGestures';
 import { errorMessage } from './SessionTools';
 
 import {t, useUi, formatNumber} from './i18n/core';
@@ -12,27 +12,25 @@ export default function MultiplexerShortcuts({ sessionId, kind }: { sessionId: s
   useUi();
   const api = useProtectedApi(nativeApi);
   const { access, mounted } = useMountedAccess();
-  const key = `lazysh.multiplexer.prefix.${kind}`;
-  const [prefix, setPrefix] = useState(() => { try { return localStorage.getItem(key) || 'Ctrl+b'; } catch { return 'Ctrl+b'; } });
+  const [prefix, setPrefix] = useState(() => storedPrefix(kind));
   const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
-  let valid = false;
-  try { if (!prefix.startsWith('text:') && !/\s/.test(prefix.trim())) { valid = parseChordSteps(prefix).length === 1; } } catch { /* Invalid prefixes keep controls disabled. */ }
+  const valid = validPrefix(prefix);
   const controls = kind === 'tmux'
     ? [['muxShortcutNewWindow', 'c'], ['muxShortcutPreviousWindow', 'p'], ['muxShortcutNextWindow', 'n'], ['muxShortcutNextPane', 'o'], ['muxShortcutSplitHorizontal', '%'], ['muxShortcutSplitVertical', '"'], ['muxShortcutZoom', 'z'], ['muxShortcutCopy', '['], ['muxShortcutDetach', 'd']] as const
     : [['muxShortcutNewTab', 'c'], ['muxShortcutPreviousTab', 'p'], ['muxShortcutNextTab', 'n'], ['muxShortcutLeft', 'h'], ['muxShortcutDown', 'j'], ['muxShortcutUp', 'k'], ['muxShortcutRight', 'l'], ['muxShortcutSplitRight', 'v'], ['muxShortcutSplitDown', '-'], ['muxShortcutZoom', 'z'], ['muxShortcutDetach', 'q']] as const;
   async function send(step: string) {
     if (!valid || locked.current || !mounted.current || !access.current()) return;
     locked.current = true; setBusy(true); setError('');
-    try { await api.writeSequence(sessionId, [...parseChordSteps(prefix), ...parseChordSteps(step)]); }
+    try { await api.writeSequence(sessionId, prefixedSteps(prefix, step)); }
     catch (e) { if (mounted.current && access.current()) setError(errorMessage(e)); }
     finally { if (mounted.current && access.current()) {locked.current = false; setBusy(false);} }
   }
   function save() {
     if (!mounted.current || !access.current()) return;
     if (!valid) { setError(new LocalUiError('muxShortcutInvalid')); return; }
-    try { localStorage.setItem(key, prefix); setError(''); }
+    try { savePrefix(kind, prefix); setError(''); }
     catch { setError(new LocalUiError('muxShortcutSaveFailed')); }
   }
   return <section aria-label={t('muxShortcutRegion',{kind})}><h3>{t('muxShortcutHeading',{kind})}</h3><p>{t('muxShortcutBindings')}</p>

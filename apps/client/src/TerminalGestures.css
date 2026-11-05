@@ -1,0 +1,29 @@
+/* Header pull feedback: names the action that runs on release. */
+.terminal-pull {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--theme-text, var(--text));
+  font-size: 13px;
+  pointer-events: none;
+}
+.terminal-pull[data-depth="pullDeep"] { border-color: var(--accent); }
+/* Toolbar keys with a long-press action carry a small corner mark. */
+.terminal-keys button[data-alternate] { position: relative; }
+.terminal-keys button[data-alternate]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}

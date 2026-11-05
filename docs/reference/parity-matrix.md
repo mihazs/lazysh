@@ -48,8 +48,8 @@ At audit time no CI job ran `test:et`, `test:openssh`, `test:multiplexers`, `tes
 
 | Platform | verified | implemented | partial | missing | n/a |
 | --- | --- | --- | --- | --- | --- |
-| Android | 70 | 132 | 25 | 14 | 10 |
-| Desktop | 74 | 124 | 29 | 18 | 6 |
+| Android | 70 | 136 | 25 | 10 | 10 |
+| Desktop | 74 | 128 | 29 | 14 | 6 |
 
 Most `implemented` rows are not missing features. They are reachable code whose platform proof is unit-level, mocked, ignored, macOS-only or currently red. The [Gaps](#gaps) section groups them into issues.
 
@@ -113,17 +113,17 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | Configurable single tap | verified | verified | TP:629-641,684; PP:118. SS:387-389,501-503 (exact bytes). | Physical touch. |
-| Double and triple tap | implemented | implemented | TP:632-640. Unit test `TerminalPane.test.tsx:671`; persistence `e2e/preferences.spec.ts:83,95`. | Playwright execution of the gesture. |
-| One-finger swipes | implemented | implemented | TP:345-346,679-686. Unit test `TerminalPane.test.tsx:698`. | Gesture execution test. |
-| Two-finger swipes (four directions) | implemented | implemented | TP:599-609,687-698. Unit tests `TerminalPane.test.tsx:607,698,939`. | Gesture execution test. |
-| Pinch changes font size | implemented | implemented | TP:655-675,692-693; PP:106. Unit test `TerminalPane.test.tsx:939`. | Playwright or device pinch. |
-| Pinch zooms the multiplexer pane | missing | missing | Pinch only changes font size; pane zoom is a button (`MultiplexerShortcuts.tsx:23-24`). | Map pinch to pane zoom. |
-| Header pull depths | missing | missing | No pull or overscroll gesture in `apps/client/src`. | — |
-| Toolbar alternate (long-press) actions | missing | missing | Toolbar keys only hold-to-repeat (TP:780-787). | — |
+| Double and triple tap | implemented | implemented | TP:632-640. Unit test `TerminalPane.test.tsx:671`; persistence `e2e/preferences.spec.ts:83,95`; executed double tap (CDP touch, exact bytes) `e2e/gestures.spec.ts:81` (PW, added after this audit). | That PW case green on `main`; triple tap execution; physical touch. |
+| One-finger swipes | implemented | implemented | TP:345-346,679-686. Unit test `TerminalPane.test.tsx:698`; executed swipes (exact bytes) `e2e/gestures.spec.ts:81` (PW, added after this audit). | That PW case green on `main`; physical touch. |
+| Two-finger swipes (four directions) | implemented | implemented | TP:599-609,687-698. Unit tests `TerminalPane.test.tsx:607,698,939`; all four directions executed with CDP touch in tmux, Herdr and Zellij, two in a plain terminal, `e2e/gestures.spec.ts:51,68` (PW, added after this audit). | Those PW cases green on `main`; physical touch. |
+| Pinch changes font size | implemented | implemented | TP:655-675,692-693; PP:106. Unit test `TerminalPane.test.tsx:939`; CDP pinch in a plain terminal and with the multiplexer pinch set to text size, `e2e/gestures.spec.ts:68,98` (PW, added after this audit). | Those PW cases green on `main`; device pinch. |
+| Pinch zooms the multiplexer pane | implemented | implemented | Added after this audit. `pinch()` in TP routes a pinch in an attached tmux, Herdr or Zellij terminal to the **Pinch in tmux, Herdr or Zellij** action (default: zoom pane; PP level-gesture slots). tmux and Herdr send the saved prefix and `z` (`apps/client/src/multiplexerGestures.ts`); Zellij uses the existing `zellij_action` `zoomPane` (`toggle-fullscreen`, `src-tauri/zellij.rs`). Unit `multiplexerGestures.test.ts`; CDP pinch asserts the exact prefix bytes or Zellij action and an unchanged font size, `e2e/gestures.spec.ts:51,98` (PW, mocked bridge). | A real multiplexer zooming the pane after a device pinch. |
+| Header pull depths | implemented | implemented | Added after this audit. TP header-pull effect: a one-finger downward drag on the session header shows the release action, runs **Short header pull** at 56 px or **Long header pull** at 144 px, and cancels when pulled back or sideways; both slots are configurable in PP. CDP touch on the header, `e2e/gestures.spec.ts:126` (PW, mocked bridge). | That PW case green on `main`; physical touch on Android. |
+| Toolbar alternate (long-press) actions | implemented | implemented | Added after this audit. `toolbarAlternates` (`prefs`) per non-modifier key, set from the selected key in `ToolbarKeysEditor.tsx`; TP `holdAlternate`/`fireAlternate` run it once after a 500 ms hold or a context menu, and keys without one keep hold-to-repeat. Unit `preferences.test.ts`; settings sync accepts the field (`src-tauri/sync.rs` test). Editor save and reload, touch and mouse holds, right-click, quick press and arrow repeat, `e2e/gestures.spec.ts:161` (PW). | That PW case green on `main`; physical touch on Android. |
 | D-pad arrows, tap and held pan | verified | verified | TP:173-227,704-707,749-757. NWT:2481,4399-4600 ownedSshDpadPanThroughRealUi (NAR); ssh.spec:208-320 (NL). | — |
 | D-pad corners (defaults or custom chord) | verified | verified | TP:753-755; `prefs:58,105`; PP:121. SS:384-385 custom corner chord (PW). | Default corner actions are unit-only. |
 | Reset gestures | verified | verified | PP:122. `preferences.spec.ts:98-100,119-120` (PW). | Corner reset not asserted. |
-| Defaults distinguish tab, pane and workspace/session levels | missing | missing | Every default is "none" (`prefs:57-58`); actions exist for lazysh sessions and Zellij only (`prefs:17`). | Level-aware tmux/Herdr/Zellij defaults. |
+| Defaults distinguish tab, pane and workspace/session levels | implemented | implemented | Added after this audit. Two-finger swipes, the multiplexer pinch and both header pulls default to **Level-aware default** (`resolveGesture` in `multiplexerGestures.ts`): in tmux, Herdr and Zellij, left/right change tabs (tmux windows), up/down change panes, pinch zooms the pane and a short pull opens the next tab; in a plain terminal, left/right change lazysh sessions; a long pull opens the next lazysh session. New generic tab, pane and zoom actions work for all three multiplexers. Unit `multiplexerGestures.test.ts`, `preferences.test.ts`; executed defaults per multiplexer `e2e/gestures.spec.ts:51,68,126`; settings and reset `e2e/gestures.spec.ts:219` (PW). | A real multiplexer receiving the default gestures on a device. |
 
 ## Keyboard and shortcuts
 
@@ -477,7 +477,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | --- | --- | --- | --- |
 | 1 | Terminal history: scrollback bound, new output while scrolled up, tmux copy-mode search and copy, real OS clipboard on copy | implemented / implemented | #981 *(new)* |
 | 2 | Desktop IME, CJK cell width and Chat IME: real WebKitGTK input method; CJK alignment rendering; device IME in Chat | verified-terminal, implemented-Chat / implemented | #982 *(new)* |
-| 3 | Touch gestures and toolbar: pinch pane zoom, header pull depths, long-press alternate actions, level-aware defaults, touch toolbar auto-hide, executed double-tap, swipe and pinch tests, toolbar reorder, snippets and session shortcut tests | missing to implemented / missing to implemented | #983 *(new)* |
+| 3 | Touch gestures and toolbar: pinch pane zoom, header pull depths, long-press alternate actions and level-aware defaults are implemented with executed PW gestures; device verification of them remains. Touch toolbar auto-hide stays limited to fine pointers by decision, because the touch toolbar supplies keys the soft keyboard lacks. Triple tap execution, snippet activation and hardware session shortcut tests remain; a double tap can leave an xterm word selection that blocks the next gesture | implemented / implemented | #983 |
 | 4 | Clipboard and links: Android long-press selection, tmux OSC 52 passthrough, native URL-open and OSC 52 clipboard checks, desktop toolbar Paste | missing to implemented / missing to implemented | #984 *(new)* |
 | 5 | SSH authentication, routing and transports: password, encrypted key, rotated host key, bastion, agent forwarding, Auto fallback and ET on native runtimes; Android Mosh range and path | implemented / implemented | #985 *(new)*; umbrella #8 |
 | 6 | Key management and fingerprint custody: file import, UI-level public-key rejection, native generate, fingerprint and export checks, fingerprints outside the keystore | missing to partial / missing to partial | #986 *(new)*; umbrella #9 |

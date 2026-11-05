@@ -2,7 +2,8 @@ import {useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent 
 import {createPortal} from "react-dom";
 import {Keyboard, Paperclip, Plus, Trash2, X} from "lucide-react";
 import {t} from "./i18n/core";
-import {maxToolbarRows, toolbarFromRows, toolbarKeyLabel, toolbarKeys, toolbarRows, type Preferences, type ToolbarKey} from "./preferences";
+import {discreteGestureActions, maxToolbarRows, toolbarFromRows, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarKeys, toolbarRows, type GestureAction, type Preferences, type ToolbarKey} from "./preferences";
+import GestureBindingField from "./GestureBindingField";
 import {findToolbarKey, placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarStepSlot, type ToolbarRows, type ToolbarSlot, type ToolbarStep} from "./toolbarLayout";
 import "./ToolbarKeysEditor.css";
 
@@ -233,6 +234,11 @@ export default function ToolbarKeysEditor({preferences, update}: {preferences: P
     setSelected(key);
     focusAfter.current = {kind: "actions"};
   }
+  /** Saves or clears one key's long-press action; a chord applies only to a custom action. */
+  function setAlternate(key: ToolbarKey, action: GestureAction, keys?: string) {
+    const {[key]: _previous, ...others} = preferences.toolbarAlternates ?? {};
+    return update({toolbarAlternates: action === "none" ? others : {...others, [key]: action === "custom" ? {action, ...(keys === undefined ? {} : {keys})} : {action}}});
+  }
   function closeActions() {
     const key = selected;
     setSelected(undefined);
@@ -293,6 +299,11 @@ export default function ToolbarKeysEditor({preferences, update}: {preferences: P
       <button type="button" aria-label={t("preferencesMoveValue1Earlier", {value1: selected})} aria-disabled={!toolbarStepSlot(rows, selected, "earlier")} onClick={() => step(selected, "earlier")}>{t("preferencesToolbarEarlier")}</button>
       <button type="button" aria-label={t("preferencesMoveValue1Later", {value1: selected})} aria-disabled={!toolbarStepSlot(rows, selected, "later")} onClick={() => step(selected, "later")}>{t("preferencesToolbarLater")}</button>
       {rows.length > 1 && rows.map((row, index) => index === at.row ? null : <button key={index} type="button" aria-label={t("preferencesToolbarMoveToRow", {key: selected, row: String(index + 1)})} onClick={() => place(selected, {row: index, index: row.length}, "row")}>{t("preferencesToolbarRowValue1", {value1: String(index + 1)})}</button>)}
+      {toolbarKeyHasAlternate(selected) && <div className="toolbar-key-alternate">
+        <GestureBindingField label={t("preferencesToolbarLongPress", {value1: label(selected)})} action={preferences.toolbarAlternates?.[selected]?.action ?? "none"} keys={preferences.toolbarAlternates?.[selected]?.keys}
+          allowed={discreteGestureActions} onAction={action => setAlternate(selected, action, preferences.toolbarAlternates?.[selected]?.keys)} onKeys={keys => setAlternate(selected, "custom", keys)} />
+        <p>{t("preferencesToolbarLongPressHint")}</p>
+      </div>}
       <button type="button" onClick={closeActions}>{t("preferencesToolbarDone")}</button>
     </div>}
     <section className="toolbar-palette" aria-label={t("preferencesToolbarAvailableKeys")} data-toolbar-drop="remove">
