@@ -997,10 +997,17 @@ class NativeWorkspaceTest {
             assertEquals("A clipboard preview must not change the app theme", appTheme, evaluate(scenario, "document.documentElement.dataset.appTheme"))
             webButton("Cancel preview")
             awaitDocument(scenario, "clipboard preview discarded", noPreview)
+            val draft = JSONObject.quote("manual draft before an oversized clipboard")
+            assertEquals("A manual draft replaces the clipboard text", "true", evaluate(scenario, """(()=>{
+                const area=document.querySelector("[aria-label='Theme JSON or share code']");if(!area)return false;
+                Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(area,$draft);
+                area.dispatchEvent(new Event('input',{bubbles:true}));return area.value===$draft;})()"""))
             clip("{\"name\":\"" + "x".repeat(20_000) + "\"}")
             webButton("Read theme from clipboard")
             awaitDocument(scenario, "oversized clipboard rejected", visibleStatus("Theme input exceeds 16 KiB."))
             assertEquals("Oversized input must not preview", "true", evaluate(scenario, noPreview))
+            assertEquals("Oversized input must keep the manual draft", "true", evaluate(scenario,
+                "document.querySelector(\"[aria-label='Theme JSON or share code']\")?.value===$draft"))
             clip("{\"v\":1,\"name\":\"Unsafe\",\"mode\":\"light\",\"colors\":{\"background\":\"url(evil)\",\"foreground\":\"#fff\"}}")
             webButton("Read theme from clipboard")
             awaitDocument(scenario, "invalid clipboard rejected", visibleStatus("Invalid theme color: background"))
@@ -1023,11 +1030,38 @@ class NativeWorkspaceTest {
             .setPackage(context.packageName), 0).map { it.activityInfo.name }
         val original = AtomicReference<MainActivity>()
         scenario.onActivity { original.set(it) }
-        fun relaunch(stage: String) {
+        val workspaceTasks = {
+            context.getSystemService(android.app.ActivityManager::class.java).appTasks.mapNotNull { runCatching { it.taskInfo }.getOrNull() }
+                .filter { info -> listOf(info.baseIntent.component?.className, info.baseActivity?.className, info.topActivity?.className)
+                    .any { it == MainActivity::class.java.name } }
+        }
+        // Re-enter through the real launcher alias and observe the trampoline run, not just the scenario state.
+        fun relaunch(stage: String, icon: String) {
             val launch = requireNotNull(manager.getLaunchIntentForPackage(context.packageName))
-            context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            while (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED && System.nanoTime() < deadline) Thread.sleep(50)
+            assertEquals("$stage must resolve to the $icon launcher alias", component(icon), launch.component)
+            val events = java.util.Collections.synchronizedList(mutableListOf<Pair<android.app.Activity, Stage>>())
+            val callback = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, observed -> events.add(activity to observed) }
+            val lifecycle = ActivityLifecycleMonitorRegistry.getInstance()
+            instrumentation.runOnMainSync { lifecycle.addLifecycleCallback(callback) }
+            fun trampolined(): Boolean = synchronized(events) {
+                val paused = events.indexOfFirst { it.first === original.get() && it.second == Stage.PAUSED }
+                events.any { it.first is LauncherActivity && it.second == Stage.DESTROYED } && paused >= 0 &&
+                    events.drop(paused + 1).any { it.first === original.get() && it.second == Stage.RESUMED }
+            }
+            try {
+                context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                while (!trampolined() && System.nanoTime() < deadline) Thread.sleep(50)
+                assertTrue("$stage must run LauncherActivity and bring the original workspace back: " +
+                    synchronized(events) { events.map { "${it.first.javaClass.simpleName}:${it.second}" } }, trampolined())
+            } finally {
+                instrumentation.runOnMainSync { lifecycle.removeLifecycleCallback(callback) }
+            }
+            // The lifecycle monitor is main-thread only; assert outside so a failure reports instead of crashing.
+            val resumed = AtomicReference<List<android.app.Activity>>()
+            instrumentation.runOnMainSync { resumed.set(lifecycle.getActivitiesInStage(Stage.RESUMED).toList()) }
+            assertEquals("$stage must leave only the original workspace resumed", listOf<android.app.Activity>(original.get()), resumed.get())
+            assertEquals("$stage must not start a second workspace task", 1, workspaceTasks().size)
             scenario.onActivity { assertSame("$stage must reuse the original workspace Activity", original.get(), it) }
         }
         fun choose(icon: String, label: String) {
@@ -1045,7 +1079,7 @@ class NativeWorkspaceTest {
             setOf(component("default").className, component("amber").className),
             manager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(context.packageName),
                 PackageManager.MATCH_DISABLED_COMPONENTS).map { it.activityInfo.name }.toSet())
-        relaunch("Default launcher alias")
+        relaunch("Default launcher alias", "default")
         val marker = JSONObject.quote(UUID.randomUUID().toString())
         try {
             openAppearance(scenario, "app icon workspace")
@@ -1061,7 +1095,7 @@ class NativeWorkspaceTest {
             scenario.onActivity { assertSame("Switching must keep the original Activity", original.get(), it); assertFalse(it.isFinishing) }
             assertEquals("Switching must not reload the WebView", "true", evaluate(scenario, "window.__lazyshIconMarker===$marker"))
             closePreferences()
-            relaunch("Amber launcher alias")
+            relaunch("Amber launcher alias", "amber")
             assertEquals("Relaunch must not reload the WebView", "true", evaluate(scenario, "window.__lazyshIconMarker===$marker"))
             openAppearance(scenario, "app icon restore")
             awaitDocument(scenario, "Amber readback after relaunch", visibleStatus("Current icon: Amber"))
