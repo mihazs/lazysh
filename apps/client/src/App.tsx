@@ -1155,6 +1155,7 @@ export default function App() {
 
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useUi();
+  const hostListId = useId();
   const invoke = useProtectedInvoke();
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
@@ -1986,6 +1987,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 <button
                   className="host-connect"
                   aria-label={t("appConnectToValue1", {value1: host.name})}
+                  aria-describedby={host.transport==='mosh' || host.transport==='et' ? `${hostListId}-${host.id}-transport` : undefined}
                   onClick={() => chooseHost(host)}
                 >
                   <span className="host-symbol" data-tone={hostTone(host.name)} aria-hidden="true">
@@ -1997,7 +1999,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                       {host.username}@{host.hostname}{host.port!==22 ? `:${host.port}` : ''}
                     </small>
                   </span>
-                  {host.transport==='mosh' || host.transport==='et' ? <span className="host-transport" aria-hidden="true">{host.transport==='mosh'?'Mosh':'ET'}</span> : null}
+                  {host.transport==='mosh' || host.transport==='et' ? <span className="host-transport" id={`${hostListId}-${host.id}-transport`}>{host.transport==='mosh'?'Mosh':'ET'}</span> : null}
                   {sessions.some(
                     (session) =>
                       session.hostId === host.id && session.connected,

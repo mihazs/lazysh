@@ -8,7 +8,9 @@ describe("whole-app appearance", () => {
     expect(document.documentElement.style.getPropertyValue("--theme-bg")).toBe("#ffffff");
     expect(document.documentElement.style.getPropertyValue("--theme-glass-opacity-floor")).toMatch(/%$/);
     expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(document.documentElement.dataset.themeMode).toBe("light");
     applyAppTheme("forest");
+    expect(document.documentElement.dataset.themeMode).toBe("dark");
     expect(document.documentElement.style.getPropertyValue("--theme-bg")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--theme-glass-opacity-floor")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--theme-on-accent")).toBe("");

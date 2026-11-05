@@ -23,7 +23,8 @@
   --kind-opencode: #f2d26b;
   --kind-other: var(--theme-muted);
 }
-:root[data-app-theme="paper"] {
+/* Paper and imported light themes share the light-tuned tag colours. */
+:root[data-theme-mode="light"] {
   --status-done: #1d7543;
   --kind-claude: #a3431b;
   --kind-codex: #1d5d93;
@@ -181,13 +182,14 @@ input[type="search"] {
 .status-group > h4 { margin: 18px 4px 8px; }
 /* Positioned so visually hidden separators scroll with their heading. */
 .status-group-toggle {
-  position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0 2px;
+  position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 40px; padding: 0 2px;
   border: 1px solid transparent; background: transparent; color: var(--theme-muted);
   font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; text-align: left;
 }
 .status-group-toggle:hover:not(:disabled) { background: transparent; color: var(--theme-text); }
 .status-group-count { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
-.status-group-toggle svg { color: var(--theme-muted); }
+.status-group-toggle svg { color: var(--theme-muted); transition: transform 160ms var(--ui-ease); }
+.status-group-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
 .status-group-rows { display: grid; gap: 8px; }
 
 .status-ring { position: relative; display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px; color: var(--status-idle); }
@@ -377,10 +379,10 @@ input[type="search"] {
 .workspace-header { border-bottom: 1px solid var(--ui-hairline); }
 @media (max-width: 600px) { .workspace-terminal-focus > .workspace-header { border-bottom: 0; box-shadow: inset 0 -1px var(--ui-hairline); } }
 .session-tabs { border-bottom: 1px solid var(--ui-hairline); }
-.terminal-keys { gap: 6px; padding: 8px 10px; border-top: 1px solid var(--ui-hairline); background: var(--theme-bg); scrollbar-width: none; }
+.terminal-keys { padding: 8px 10px; border-top: 1px solid var(--ui-hairline); background: var(--theme-bg); scrollbar-width: none; }
 .terminal-keys::-webkit-scrollbar { display: none; }
 .terminal-keys button, .terminal-keys button:hover {
-  min-width: 44px; min-height: 40px; padding: 6px 12px; border: 1px solid transparent; border-radius: 12px;
+  min-width: 44px; min-height: 44px; padding: 6px 12px; border: 1px solid transparent; border-radius: 12px;
   background: var(--theme-control); color: var(--theme-text); font-size: 13px; font-weight: 500;
   box-shadow: inset 0 -1px 0 rgb(0 0 0 / 35%);
 }
@@ -388,18 +390,8 @@ input[type="search"] {
 .workspace-footer { border-top: 1px solid var(--ui-hairline); background: var(--theme-bg); }
 @media (max-width: 600px) {
   .terminal-keys { padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
-  .terminal-keys button { min-height: 40px; padding-inline: 11px; font-size: 13px; }
+  .terminal-keys button { padding-inline: 11px; font-size: 13px; }
 }
-@media (hover: none), (pointer: coarse) { .terminal-keys button { min-height: 44px; } }
-
-/* Draft composer: one rounded input card with quiet tools and a single round send. */
-:is(.app-shell) .terminal-compose.terminal-draft-composer { margin: 6px 8px 8px; border: 1px solid var(--ui-hairline-strong); border-radius: 26px; background: var(--theme-control); box-shadow: 0 10px 30px rgb(0 0 0 / 35%); }
-:is(.app-shell) .terminal-compose.terminal-draft-composer:focus-within { outline: 0; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
-:is(.app-shell) .terminal-compose.terminal-draft-composer > .terminal-draft-editor { padding: 12px 16px 2px; }
-:is(.app-shell) .terminal-compose.terminal-draft-composer textarea { font-size: 16px; resize: none; }
-:is(.app-shell) .terminal-draft-actions .icon-button { border: 1px solid transparent; background: transparent; color: var(--theme-muted); }
-:is(.app-shell) .terminal-draft-actions .icon-button:hover:not(:disabled) { background: var(--theme-hover); color: var(--theme-text); }
-:is(.app-shell) .terminal-draft-actions .terminal-draft-paste, :is(.app-shell) .terminal-draft-actions .terminal-draft-paste:hover:not(:disabled) { background: var(--accent); color: var(--theme-on-accent); }
 
 /* ---------- Sheets and pages ---------- */
 .dialog { border: 1px solid var(--ui-hairline); border-radius: 24px; background: var(--theme-panel); }
@@ -467,10 +459,8 @@ input[type="search"] {
 }
 .settings-navigation .settings-detail-header .settings-back:hover:not(:disabled) { background: transparent; }
 .settings-navigation h2 { margin: 4px 4px 18px; font-size: 28px; font-weight: 700; letter-spacing: -.6px; }
-@media (min-width: 900px) {
-  .settings-detail { border-left-color: var(--ui-hairline); }
-  .settings-navigation { grid-template-columns: minmax(250px, .9fr) minmax(0, 2fr); }
-}
+/* The index keeps the base column split so the detail page keeps its measured width. */
+@media (min-width: 900px) { .settings-detail { border-left-color: var(--ui-hairline); } }
 .dialog:has(.settings-navigation), .dialog:has(.settings-navigation) .settings-detail-header { background: var(--theme-bg); }
 
 /* Detail rows: consecutive fields merge into one rounded group; prose becomes a footnote. */
@@ -534,7 +524,7 @@ input[type="search"] {
 @media (prefers-reduced-motion: reduce) {
   .status-ring[data-tone="working"] > .status-ring-svg,
   .dialog-backdrop, .dialog, .agent-panel .agent-configuration:not([hidden]) { animation: none; }
-  .sidebar, .sidebar .workspace-navigation-modes button, .agent-section-jumps button, .agent-section-jumps button::before,
+  .sidebar, .sidebar .workspace-navigation-modes button, .agent-section-jumps button, .agent-section-jumps button::before, .status-group-toggle svg,
   .herdr-navigation[data-mode=agents] .herdr-agent-row, .agent-panel .agent-card,
   .preferences-content [data-settings-page] > label > input[type="checkbox"],
   .preferences-content [data-settings-page] > label > input[type="checkbox"]::after,

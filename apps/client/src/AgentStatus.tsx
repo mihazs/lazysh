@@ -1,7 +1,8 @@
 import {Check} from 'lucide-react';
-import {formatDateTime,uiI18n} from './i18n/core';
 
 export type StatusTone='working'|'attention'|'done'|'idle'|'unknown';
+/** Ring tones for hook-reported states shared by Reported activity and the agent inbox. */
+export const reportedTones={needs_attention:'attention',working:'working',done:'done'} as const satisfies Record<string,StatusTone>;
 
 /** Decorative state ring; the owning row always carries the state as text. */
 export function StatusRing({tone}:{tone:StatusTone}) {
@@ -16,22 +17,4 @@ export function StatusRing({tone}:{tone:StatusTone}) {
 export function agentKind(name:string|null|undefined) {
   const value=(name??'').toLowerCase();
   return ['claude','codex','gemini','opencode','cursor','droid','cline','kimi','aider','amp','copilot','grok'].find(kind=>value.includes(kind))??'other';
-}
-
-export function projectName(path:string) {
-  const parts=path.split(/[\\/]+/).filter(Boolean);
-  return parts.at(-1)??path;
-}
-
-/** Compact relative recency for row tags; callers keep the absolute time in a title. */
-export function formatRecency(value:string|number|Date,now=Date.now()) {
-  const time=new Date(value).getTime();
-  if(!Number.isFinite(time))return '';
-  const seconds=Math.round((time-now)/1000),abs=Math.abs(seconds);
-  const format=new Intl.RelativeTimeFormat(uiI18n.language,{numeric:'auto',style:'short'});
-  if(abs<45)return format.format(0,'second');
-  if(abs<3600)return format.format(Math.round(seconds/60),'minute');
-  if(abs<86400)return format.format(Math.round(seconds/3600),'hour');
-  if(abs<86400*7)return format.format(Math.round(seconds/86400),'day');
-  return formatDateTime(time);
 }

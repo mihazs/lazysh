@@ -1,6 +1,7 @@
 import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
-import { Archive, Check, ChevronDown, ChevronRight, Inbox, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Inbox, RefreshCw, Settings2, Trash2 } from 'lucide-react';
 import { formatRelativeTime, pathBasename, useNow } from './relativeTime';
+import { StatusRing, reportedTones } from './AgentStatus';
 import './NotificationPanel.css';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
@@ -108,13 +109,13 @@ export default function NotificationPanel({ sessions }: { sessions: InboxSession
     {status && <p role="status">{t(status)}</p>}
     {state.rows.length === 0 && <div className="inbox-empty"><Inbox size={28} aria-hidden="true" /><strong>{t("inboxEmptyTitle")}</strong><span>{t("inboxEmpty")}</span></div>}
     {groups.map(([group, label, rows]) => <div className="inbox-group" data-state={group} key={group}>
-      <h4><button type="button" className="inbox-group-toggle" aria-expanded={!collapsed[group]} onClick={() => setCollapsed(previous => ({ ...previous, [group]: !previous[group] }))}>
-        <span>{t(label)}</span><span className="inbox-group-count">{formatNumber(rows.length)}</span><ChevronDown size={14} aria-hidden="true" />
+      <h4><button type="button" className="status-group-toggle" aria-expanded={!collapsed[group]} onClick={() => setCollapsed(previous => ({ ...previous, [group]: !previous[group] }))}>
+        <span>{t(label)}</span><span className="status-group-count">{formatNumber(rows.length)}</span><ChevronDown size={14} aria-hidden="true" />
       </button></h4>
       {!collapsed[group] && <div className="notification-list">{rows.map(row => {
         const connected = sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected);
         return <article className="inbox-row" key={row.id} data-state={row.state} aria-labelledby={`inbox-${row.id}`}>
-          <span className="inbox-ring" data-state={row.state} aria-hidden="true">{row.state === 'needs_attention' ? '!' : row.state === 'done' ? <Check size={14} /> : null}</span>
+          <StatusRing tone={reportedTones[row.state]} />
           <div className="inbox-row-body">
             <strong id={`inbox-${row.id}`}>{row.agent}</strong>
             <span className="inbox-row-context"><span className="inbox-project">{pathBasename(row.project)}</span><span>{row.hostName}</span><time dateTime={row.updatedAt} title={formatDateTime(new Date(row.updatedAt))}>{formatRelativeTime(row.updatedAt, now)}</time></span>

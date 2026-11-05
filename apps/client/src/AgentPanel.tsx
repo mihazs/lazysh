@@ -4,7 +4,8 @@ import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 
 import { ArrowLeft, Bot, ChevronRight, RefreshCw, Search, Settings2 } from 'lucide-react';
-import {StatusRing,agentKind,formatRecency,projectName} from './AgentStatus';
+import {StatusRing,agentKind,reportedTones} from './AgentStatus';
+import {formatRelativeTime,pathBasename,useNow} from './relativeTime';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
@@ -29,7 +30,6 @@ export type AgentSession = {
 const states: AgentState[] = ['needs_attention', 'working', 'done'];
 function reportKey(row:AgentSession) {return JSON.stringify([row.agent,row.sessionId]);}
 const names = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
-const tones = {needs_attention:'attention',working:'working',done:'done'} as const;
 
 export function parseSnapshot(value: unknown): AgentSession[] {
   if (!value || typeof value !== 'object' || !('schemaVersion' in value) || value.schemaVersion !== 1 || !('sessions' in value) || !Array.isArray(value.sessions) || value.sessions.length > 100) {
@@ -103,6 +103,8 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
   const visible=matching.filter(row=>filter==='all' || row.state===filter);
   const selected=selection?.source===sessionId ? visible.find(row=>reportKey(row)===selection.key) : undefined;
   useEffect(()=>{if(selection && !selected)setSelection(null);},[selection,selected]);
+  /** Keeps row recency current between polls while reported activity is on screen. */
+  const now=useNow(30000,panelVisible && activityVisible && visible.length>0);
   const request = useRef(0);
   const snapshotFlight=useRef<number|null>(null);
   const historyRequest=useRef(0);
@@ -227,7 +229,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
     {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
-    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><StatusRing tone={tones[s.state]}/><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{projectName(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small><time dateTime={s.updatedAt} title={t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}>{formatRecency(s.updatedAt)}</time></small></span></span><ChevronRight className="row-chevron" size={18} aria-hidden="true"/></button>{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
+    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><StatusRing tone={reportedTones[s.state]}/><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small><time dateTime={s.updatedAt} title={t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}>{formatRelativeTime(s.updatedAt,now)}</time></small></span></span><ChevronRight className="row-chevron" size={18} aria-hidden="true"/></button>{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
   </section>;
   return renderNavigation?<>{approvals}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
 }
