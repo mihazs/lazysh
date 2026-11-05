@@ -91,7 +91,8 @@ test('the ORT action reuses a matching restored archive without contacting GitHu
 });
 
 test('the ORT action fails and exports nothing when the archive does not match its pin', async () => {
-  const result = await provisionOrt({ served: 'changed upstream bytes' });
+  // Same length as the pinned fixture, so only the checksum can reject these bytes.
+  const result = await provisionOrt({ served: 'pinned fixture bytez' });
   expect(result.exit).not.toBe(0);
   expect(result).toMatchObject({ cached: undefined, env: '' });
 });
