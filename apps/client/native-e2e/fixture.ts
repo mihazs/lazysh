@@ -163,18 +163,55 @@ export class NativeGui {
     if(this.disposableVault)await this.startDisposableVault();
     this.driver=this.namespaced(this.driverFile,['--port',String(driverPort),'--native-port',String(nativePort),'--native-host','127.0.0.1','--native-driver',this.nativeDriverFile]);
     await until('owned driver listeners',async()=>await this.ownsListener(driverPort,this.driverFile)&&await this.ownsListener(nativePort,this.nativeDriverFile)?true:undefined);
+    await this.openBrowser();
+    const digest=createHash('sha256');for await(const chunk of createReadStream(this.binary))digest.update(chunk);
+    console.info(`Owned native GUI binary sha256=${digest.digest('hex')}`);
+  }
+  private async openBrowser() {
     await this.assertDisplay();
     const {remote}=await import('webdriverio');
     const capabilities:WebdriverIO.Capabilities&{'tauri:options':{application:string}}={
       'tauri:options':{application:this.binary},'wdio:enforceWebDriverClassic':true,
     };
-    this.browser=await remote({hostname:'127.0.0.1',port:driverPort,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:20_000,
+    this.browser=await remote({hostname:'127.0.0.1',port:this.ports.driver,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:20_000,
       capabilities});
     const url=new URL(await this.browser.getUrl());
     if(!((url.protocol==='tauri:'&&url.hostname==='localhost')||(url.protocol==='http:'&&url.hostname==='tauri.localhost')))throw new Error('Native GUI did not load its bundled frontend');
-    await this.appOwner();
-    const digest=createHash('sha256');for await(const chunk of createReadStream(this.binary))digest.update(chunk);
-    console.info(`Owned native GUI binary sha256=${digest.digest('hex')}`);
+    return this.appOwner();
+  }
+  /** SIGKILL only the owned application, then start it again on the same private profile. */
+  async killAndRelaunch():Promise<AppOwner> {
+    const killed=await this.appOwner();
+    process.kill(killed.pid,'SIGKILL');
+    await until('killed application retirement',async()=>{
+      const current=await identity(killed.pid);
+      return !current||current.start!==killed.start||['Z','X'].includes(current.state)?true:undefined;
+    },5000);
+    const stale=this.browser;this.browser=undefined;
+    // The driver session lost its application; ending it must not wait on that process.
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    await Promise.race([stale?.deleteSession().catch(()=>{}),new Promise<void>(done=>{timer=setTimeout(done,5000);})]).finally(()=>clearTimeout(timer));
+    const relaunched=await this.openBrowser();
+    if(relaunched.pid===killed.pid&&relaunched.start===killed.start)throw new Error('Owned application was not relaunched');
+    return relaunched;
+  }
+  /** Whether WebKit has written text to the private profile on disk, not only to page memory. */
+  async profileContains(text:string) {
+    const encodings=[Buffer.from(text,'utf8'),Buffer.from(text,'utf16le')];
+    const pending=[join(this.directory,'data')];let files=0;
+    while(pending.length) {
+      const directory=pending.pop()!;
+      for(const entry of await readdir(directory,{withFileTypes:true})) {
+        const path=join(directory,entry.name);
+        if(entry.isDirectory()){pending.push(path);continue;}
+        if(!entry.isFile())continue;
+        if(++files>4096)throw new Error('Owned GUI profile exceeds its file bound');
+        if((await stat(path)).size>16*1024*1024)continue;
+        const bytes=await readFile(path);
+        if(encodings.some(encoded=>bytes.includes(encoded)))return true;
+      }
+    }
+    return false;
   }
   private namespaced(program:string,args:string[],captureOutput=true) {
     return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[]),...(this.secretImage?[this.secretImage]:[])]),this.directory,this.env,captureOutput);

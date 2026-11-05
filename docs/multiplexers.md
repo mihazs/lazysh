@@ -319,3 +319,9 @@ The snapshots add two observations, not an exit assertion, retry or cleanup
 action, and leave the existing three-second retirement/teardown budgets intact.
 This identifies which observed control lifetime remains when possible; it does
 not establish remote command exit, pending-buffer sizes or the failure cause.
+
+### Application restart restoration acceptance
+
+The Linux native GUI case `native-e2e/restore.spec.ts` runs the bundled app against an owned OpenSSH server whose tmux uses a private `TMUX_TMPDIR` inside the server's PID namespace. It saves the key in a disposable Secret Service, enters a saved tmux default and records the pane's `TMUX_PANE` and shell PID. After WebKit has written the workspace descriptor to the private on-disk profile, the test sends `SIGKILL` to the app and starts it again on the same profile. The relaunched app only offers **Restore previous workspace**: no terminal opens and no tmux client attaches until the click. Restoring uses the saved credentials and reattaches the same named session; the display must show the output written before the kill, and the same pane ID and shell PID. The credential item is unchanged.
+
+This case covers process death and GUI relaunch on Linux. It does not cover Herdr, Android process death, OS-vault prompts or network changes. The mocked Playwright case `e2e/workspace-relaunch.spec.ts` checks the restore order for tmux, Herdr, Zellij and plain-shell descriptors in both projects.
