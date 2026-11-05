@@ -1,0 +1,25 @@
+.chat-card { display: grid; gap: 8px; margin-block: 8px; padding: 12px; min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 10px; background: var(--theme-control, transparent); }
+.chat-card > h5 { margin: 0; font-size: 0.9rem; }
+.chat-card > p { margin: 0; }
+.chat-plan-entries { display: grid; gap: 6px; margin: 0; padding-inline-start: 1.5em; }
+.chat-plan-entries li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.chat-plan-status { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; color: var(--muted); }
+.chat-plan-entries li[data-status="in_progress"] .chat-plan-status { color: var(--accent); border-color: var(--accent); }
+.chat-plan-entries li[data-status="completed"] > span:last-child,
+.chat-plan-entries li[data-status="cancelled"] > span:last-child { text-decoration: line-through; color: var(--muted); }
+.chat-question-card fieldset { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.chat-question-card legend { padding-inline: 4px; font-weight: 600; }
+.chat-question-options { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chat-question-options li { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.chat-question-options li > span { color: var(--muted); font-size: 0.85rem; }
+.chat-question-card > button { justify-self: start; min-height: 44px; }
+.chat-activity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
+.chat-activity small { flex-basis: 100%; color: var(--muted); }
+.chat-activity-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.chat-activity[data-activity="working"] .chat-activity-dot { background: var(--accent); }
+.chat-activity[data-activity="waiting"] .chat-activity-dot { background: var(--theme-warning, var(--accent)); }
+.chat-activity[data-activity="stopped"] .chat-activity-dot { background: var(--danger); }
+@media (prefers-reduced-motion: no-preference) {
+  .chat-activity[data-activity="working"] .chat-activity-dot { animation: chat-activity-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes chat-activity-pulse { 50% { opacity: 0.35; } }

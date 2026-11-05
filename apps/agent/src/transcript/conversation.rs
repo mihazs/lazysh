@@ -75,7 +75,8 @@ fn conversation_options(
         })
         .map(|(_, record)| record)
         .collect();
-    let chain = active_chain(&records)?;
+    let (chain, leaf) = active_chain(&records)?;
+    let activity = leaf.and_then(|leaf| activity(&records, leaf));
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
@@ -110,6 +111,7 @@ fn conversation_options(
         branch_id,
         truncated,
         checkpoint: None,
+        activity,
     })
 }
 
@@ -207,7 +209,67 @@ fn candidate_results<'a>(
         Some(calls)
     }
 }
-fn active_chain(records: &[(u64, Value)]) -> Result<Vec<usize>> {
+/// Turn state at the selected leaf. Claude Code records `system/turn_duration`
+/// after a turn ends; an unanswered question or plan approval waits for the
+/// user; an assistant `tool_use` stop or a user record means a turn is running.
+fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, (_, record)) in records.iter().enumerate() {
+        if let Some(parent) = record["parentUuid"].as_str() {
+            children.entry(parent).or_default().push(index);
+        }
+    }
+    let mut pending = vec![leaf];
+    let mut seen = HashSet::new();
+    while let Some(index) = pending.pop() {
+        let record = &records[index].1;
+        if !seen.insert(index)
+            || (index != leaf && matches!(record["type"].as_str(), Some("user" | "assistant")))
+        {
+            continue;
+        }
+        if record["type"] == "system"
+            && record["subtype"] == "turn_duration"
+            && record["isSidechain"] != true
+        {
+            return Some("idle");
+        }
+        if let Some(id) = record["uuid"].as_str() {
+            pending.extend(children.get(id).into_iter().flatten());
+        }
+    }
+    let record = &records[leaf].1;
+    let content = &record["message"]["content"];
+    if record["type"] == "user" {
+        // An interruption marker is not a recorded running turn.
+        let interrupted = content.as_str().into_iter().chain(
+            content
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|part| part["text"].as_str()),
+        );
+        return (!interrupted
+            .into_iter()
+            .any(|text| text.starts_with("[Request interrupted")))
+        .then_some("working");
+    }
+    let asks = content.as_array().into_iter().flatten().any(|part| {
+        part["type"] == "tool_use"
+            && part["name"].as_str().is_some_and(|name| {
+                super::interaction::awaits_answer(TranscriptAgent::Claude, name)
+            })
+    });
+    if asks {
+        Some("waiting")
+    } else if record["message"]["stop_reason"] == "tool_use" {
+        Some("working")
+    } else {
+        None
+    }
+}
+
+fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)> {
     let mut by_id = HashMap::new();
     let mut parents = HashSet::new();
     for (index, (_, record)) in records.iter().enumerate() {
@@ -248,7 +310,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<Vec<usize>> {
         if !records.is_empty() && parents.len() >= by_id.len() {
             return Err(Error::InvalidEvent);
         }
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     };
     let mut chain = Vec::new();
     let mut seen = HashSet::new();
@@ -263,7 +325,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<Vec<usize>> {
             .and_then(|parent| by_id.get(parent).copied());
     }
     chain.reverse();
-    recover_parallel(records, &chain, &mut seen)
+    Ok((recover_parallel(records, &chain, &mut seen)?, Some(leaf)))
 }
 
 fn is_main(record: &Value) -> bool {

@@ -213,6 +213,7 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         branch_id,
         truncated,
         checkpoint: None,
+        activity: None,
     })
 }
 

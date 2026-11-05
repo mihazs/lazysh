@@ -1,0 +1,435 @@
+{
+  "claudeIdle": {
+    "activity": "idle",
+    "agent": "claude",
+    "branchId": "c-a4",
+    "hasMore": false,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "text": "Plan the fixture work and ask before choosing a layout.",
+            "type": "text"
+          }
+        ],
+        "id": "c-u1",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:00.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "entries": [
+                {
+                  "status": "completed",
+                  "text": "Record the fixture shapes"
+                },
+                {
+                  "status": "in_progress",
+                  "text": "Choose a layout"
+                },
+                {
+                  "status": "pending",
+                  "text": "Write the reader tests"
+                }
+              ],
+              "kind": "plan"
+            },
+            "id": "toolu_c_todo",
+            "name": "TodoWrite",
+            "text": "{\"todos\":[{\"activeForm\":\"Recording the fixture shapes\",\"content\":\"Record the fixture shapes\",\"status\":\"completed\"},{\"activeForm\":\"Choosing a layout\",\"content\":\"Choose a layout\",\"status\":\"in_progress\"},{\"activeForm\":\"Writing the reader tests\",\"content\":\"Write the reader tests\",\"status\":\"pending\"}]}",
+            "type": "tool_use"
+          }
+        ],
+        "id": "c-a1",
+        "parentId": "c-u1",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:01.000Z",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 5
+        }
+      },
+      {
+        "blocks": [
+          {
+            "id": "toolu_c_todo",
+            "text": "Todos have been modified successfully.",
+            "type": "tool_result"
+          }
+        ],
+        "id": "c-u2",
+        "parentId": "c-a1",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:02.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "kind": "question",
+              "questions": [
+                {
+                  "header": "Layout",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "description": "One records file per agent.",
+                      "label": "Flat"
+                    },
+                    {
+                      "description": "One directory per agent.",
+                      "label": "Nested"
+                    }
+                  ],
+                  "question": "Which fixture layout should the reader use?"
+                }
+              ]
+            },
+            "id": "toolu_c_ask",
+            "name": "AskUserQuestion",
+            "text": "{\"questions\":[{\"header\":\"Layout\",\"multiSelect\":false,\"options\":[{\"description\":\"One records file per agent.\",\"label\":\"Flat\"},{\"description\":\"One directory per agent.\",\"label\":\"Nested\"}],\"question\":\"Which fixture layout should the reader use?\"}]}",
+            "type": "tool_use"
+          }
+        ],
+        "id": "c-a2",
+        "parentId": "c-u2",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:03.000Z",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 5
+        }
+      },
+      {
+        "blocks": [
+          {
+            "id": "toolu_c_ask",
+            "text": "User has answered your questions: \"Which fixture layout should the reader use?\"=\"Nested\".",
+            "type": "tool_result"
+          }
+        ],
+        "id": "c-u3",
+        "parentId": "c-a2",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:09.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "kind": "proposed_plan",
+              "text": "## Fixture plan\n\n1. Add nested fixtures.\n2. Cover each reader."
+            },
+            "id": "toolu_c_plan",
+            "name": "ExitPlanMode",
+            "text": "{\"plan\":\"## Fixture plan\\n\\n1. Add nested fixtures.\\n2. Cover each reader.\",\"planFilePath\":\"/work/fixture/.claude/plans/fixture.md\"}",
+            "type": "tool_use"
+          }
+        ],
+        "id": "c-a3",
+        "parentId": "c-u3",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:10.000Z",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 5
+        }
+      },
+      {
+        "blocks": [
+          {
+            "id": "toolu_c_plan",
+            "text": "User has approved your plan.",
+            "type": "tool_result"
+          }
+        ],
+        "id": "c-u4",
+        "parentId": "c-a3",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:15.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "text": "The plan is approved; the fixtures are nested.",
+            "type": "text"
+          }
+        ],
+        "id": "c-a4",
+        "parentId": "c-u4",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:16.000Z",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 5
+        }
+      }
+    ],
+    "nextOffset": 5472,
+    "schemaVersion": 1,
+    "truncated": false,
+    "view": "active_branch"
+  },
+  "claudeWaiting": {
+    "activity": "waiting",
+    "branchId": "c-a2",
+    "messages": 4,
+    "nextOffset": 2161
+  },
+  "codexIdle": {
+    "activity": "idle",
+    "agent": "codex",
+    "branchId": "22222222-2222-4222-8222-222222222222",
+    "hasMore": false,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "text": "Plan the fixture work and ask before choosing a layout.",
+            "type": "text"
+          }
+        ],
+        "id": "14:turn-fixture-1fixture-user-1",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:00.200Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "kind": "proposed_plan"
+            },
+            "text": "## Fixture plan\n\n1. Add nested fixtures.\n2. Cover each reader.",
+            "type": "text"
+          }
+        ],
+        "id": "14:turn-fixture-1fixture-plan-1",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:10.000Z"
+      }
+    ],
+    "nextOffset": 2970,
+    "schemaVersion": 1,
+    "truncated": false,
+    "view": "active_branch"
+  },
+  "codexRecords": {
+    "agent": "codex",
+    "hasMore": false,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "card": {
+              "entries": [
+                {
+                  "status": "completed",
+                  "text": "Record the fixture shapes"
+                },
+                {
+                  "status": "in_progress",
+                  "text": "Choose a layout"
+                },
+                {
+                  "status": "pending",
+                  "text": "Write the reader tests"
+                }
+              ],
+              "explanation": "Fixture work in order.",
+              "kind": "plan"
+            },
+            "id": "call_fixture_plan",
+            "name": "update_plan",
+            "text": "{\"explanation\": \"Fixture work in order.\", \"plan\": [{\"step\": \"Record the fixture shapes\", \"status\": \"completed\"}, {\"step\": \"Choose a layout\", \"status\": \"in_progress\"}, {\"step\": \"Write the reader tests\", \"status\": \"pending\"}]}",
+            "type": "tool_use"
+          }
+        ],
+        "id": "record-771",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:01.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "id": "call_fixture_plan",
+            "text": "Plan updated",
+            "type": "tool_result"
+          }
+        ],
+        "id": "record-1276",
+        "role": "tool",
+        "timestamp": "2026-11-04T10:00:01.100Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "kind": "question",
+              "questions": [
+                {
+                  "header": "Layout",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "description": "One records file per agent.",
+                      "label": "Flat (Recommended)"
+                    },
+                    {
+                      "description": "One directory per agent.",
+                      "label": "Nested"
+                    }
+                  ],
+                  "question": "Which fixture layout should the reader use?"
+                }
+              ]
+            },
+            "id": "call_fixture_ask",
+            "name": "request_user_input",
+            "text": "{\"questions\": [{\"header\": \"Layout\", \"id\": \"fixture_layout\", \"question\": \"Which fixture layout should the reader use?\", \"options\": [{\"label\": \"Flat (Recommended)\", \"description\": \"One records file per agent.\"}, {\"label\": \"Nested\", \"description\": \"One directory per agent.\"}]}]}",
+            "type": "tool_use"
+          }
+        ],
+        "id": "record-1522",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:02.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "id": "call_fixture_ask",
+            "text": "{\"answers\": {\"fixture_layout\": {\"answers\": [\"Nested\"]}}}",
+            "type": "tool_result"
+          }
+        ],
+        "id": "record-2087",
+        "role": "tool",
+        "timestamp": "2026-11-04T10:00:09.000Z"
+      }
+    ],
+    "nextOffset": 2970,
+    "schemaVersion": 1,
+    "truncated": false,
+    "view": "record_stream"
+  },
+  "opencodeIdle": {
+    "activity": "idle",
+    "agent": "opencode",
+    "branchId": "ses_fixture",
+    "hasMore": false,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "text": "Plan the fixture work and ask before choosing a layout.",
+            "type": "text"
+          }
+        ],
+        "id": "msg_fixture_1",
+        "role": "user",
+        "timestamp": "2026-11-04T10:00:00+00:00"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "entries": [
+                {
+                  "status": "completed",
+                  "text": "Record the fixture shapes"
+                },
+                {
+                  "status": "in_progress",
+                  "text": "Choose a layout"
+                },
+                {
+                  "status": "cancelled",
+                  "text": "Drop the legacy layout"
+                }
+              ],
+              "kind": "plan"
+            },
+            "id": "call_fixture_todo",
+            "name": "todowrite",
+            "status": "completed",
+            "text": "{\"todos\":[{\"content\":\"Record the fixture shapes\",\"priority\":\"high\",\"status\":\"completed\"},{\"content\":\"Choose a layout\",\"priority\":\"high\",\"status\":\"in_progress\"},{\"content\":\"Drop the legacy layout\",\"priority\":\"low\",\"status\":\"cancelled\"}]}",
+            "type": "tool_use"
+          },
+          {
+            "id": "call_fixture_todo",
+            "name": "todowrite",
+            "status": "completed",
+            "text": "[{\"content\": \"Record the fixture shapes\", \"status\": \"completed\", \"priority\": \"high\"}, {\"content\": \"Choose a layout\", \"status\": \"in_progress\", \"priority\": \"high\"}, {\"content\": \"Drop the legacy layout\", \"status\": \"cancelled\", \"priority\": \"low\"}]",
+            "type": "tool_result"
+          },
+          {
+            "card": {
+              "kind": "question",
+              "questions": [
+                {
+                  "header": "Layout",
+                  "multiple": true,
+                  "options": [
+                    {
+                      "description": "One records file per agent.",
+                      "label": "Flat"
+                    },
+                    {
+                      "description": "One directory per agent.",
+                      "label": "Nested"
+                    }
+                  ],
+                  "question": "Which fixture layout should the reader use?"
+                }
+              ]
+            },
+            "id": "call_fixture_ask",
+            "name": "question",
+            "status": "completed",
+            "text": "{\"questions\":[{\"header\":\"Layout\",\"multiple\":true,\"options\":[{\"description\":\"One records file per agent.\",\"label\":\"Flat\"},{\"description\":\"One directory per agent.\",\"label\":\"Nested\"}],\"question\":\"Which fixture layout should the reader use?\"}]}",
+            "type": "tool_use"
+          },
+          {
+            "id": "call_fixture_ask",
+            "name": "question",
+            "status": "completed",
+            "text": "User has answered your questions: \"Which fixture layout should the reader use?\"=\"Nested\".",
+            "type": "tool_result"
+          }
+        ],
+        "id": "msg_fixture_2",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:01+00:00",
+        "usage": {
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "inputTokens": 10,
+          "outputTokens": 5
+        }
+      },
+      {
+        "blocks": [
+          {
+            "text": "The fixtures are nested.",
+            "type": "text"
+          }
+        ],
+        "id": "msg_fixture_3",
+        "role": "assistant",
+        "timestamp": "2026-11-04T10:00:10+00:00",
+        "usage": {
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "inputTokens": 12,
+          "outputTokens": 6
+        }
+      }
+    ],
+    "nextOffset": 0,
+    "schemaVersion": 1,
+    "truncated": false,
+    "view": "active_branch"
+  },
+  "provenance": "Generated by apps/agent/tests/interaction_cards.rs from apps/agent/tests/fixtures/interaction-cards. claudeWaiting lists only how that page differs from claudeIdle."
+}
