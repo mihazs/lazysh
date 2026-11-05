@@ -11,7 +11,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Main runs are serialized, not cancelled: a later push waits as the single pending run, so a busy
+  # main still regenerates the version PR instead of cancelling every in-flight version-pr job.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   release-tools:
