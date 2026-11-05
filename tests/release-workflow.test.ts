@@ -139,3 +139,28 @@ esac
   expect(uploads).toEqual(['foss', 'google'].map(flavor => [`release-android-${flavor}-arm64`,
     `\${{ runner.temp }}/installation-files/android-${flavor}-arm64`]));
 });
+
+// Windows and macOS release runners check out onto case-insensitive file systems. There two
+// tracked paths that differ only in case are one file, and an extensionless module import such
+// as './CommandPalette' also opens 'commandPalette.ts' (#1011 broke the Windows build this way).
+const moduleExtension = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+function caseCollisions(paths: string[]) {
+  const groups = new Map<string, Set<string>>();
+  const add = (key: string, path: string) => groups.set(key, (groups.get(key) ?? new Set()).add(path));
+  for (const path of paths) {
+    const parts = path.split('/');
+    for (let length = 1; length <= parts.length; length++) add(`path:${parts.slice(0, length).join('/').toLowerCase()}`, parts.slice(0, length).join('/'));
+    if (moduleExtension.test(path)) add(`module:${path.replace(moduleExtension, '').toLowerCase()}`, path.replace(moduleExtension, ''));
+  }
+  return [...groups.values()].filter(group => group.size > 1).map(group => [...group].sort());
+}
+
+test('tracked paths and module specifiers stay distinct on case-insensitive release runners', async () => {
+  expect(caseCollisions(['src/CommandPalette.tsx', 'src/commandPalette.ts', 'src/CommandPalette.css']))
+    .toEqual([['src/CommandPalette', 'src/commandPalette']]);
+  expect(caseCollisions(['Docs/a.md', 'docs/b.md'])).toEqual([['Docs', 'docs']]);
+  expect(caseCollisions(['src/Palette.tsx', 'src/Palette.css', 'src/palette-model.ts'])).toEqual([]);
+  const listed = await spawnText(join(import.meta.dir, '..'), ['git', 'ls-files', '-z']);
+  expect(listed.code).toBe(0);
+  expect(caseCollisions(listed.stdout.split('\0').filter(Boolean))).toEqual([]);
+});

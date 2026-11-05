@@ -2,7 +2,7 @@ import {t, useUi} from './i18n/core';
 import {useEffect, useId, useRef, useState, type KeyboardEvent} from 'react';
 import {Search, Server, TerminalSquare, Wrench, Zap} from 'lucide-react';
 import {paletteShortcut} from './keyboard';
-import {filterPalette, firstEnabled, movePaletteSelection, type PaletteCommand, type PaletteGroup} from './commandPalette';
+import {filterPalette, firstEnabled, movePaletteSelection, type PaletteCommand, type PaletteGroup} from './paletteModel';
 import './CommandPalette.css';
 
 const groupIcons = {host: Server, session: TerminalSquare, tool: Wrench, action: Zap} as const;

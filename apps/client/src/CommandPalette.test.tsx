@@ -4,7 +4,7 @@ import {cleanup, render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {useState} from 'react';
 import CommandPalette from './CommandPalette';
-import type {PaletteCommand} from './commandPalette';
+import type {PaletteCommand} from './paletteModel';
 
 afterEach(cleanup);
 function Harness({commands, onDone}: {commands: PaletteCommand[]; onDone: () => void}) {

@@ -1,5 +1,5 @@
 import {expect, it, vi} from 'vitest';
-import {filterPalette, firstEnabled, movePaletteSelection, type PaletteCommand} from './commandPalette';
+import {filterPalette, firstEnabled, movePaletteSelection, type PaletteCommand} from './paletteModel';
 
 const command = (id: string, label: string, extra: Partial<PaletteCommand> = {}): PaletteCommand => ({id, group: 'action', label, run: vi.fn(), ...extra});
 const commands = [

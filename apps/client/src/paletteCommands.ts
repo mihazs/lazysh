@@ -1,6 +1,6 @@
 import {t} from './i18n/core';
 import type {Host} from './bridge';
-import type {PaletteCommand} from './commandPalette';
+import type {PaletteCommand} from './paletteModel';
 
 type Action = () => void;
 type ActionRow = readonly [id: string, label: string, run: Action, disabled?: boolean, aliases?: readonly string[]];
