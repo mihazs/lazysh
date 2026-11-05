@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.13.0
+
+### Minor Changes
+
+- 2dd690e: Arrange terminal toolbar keys by drag and drop, with keyboard and single-tap alternatives, and lay the toolbar out in one to three rows. The default stays one row with the same keys, and older clients read multi-row toolbars as one row.
+- 6c02544: Redesign pending approval cards and the agent inbox: approvals show the agent and tool, project and request age, the full tool input, a live expiry countdown, a side-by-side Deny/Allow pair and a project/session/pane summary; the inbox groups events into foldable Needs you, Working and Done sections with status rings, relative times and icon actions, and moves monitoring controls into a collapsible settings group.
+- 2b4841e: Show a live Herdr agent's lifecycle state when Herdr reports Unknown, as Herdr 0.9.3 does for an idle Codex prompt. If the pane's Herdr-reported session ID is unique among live panes and matches exactly one companion report from the same connection, the pane shows Working, Needs attention or Done. Herdr's own states take precedence, workspace and tab summaries stay Herdr's, and a pane without an exact match stays Unknown.
+- 4b44d33: Extend the Ctrl/Cmd+K palette into a keyboard-operable command palette over hosts, open sessions, workspace tools and application actions, also opened by Ctrl/Cmd+Shift+P from a focused terminal. Files previews PNG, JPEG, GIF and WebP images up to 2 MiB, shows SVG only as an image from a blob URL so its scripts never run, and renders Markdown through the Chat renderer without raw HTML, links or remote images.
+- 3c65f15: Redesign the terminal composer as a full-height sheet over the unchanged terminal and make its primary Send action paste the draft, then press Enter once. A new Input preference, on by default, restores paste-only behavior when turned off.
+
+### Patch Changes
+
+- 9164118: Fully reveal each owned Android native select inside its scroll panel before the unchanged centre hit-test and native tap, so a recorded-source selector left partly clipped under the context navigation by an earlier keyboard scroll is no longer tapped through the navigation. This test-only repair keeps every geometry, ownership and chooser assertion and does not change application behavior.
+- @lazysh/account-usage@1.13.0
+  - @lazysh/common@1.13.0
+  - @lazysh/display-idle@1.13.0
+  - @lazysh/et-transport@1.13.0
+  - @lazysh/mosh-transport@1.13.0
+
 ## 1.12.0
 
 ### Minor Changes
