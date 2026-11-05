@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.17.1
+
+### Patch Changes
+
+- 46c4f00: Find the documented per-user Herdr installation on supported Unix hosts while preserving command PATH precedence.
+- @lazysh/account-usage@1.17.1
+  - @lazysh/common@1.17.1
+  - @lazysh/display-idle@1.17.1
+  - @lazysh/et-transport@1.17.1
+  - @lazysh/mosh-transport@1.17.1
+
 ## 1.17.0
 
 ### Minor Changes
