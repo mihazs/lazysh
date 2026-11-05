@@ -3320,8 +3320,14 @@ mod tests {
     #[cfg(unix)]
     #[path = "companion_fixture.rs"]
     mod companion_fixture;
+    #[cfg(target_os = "linux")]
+    #[path = "connection_parity_fixture.rs"]
+    mod connection_parity_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
+    #[cfg(unix)]
+    #[path = "owned_sshd.rs"]
+    mod owned_sshd;
     #[cfg(unix)]
     #[path = "transcript_image_fixture.rs"]
     mod transcript_image_fixture;
@@ -5988,15 +5994,9 @@ mod tests {
         let mac_clipboard = matches!(check, OpenSshCheck::Clipboard);
         #[cfg(not(target_os = "macos"))]
         let mac_clipboard = false;
-        use std::os::unix::fs::PermissionsExt;
+        #[cfg(target_os = "macos")]
+        use owned_sshd::Process;
         use tauri::Manager;
-        struct Process(std::process::Child);
-        impl Drop for Process {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
         let dir = tempfile::tempdir().unwrap();
         let environment = if mosh {
             let resolved = std::process::Command::new("sh")
@@ -6025,47 +6025,15 @@ mod tests {
         };
         let key = ed25519_key();
         let user_key = ed25519_key();
-        let key_path = dir.path().join("host_key");
-        fs::write(
-            &key_path,
-            key.to_openssh(Default::default()).unwrap().as_bytes(),
-        )
-        .unwrap();
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
         let authorized = dir.path().join("authorized_keys");
         fs::write(&authorized, user_key.public_key().to_openssh().unwrap()).unwrap();
-        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = socket.local_addr().unwrap().port();
-        drop(socket);
-        let config = dir.path().join("sshd_config");
-        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp -d {}\n{environment}",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display(),dir.path().display())).unwrap();
-        let sshd = std::process::Command::new("sh")
-            .args(["-c", "command -v sshd"])
-            .output()
-            .unwrap();
-        let mut process = Process(
-            std::process::Command::new(String::from_utf8(sshd.stdout).unwrap().trim())
-                .args(["-D", "-e", "-f"])
-                .arg(&config)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap(),
+        let port = owned_sshd::free_port();
+        let settings = format!(
+            "AuthorizedKeysFile {}\nSubsystem sftp internal-sftp -d {}\n{environment}",
+            authorized.display(),
+            dir.path().display()
         );
-        timeout(Duration::from_secs(3), async {
-            loop {
-                assert!(process.0.try_wait().unwrap().is_none(), "test sshd exited");
-                if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                    .await
-                    .is_ok()
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
+        let _sshd = owned_sshd::OwnedSshd::start(dir.path(), port, &key, &settings, &[]).await;
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
             default_multiplexer: None,
@@ -6671,39 +6639,16 @@ mod tests {
             ..host.clone()
         };
         let forwarding_handle = key_handle(&app.state(), &forwarding_host, &user_key).await;
-        let (mut channel, mut forwarded_output) = open_terminal(
+        let (forwarding_status, forwarded_output) = owned_sshd::terminal_command(
             &forwarding_handle,
-            80,
-            24,
-            Some(format!(
+            format!(
                 "ssh-add -L && ssh-add -T {}",
                 quote(&authorized.to_string_lossy())
-            )),
+            ),
         )
-        .await
-        .unwrap();
-        let mut forwarding_status = None;
-        timeout(Duration::from_secs(5), async {
-            while let Some(message) = channel.wait().await {
-                match message {
-                    ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                        forwarded_output.extend_from_slice(&data)
-                    }
-                    ChannelMsg::ExitStatus { exit_status } => forwarding_status = Some(exit_status),
-                    _ => {}
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            forwarding_status,
-            Some(0),
-            "{}",
-            String::from_utf8_lossy(&forwarded_output)
-        );
-        assert!(String::from_utf8_lossy(&forwarded_output)
-            .contains(user_key.public_key().to_openssh().unwrap().trim()));
+        .await;
+        assert_eq!(forwarding_status, Some(0), "{forwarded_output}");
+        assert!(forwarded_output.contains(user_key.public_key().to_openssh().unwrap().trim()));
         forwarding_handle
             .disconnect(
                 russh::Disconnect::ByApplication,

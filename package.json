@@ -32,6 +32,7 @@
     "test:e2e": "turbo run test:e2e",
     "test:native-gui": "turbo run test:native-gui --filter=@lazysh/client --concurrency=1",
     "test:openssh": "turbo run test:openssh",
+    "test:openssh-connections": "turbo run test:openssh-connections",
     "test:multiplexers": "turbo run test:multiplexers",
     "test:voice": "turbo run test:voice",
     "test:et": "turbo run test:et",
