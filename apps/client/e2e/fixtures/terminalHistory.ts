@@ -63,9 +63,16 @@ export async function scrollHistory(page:Page,phone:boolean,rows:number,between:
     for(let row=0;row<rows;row++){await page.mouse.wheel(0,-height);await between();}
     await settle(page);return;
   }
-  const input=await page.context().newCDPSession(page);
+  await fingerDrag(page,{x,y},height,rows,{between,step});
+}
+
+/** One finger from `start` down by `rows` rows in moves of `step` rows. A
+ * `slant` first sample goes only sideways, as a thumb often starts. */
+export async function fingerDrag(page:Page,start:{x:number;y:number},height:number,rows:number,{between=async()=>{},step=1,slant=0}:{between?:()=>Promise<unknown>;step?:number;slant?:number}={}) {
+  const {x,y}=start,input=await page.context().newCDPSession(page);
   await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
-  for(let move=1;move*step<=rows;move++){await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y+move*step*height}]});await between();}
+  if(slant)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+slant,y}]});
+  for(let move=1;move*step<=rows;move++){await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+slant,y:y+move*step*height}]});await between();}
   await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await input.detach();await settle(page);
 }

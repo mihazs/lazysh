@@ -2249,7 +2249,7 @@ class NativeWorkspaceTest {
             return floatArrayOf((frame[0] + x).toFloat(), (frame[1] + y).toFloat())
         }
         val fingerStarted = System.nanoTime()
-        val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
+        var fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
         fun nativeFingerGesture(short: Boolean, before: Int, requireCompletedProgress: Boolean = false): JSONObject {
             val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
             val fingerObservation = """
@@ -2438,12 +2438,16 @@ class NativeWorkspaceTest {
             }
         }
         assertEquals("Both completed short-drag groups must advance remote history", 2, completedProgress)
-        nativeFingerGesture(false, shortRow)
+        val swiped = nativeFingerGesture(false, shortRow).getInt("row")
         awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
             (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
         """)
+        // A reader who lifts the finger in history and waits keeps scrolling with the next drag (#1040).
+        Thread.sleep(1_500)
+        fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        nativeFingerGesture(false, swiped)
         focusTab(originalTab)
-        println("lazysh Herdr finger scroll: five short native drags advanced history repeatedly, then two MOVE phases advanced before one UP; original tab restored before guarded Chat")
+        println("lazysh Herdr finger scroll: five short native drags advanced history repeatedly, then two MOVE phases advanced before one UP, again after a pause in history; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)

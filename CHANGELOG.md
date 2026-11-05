@@ -530,6 +530,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Keep finger scrolling responsive after a pause in history while the on-screen
+  keyboard (SwiftKey, Gboard) holds a word in composition. A drag whose first
+  movement was short or sideways was dropped entirely, so a full-screen agent
+  with mouse reporting (Claude Code fullscreen, Herdr, tmux mouse mode, Mosh)
+  received no scroll and only its Jump to bottom control moved the view. A
+  toolbar key that sends the composed word no longer leaves the terminal
+  treating later drags and long-presses as part of that composition. No
+  defaults change.
+
 - Changed companion SQLite close behavior: successful Store connections retain
   private WAL/SHM files after clean exit instead of checkpointing/deleting them
   for each short-lived hook. FULL commit synchronization and normal automatic
