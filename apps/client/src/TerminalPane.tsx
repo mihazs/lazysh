@@ -630,6 +630,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (target !== undefined) target?.focus();
     else {imeInput.current?.resume(); session.terminal.focus();}
   }
+  // Like xterm's keyboard input, sent keys return the reader to the live screen where the TUI answers them.
+  function followLive() {if (session.terminal.options.scrollOnUserInput !== false) session.terminal.scrollToBottom();}
   function sendNamed(key: string, physical?: KeyboardEvent, expectedOwner?:InputOwner) {
     const current=()=>activeRef.current&&session.connected&&mounted.current&&access.current()&&(!expectedOwner||(inputOwner.current===expectedOwner&&!expectedOwner.disposed&&expectedOwner.session.id===session.id&&expectedOwner.session.terminal===session.terminal&&dpadView.current.session===session&&pasteView.current.id===session.id&&pasteView.current.terminal===session.terminal&&!document.querySelector('[role="dialog"][aria-modal="true"]')));
     if (!current()) return false;
@@ -640,6 +642,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${((repeatShift.current ?? state.shift) && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
     try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`),expectedOwner).catch(error => reportError(captureUiError(error)));}
     catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return false;}
+    followLive();
     consumeModifiers();
     focusTerminal();return true;
   }
@@ -714,6 +717,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       const steps = parseChordSteps(keys);
       imeInput.current?.flush();
       void writeInput('chord', steps).catch(error => {if (current()) reportError(errorMessage(error));});
+      followLive();
       return true;
     } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
