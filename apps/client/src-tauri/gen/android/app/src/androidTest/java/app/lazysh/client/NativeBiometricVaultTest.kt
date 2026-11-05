@@ -286,24 +286,33 @@ class NativeBiometricVaultTest {
         !covered(scenario) && js(scenario, "Boolean(window.__TAURI_INTERNALS__?.invoke&&document.querySelector(\"button[aria-label='Add host']\"))") == "true"
     }
 
+    /** Reaches Security preferences through the visible Preferences control and its category list. */
+    private fun security(scenario: ActivityScenario<MainActivity>) {
+        workspace(scenario)
+        if (js(scenario, "Boolean(document.querySelector('.access-lock-toggle'))") != "true")
+            click(scenario, "document.querySelector(\"button[aria-label='Preferences']\")")
+        val category = "document.querySelector(\".settings-navigation button[data-settings-target='security']\")"
+        until("security preferences") {
+            js(scenario, "Boolean(document.querySelector('.access-lock-toggle'))") == "true" ||
+                js(scenario, "(()=>{const e=$category||document.querySelector('.settings-detail-header button');e?.click();return false})()") == "true"
+        }
+    }
+
     private fun lockToggle(scenario: ActivityScenario<MainActivity>, enabled: Boolean) {
         val checkbox = "document.querySelector('.access-lock-toggle input')"
+        security(scenario)
         until("resume lock setting") { js(scenario, "Boolean($checkbox&&!$checkbox.disabled)") == "true" }
         click(scenario, checkbox)
         // Enabling writes then verifies a new proof; disabling verifies the current proof.
         repeat(if (enabled) 2 else 1) { authenticate() }
+        // A committed policy is a new access authority: the workspace remounts by design,
+        // closing Preferences, so the committed state is read back from a fresh visit.
+        security(scenario)
         until("resume lock committed") { js(scenario, "$checkbox?.checked===$enabled&&!$checkbox.disabled") == "true" }
     }
 
     @Test fun resumeLockOpensOnlyForEnrolledFingerprint() {
         val scenario = NativeActivityFixture.scenario
-        workspace(scenario)
-        click(scenario, "document.querySelector(\"button[aria-label='Preferences']\")")
-        val security = "document.querySelector(\".settings-navigation button[data-settings-target='security']\")"
-        until("security preferences") {
-            js(scenario, "Boolean(document.querySelector('.access-lock-toggle'))") == "true" ||
-                js(scenario, "(()=>{const e=$security||document.querySelector('.settings-detail-header button');e?.click();return false})()") == "true"
-        }
         lockToggle(scenario, true)
         scenario.moveToState(Lifecycle.State.CREATED)
         scenario.moveToState(Lifecycle.State.RESUMED)
