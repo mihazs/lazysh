@@ -69,7 +69,8 @@ class SessionForegroundService : Service() {
                 context.getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL,
                     context.getString(R.string.session_notification_channel), NotificationManager.IMPORTANCE_LOW))
             }
-            // The launcher's own intent: a tap brings the existing workspace task forward unchanged.
+            // The MainActivity base intent that the LauncherActivity trampoline starts: a tap brings the
+            // existing workspace task forward unchanged.
             val workspace = Intent(context, MainActivity::class.java).setAction(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
