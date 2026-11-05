@@ -876,8 +876,8 @@ jobs:
       - *source-bun
       - *pinned-download-cache
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install build, OpenSSH, nss_wrapper, tmux and official ET build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper
+      - name: Install build, OpenSSH, nss_wrapper, tmux, login shell and official ET build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
         # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
@@ -952,6 +952,11 @@ jobs:
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
         run: bun run test:multiplexers
+      - name: Exercise Herdr creation argv quoting under sh, bash, zsh and fish login shells
+        if: ${{ !cancelled() }}
+        env:
+          LAZYSH_REQUIRE_FISH: '1'
+        run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib herdr_create::tests::"
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et

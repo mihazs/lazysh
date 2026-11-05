@@ -130,6 +130,64 @@ lazysh does not substitute another one. Plain terminals automatically select a s
 running server and require a choice when several are available. Discovery reads one
 server per refresh and does not grant terminal input or approval authority.
 
+### Create workspaces, worktrees and agents
+
+Herdr **Spaces** offers **New workspace** above the workspace tree, and a
+**New worktree from …** button on each workspace that reports a pane directory.
+
+- **New workspace** asks for a label and an absolute directory. Type it, pick
+  one of the known directories (current Herdr pane directories and companion
+  project reports), or browse host folders over SFTP.
+- **New worktree** reads the Git repository that contains the workspace's first
+  reported pane directory. It suggests a branch derived from the workspace label,
+  the repository's current HEAD as the base, and a path. If every existing linked
+  worktree shares one parent directory, the path uses that parent; otherwise it is
+  the sibling `<repo>-worktrees/<branch>` with `/` replaced by `-`. All three are
+  editable. The new workspace is labelled with the branch name.
+
+Both dialogs ask **Start an agent in it?** and default to not starting one.
+Choosing yes requires selecting an agent from the supported Herdr agent kinds
+whose executable `command -v` finds on the host; nothing is offered when none is
+found. Codex and Claude Code accept an optional single-line initial prompt as
+their positional argument; other agents start without one.
+
+**Review commands** shows every command that will run, exactly as quoted. Nothing
+runs until you confirm. In order, the host runs:
+
+```sh
+command -v -- <agent executable>                                      # agent only
+git -C <repository> worktree add -b <branch> -- <path> <base>        # worktree only
+herdr --session <server> workspace create --no-focus --label <label> --cwd <directory>
+herdr --session <server> agent start <name> --kind <kind> --pane <new root pane> --timeout 60000 [-- <prompt>]
+```
+
+The shown commands are POSIX `sh` syntax, and each one runs under `sh` with
+exactly those arguments. The SSH exec channel passes its command string to your
+login shell, so lazysh sends a fixed `sh -c '"$@" …' sh` wrapper followed by
+each argument as its own single-quoted word, with `'` and `\` written as `"'"`
+and `"\\"`. POSIX login shells (such as sh, dash, bash, zsh and ksh) and fish read every
+such word literally, so quotes, `;`, `$(…)` and backticks in labels, paths,
+branches or prompts, including directory names reported by the host, are never
+run as shell syntax. Other login shells, such as csh, tcsh or nushell, are not
+covered. Branch names follow `git check-ref-format --branch`
+rules; labels, paths and prompts must be one line without backslashes, paths must
+be absolute without `.` or `..` segments, and a base or prompt cannot start with
+`-`. The agent starts only through Herdr's `agent start` in the new workspace's
+root pane, which waits for Herdr to detect the agent as ready. No keystrokes are
+sent to an existing pane. On success, lazysh opens the new workspace.
+
+Host errors are shown verbatim, limited to 2,000 characters with terminal
+control characters removed. When the agent check, the worktree step or (without
+a worktree) the workspace step fails, nothing was created.
+When a later step fails (for example the worktree was created but `herdr
+workspace create` or the agent start failed), the dialog lists what already
+exists and offers to open the workspace. Nothing is rolled back: remove an unwanted
+worktree with `git worktree remove` and its branch with `git branch -d`.
+
+`command -v` runs in the SSH command environment. An agent that is only on the
+PATH of an interactive shell may be missing from the list, and `herdr agent
+start` resolves the executable in the new pane's shell.
+
 Attached tmux and Herdr terminals also offer prefix shortcuts and numbered window/tab controls. Configure one prefix key, such as `Ctrl+b` or `F12`; it is validated with the existing terminal chord parser. The panel uses the host's default action bindings. It only appears on a terminal known to be attached to that multiplexer, so a plain shell never receives prefix input from these controls. Custom host action remappings remain available through the terminal or configurable keyboard chords.
 
 ## Zellij
@@ -172,6 +230,21 @@ create only owned loopback SSH listeners, keys and temporary tmux sockets. They
 cover display/server replacement and ID reuse, hostile labels, startup bytes,
 queued lease revocation, partial-response cancellation, malformed/oversized
 framing and a notification stream that cannot refresh the absolute deadline.
+
+The Herdr creation case (`herdr_create::tests::real_herdr_worktree_workspace_and_agent`)
+also needs `git`. It creates a temporary repository, runs each step through the same
+`sh -c` command strings the SSH channel uses, and checks that `git worktree list`
+shows the new worktree, the Herdr snapshot shows a workspace labelled with the branch
+whose pane directory is the worktree, and a stub `codex` on `PATH` started in that
+pane with the literal prompt. Hostile but valid branch names and prompts containing
+`$(…)` and quotes stay literal; a duplicate branch or a missing agent creates
+nothing. The real SSH channel itself is covered by the existing OpenSSH fixtures, not
+by this case. `herdr_create::tests::login_shells_read_each_argv_word_literally` and
+the agent detection test run the generated command strings as `<shell> -c` under
+`/bin/sh` and every installed bash, zsh and fish, with values containing `'`, `\`,
+`;`, `$(…)` and backticks, and assert the argv arrives literally and nothing is
+created. Fish is skipped with a message when absent; CI installs it in
+`native-linux-runtimes` and sets `LAZYSH_REQUIRE_FISH=1` so it cannot be skipped there.
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 

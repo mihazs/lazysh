@@ -13,6 +13,7 @@ mod devices;
 mod et;
 mod forward_agent;
 mod herdr;
+mod herdr_create;
 mod herdr_guard;
 mod host_clipboard;
 mod identities;
@@ -237,6 +238,10 @@ pub fn run() {
                 herdr_guard::herdr_chat,
                 herdr::herdr_tree,
                 herdr::herdr_action,
+                herdr_create::herdr_workspace_plan,
+                herdr_create::herdr_workspace_create,
+                herdr_create::herdr_agent_kinds,
+                herdr_create::herdr_repository,
                 zellij::zellij_action,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,

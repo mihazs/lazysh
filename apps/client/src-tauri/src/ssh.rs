@@ -53,6 +53,9 @@ impl SshError {
     pub(crate) fn kind(&self) -> &'static str {
         self.kind
     }
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
     pub(crate) fn new(kind: &'static str, message: impl ToString) -> Self {
         Self {
             kind,
