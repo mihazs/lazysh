@@ -125,3 +125,27 @@ it('keeps empty board approvals compact while polling and reveals real requests 
     expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='agent_approvals')).toHaveLength(4);
   } finally {vi.useRealTimers();}
 });
+
+it('counts down to expiry and then refuses a decision for the expired request',async()=>{
+  vi.useFakeTimers({now:new Date('2026-10-29T12:05:00Z'),toFake:['setInterval','clearInterval','setTimeout','clearTimeout','Date']});
+  try {
+    const expiring={...request,createdAt:'2026-10-29T12:04:00Z',expiresAt:'2026-10-29T12:06:05Z'};
+    vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[expiring]}:{schemaVersion:1,accepted:true});
+    render(<ApprovalPanel sessionId="countdown-owner"/>);
+    await act(async()=>{});
+    const card=screen.getByRole('article',{name:'claude · Bash'});
+    expect(card.textContent).toContain('Expires in 1:05');
+    expect(card.querySelector('time[datetime="2026-10-29T12:06:05Z"]')).toBeTruthy();
+    const facts=Object.fromEntries(Array.from(card.querySelectorAll('dt'),term=>[term.textContent,term.nextElementSibling?.textContent]));
+    expect(facts).toEqual({Project:'/work','Agent session':'agent-session',Pane:'%7'});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(card.textContent).toContain('Expires in 1:00');
+    expect(screen.getByRole('button',{name:'Allow this request'})).toHaveProperty('disabled',false);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(60000);});
+    expect(card.textContent).toContain("Expired. Answer it in the agent's terminal instead.");
+    const allow=screen.getByRole('button',{name:'Allow this request'});
+    expect(allow).toHaveProperty('disabled',true);expect(screen.getByRole('button',{name:'Deny request'})).toHaveProperty('disabled',true);
+    fireEvent.click(allow);await act(async()=>{});
+    expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(0);
+  } finally {vi.useRealTimers();}
+});

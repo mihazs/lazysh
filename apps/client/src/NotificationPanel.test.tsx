@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import NotificationPanel, { NotificationMonitor } from './NotificationPanel';
@@ -32,7 +32,8 @@ it('notifies once after a new attention event and pauses further collection', as
   fireEvent.click(screen.getByRole('button', { name: 'Enable system notifications' }));
   await screen.findByText('System notifications enabled for new attention events while connected.');
   fireEvent.click(screen.getByRole('checkbox', { name: 'Monitor connected hosts' }));
-  await screen.findByText('Needs you · Claude');
+  await screen.findByRole('article', { name: 'Claude' });
+  expect(screen.getByRole('button', { name: /^Needs you\s*1$/ }).getAttribute('aria-expanded')).toBe('true');
   await act(async () => {});
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'notify_agent_attention')).toHaveLength(0);
   vi.mocked(invoke).mockImplementation(async command => command === 'agent_snapshot' ? { schemaVersion: 1, sessions: [{ ...event, eventCount: 2, updatedAt: '2026-10-24T22:01:00Z' }] } : undefined);
@@ -61,4 +62,36 @@ it('polls at most four hosts concurrently and discards late results after unmoun
   const before = getInbox().rows;
   await act(async () => { pending.slice(1).forEach(resolve => resolve({ schemaVersion: 1, sessions: [event] })); });
   expect(getInbox().rows).toBe(before);
+});
+
+it('groups inbox events by attention state, folds a group and ties opening to the live connection', async () => {
+  vi.useFakeTimers({ now: new Date('2026-10-24T22:10:00Z'), toFake: ['setInterval', 'clearInterval', 'Date'] });
+  try {
+    const row = (id: string, state: 'needs_attention' | 'working' | 'done', agent: string, sessionId: string, minutes: number) => ({ id: id.repeat(64), eventId: ({ a: 'b', c: 'd', e: 'f' } as Record<string, string>)[id].repeat(64), sessionId, hostId: 'host1', hostName: 'Dev host', agent, project: `/work/${agent.toLowerCase()}`, agentSessionId: agent, state, updatedAt: new Date(Date.parse('2026-10-24T22:10:00Z') - minutes * 60000).toISOString(), paneId: '%1' });
+    updateInbox({ monitoring: true, rows: [row('c', 'done', 'Finished', 'ssh1', 90), row('a', 'needs_attention', 'Blocked', 'ssh1', 4), row('e', 'working', 'Busy', 'gone', 1)] });
+    render(<NotificationPanel sessions={sessions} />);
+    const toggles = screen.getAllByRole('button', { expanded: true }).map(button => button.textContent);
+    expect(toggles).toEqual(['Needs you1', 'Working1', 'Done1']);
+    const blocked = screen.getByRole('article', { name: 'Blocked' });
+    expect(blocked.textContent).toContain('blocked');
+    expect(blocked.querySelector('time')?.textContent).toBe('4 min. ago');
+    expect(blocked.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-24T22:06:00.000Z');
+    expect(within(blocked).getByRole('button', { name: 'Open connected session' })).toHaveProperty('disabled', false);
+    expect(within(screen.getByRole('article', { name: 'Busy' })).getByRole('button', { name: 'Open connected session' })).toHaveProperty('disabled', true);
+    expect(screen.getByText('Watching connected hosts for agent events.')).toBeTruthy();
+    expect(screen.getByText('Monitoring and notifications').closest('details')?.open).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /^Done\s*1$/ }));
+    expect(screen.queryByRole('article', { name: 'Finished' })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Done\s*1$/ }).getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(within(blocked).getByRole('button', { name: 'Archive' }));
+    expect(screen.queryByRole('article', { name: 'Blocked' })).toBeNull();
+    expect(getInbox().rows.map(event => event.agent)).toEqual(['Finished', 'Busy']);
+  } finally { vi.useRealTimers(); }
+});
+
+it('shows an explicit empty state with monitoring settings open when nothing has been collected', () => {
+  render(<NotificationPanel sessions={sessions} />);
+  expect(screen.getByText('No agent events yet')).toBeTruthy();
+  expect(screen.getByText('Monitoring and notifications').closest('details')?.open).toBe(true);
+  expect(screen.getByRole('button', { name: 'Clear inbox' })).toHaveProperty('disabled', true);
 });
