@@ -1,5 +1,11 @@
 # @lazysh/credential-vault
 
+## 1.15.0
+
+### Patch Changes
+
+- e054793: Fix Android biometric-protected credentials failing to save or unlock after a successful fingerprint, and the biometric resume lock stalling on its second prompt.
+
 ## 1.14.0
 
 No changes in this release.
