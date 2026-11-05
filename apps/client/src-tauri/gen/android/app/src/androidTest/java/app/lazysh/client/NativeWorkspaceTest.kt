@@ -2961,7 +2961,13 @@ class NativeWorkspaceTest {
             closeSoftKeyboard()
             assertEquals("Owned select control must be unique", "1", evaluate(scenario,
                 "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
+            // Espresso's scroll atom leaves any partly visible control in place, so a select clipped
+            // by the top of its scroll panel keeps its center under the navigation above it.
+            // Reveal the whole control in its own scrollport before the unchanged hit-test guard.
+            assertEquals("Owned select control must be revealed", "true", evaluate(scenario, """(() => {
+              document.querySelector(${JSONObject.quote(selector)}).scrollIntoView({block:'nearest',inline:'nearest'});
+              return true;
+            })()"""))
             // A DOM click atom does not activate Chromium's native select popup.
             // Read only this control's viewport geometry, then inject one native tap.
             val geometry = JSONArray(evaluate(scenario, """(() => {
