@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.18.0
+
+### Minor Changes
+
+- 9b63d05: Add a pinch that zooms the multiplexer pane, short and long header pulls, long-press toolbar key actions and level-aware gesture defaults for tmux, Herdr, Zellij and plain terminals.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.18.0
+  - @lazysh/common@1.18.0
+  - @lazysh/display-idle@1.18.0
+  - @lazysh/et-transport@1.18.0
+  - @lazysh/mosh-transport@1.18.0
+
 ## 1.17.1
 
 ### Patch Changes
