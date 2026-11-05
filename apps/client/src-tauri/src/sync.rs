@@ -474,6 +474,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "gestureChords",
             "dpadCorners",
             "autoHideToolbar",
+            "composerSendEnter",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
         validate_theme_preferences(object)?;

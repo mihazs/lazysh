@@ -1,0 +1,57 @@
+/* The draft sheet replaces the visible terminal output without resizing it. */
+.terminal-stage { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet {
+  position: absolute; inset: 0; z-index: 1; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  max-height: none; min-height: 0; margin: 0; overflow: hidden;
+  padding: 12px max(12px, env(safe-area-inset-right)) calc(12px + var(--terminal-composer-keyboard, 0px)) max(12px, env(safe-area-inset-left));
+  border: 0; border-radius: 0; outline: 0; box-shadow: none;
+  background: var(--theme-bg, var(--bg)); color: var(--theme-text, var(--text));
+  animation: terminal-composer-in 140ms ease-out;
+}
+@keyframes terminal-composer-in { from { opacity: 0; transform: translateY(6px); } }
+.terminal-composer-sheet > .terminal-composer-head { display: flex; align-items: baseline; gap: 12px; flex: 0 0 auto; min-height: 24px; padding-inline: 4px; }
+/* The fallback header controls stay reachable above the sheet. */
+.terminal-pane:has(> .terminal-actions-fallback) .terminal-composer-sheet > .terminal-composer-head { padding-inline-end: 100px; }
+.terminal-composer-head > label { font-weight: 600; font-size: 15px; }
+.terminal-composer-head > .terminal-composer-count { color: var(--theme-muted, var(--muted)); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-editor {
+  display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 0;
+  border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-radius: 16px;
+  background: var(--theme-panel, var(--panel));
+}
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-editor > textarea {
+  display: block; flex: 1 1 auto; width: 100%; height: auto; min-height: 0; max-height: none; box-sizing: border-box;
+  padding: 14px 16px; margin: 0; border: 0; border-radius: 16px; resize: none; outline: none; overflow: auto;
+  background: transparent; color: var(--theme-text, var(--text)); font: inherit; font-size: 16px; line-height: 1.5;
+}
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 0; }
+.terminal-composer-sheet .terminal-composer-secondary, .terminal-composer-sheet .terminal-composer-primary { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.terminal-composer-sheet .terminal-composer-primary { gap: 12px; margin-inline-start: auto; }
+.terminal-stage > .terminal-composer-sheet .terminal-composer-secondary > .icon-button {
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; margin: 0;
+  border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--theme-muted, var(--muted));
+}
+.terminal-stage > .terminal-composer-sheet .terminal-composer-secondary > .icon-button:hover:not(:disabled) { background: var(--theme-hover); color: var(--theme-text, var(--text)); }
+.terminal-composer-sheet .terminal-composer-hint { color: var(--theme-muted, var(--muted)); font-size: 13px; white-space: nowrap; }
+.terminal-stage > .terminal-composer-sheet .terminal-draft-actions .terminal-composer-send {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-width: 104px; min-height: 44px; padding: 0 20px; margin: 0;
+  border: 0; border-radius: 22px; background: var(--accent); color: var(--theme-on-accent, var(--bg)); font-weight: 600; font-size: 15px;
+}
+.terminal-stage > .terminal-composer-sheet .terminal-draft-actions .terminal-composer-send:disabled { opacity: .45; }
+.terminal-stage > .terminal-composer-sheet button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (pointer: coarse) {
+  /* Touch keyboards have no shortcut; the sheet sits directly above the keyboard. */
+  .terminal-composer-sheet .terminal-composer-hint { display: none; }
+  .terminal-pane:has(.terminal-composer-sheet) .terminal-keys { display: none; }
+}
+@media (max-height: 480px) {
+  /* Keyboard-sized viewports give the editor the label row; the label stays for assistive tech. */
+  .terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet { gap: 8px; padding-top: 8px; padding-bottom: calc(8px + var(--terminal-composer-keyboard, 0px)); }
+  .terminal-composer-sheet > .terminal-composer-head { position: absolute; width: 1px; height: 1px; min-height: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet { animation: none; }
+}

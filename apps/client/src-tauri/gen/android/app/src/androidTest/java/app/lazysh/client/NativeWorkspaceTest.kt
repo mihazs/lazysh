@@ -2767,9 +2767,9 @@ class NativeWorkspaceTest {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
             closeSoftKeyboard()
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Paste draft']")).perform(webClick())
+            // Send pastes the draft and submits it with its own Enter.
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Send']")).perform(webClick())
             closeSoftKeyboard()
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
         }
         fun proof(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun record(part: String) = "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/background-$part.tmp; " +
@@ -3077,9 +3077,8 @@ class NativeWorkspaceTest {
             if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
             typeInto(scenario, ".terminal-compose textarea", command)
             closeSoftKeyboard()
-            clickButton("Paste draft")
+            clickButton("Send")
             closeSoftKeyboard()
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
                 " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
             assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
@@ -3431,14 +3430,14 @@ class NativeWorkspaceTest {
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
                     .also { require(it.size <= 2048) { "Keyboard viewport oracle bound" } }.toString(Charsets.UTF_8)
                 val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
-                awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
+                awaitDocument(scenario, "composer sheet editor and actions inside the keyboard-resized WebView", """
                     (()=>{
-                      const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
-                      if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
-                      const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
+                      const sheet=document.querySelector('.terminal-composer-sheet'), editor=sheet?.querySelector('textarea');
+                      const send=sheet?.querySelector("button[aria-label='Send']"), close=sheet?.querySelector("button[aria-label='Close composer']");
+                      if(!sheet || !editor || !send || !close || editor.getBoundingClientRect().height<=0) return false;
                       $viewportOracle
-                      return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
-                        [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
+                      return ownedKeyboardViewportContains(window.visualViewport,
+                        [sheet,editor,send,close].map(x=>x.getBoundingClientRect()));
                     })()
                 """, observe = { remaining ->
                     val native = JSONObject()
@@ -3478,14 +3477,20 @@ class NativeWorkspaceTest {
                 val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
                 closeSoftKeyboard()
                 awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
-                clickButton("Paste draft")
+                clickButton("Send")
                 val terminalFocused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
-                assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario, terminalFocused))
+                awaitDocument(scenario, "Send closes the composer and leaves the terminal input focused",
+                    "!" + present(".terminal-compose textarea") + " && " + terminalFocused)
                 // Refocusing xterm can reopen the docked IME and reduce the visible screen to one row.
                 // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
                 closeSoftKeyboard()
                 assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+                // Send submitted the draft with its own Enter; no native key press was needed.
+                awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
+                    screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+                val prompt = JSONObject.quote(fixture.getString("prompt"))
                 val literalClipboard = " # CLIP_${nonce}_\$literal"
+                val literal = JSONObject.quote(literalClipboard)
                 instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
                 clickButton("paste")
                 awaitDocument(scenario, "native clipboard client settled and focused", """
@@ -3498,11 +3503,11 @@ class NativeWorkspaceTest {
                 closeSoftKeyboard()
                 assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
                 awaitDocument(scenario, "native clipboard text pasted literally without Enter",
-                    screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
-                // Normal native Enter submits the real shell input.
+                    "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>{const i=x.textContent.lastIndexOf($literal);return i>=0&&x.textContent.lastIndexOf($prompt)<i;})")
+                // Normal native Enter submits the real shell input; the comment line returns a prompt.
                 onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
-                awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
-                    screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+                awaitDocument(scenario, "native Enter submits the literal clipboard line",
+                    "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf($prompt)>x.textContent.lastIndexOf($literal))")
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
                 if (!requireSharedHerdr) verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
                 if (requireSharedHerdr) verifySharedHerdrNavigation(scenario, fixture.getJSONObject("herdr"), name, label)
@@ -4457,6 +4462,13 @@ class NativeWorkspaceTest {
                 added = true
             }
             onWebView().withElement(findElement(Locator.XPATH, selector)).perform(webScrollIntoView()).perform(webClick())
+            // The exact D-pad receiver bytes exclude the composer's default separate Enter.
+            preferencesCategory(scenario, "input")
+            val sendEnter = "Array.from(document.querySelectorAll('[role=dialog] label')).find(x=>x.textContent.trim()==='Send Enter after pasting the draft')?.querySelector('input[type=checkbox]')"
+            val wanted = action != "Add"
+            if (evaluate(scenario, "$sendEnter?.checked===$wanted") != "true")
+                onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//label[normalize-space(.)='Send Enter after pasting the draft']/input[@type='checkbox']")).perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "composer Send Enter preference is $wanted", "$sendEnter?.checked===$wanted")
             raw.clickIcon("Close Preferences")
             awaitDocument(scenario, "owned D-pad preference dialog closed", "!document.querySelector('[role=dialog][aria-label=Preferences]')")
         }
@@ -4711,12 +4723,12 @@ class NativeWorkspaceTest {
         fun clickIcon(name: String) = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
             "button[aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
         fun proof(marker: String) = "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes(${JSONObject.quote(marker)})"
+        /** Send adds a separate Enter; with that preference off, Paste draft pastes only. */
         fun send(command: String, enter: Boolean = true) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true") clickIcon("Compose")
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
-            closeSoftKeyboard(); clickIcon("Paste draft"); closeSoftKeyboard(); clickIcon("Close composer")
-            awaitDocument(scenario, "owned IME command terminal focused", "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
-            if (enter) onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+            closeSoftKeyboard(); clickIcon(if (enter) "Send" else "Paste draft"); closeSoftKeyboard()
+            awaitDocument(scenario, "owned IME command terminal focused", "!Boolean(document.querySelector('.terminal-compose textarea')) && document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
         }
         fun start() {
             send(fixture.getString("challenge"))

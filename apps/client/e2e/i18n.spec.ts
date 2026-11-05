@@ -20,7 +20,7 @@ async function fixture(page: Page, languages = ['en-GB']) {
         window.localeFixture.output=(text='RAW C-b, {{text}} 世界\r\n')=>channel.onmessage({type:'data',data:[...new TextEncoder().encode(text)]});
         return {sessionId:'local:locale-fixture'};
       }
-      if(command==='local_write'){window.localeFixture.sent.push(String(args.data));return;}
+      if(command==='local_write'){window.localeFixture.sent.push(...(Array.isArray(args.steps)?args.steps.map(String):[String(args.data)]));return;}
       if(['local_resize','local_ack','local_disconnect'].includes(command))return;
       if(command==='app_icon_status')return {available:false,current:'unknown',reason};
       if(command==='credential_protection')return {available:false,reason};
@@ -41,7 +41,7 @@ async function connectedTerminal(page: Page) {
   await expect(screen).toContainText('RAW C-b, {{text}} 世界');
   return {screen,canvas:await page.locator('.terminal-canvas').elementHandle()};
 }
-test('Paste draft returns keyboard Enter to the existing terminal without losing composer staging focus',async({page})=>{
+test('Send submits the draft with a separate Enter and returns focus to the existing terminal',async({page})=>{
   await fixture(page);const {canvas}=await connectedTerminal(page);
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   const composer=page.getByRole('textbox',{name:'Compose text',exact:true});
@@ -51,10 +51,9 @@ test('Paste draft returns keyboard Enter to the existing terminal without losing
   const draft=await composer.inputValue();
   expect(draft).toContain('\n');
   expect(await page.evaluate(()=>window.localeFixture.sent)).toEqual([]);
-  await page.getByRole('button',{name:'Paste draft',exact:true}).click();
-  await expect(composer).toHaveValue('');
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect(composer).toHaveCount(0);
   await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
-  await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>window.localeFixture.sent)).toEqual([draft.replaceAll('\n','\r'),'\r']);
   expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId:'local:locale-fixture',text:'new staged draft'}})));
@@ -209,9 +208,9 @@ for(const system of [
 });
 
 for(const locale of [
-  {code:'en',compose:'Compose text',paste:'Paste draft',find:'Find',search:'Search terminal history',next:'Next',match:'Match on line 1',consent:'Remote clipboard request',allow:'Allow this copy'},
-  {code:'pt-BR',compose:'Compor texto',paste:'Colar rascunho',find:'Buscar',search:'Buscar no histórico do terminal',next:'Próxima',match:'Resultado na linha 1',consent:'Solicitação remota da área de transferência',allow:'Permitir esta cópia'},
-  {code:'es',compose:'Redactar texto',paste:'Pegar borrador',find:'Buscar',search:'Buscar en el historial del terminal',next:'Siguiente',match:'Coincidencia en la línea 1',consent:'Solicitud remota del portapapeles',allow:'Permitir esta copia'},
+  {code:'en',compose:'Compose text',close:'Close composer',find:'Find',search:'Search terminal history',next:'Next',match:'Match on line 1',consent:'Remote clipboard request',allow:'Allow this copy'},
+  {code:'pt-BR',compose:'Compor texto',close:'Fechar editor de texto',find:'Buscar',search:'Buscar no histórico do terminal',next:'Próxima',match:'Resultado na linha 1',consent:'Solicitação remota da área de transferência',allow:'Permitir esta cópia'},
+  {code:'es',compose:'Redactar texto',close:'Cerrar redactor',find:'Buscar',search:'Buscar en el historial del terminal',next:'Siguiente',match:'Coincidencia en la línea 1',consent:'Solicitud remota del portapapeles',allow:'Permitir esta copia'},
 ] as const) test(`terminal-owned ${locale.code} controls retain live content, explicit consent and input bytes`,async({page})=>{
   await fixture(page);const {screen,canvas}=await connectedTerminal(page);
   await page.getByRole('button',{name:'ctrl',exact:true}).dblclick();
@@ -230,6 +229,9 @@ for(const locale of [
   expect(await page.evaluate(()=>window.localeFixture.copied)).toEqual([]);expect(await page.evaluate(()=>window.localeFixture.sent)).toEqual([]);
   await page.getByRole('button',{name:locale.allow,exact:true}).click();
   expect(await page.evaluate(()=>window.localeFixture.copied)).toEqual(['RAW clipboard {{text}}']);
+  // The composer covers output and, on touch layouts, the key row until it closes.
+  await page.getByRole('button',{name:locale.close,exact:true}).click();
+  await expect(localized).toHaveCount(0);
   await page.getByRole('button',{name:locale.find,exact:true}).click();
   await page.getByRole('textbox',{name:locale.search,exact:true}).fill('RAW');
   await page.getByRole('button',{name:locale.next,exact:true}).click();await expect(page.getByText(locale.match,{exact:true})).toBeVisible();

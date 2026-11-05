@@ -103,6 +103,7 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
 {id:"input",title:t("preferencesCategoryInput"),content:<>
 
     <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
+    <label><input type="checkbox" checked={preferences.composerSendEnter} onChange={e => update({composerSendEnter: e.target.checked})} />{t("preferencesComposerSendEnter")}</label>
 
 </>},
 {id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>

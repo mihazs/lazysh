@@ -490,9 +490,9 @@ test('mobile terminal keeps one compact header and reaches every session control
   await actions.getByRole('button',{name:'Compose',exact:true}).click();
   await page.getByLabel('Compose text',{exact:true}).fill('Review this draft');
   const composer=page.locator('.terminal-compose');
-  for(const name of ['Paste draft','Close composer']) {
+  for(const name of ['Send','Close composer']) {
     const button=composer.getByRole('button',{name,exact:true});
-    expect(await button.textContent()).toBe(''); await expect(button.locator('svg')).toHaveCount(1);
+    expect(await button.textContent()).toBe(name==='Send'?'Send':''); await expect(button.locator('svg')).toHaveCount(1);
   }
   if(phone){
     for(const width of [393,412]) for(const height of [844,420]){
@@ -502,6 +502,12 @@ test('mobile terminal keeps one compact header and reaches every session control
       expect((await page.locator('.session-body').boundingBox())!.y).toBe(44);
       const buttons=(await composer.locator('.terminal-compose-actions').boundingBox())!;
       expect(buttons.y+buttons.height).toBeLessThanOrEqual(height);
+    }
+    await page.setViewportSize({width:393,height:844});
+    await page.screenshot({path:testInfo.outputPath('compact-composer.png')});
+    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
+    for(const width of [393,412]) for(const height of [844,420]){
+      await page.setViewportSize({width,height});
       const withKeys=(await page.locator('.terminal-canvas:visible').boundingBox())!.height;
       await actions.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
       expect((await page.locator('.terminal-canvas:visible').boundingBox())!.height).toBeGreaterThan(withKeys);
@@ -519,8 +525,6 @@ test('mobile terminal keeps one compact header and reaches every session control
       }
     }
     await page.setViewportSize({width:393,height:844});
-    await page.screenshot({path:testInfo.outputPath('compact-composer.png')});
-    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
     const protocol=await page.context().newCDPSession(page);
     await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62}});
     await expect(header).toHaveCSS('padding-top','62px');
