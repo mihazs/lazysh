@@ -90,6 +90,8 @@ import {appShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
+import type {UploadedAttachment} from "./AttachmentPanel";
+import {stageComposerAttachment} from "./composerTokens";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
@@ -1174,6 +1176,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
+  // The session whose terminal composer opened the attachment tool, so the upload returns to its draft.
+  const [composerAttachment, setComposerAttachment] = useState<string | null>(null);
+  useEffect(() => {if (view !== 'attachments') setComposerAttachment(null);}, [view]);
   const trail = useRef<{sessionId:string;view:View;sidebar:boolean;mode:NavigationMode}[]>([]);
   const [backCount,setBackCount] = useState(0);
   const terminalBack = useRef<{sessionId:string;close:()=>boolean}|null>(null);
@@ -1299,12 +1304,21 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
     return api.write(live.id,data);
   }
-  function openTerminalAttachments(session: LiveSession) {
+  function openTerminalAttachments(session: LiveSession, target?: 'composer') {
     if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
       || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
       || !sessionsRef.current.includes(session))return;
     visitView('attachments');
+    setComposerAttachment(target==='composer' ? session.id : null);
+  }
+  function addComposerAttachment(path: string, uploaded: UploadedAttachment) {
+    const sessionId=composerAttachment;
+    const live=sessionsRef.current.find(session=>session.id===sessionId&&session.connected&&!session.disposed);
+    if(!sessionId||!mounted.current||!lease.current()||!live||live!==active||currentView.current.activeId!==sessionId
+      ||currentView.current.view!=='attachments'||closingSessions.current.has(sessionId))return;
+    stageComposerAttachment(sessionId,{path,...uploaded});
+    returnToContext(true);
   }
   function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
     const current=()=>mounted.current && lease.current() && !document.hidden
@@ -2239,7 +2253,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     reportError={setError}
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
-                    onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
+                    onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
                   />
                 ))}
                 {active.connected && view === "usage" && (
@@ -2262,7 +2276,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && !active.local && view === "attachments" && (
-                  <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
+                  <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} {...composerAttachment===active.id ? {onAttach:addComposerAttachment,attachTarget:'composer' as const} : {}} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
                 )}
                 {active.connected && view === "voice" && (
                   <VoicePanel key={active.id} sessionId={active.id} onDirectDictation={deliverDictation} />

@@ -14,7 +14,10 @@ import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageS
 type Selected = { file: File; bytes: Uint8Array; size: ImageSize | null };
 type Stroke = { points: Point[]; color: string; width: number };
 
-export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRestoreFileTransfer }: { sessionId: string; onAttach?: (path:string)=>void; onPastePath?:(request:AttachmentPathPaste)=>Promise<void>; onRestoreFileTransfer?:(restored:()=>void)=>void }) {
+/** What was uploaded, for callers that reference the file instead of only its path. */
+export type UploadedAttachment = {name:string;kind:'image'|'file';preview?:Blob};
+
+export default function AttachmentPanel({ sessionId, onAttach, attachTarget='chat', onPastePath, onRestoreFileTransfer }: { sessionId: string; onAttach?: (path:string,uploaded:UploadedAttachment)=>void; attachTarget?:'chat'|'composer'; onPastePath?:(request:AttachmentPathPaste)=>Promise<void>; onRestoreFileTransfer?:(restored:()=>void)=>void }) {
   useUi();
   const api = useProtectedApi(nativeApi);
   const clipboardPlatform = useClipboardPlatform();
@@ -23,6 +26,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
   const originalSession=useRef(sessionId).current;
   const latestSession=useRef(sessionId);latestSession.current=sessionId;
   const completed=useRef<{path:string}|null>(null);
+  const uploadedFile=useRef<UploadedAttachment|null>(null);
   const pasting=useRef<{target:{path:string};claimed:boolean}|null>(null);
   const [pasteBusy,setPasteBusy]=useState(false);
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -47,7 +51,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
   const hostClipboard=useHostClipboard(api,sessionId,error=>setError(captureUiError(error)),kind=>setNotice({key:kind==='copied'?'attachmentHostCopied':'attachmentHostCopyCancelled'}));
   const busy=uploadJob.busy||hostClipboard.busy||pasteBusy;
   const renderedPasteTarget=completed.current;
-  function clearCompletion(){completed.current=null;hostClipboard.clear();setAttachable(false);}
+  function clearCompletion(){completed.current=null;uploadedFile.current=null;hostClipboard.clear();setAttachable(false);}
   const currentPasteOwner=()=>owner.mounted.current&&owner.access.current()&&latestSession.current===originalSession;
   async function pastePath(target:{path:string}|null){
     if(!onPastePath||!target||completed.current!==target||pasting.current||uploadJob.active()||hostClipboard.active()
@@ -146,6 +150,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
     if (!selected || busy) return;
     clearCompletion();
     setError(''); setNotice('');
+    let sent:UploadedAttachment|null=null;
     await uploadJob.start(async()=>{
       checkDestination(destination);
       let bytes = selected.bytes;
@@ -162,9 +167,13 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
           bytes = new Uint8Array(await blob.arrayBuffer());
         } finally {output.width = 0; output.height = 0;}
       }
+      const image=bytes!==selected.bytes||!!selected.size||selected.file.type.startsWith('image/');
+      const mime=bytes!==selected.bytes?'image/png':selected.size?.mime??selected.file.type;
+      sent={name:'',kind:image?'image':'file',preview:image?new Blob([new Uint8Array(bytes)],{type:mime}):undefined};
       return {path:destination,bytes};
     },(path,uploadId)=>{
       completed.current=Object.freeze({path});
+      if(sent)uploadedFile.current={...sent,name:path.slice(path.lastIndexOf('/')+1)||path};
       setAttachable(true);hostClipboard.completed(uploadId);
       setRecoveryNeeded(false);setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
@@ -178,7 +187,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
     <h3>{t('attachmentHeading')}</h3><p>{t('attachmentScope')}</p>
     {uploaded && <div className="form-stack attachment-completed"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label>
       {onPastePath&&!onAttach&&attachable&&<><button type="button" className="primary-button" disabled={busy} onClick={()=>void pastePath(renderedPasteTarget)}>{t(pasteBusy?'attachmentPasting':'attachmentPastePath')}</button><small>{t('attachmentPasteHint')}</small></>}
-      {onAttach && attachable && <button type="button" className="primary-button" disabled={busy} onClick={guard(()=>{if(!uploadJob.active()&&!hostClipboard.active())onAttach(uploaded);})}>{t('attachmentAddToChat')}</button>}
+      {onAttach && attachable && <button type="button" className="primary-button" disabled={busy} onClick={guard(()=>{const file=uploadedFile.current;if(!uploadJob.active()&&!hostClipboard.active()&&file)onAttach(uploaded,file);})}>{t(attachTarget==='composer'?'attachmentAddToComposer':'attachmentAddToChat')}</button>}
       <details><summary>{t('attachmentOtherActions')}</summary><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></details></div>}
     <details className="attachment-sources" open={!selected}><summary>{t('attachmentChoose')}</summary><div className="button-row">
       <label><FilePlus2 size={20} aria-hidden="true"/>{t('attachmentChoose')}<input aria-label={t('attachmentChooseLabel')} type="file" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>
