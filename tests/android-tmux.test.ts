@@ -51,6 +51,11 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await client.stop();
     await owned.verifyDetachedAndReattached();
     expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2});
+    // A still-attached control-mode client, like the app's Jump binding, must not break teardown.
+    client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -f no-output,ignore-size -t '=owned-tmux'");
+    await wait(()=>client!.stdout.includes('%session-changed'));
+    await owned.stop();
+    expect(await client.finish('owned tmux control client detached by teardown',5000)).toContain('%exit');
   } finally {
     await client?.stop();
     await owned.stop();

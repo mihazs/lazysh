@@ -127,10 +127,30 @@ export class TmuxFixture {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
     return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker}))};
   }
+  // tmux 3.4 can crash (exit 139) in its SIGTERM shutdown while a control-mode client,
+  // such as the app's Jump binding, is still attached. Detach every remaining client and
+  // observe zero attached clients first, so the owned server exits through its clean path.
+  private async quiesce() {
+    if(!await this.server?.liveIdentity())return;
+    const attached=async()=>{
+      const text=await this.run(['list-clients','-F','#{client_control_mode}']);
+      return tmuxDisplayClients(text)+text.split('\n').filter(line=>line==='1').length;
+    };
+    if(!await attached())return;
+    await this.run(['detach-client','-s',`=${this.name}`]);
+    const deadline=performance.now()+3000;
+    while(await attached()) {
+      if(performance.now()>=deadline)throw new Error('Owned tmux clients survived detach');
+      await delay(25);
+    }
+  }
   async stop() {
     if(this.stopped)return;
+    let quiesced:unknown;
+    try{await this.quiesce();}catch(error){quiesced=error;}
     await stopOwnedServer(this.ssh,this.server,'tmux',async()=>(await Promise.all([this.serverPid,...this.windows.map(window=>window.pane)]
       .map(saved=>saved?.pid?this.alive(saved):false))).some(Boolean));
+    if(quiesced)throw quiesced;
     this.stopped=true;
   }
 }
