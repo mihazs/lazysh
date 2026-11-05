@@ -5062,7 +5062,7 @@ class NativeWorkspaceTest {
                 "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(marker)}))")
             closeSoftKeyboard()
             // A native finger slide to the right over the snippets page returns to the key rows.
-            val page = cssCenter(".terminal-keys [role=tabpanel][aria-label='Snippets']", null)
+            val page = cssCenter(".terminal-keys [role=tabpanel][data-toolbar-page='snippets']", null)
             val travel = page.getDouble(2) * 0.35
             onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.SLOW,
                 { view -> screen(view, page, -travel) }, { view -> screen(view, page, travel) }, Press.FINGER))
