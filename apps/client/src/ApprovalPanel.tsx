@@ -1,4 +1,7 @@
-import {t, useUi, formatDateTime} from './i18n/core';
+import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
+import { Check, Clock, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { formatCountdown, formatRelativeTime, pathBasename, useNow } from './relativeTime';
+import './ApprovalPanel.css';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
@@ -125,16 +128,17 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       }
     }
   }
+  const now=useNow(1000,visible && requests.length>0);
   if(compactEmpty && requests.length===0 && !error)return null;
   return (
     <section hidden={!visible} style={visible?undefined:{display:'none'}} aria-label={t('approvalsTitle')} className="approval-panel">
-      <div className="tool-bar">
-        <h3>{t('approvalsTitle')}</h3>
-        <button disabled={busy || !visible} onClick={() => void refresh()}>
-          {t('approvalsRefresh')}
+      <div className="approval-header">
+        <h3>{t('approvalsTitle')}{requests.length>0 && <span className="approval-count">{formatNumber(requests.length)}</span>}</h3>
+        <button type="button" className="icon-button" aria-label={t('approvalsRefresh')} title={t('approvalsRefresh')} disabled={busy || !visible} onClick={() => void refresh()}>
+          <RefreshCw size={16} aria-hidden="true" />
         </button>
       </div>
-      <p>
+      <p className="approval-hint">
         {t('approvalsHint')}
       </p>
       {error && (
@@ -142,30 +146,46 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
           {uiErrorText(error)}
         </p>
       )}
-      {requests.map((request) => (
-        <article className="chat-message" key={request.id}>
-          <h4>
-            {request.agent} · {request.toolName}
-          </h4>
-          <p>
-            {request.paneId?t('approvalsPaneContext',{project:request.project,session:request.sessionId,pane:request.paneId}):t('approvalsContext',{project:request.project,session:request.sessionId})}
+      {requests.map((request) => {
+        const expires=Date.parse(request.expiresAt);
+        const expired=expires<=Math.max(now,Date.now());
+        const titleId=`approval-${request.id}`;
+        return (
+        <article className="approval-card" key={request.id} aria-labelledby={titleId} data-expired={expired?'true':undefined}>
+          <header className="approval-identity">
+            <span className="approval-mark" aria-hidden="true"><ShieldAlert size={18} /></span>
+            <div className="approval-heading">
+              <h4 id={titleId}>{request.agent} · {request.toolName}</h4>
+              <p className="approval-origin">
+                <span>{pathBasename(request.project)}</span>
+                <time dateTime={request.createdAt} title={formatDateTime(new Date(request.createdAt))}>{formatRelativeTime(request.createdAt,now)}</time>
+              </p>
+            </div>
+            <span className="approval-kind">{t('approvalsPermission')}</span>
+          </header>
+          <pre className="approval-input">{JSON.stringify(request.toolInput, null, 2)}</pre>
+          <p className="approval-expiry">
+            <Clock size={14} aria-hidden="true" />
+            <time dateTime={request.expiresAt} title={t('approvalsExpires',{time:formatDateTime(new Date(expires))})}>
+              {expired?t('approvalsExpired'):t('approvalsExpiresIn',{time:formatCountdown(expires-now)})}
+            </time>
           </p>
-          <pre>{JSON.stringify(request.toolInput, null, 2)}</pre>
-          <p><time dateTime={request.expiresAt}>{t('approvalsExpires',{time:formatDateTime(new Date(request.expiresAt))})}</time></p>
-          <button
-            disabled={!visible || busy || Date.parse(request.expiresAt) <= Date.now()}
-            onClick={() => void decide(request, "deny")}
-          >
-            {t('approvalsDeny')}
-          </button>
-          <button
-            disabled={!visible || busy || Date.parse(request.expiresAt) <= Date.now()}
-            onClick={() => void decide(request, "allow")}
-          >
-            {t('approvalsAllow')}
-          </button>
+          <div className="approval-actions">
+            <button type="button" className="approval-deny" disabled={!visible || busy || expired} onClick={() => void decide(request, "deny")}>
+              <X size={16} aria-hidden="true" />{t('approvalsDeny')}
+            </button>
+            <button type="button" className="approval-allow" disabled={!visible || busy || expired} onClick={() => void decide(request, "allow")}>
+              <Check size={16} aria-hidden="true" />{t('approvalsAllow')}
+            </button>
+          </div>
+          <dl className="approval-facts">
+            <div><dt>{t('approvalsProjectLabel')}</dt><dd>{request.project}</dd></div>
+            <div><dt>{t('approvalsSessionLabel')}</dt><dd>{request.sessionId}</dd></div>
+            {request.paneId && <div><dt>{t('approvalsPaneLabel')}</dt><dd>{request.paneId}</dd></div>}
+          </dl>
         </article>
-      ))}
+        );
+      })}
     </section>
   );
 }

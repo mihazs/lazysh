@@ -46,16 +46,18 @@ it('keeps the original polling interval and skips dispatch while a decision is i
   let complete!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[agentApproval()]}:new Promise(resolve=>{complete=resolve;}));
   const view=render(<ApprovalPanel sessionId={agentBoardSession}/>);
-  await act(async()=>{});expect(timer).toHaveBeenCalledTimes(1);expect(timer.mock.calls[0][1]).toBe(10000);
+  // The 1 s expiry countdown is a separate display timer; only the 10 s approval poll is owned here.
+  const polls=()=>timer.mock.calls.flatMap((call,index)=>call[1]===10000?[timer.mock.results[index].value]:[]);
+  await act(async()=>{});expect(polls()).toHaveLength(1);
   await languagesKeep(()=>expect(screen.getByRole('article')).toBeTruthy());
-  expect(timer).toHaveBeenCalledTimes(1);expect(clear).not.toHaveBeenCalled();
+  expect(polls()).toHaveLength(1);expect(clear).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:t('approvalsAllow')}));
   await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
   expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='agent_approvals')).toHaveLength(1);
   await act(async()=>{complete({schemaVersion:1,accepted:true});});
   await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
   expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='agent_approvals')).toHaveLength(2);
-  view.unmount();expect(clear).toHaveBeenCalledTimes(1);
+  view.unmount();expect(clear.mock.calls.filter(([id])=>id===polls()[0])).toHaveLength(1);expect(polls()).toHaveLength(1);
   delete (document as unknown as {hidden?:boolean}).hidden;
 });
 it('keeps host rejection visible and translated without retrying or treating it as accepted',async()=>{

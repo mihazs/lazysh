@@ -1,9 +1,14 @@
-import {t, useUi, formatDateTime} from './i18n/core';
+import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
+import { Archive, Check, ChevronDown, ChevronRight, Inbox, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { formatRelativeTime, pathBasename, useNow } from './relativeTime';
+import './NotificationPanel.css';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { isPermissionGranted, onAction, registerActionTypes, requestPermission } from '@tauri-apps/plugin-notification';
-import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxSession } from './notificationStore';
+import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxRow, type InboxSession } from './notificationStore';
+
+const inboxGroups = [['needs_attention', 'inboxNeedsYou'], ['working', 'inboxWorking'], ['done', 'inboxDone']] as const;
 import { errorMessage } from './SessionTools';
 
 export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) {
@@ -88,24 +93,50 @@ export default function NotificationPanel({ sessions }: { sessions: InboxSession
     catch (e) { updateInbox({ error: errorMessage(e) }); }
     finally { setBusy(false); }
   }
-  const names = { needs_attention: "inboxNeedsYou", working: "inboxWorking", done: "inboxDone" } as const;
+  const [settingsOpen, setSettingsOpen] = useState(() => !state.monitoring || state.rows.length === 0);
+  const [collapsed, setCollapsed] = useState<Partial<Record<InboxRow['state'], boolean>>>({});
+  const now = useNow(30000, state.rows.length > 0);
+  const groups = inboxGroups.map(([group, label]) => [group, label, state.rows.filter(row => row.state === group)] as const).filter(([, , rows]) => rows.length);
   return <section className="tool-panel notification-panel" aria-label={t("inboxTitle")}>
-    <h3>{t("inboxTitle")}</h3>
-    <p>{t("inboxExplanation")}</p>
-    <div className="tool-bar"><label><input type="checkbox" checked={state.monitoring} disabled={!isTauri()} onChange={event => updateInbox({ monitoring: event.target.checked })} />{t("inboxMonitor")}</label>
-      {state.notifications ? <button onClick={() => updateInbox({ notifications: false })}>{t("inboxPause")}</button> : <button disabled={busy || !isTauri()} onClick={() => void enable()}>{t("inboxEnable")}</button>}
-      <button disabled={busy || !state.notifications || !isTauri()} onClick={() => void test()}>{t("inboxTest")}</button>
-      <button disabled={!state.monitoring || !isTauri()} onClick={() => window.dispatchEvent(new Event('lazysh-inbox-refresh'))}>{t("inboxRefresh")}</button>
-      <button disabled={!state.rows.length} onClick={() => updateInbox({ rows: [] })}>{t("inboxClear")}</button>
+    <div className="inbox-header">
+      <h3>{t("inboxTitle")}</h3>
+      <button type="button" className="icon-button" aria-label={t("inboxRefresh")} title={t("inboxRefresh")} disabled={!state.monitoring || !isTauri()} onClick={() => window.dispatchEvent(new Event('lazysh-inbox-refresh'))}><RefreshCw size={16} aria-hidden="true" /></button>
+      <button type="button" className="icon-button" aria-label={t("inboxClear")} title={t("inboxClear")} disabled={!state.rows.length} onClick={() => updateInbox({ rows: [] })}><Trash2 size={16} aria-hidden="true" /></button>
     </div>
-    <p>{t("inboxPrivacy")}</p>
-    {!isTauri() && <p>{t("inboxNativeRequired")}</p>}
+    <p className="inbox-status" data-monitoring={state.monitoring ? 'true' : 'false'}>{state.monitoring ? t("inboxMonitoringOn") : t("inboxMonitoringOff")}</p>
     {state.error && <p className="inline-error" role="alert">{state.error}</p>}
     {status && <p role="status">{t(status)}</p>}
-    {state.rows.length === 0 && <p>{t("inboxEmpty")}</p>}
-    <div className="notification-list">{state.rows.map(row => <article className="agent-card" key={row.id}><strong>{t(names[row.state])} · {row.agent}</strong><p>{row.hostName} · <code>{row.project}</code></p><time dateTime={row.updatedAt}>{formatDateTime(new Date(row.updatedAt))}</time><div>
-      <button disabled={!sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)} onClick={() => { if (!openInboxEvent(row.eventId, sessions)) setStatus("inboxConnectionEnded"); }}>{t("inboxOpenConnected")}</button>
-      <button onClick={() => updateInbox({ rows: state.rows.filter(event => event.id !== row.id) })}>{t("inboxArchive")}</button>
-    </div></article>)}</div>
+    {state.rows.length === 0 && <div className="inbox-empty"><Inbox size={28} aria-hidden="true" /><strong>{t("inboxEmptyTitle")}</strong><span>{t("inboxEmpty")}</span></div>}
+    {groups.map(([group, label, rows]) => <div className="inbox-group" data-state={group} key={group}>
+      <h4><button type="button" className="inbox-group-toggle" aria-expanded={!collapsed[group]} onClick={() => setCollapsed(previous => ({ ...previous, [group]: !previous[group] }))}>
+        <span>{t(label)}</span><span className="inbox-group-count">{formatNumber(rows.length)}</span><ChevronDown size={14} aria-hidden="true" />
+      </button></h4>
+      {!collapsed[group] && <div className="notification-list">{rows.map(row => {
+        const connected = sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected);
+        return <article className="inbox-row" key={row.id} data-state={row.state} aria-labelledby={`inbox-${row.id}`}>
+          <span className="inbox-ring" data-state={row.state} aria-hidden="true">{row.state === 'needs_attention' ? '!' : row.state === 'done' ? <Check size={14} /> : null}</span>
+          <div className="inbox-row-body">
+            <strong id={`inbox-${row.id}`}>{row.agent}</strong>
+            <span className="inbox-row-context"><span className="inbox-project">{pathBasename(row.project)}</span><span>{row.hostName}</span><time dateTime={row.updatedAt} title={formatDateTime(new Date(row.updatedAt))}>{formatRelativeTime(row.updatedAt, now)}</time></span>
+            <code>{row.project}</code>
+          </div>
+          <div className="inbox-row-actions">
+            <button type="button" className="icon-button" aria-label={t("inboxArchive")} title={t("inboxArchive")} onClick={() => updateInbox({ rows: state.rows.filter(event => event.id !== row.id) })}><Archive size={16} aria-hidden="true" /></button>
+            <button type="button" className="icon-button inbox-open" aria-label={t("inboxOpenConnected")} title={connected ? t("inboxOpenConnected") : t("inboxConnectionEnded")} disabled={!connected} onClick={() => { if (!openInboxEvent(row.eventId, sessions)) setStatus("inboxConnectionEnded"); }}><ChevronRight size={18} aria-hidden="true" /></button>
+          </div>
+        </article>;
+      })}</div>}
+    </div>)}
+    <details className="inbox-settings" open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)}>
+      <summary><Settings2 size={16} aria-hidden="true" />{t("inboxSettings")}</summary>
+      <p>{t("inboxExplanation")}</p>
+      <label className="inbox-switch"><input type="checkbox" checked={state.monitoring} disabled={!isTauri()} onChange={event => updateInbox({ monitoring: event.target.checked })} />{t("inboxMonitor")}</label>
+      <div className="inbox-settings-actions">
+        {state.notifications ? <button type="button" onClick={() => updateInbox({ notifications: false })}>{t("inboxPause")}</button> : <button type="button" disabled={busy || !isTauri()} onClick={() => void enable()}>{t("inboxEnable")}</button>}
+        <button type="button" disabled={busy || !state.notifications || !isTauri()} onClick={() => void test()}>{t("inboxTest")}</button>
+      </div>
+      <p>{t("inboxPrivacy")}</p>
+      {!isTauri() && <p>{t("inboxNativeRequired")}</p>}
+    </details>
   </section>;
 }
