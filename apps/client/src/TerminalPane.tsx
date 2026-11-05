@@ -200,6 +200,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const imeComposing = useRef(false);
   // A toolbar key or a revoked editor ends the composition by clearing the
   // editor, and the browser then sends no compositionend: trust the IME owner.
+  // Read the flag only through composingIme(); a direct read of
+  // imeComposing.current can see that stale composition.
   const composingIme = () => {
     if (imeComposing.current && imeInput.current?.composing() === false) imeComposing.current = false;
     return imeComposing.current;
