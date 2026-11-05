@@ -141,7 +141,7 @@ test('long settings use a mobile page with a persistent close action and short c
   }
   await page.screenshot({path:testInfo.outputPath('settings-presentation.png')});
   await close.click(); await page.keyboard.press('Control+k');
-  const choices=page.getByRole('dialog',{name:'Jump to a host',exact:true});
+  const choices=page.getByRole('dialog',{name:'Command palette',exact:true});
   await expect(choices).toBeVisible();
   expect(await choices.locator('..').getAttribute('data-mobile-presentation')).toBe('sheet');
   if(phone){const bounds=(await choices.boundingBox())!;expect(bounds.y).toBeGreaterThan(0);expect(bounds.y+bounds.height).toBeLessThan(844);}

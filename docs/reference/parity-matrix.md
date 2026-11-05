@@ -134,7 +134,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Snippets | implemented | implemented | PP:131-139; toolbar inserts into the composer (TP:791). Persistence `e2e/shortcut-capacity.spec.ts:4`. | End-to-end snippet activation. |
 | Simple modifier sequences | verified | verified | `apps/client/src/simpleChord.ts:7-32`; `ChordBuilder.tsx:25-34`. SS:293-341 (PW). | — |
 | Validated advanced chords, function keys, per-step modifiers | verified | verified | `prefs:176-226`; `ChordBuilder.tsx:36-44`. SS:469-504 (Alt+F12 sends `\x1b[24;3~`); `preferences.spec.ts:80-104` (PW). | — |
-| Hardware app shortcut (Ctrl/Cmd+K palette) | verified | verified | `apps/client/src/keyboard.ts:3-15`; `App.tsx:1692-1711`. `e2e/workspace.spec.ts:14`, `preferences.spec.ts:143` (PW). | Physical Android keyboard. |
+| Hardware app shortcut (Ctrl/Cmd+K palette) | verified | verified | `apps/client/src/keyboard.ts`; `App.tsx` keyboard effect. Ctrl/Cmd+Shift+P also opens it from a focused terminal (`CommandPalette.tsx` `usePaletteShortcut`). `e2e/workspace.spec.ts:14`, `preferences.spec.ts:143`, `e2e/command-palette.spec.ts` (PW). | Physical Android keyboard. |
 | Hardware session shortcuts (Ctrl+1 to 9, O, N, W) | implemented | implemented | `keyboard.ts:13-15`; `App.tsx:1696-1708`. Unit test `keyboard.test.ts:13-29`. | Playwright key-press test. |
 | Hardware terminal keys (Shift+Enter, modified named keys) | verified | verified | TP:390-405. Shift+Enter NWT:4955 (NAR); SS:96-109 (PW). | — |
 | Option as Meta | n/a | n/a | macOS-only key (PP:112; `prefs:99,154`); Linux, Windows and Android send ESC+key for Alt. macOS checked only with a Mac user agent (`e2e/terminal-ime.spec.ts:440-464`). | macOS native test (#958 scopes the control). |
@@ -401,8 +401,8 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Line comments included in the next prompt | verified | verified | `RepositoryPanel.tsx:207-233,276` posts a prompt draft consumed at TP:267. `repository-annotations.spec.ts:6-34`, `file-review-locales.spec.ts:43-46` (PW). | Source files are mocked. |
 | CLI entry point | missing | missing | No review subcommand in `apps/agent/src/main.rs:194-330`. | — |
 | Files: browse and code view | implemented | implemented | `apps/client/src/SessionTools.tsx:28-250`; `CodePreview.tsx:10-28`. Mocked `file-review-locales.spec.ts:11-35`. Remote listing and reads over real OpenSSH in `test:openssh` (`NLR`). | First green `NLR` run on `main` makes desktop `verified`. |
-| Markdown viewing | implemented | implemented | `RepositoryPanel.tsx:6,270-272`. Vitest only. | Any e2e. |
-| Media viewing | partial | partial | Images up to 2 MB in repository review only (`RepositoryPanel.tsx:71-77,176-178,268`); Files is text only. | Media in Files; video, audio and PDF. |
+| Markdown viewing | implemented | implemented | Repository review and Files share `ChatMarkdown` (no raw HTML, links or remote images): `RepositoryPanel.tsx`, `FilePreview.tsx`. Files rendering and inert raw HTML in `e2e/command-palette.spec.ts` (PW, mocked). | Native-runtime case over real SSH. |
+| Media viewing | partial | partial | PNG, JPEG, GIF and WebP up to 2 MiB in repository review and Files through the sniffing `repository_image` reader (`mediaPreview.ts`); Files shows SVG only as an `<img>` from a blob URL (`FilePreview.tsx`). `e2e/command-palette.spec.ts` asserts a non-executing SVG script (PW, mocked). | Video, audio and PDF; native-runtime case. |
 
 ## Browser previews
 
@@ -452,8 +452,8 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Remote hosts | verified | verified | ssh.spec:21 (NL); NWT:2480 (NAR). | Windows GUI (#492). |
 | Session and Chat switching | verified | verified | `App.tsx:2425`. ssh.spec:511-529; NWT:2341-2356; `e2e/session-layout.spec.ts:45-60`. | — |
 | Workspace and agent sidebar | verified | verified | `App.tsx:2011-2030`. ssh.spec:478-497; NWT:1505-1511,2358-2359. | — |
-| Command palette | partial | partial | `App.tsx:2354-2400` launches hosts and local terminals only. `preferences.spec.ts:143-148`. | Command actions. |
-| Files with code, Markdown and media viewing | partial | partial | See Diff review and files. | Media viewing and real remote reads. |
+| Command palette | implemented | implemented | `CommandPalette.tsx`, `commandPalette.ts`, `paletteCommands.ts`: fuzzy search over hosts, local terminal, open sessions, workspace tools and application actions; combobox/listbox keyboard model. `commandPalette.test.ts`, `CommandPalette.test.tsx`, `App.test.tsx`; `e2e/command-palette.spec.ts` (PW, desktop and phone). | Native-runtime GUI case. |
+| Files with code, Markdown and media viewing | partial | partial | Code, rendered Markdown, raster images and SVG in Files (`FilePreview.tsx`); see Diff review and files. | Video, audio and PDF; real remote reads. |
 | Forwarded previews | implemented | implemented | See Browser previews. | Linux/Windows runtime case. |
 | Line and element comments in the next prompt | partial | partial | Line comments verified (PW); element comments partial (#11). | Visual element annotation. |
 | Terminal ownership stays on the host | implemented | verified | Detach hint MP:166. TJF:2569 fresh SSH restores the same durable pane (`test:tmux`); TJF:1474 and HGF:158 survive bootstrap closure (NL). | Android reattach case. |

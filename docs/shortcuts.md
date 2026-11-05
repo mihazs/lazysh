@@ -136,3 +136,19 @@ Native Cargo tests use paused time for step boundaries and ET loss handling,
 real SSH with a frozen input window for revocation/output progress, an owned PTY
 for queue ordering, and explicit OpenSSH/Mosh/ET protocol interoperability fixtures.
 These checks do not establish physical mobile timing parity.
+
+## Command palette
+
+Press **Ctrl+K** (Cmd+K on macOS) outside the terminal, or **Ctrl+Shift+P**
+(Cmd+Shift+P) anywhere, including a focused terminal, to open the command palette.
+Inside the terminal, Ctrl+K stays with the shell. On a phone, open **More**
+(Workspace tools) and choose **Search saved hosts**.
+
+Type to filter saved hosts, the local terminal, open sessions, the current
+connection's tools (Terminal, Files, Diff, Sessions, Preview, Transcript, Agents
+and the rest) and application actions such as Preferences, notification inbox,
+encrypted sync, shareable uploads, About and ending the current connection. Labels
+match fuzzily ("fls" finds Files) and without accents; details such as
+`user@host` and a few English aliases ("settings", "git") need contiguous text.
+Use the Up and Down arrows to choose, Enter to run and Esc to close. Unavailable
+commands stay listed, are skipped by the arrows and cannot run.

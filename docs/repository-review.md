@@ -18,6 +18,18 @@ Text files render as escaped source. Syntax highlighting loads on demand for sup
 
 To comment on source, enter a line number, choose **Add line comment**, and edit the comment. **Use in next prompt** stages the file/line references and comments in an editable prompt. Sending remains an explicit action. **Copy comments** copies the same text. Review references against the current file before sending if the agent has continued editing it.
 
+## View files in Files
+
+The **Files** view opens the same viewers for the current directory. Source files
+render as escaped text with optional highlighting. Markdown files render by
+default through the Chat renderer, without raw HTML, active links or remote
+images; **Show source** displays the text. PNG, JPEG, GIF and WebP files up to
+2 MiB are read through the same byte-sniffing image reader as repository review;
+larger images are refused before reading. SVG files, read as text up to 1 MiB,
+are shown only as an image resource from a local blob URL, so their scripts,
+event handlers and external references do not run or load; **Show source**
+displays the markup as text. Video, audio and PDF are not previewed.
+
 ## Bounds
 
 - Git command output and current text previews are limited to 1 MiB. Individual text diffs are limited to 10,000 lines.
