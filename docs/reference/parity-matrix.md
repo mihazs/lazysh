@@ -453,7 +453,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Remote hosts | verified | verified | ssh.spec:21 (NL); NWT:2480 (NAR). | Windows GUI (#492). |
 | Session and Chat switching | verified | verified | `App.tsx:2425`. ssh.spec:511-529; NWT:2341-2356; `e2e/session-layout.spec.ts:45-60`. | — |
 | Workspace and agent sidebar | verified | verified | `App.tsx:2011-2030`. ssh.spec:478-497; NWT:1505-1511,2358-2359. | — |
-| Command palette | implemented | implemented | `CommandPalette.tsx`, `commandPalette.ts`, `paletteCommands.ts`: fuzzy search over hosts, local terminal, open sessions, workspace tools and application actions; combobox/listbox keyboard model. `commandPalette.test.ts`, `CommandPalette.test.tsx`, `App.test.tsx`; `e2e/command-palette.spec.ts` (PW, desktop and phone). | Native-runtime GUI case. |
+| Command palette | implemented | implemented | `CommandPalette.tsx`, `paletteModel.ts`, `paletteCommands.ts`: fuzzy search over hosts, local terminal, open sessions, workspace tools and application actions; combobox/listbox keyboard model. `paletteModel.test.ts`, `CommandPalette.test.tsx`, `App.test.tsx`; `e2e/command-palette.spec.ts` (PW, desktop and phone). | Native-runtime GUI case. |
 | Files with code, Markdown and media viewing | partial | partial | Code, rendered Markdown, raster images and SVG in Files (`FilePreview.tsx`); see Diff review and files. | Video, audio and PDF; real remote reads. |
 | Forwarded previews | implemented | implemented | See Browser previews. | Linux/Windows runtime case. |
 | Line and element comments in the next prompt | partial | partial | Line comments verified (PW); element comments partial (#11). | Visual element annotation. |
