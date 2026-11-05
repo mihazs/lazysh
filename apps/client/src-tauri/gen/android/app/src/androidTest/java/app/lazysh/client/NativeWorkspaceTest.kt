@@ -2015,7 +2015,7 @@ class NativeWorkspaceTest {
             .use { it.readNBytes(16_385) }
         require(fingerSource.size <= 16_384)
         val fingerScript = fingerSource.toString(Charsets.UTF_8)
-        val geometryScript = "(()=>{$fingerScript;const screens=$screens,result=ownedHerdrSwipeGeometry(screens,window.visualViewport,devicePixelRatio,document);if(result.ready)result.rowHeight=screens[0].getBoundingClientRect().height/screens[0].querySelectorAll('.xterm-rows > div').length;return result;})()"
+        val geometryScript = "(()=>{$fingerScript;return ownedHerdrSwipeGeometry($screens,window.visualViewport,devicePixelRatio,document);})()"
         var geometry = JSONObject()
         while (true) {
             val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
@@ -2025,15 +2025,6 @@ class NativeWorkspaceTest {
             val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
             if (pause > 0) Thread.sleep(pause)
         }
-        val shortRowHeight = geometry.getDouble("rowHeight")
-        require(shortRowHeight.isFinite() && shortRowHeight > 0 && shortRowHeight <= 32.0) { "Owned short-drag geometry admission unavailable: rendered row must be finite, positive and at most 32 CSS pixels" }
-        val rect = geometry.getJSONArray("rect")
-        val viewport = geometry.getJSONArray("viewport")
-        val bounds = (0..3).map { rect.getDouble(it) }
-        val visible = (0..4).map { viewport.getDouble(it) }
-        require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
-            bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
-            bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         lateinit var fingerActivity: MainActivity
         lateinit var fingerView: WebView
@@ -2054,7 +2045,14 @@ class NativeWorkspaceTest {
             fingerView.isAttachedToWindow && fingerView.isShown && fingerView.hasWindowFocus() &&
             (fingerWindow == null || fingerActivity.window.callback === fingerWindow) &&
             (startFrame == null || fingerFrame(fingerView) == startFrame)
-        fun fingerPoint(view: View, fraction: Double, dispatch: JSONObject): FloatArray {
+        fun fingerPoint(view: View, fraction: Double, dispatch: JSONObject, geometry: JSONObject): FloatArray {
+            val rect = geometry.getJSONArray("rect")
+            val viewport = geometry.getJSONArray("viewport")
+            val bounds = (0..3).map { rect.getDouble(it) }
+            val visible = (0..4).map { viewport.getDouble(it) }
+            require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
+                bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
+                bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
             val frame = fingerFrame(view)
             if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
             val density = view.resources.displayMetrics.density.toDouble()
@@ -2089,7 +2087,12 @@ class NativeWorkspaceTest {
         val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
         fun nativeFingerGesture(short: Boolean, before: Int, requireCompletedProgress: Boolean = false): JSONObject {
             val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
-            val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
+            val fingerObservation = """
+                (()=>{$fingerScript;const screens=$screens;
+                  const geometry=ownedHerdrSwipeGeometry(screens,window.visualViewport,devicePixelRatio,document,true);
+                  return {geometry,installed:geometry.ready&&ownedHerdrObserveFinger(window,$fingerKey,screens,geometry)};})()
+            """.trimIndent()
+            var gestureGeometry: JSONObject? = null
             val downTime = android.os.SystemClock.uptimeMillis()
             val pointer = android.view.MotionEvent.PointerProperties().apply {
                 id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
@@ -2113,12 +2116,12 @@ class NativeWorkspaceTest {
             }
             fun injectFinger(action: Int, fraction: Double) {
                 val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
-                if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
+                if (dispatches.length() == 0) dispatch.put("geometry", checkNotNull(gestureGeometry).getJSONObject("diagnostic"))
                 assertTrue("Owned finger dispatch trace is bounded", dispatches.length() < 6)
                 dispatches.put(dispatch)
                 // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
                 instrumentation.runOnMainSync {
-                    lastPoint = fingerPoint(fingerView, fraction, dispatch)
+                    lastPoint = fingerPoint(fingerView, fraction, dispatch, checkNotNull(gestureGeometry))
                     val global = Rect(); val visibleWindow = Rect()
                     dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
                     fingerView.getWindowVisibleDisplayFrame(visibleWindow)
@@ -2158,6 +2161,7 @@ class NativeWorkspaceTest {
                     assertTrue("Owned short drag delivery exceeded original cohort budget: ended=$ended dispatches=$dispatches sample=$lastFingerSample", remaining > 0)
                     val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                     lastFingerSample = sample
+                    assertFalse("Owned first DOWN landed outside its calibrated geometry: sample=$sample", sample.getBoolean("bindingRejected"))
                     val events = sample.getJSONObject("global").getJSONArray("events")
                     val touchStarts = (0 until events.length()).count { events.getJSONObject(it).getString("type") == "touchstart" }
                     val cancelled = (0 until events.length()).any { events.getJSONObject(it).getString("type") == "touchcancel" }
@@ -2182,6 +2186,7 @@ class NativeWorkspaceTest {
                     assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
                     val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                     lastFingerSample = sample
+                    assertFalse("Owned first DOWN landed outside its calibrated geometry: sample=$sample", sample.getBoolean("bindingRejected"))
                     samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
                     assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                     val row = sample.getInt("row")
@@ -2190,9 +2195,24 @@ class NativeWorkspaceTest {
                 }
             }
             try {
-                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned native gesture requires remaining original cohort budget", remaining > 0)
-                assertEquals("Owned continuous finger observation installed", "true", fingerRead(fingerObservation, remaining))
+                // Geometry that is still settling after the previous redraw is re-measured; nothing retargets after DOWN.
+                var installation: JSONObject
+                while (true) {
+                    val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                    assertTrue("Owned native gesture requires remaining original cohort budget", remaining > 0)
+                    installation = JSONObject(fingerRead(fingerObservation, remaining))
+                    if (installation.getBoolean("installed") || installation.getJSONObject("geometry").getBoolean("ready")) break
+                    val pause = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime()).coerceAtMost(50)
+                    assertTrue("Owned current finger geometry did not settle within original cohort budget: ${installation.getJSONObject("geometry").optJSONObject("diagnostic")}", pause > 0)
+                    Thread.sleep(pause)
+                }
+                assertTrue("Owned current finger geometry and observation required: ${installation.optJSONObject("geometry")?.optJSONObject("diagnostic")}", installation.getBoolean("installed"))
+                val measured=installation.getJSONObject("geometry")
+                val shortRowHeight=measured.getDouble("rowHeight")
+                require(shortRowHeight.isFinite() && shortRowHeight > 0 && shortRowHeight <= 32.0) { "Owned two-short-drag group requires a finite positive public cell at most 32 CSS pixels" }
+                gestureGeometry=measured
+                val bounds=(0..3).map { measured.getJSONArray("rect").getDouble(it) }
+                val visible=(0..4).map { measured.getJSONArray("viewport").getDouble(it) }
                 instrumentation.runOnMainSync {
                     check(ownsFingerView()) { "Owned finger Window installation lost its view" }
                     val window = fingerActivity.window
