@@ -1,6 +1,6 @@
 import {Activity,Download,RefreshCw} from 'lucide-react';
 import {t,useUi,formatDateTime} from './i18n/core';
-import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageStale} from './accountUsageReport';
+import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageSpendPercent,accountUsageStale} from './accountUsageReport';
 import type {AccountUsageModel} from './useAccountUsage';
 import './AccountUsage.css';
 export function AccountUsageBar({model,onOpen}:{model:AccountUsageModel;onOpen:()=>void}) {
@@ -27,13 +27,15 @@ export function AccountUsageDetails({model,onRestoreHostTools,onOpenCompanion}:{
       <p>{t('accountUsageDescription')}</p>
       <label>{t('accountUsageAccount')}<select value={entry.id} onChange={e=>select(e.target.value)}>{response?.report?.entries.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></label>
       <p>{entry.plan??t('accountUsagePlanUnknown')} · {t(entry.status==='error'?'accountUsageProviderUnavailable':accountUsageStale(entry)||response?.state!=='ready'?'accountUsageStale':'accountUsageLatest')}{entry.fetchedAt&&<> · <time dateTime={entry.fetchedAt}>{formatDateTime(new Date(entry.fetchedAt))}</time></>}</p>
-      <dl>{entry.rows.map((row,index)=><div key={`${row.label}:${index}`}><dt>{row.label}</dt><dd>{row.type==='metric'?<>
+      <dl>{entry.rows.map((row,index)=>{
+        const spend=row.type==='text'?accountUsageSpendPercent(row):null;
+        return <div key={`${row.label}:${index}`}><dt>{row.label}</dt><dd>{row.type==='metric'?<>
         <strong>{row.headline==='value'?row.value:accountUsagePercent(row.percent,row.reading)}</strong>
         <meter min={0} max={100} value={Math.min(100,row.percent)} aria-label={`${row.label} ${t(row.reading==='used'?'accountUsageUsed':'accountUsageLeft')}`} aria-valuetext={accountUsagePercent(row.percent,row.reading)}/>
         <span>{row.headline==='percent'?row.value:null}{row.detail&&` · ${row.detail}`}</span>
         {row.resetAt&&<span>{row.regen?t('accountUsageRegenerates',{amount:row.regen}):t('accountUsageResets')} · <time dateTime={row.resetAt}>{formatDateTime(new Date(row.resetAt))}</time></span>}
         {row.modelPool&&<span>{t('accountUsageModelPool')}</span>}
-      </>:row.value}</dd></div>)}</dl>
+      </>:<>{row.value}{spend!==null&&<><span>{accountUsagePercent(spend,'used')}</span><meter min={0} max={100} value={Math.min(100,spend)} aria-label={`${row.label} ${t('accountUsageUsed')}`} aria-valuetext={accountUsagePercent(spend,'used')}/></>}</>}</dd></div>;})}</dl>
       {entry.resetCredits&&<p>{t('accountUsageResetCredits',{count:entry.resetCredits.available})}{entry.resetCredits.credits.map((credit,index)=><span key={index}>{credit.title}{credit.expiresAt&&` · ${t('accountUsageExpires',{date:formatDateTime(new Date(credit.expiresAt))})}`}</span>)}</p>}
     </>}
   </section>;

@@ -65,3 +65,23 @@ it('offers the existing installer only for missing or incompatible companions an
  render(<Surface onOpenCompanion={install}/>);fireEvent.click(await screen.findByRole('button',{name:'Install or update companion'}));expect(install).toHaveBeenCalledTimes(1);expect(screen.getByText('AI usage: setup')).toBeTruthy();expect(screen.queryByRole('meter')).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('No AI accounts');expect(screen.queryByRole('button',{name:'Install or update companion'})).toBeNull();expect(screen.getByText(/No enabled accounts were reported/)).toBeTruthy();
 });
+
+it.each([0,25,125])('meters reported capped spend at %s percent without replacing money or truncating over-cap percentages',async(percent)=>{
+ const balance={type:'text' as const,label:'Balance',value:'$12.30',usedCents:null,limitCents:null,percent:null};
+ const spend={type:'text' as const,label:'On-Demand',value:`$${percent}.00 / $100.00`,usedCents:percent*100,limitCents:10000,percent};
+ const entry={...report.report!.entries[0],rows:[balance,spend]};
+ expect(accountUsageHeadline(entry)).toEqual({text:spend.value,percent});
+ vi.mocked(invoke).mockResolvedValue({...report,report:{primary:entry.id,entries:[entry]}});const {container}=render(<Surface/>);
+ await screen.findByText(`${percent}% used`);expect(screen.getByRole('meter',{name:'On-Demand used'}).getAttribute('value')).toBe(String(Math.min(100,percent)));
+ expect(screen.getByRole('meter',{name:'On-Demand used'}).getAttribute('aria-valuetext')).toBe(`${percent}% used`);
+ expect(screen.getByText(spend.value)).toBeTruthy();expect(screen.getByText(balance.value)).toBeTruthy();
+ expect(container.querySelector('.account-usage-chip meter')?.getAttribute('value')).toBe(String(Math.min(100,percent)));
+});
+it('keeps uncapped and incomplete monetary rows unmetered without deriving percentages',async()=>{
+ for(const absent of [{percent:null},{limitCents:null},{usedCents:null},{limitCents:0}]) {
+  const row={type:'text' as const,label:'On-Demand',value:'$25.00',usedCents:2500,limitCents:10000,percent:25,...absent};
+  const entry={...report.report!.entries[0],rows:[row]};expect(accountUsageHeadline(entry)).toEqual({text:row.value,percent:null});
+  vi.mocked(invoke).mockResolvedValue({...report,report:{primary:entry.id,entries:[entry]}});const {container}=render(<Surface/>);
+  await screen.findByText(row.value);expect(container.querySelector('meter')).toBeNull();expect(screen.queryByText('25% used')).toBeNull();cleanup();
+ }
+});

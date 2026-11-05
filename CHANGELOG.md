@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show reported prepaid spend-cap percentages in AI usage details and the compact usage button. Keep formatted monetary amounts and over-cap numbers intact; uncapped balances and missing percentages remain unmetered.
+
 - Reduce workspace clutter by removing the redundant explanation beneath the session manager action.
 
 - Import SSH private keys from a file in the SSH identities panel on desktop and Android. The file contents stay in memory, are not shown in the paste field, and files over 64 KiB are refused before reading. Imported OpenSSH, PEM and PKCS#8 keys tolerate Windows line endings and a byte-order mark. Connecting with a public key (`.pub`, `authorized_keys` entry, certificate, RFC 4716 or PEM public key) now fails before authentication with a specific error instead of a generic decode error, and an encrypted key without its passphrase reports that a passphrase is needed. Host-key pins stay in `hosts.json`; storage is unchanged.
