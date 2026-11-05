@@ -1593,6 +1593,7 @@ button svg {
 .repository-code .hljs-number, .repository-code .hljs-literal, .repository-code .hljs-type { color: var(--theme-blue, #9fc5df); }
 .repository-code .hljs-comment { color: var(--muted); font-style: italic; }
 .repository-code .hljs-title, .repository-code .hljs-built_in { color: var(--theme-danger, #e2b2a2); }
+.chat-panel[hidden] { display: none; }
 .chat-panel .tool-bar { align-items: end; flex-wrap: wrap; }
 .chat-panel label { display: grid; gap: 6px; min-width: 0; }
 .chat-panel input { min-width: 220px; }

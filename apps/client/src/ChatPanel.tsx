@@ -140,7 +140,8 @@ export function parseTranscript(value: unknown): Page {
   return page;
 }
 
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels }) {
+/** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front. */
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -287,10 +288,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const autoRead = useRef(() => {});
   autoRead.current = () => {void read(false,true);};
   useEffect(() => {
-    if (!following || !canFollow || busy || !visible || !access.current()) return;
+    if (!following || !canFollow || busy || !visible || !shown || !access.current()) return;
     const timer = setTimeout(() => autoRead.current(),2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,completed,accessState.epoch,access]);
+  }, [following,canFollow,busy,visible,shown,completed,accessState.epoch,access]);
   async function discover() {
     if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
     flight.current = true;
@@ -402,7 +403,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     setDraftStatus("chatDraftStaged");
   }
   return (
-    <section ref={chatRoot} className="tool-panel chat-panel" data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
       <h3>{t("chatTitle")}</h3>
       <p>
         {t("chatExplanation")}
@@ -603,7 +604,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
           <textarea id={draftId} rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
           <div className="chat-draft-commands">{onOpenTerminal && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button><button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button></div>
-          {terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
+          {shown && terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
             key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
             access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
             onSent={(text,revision)=>{
