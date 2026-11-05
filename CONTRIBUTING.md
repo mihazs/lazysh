@@ -32,6 +32,9 @@ Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
 Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
+CI skips the native, companion and Herdr jobs for a pull request whose every changed
+path is documentation (`docs/**`, root `*.md`, `.changeset/*.md` and the GitHub issue
+and PR templates); client and agent still run, and pushes to `main` run everything.
 Do not substitute a passing build for device or behavioral acceptance.
 
 ## Conventional Commits

@@ -67,7 +67,13 @@ test('native matrix is complete and candidates cannot upload publication receipt
   expect(verify.env.EXPECTED_COMPANION_SHA).toBe('${{ steps.prepare.outputs.sha256 }}');
   expect(verify.env.EXPECTED_COMPANION_BYTES).toBe('${{ steps.prepare.outputs.bytes }}');
   const checks = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as any;
-  expect(checks.jobs['companion-candidates']).toEqual({ uses: './.github/workflows/companion-artifacts.yml' });
+  // PR candidates call the reusable build without staging inputs or secrets, so they can never
+  // upload publication receipts; documentation-only PRs may skip them through `changes`.
+  const candidates = checks.jobs['companion-candidates'];
+  expect(candidates.uses).toBe('./.github/workflows/companion-artifacts.yml');
+  expect(candidates.with).toBeUndefined();
+  expect(candidates.secrets).toBeUndefined();
+  expect(Object.keys(candidates).sort()).toEqual(['if', 'needs', 'uses']);
   const release = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-artifacts.yml', import.meta.url)).text()) as any;
   expect(release.jobs.companion.with.stage).toBe(true);
   expect(release.jobs.aggregate.needs).toContain('companion');

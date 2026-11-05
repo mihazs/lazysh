@@ -13,7 +13,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Documentation-only pull requests skip the native, companion and Herdr jobs; client and
+  # agent still run. Pushes to main and any non-documentation change run everything.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.paths.outputs.native }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: sh .github/scripts/native-changes.sh >> "$GITHUB_OUTPUT"
+
   companion-candidates:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     uses: ./.github/workflows/companion-artifacts.yml
 
   client:
@@ -75,6 +95,8 @@ jobs:
   # Build outside the checkout: Zig 0.16.0 writes source-local zig-pkg dependencies.
   # Source/build contract: packages/herdr-upstream/PROVENANCE.md and ../herdr-guard/README.md.
   herdr-native:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     # Match the oldest native consumer's glibc floor.
     runs-on: ubuntu-22.04
     outputs:
@@ -275,7 +297,8 @@ jobs:
           retention-days: 3
 
   native-linux:
-    needs: herdr-native
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -431,6 +454,8 @@ jobs:
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
 
   native-desktop:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -497,6 +522,8 @@ jobs:
         run: bunx turbo run test:resume-policy --filter=@lazysh/client
 
   native-android:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -548,7 +575,8 @@ jobs:
             apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/push-artifact/google.json
 
   native-android-runtime:
-    needs: herdr-native
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -685,6 +713,8 @@ jobs:
           if-no-files-found: warn
 
   native-android-mosh:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -694,7 +724,8 @@ jobs:
     steps: *android-owned-runtime-steps
 
   native-android-herdr-navigation:
-    needs: herdr-native
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -750,7 +781,8 @@ jobs:
   # Real-runtime suites outside native-linux, so one red suite cannot hide the others
   # and the GUI job is not lengthened. Every external fixture is pinned and verified.
   native-linux-runtimes:
-    needs: herdr-native
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -837,6 +869,8 @@ jobs:
         run: bunx turbo run test:parakeet-product --filter=@lazysh/client
 
   native-android-auxiliary:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -864,6 +898,8 @@ jobs:
           if-no-files-found: warn
 
   native-android-ntfy:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -925,6 +961,8 @@ jobs:
           if-no-files-found: warn
 
   native-ios-simulator:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
