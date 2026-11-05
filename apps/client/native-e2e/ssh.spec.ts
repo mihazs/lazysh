@@ -718,8 +718,8 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     const selectedFile=await panel.$('details.attachment-selected');
     expect(await selectedFile.getAttribute('open')).toBeNull();
     // WebdriverIO treats a selector ending in an image extension as an image file, so select the
-    // section's only summary and check its text instead of using a partial-text selector.
-    const summary=await selectedFile.$('summary');
+    // section's own summary (not the nested options summary) and check its text instead.
+    const summary=await panel.$('details.attachment-selected > summary');
     expect(await summary.getText()).toContain(name);
     await summary.click();
     const repeat=await selectedFile.$('button=Upload attachment');await repeat.waitForClickable({timeout:5000});
