@@ -10,7 +10,7 @@ Use trunk-based development.
 - Never open draft pull requests. Open a PR only when its change is complete and locally verified, then drive it to merge. Keep at most 10 pull requests open at a time; finish, merge or close existing ones before opening more.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
 - Every completed milestone must lead to a published version. Follow the release policy in `CONTRIBUTING.md`; version preparation or a merge alone is not delivery. Verify the public release and its assets before reporting the milestone released.
-- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes, then verify the published GitHub release and its assets before reporting the issue released. While that version PR is open, hold test-only or tooling PRs, because each merge to `main` regenerates the version PR and restarts its checks; merge them once the version PR has merged.
+- Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes, then verify the published GitHub release and its assets before reporting the issue released. Do not hold other ready PRs to keep releases separate; the next version PR ships whatever merged meanwhile.
 - Create every Git worktree under `~/dev/.worktrees/`.
 
 # Continuing implementation
