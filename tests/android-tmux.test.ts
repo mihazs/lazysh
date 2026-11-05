@@ -19,13 +19,14 @@ test('tmux host readback admits only the owned two-window topology and display c
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
 });
 
-test('tmux teardown evidence keeps only fixed fixture messages and supervisor status',()=>{
+test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
   const server=(exitCode:number|null,signalCode:NodeJS.Signals|null)=>({child:{exitCode,signalCode}});
-  expect(tmuxTeardownObservation('live',new Error('Owned tmux root identity lost'),server(137,null))).toEqual({scope:'tmux-teardown',
-    serverAtStop:'live',failure:'Owned tmux root identity lost',supervisorExit:137,supervisorSignal:'none'});
+  const evidence={serverAtStop:'live' as const,sockets:4,shutdown:'deadline' as const,exitMs:10000};
+  expect(tmuxTeardownObservation(evidence,new Error('Owned tmux root identity lost'),server(137,null))).toEqual({scope:'tmux-teardown',
+    ...evidence,failure:'Owned tmux root identity lost',supervisorExit:137,supervisorSignal:'none'});
   for(const failure of [new Error('private /tmp/owned path'),'private text'])
-    expect(tmuxTeardownObservation('exited',failure,server(null,'SIGUSR2'))).toEqual({scope:'tmux-teardown',serverAtStop:'exited',failure:'other',supervisorExit:null,supervisorSignal:'other'});
-  expect(tmuxTeardownObservation('absent',undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
+    expect(tmuxTeardownObservation({...evidence,shutdown:'unclean'},failure,server(null,'SIGUSR2'))).toMatchObject({failure:'other',supervisorExit:null,supervisorSignal:'other'});
+  expect(tmuxTeardownObservation({serverAtStop:'absent',sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -68,6 +69,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     // Pane echo becomes undrained control output until the client can no longer leave.
     const pressure=await owned.ssh.client(true,`i=0; while [ $i -lt 400 ]; do tmux -L default send-keys -l -t '=owned-tmux:0' '${'x'.repeat(4000)}'; i=$((i+1)); done`);
     await pressure.finish('owned tmux control output pressure',20000);
+    await owned.stop();
     await owned.stop();
     process.kill(-client.child.pid!,'SIGCONT');
     await expect(client.finish('owned tmux control client retired with SSH',5000)).rejects.toThrow('Owned fixture failed');

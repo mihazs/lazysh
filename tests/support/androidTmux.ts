@@ -1,8 +1,8 @@
 import {join} from 'node:path';
-import {lstat} from 'node:fs/promises';
+import {lstat,readdir,readlink} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,identity,type OwnedPid} from './ownedProcess';
-import {SshFixture,stopOwnedServer} from './sshFixture';
+import {SshFixture,stopOwnedTree} from './sshFixture';
 
 type OwnedWindow={windowId:string;index:number;name:'alpha'|'beta';marker:string;paneId:string;pane:OwnedPid};
 const paneRow=/^(@[0-9]{1,9})\|([0-9]{1,3})\|(alpha|beta)\|([01])\|(%[0-9]{1,9})\|([1-9][0-9]{0,9})\|([01])$/;
@@ -29,13 +29,14 @@ export function tmuxAttachHistoryVerified(history:readonly number[]) {
 }
 
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
-  'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown',
+  'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
   'Owned SSH root identity unavailable','Owned SSH root identity lost','Owned SSH listener survived teardown'];
-/** Closed teardown evidence: fixed fixture messages, supervisor status and phase only. */
-export function tmuxTeardownObservation(serverAtStop:'absent'|'live'|'exited',failure:unknown,server?:{child:{exitCode:number|null;signalCode:NodeJS.Signals|null}}) {
+export type TmuxTeardownEvidence={serverAtStop:'absent'|'live'|'exited';sockets:number|null;shutdown:'not-requested'|'clean'|'unclean'|'deadline';exitMs:number|null};
+/** Closed teardown evidence: fixed fixture messages, socket count, supervisor status and timing only. */
+export function tmuxTeardownObservation(evidence:TmuxTeardownEvidence,failure:unknown,server?:{child:{exitCode:number|null;signalCode:NodeJS.Signals|null}}) {
   const message=(error:unknown)=>error===undefined?'none':error instanceof Error && teardownErrors.includes(error.message)?error.message:'other';
   const code=server?.child.exitCode,signal=server?.child.signalCode;
-  return {scope:'tmux-teardown',serverAtStop,failure:message(failure),
+  return {scope:'tmux-teardown',...evidence,failure:message(failure),
     supervisorExit:Number.isInteger(code) && code!>=0 && code!<=255?code:null,
     supervisorSignal:signal==null?'none':(['SIGTERM','SIGKILL','SIGSEGV','SIGABRT','SIGHUP'] as const).find(value=>value===signal)??'other'};
 }
@@ -48,7 +49,6 @@ export class TmuxFixture {
   private serverPid:OwnedPid|undefined;
   private windows:OwnedWindow[]=[];
   private history:number[]=[];
-  private stopped=false;
   private constructor(readonly ssh:SshFixture) {}
   static async start(binary=process.env.LAZYSH_TEST_TMUX) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned tmux binary required');
@@ -139,21 +139,58 @@ export class TmuxFixture {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
     return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker}))};
   }
-  async stop() {
-    if(this.stopped)return;
-    const serverAtStop=!this.server?'absent':await this.server.liveIdentity()?'live':'exited';
+  private stopping:Promise<void>|undefined;
+  /** Idempotent: every caller observes the one teardown's result. */
+  stop() {return this.stopping??=this.stopOnce();}
+  private async stopOnce() {
+    const server=this.server,serverAtStop=!server?'absent':await server.liveIdentity()?'live':'exited';
+    const observation:TmuxTeardownEvidence={serverAtStop,sockets:null,shutdown:'not-requested',exitMs:null};
     let failure:unknown;
-    // The tmux server's clean SIGTERM exit waits for every client connection, and tmux 3.4
-    // can crash (exit 139) while a control-mode client such as the app's Jump binding is
-    // still attached. Retire the SSH tree, which owns every remote client, before the server.
+    // Remote clients belong to the SSH tree. tmux's clean exit waits for every client
+    // connection, so retire that tree before asking the server to shut down.
+    try{await this.ssh.retire();}catch(error){failure=error;}
     try {
-      await stopOwnedServer(this.ssh,this.server,'tmux',async()=>(await Promise.all([this.serverPid,...this.windows.map(window=>window.pane)]
-        .map(saved=>saved?.pid?this.alive(saved):false))).some(Boolean),true);
-    } catch(error){failure=error;}
+      if(server && serverAtStop==='live') {
+        observation.sockets=this.serverPid?await socketCount(this.serverPid):null;
+        // Ask the original server to exit through its own socket and require its namespaced
+        // supervisor to report that exit as clean; the reply can race the shutdown itself.
+        const started=performance.now();
+        await this.run(['kill-server']).catch(()=>{});
+        const code=await Promise.race([server.done.then(value=>value,()=>null),delay(10_000).then(()=>'deadline' as const)]);
+        observation.exitMs=Math.min(60_000,Math.round(performance.now()-started));
+        observation.shutdown=code==='deadline'?'deadline':code===0?'clean':'unclean';
+        if(code==='deadline')await stopOwnedTree(server,'tmux',true);
+        else if(code!==0)throw new Error('Owned tmux server exited uncleanly');
+      }
+      await this.retireSurvivors();
+    } catch(error){failure??=error;}
+    try{await this.ssh.stop();}catch(error){failure??=error;}
     if(failure) {
-      try{console.error('Owned tmux teardown '+JSON.stringify(tmuxTeardownObservation(serverAtStop,failure,this.server)));}catch{/* Keep the original failure. */}
+      try{console.error('Owned tmux teardown '+JSON.stringify(tmuxTeardownObservation(observation,failure,server)));}catch{/* Keep the original failure. */}
       throw failure;
     }
-    this.stopped=true;
   }
+  /** The original server and pane processes, by PID and start time only, must be gone. */
+  private async retireSurvivors() {
+    const saved=[this.serverPid,...this.windows.map(window=>window.pane)].filter((value):value is OwnedPid=>!!value?.pid);
+    const present=async(item:OwnedPid)=>{const current=await identity(item.pid);return current?.start===item.start && !['Z','X'].includes(current.state);};
+    const deadline=performance.now()+3000;
+    while((await Promise.all(saved.map(present))).some(Boolean) && performance.now()<deadline)await delay(25);
+    const survivors=(await Promise.all(saved.map(async item=>await present(item)?item:undefined))).filter((value):value is OwnedPid=>!!value);
+    if(!survivors.length)return;
+    for(const item of survivors)if(await present(item))try{process.kill(item.pid,'SIGKILL');}catch{/* Already gone. */}
+    throw new Error('Owned tmux process survived teardown');
+  }
+}
+
+async function socketCount(saved:OwnedPid) {
+  try {
+    const current=await identity(saved.pid);
+    if(current?.start!==saved.start)return null;
+    const entries=await readdir(`/proc/${saved.pid}/fd`);
+    if(entries.length>4096)return null;
+    let count=0;
+    for(const entry of entries)if((await readlink(`/proc/${saved.pid}/fd/${entry}`).catch(()=>'')).startsWith('socket:'))count++;
+    return count;
+  } catch {return null;}
 }

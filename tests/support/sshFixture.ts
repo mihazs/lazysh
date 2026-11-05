@@ -94,11 +94,8 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'|'tmu
   if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;}
 }
 // Retire a namespaced tool server, prove its owned processes are gone, then stop SSH.
-export async function stopOwnedServer(ssh:SshFixture,server:OwnedProcess|undefined,label:'Herdr'|'tmux',survived:()=>Promise<boolean>,clientsFirst=false) {
+export async function stopOwnedServer(ssh:SshFixture,server:OwnedProcess|undefined,label:'Herdr'|'tmux',survived:()=>Promise<boolean>) {
   let failure:unknown;
-  // Remote clients belong to the SSH tree. A server that waits for its clients before a
-  // clean exit can only finish once that tree, including any undrained client, is retired.
-  if(clientsFirst)try{await ssh.retire();}catch(error){failure=error;}
   try {
     if(server)await stopOwnedTree(server,label,true);
     if(await survived())throw new Error(label==='Herdr'?'Owned Herdr receiver survived teardown':'Owned tmux process survived teardown');
