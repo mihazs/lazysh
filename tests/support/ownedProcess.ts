@@ -95,8 +95,8 @@ export class OwnedProcess {
     }
   }
 }
-export async function reportOwnedTeardownFailure(owned:OwnedProcess,stage:'attach-stop'|'herdr-stop'|'ssh-stop') {
-  if(!['attach-stop','herdr-stop','ssh-stop'].includes(stage))return;
+export async function reportOwnedTeardownFailure(owned:OwnedProcess,stage:'attach-stop'|'herdr-stop'|'tmux-stop'|'ssh-stop') {
+  if(!['attach-stop','herdr-stop','tmux-stop','ssh-stop'].includes(stage))return;
   try {
     let observation:Awaited<ReturnType<OwnedProcess['teardownDiagnostic']>>|{scope:'post-stop-sample';state:'unavailable'};
     try {

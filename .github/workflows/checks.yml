@@ -386,7 +386,7 @@ jobs:
           "${namespace_command[@]}" --unshare-pid --dev-bind / / --proc /proc --ro-bind /etc/group /etc/group -- /usr/bin/true
       - name: Build the pinned official tmux fixture outside the checkout
         timeout-minutes: 10
-        run: |
+        run: &pinned-tmux-build |
           test "$(/usr/bin/tmux -V)" = 'tmux 3.2a'
           tmux_root=$(mktemp -d "$RUNNER_TEMP/lazysh-tmux-3.4-XXXXXX")
           sh .github/scripts/pinned-download.sh 551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa "$tmux_root/tmux-3.4.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 707213 https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz
@@ -659,6 +659,13 @@ jobs:
         run: *native-fixture-namespace
       - *pinned-download-cache
       - *official-mosh-fixture
+      - name: Install the distribution tmux and pinned tmux build dependencies
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
+        run: sudo apt-get install -y tmux libevent-dev bison
+      - name: Build the pinned official tmux fixture outside the checkout
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
+        timeout-minutes: 10
+        run: *pinned-tmux-build
       - *android-cache-identity
       # Emulator jobs on one runner image build the same x86_64 APK and host companion, so
       # they share one cache (the toolchain fingerprint separates images) saved only from main
@@ -689,7 +696,7 @@ jobs:
           cargo test --locked -p lazysh-agent --example owned_terminal_receiver
           cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
-        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh'
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux'
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |
@@ -750,6 +757,7 @@ jobs:
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
+            tmux) bun run test:android-tmux; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
             auxiliary) ;;
@@ -841,6 +849,18 @@ jobs:
           path: *android-runtime-result-paths
           if-no-files-found: warn
           retention-days: 3
+
+  # Owned pinned tmux on the emulator; separate so its verdict is attributable.
+  native-android-tmux:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: tmux
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-tmux-results
+    steps: *android-owned-runtime-steps
 
   # Real-runtime suites outside native-linux, so one red suite cannot hide the others
   # and the GUI job is not lengthened. Every external fixture is pinned and verified.
