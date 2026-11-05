@@ -1,7 +1,8 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
+import {join} from 'node:path';
 import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
-import {listening,type OwnedProcess} from './support/androidSsh';
+import {listening,OwnedProcess} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
   const row=(index:number,name:string,active:number,dead=0)=>`@${index+1}|${index}|${name}|${active}|%${index}|${100+index}|${dead}`;
@@ -24,12 +25,12 @@ test('tmux host readback admits only the owned two-window topology and display c
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
   const server=(exitCode:number|null,signalCode:NodeJS.Signals|null)=>({child:{exitCode,signalCode}});
-  const evidence={serverAtStop:'live' as const,clients:1,detached:'all' as const,sockets:4,shutdown:'deadline' as const,exitMs:10000};
+  const evidence={serverAtStop:'live' as const,clients:1,processes:{live:1,inSsh:1},detached:'all' as const,straysRetired:0,sockets:4,shutdown:'deadline' as const,exitMs:10000};
   expect(tmuxTeardownObservation(evidence,new Error('Owned tmux root identity lost'),server(137,null))).toEqual({scope:'tmux-teardown',
     ...evidence,failure:'Owned tmux root identity lost',supervisorExit:137,supervisorSignal:'none'});
   for(const failure of [new Error('private /tmp/owned path'),'private text'])
     expect(tmuxTeardownObservation({...evidence,shutdown:'unclean'},failure,server(null,'SIGUSR2'))).toMatchObject({failure:'other',supervisorExit:null,supervisorSignal:'other'});
-  expect(tmuxTeardownObservation({serverAtStop:'absent',clients:null,detached:'not-requested',sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
+  expect(tmuxTeardownObservation({serverAtStop:'absent',clients:null,processes:null,detached:'not-requested',straysRetired:null,sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
 });
 
 test('tmux command failures and supervisor status keep only fixed classes and bounded codes',()=>{
@@ -113,4 +114,20 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await owned.stop();
   }
   await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly',async()=>{
+  const owned=await TmuxFixture.start();
+  // Outside the SSH tree and stopped, this owned tmux client can neither detach nor be retired with SSH.
+  const client=new OwnedProcess(join(owned.ssh.directory,'bin/tmux'),['-u','-L','default','-C','attach-session','-t','=owned-tmux'],owned.ssh.directory,owned.ssh.environment);
+  try {
+    const deadline=performance.now()+5000;
+    while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+    process.kill(client.child.pid!,'SIGSTOP');
+    await owned.stop();
+    expect(client.child.signalCode).toBe('SIGKILL');
+  } finally {
+    await client.stop();
+    await owned.stop();
+  }
 },60_000);
