@@ -3,6 +3,10 @@ name: Verified stable tag
 on:
   push:
     branches: [main]
+    # Every version transition rewrites this version-derived file (release consistency rejects
+    # any other content), so ordinary main pushes never queue release work. Admission in
+    # source-build still decides; a missed push can be repeated by an ordinary main dispatch.
+    paths: [apps/client/android-version.properties]
   workflow_dispatch:
     inputs:
       initial:
@@ -25,12 +29,16 @@ env:
   LAZYSH_RELEASE_INITIAL: ${{ inputs.initial || false }}
   LAZYSH_RELEASE_EXPECTED_SHA: ${{ inputs.expected-source-sha || '' }}
 
+# Two runner-queue entries on the critical path: the admitted source build and the platform
+# installation builds start together, then one job aggregates, tags and publishes.
 jobs:
-  candidate:
+  source-build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     outputs:
       enabled: ${{ steps.prepare.outputs.enabled }}
-      version-code: ${{ steps.prepare.outputs.versionCode }}
+    env:
+      BUILD_CONTAINER: lazysh-fdroid-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - &checkout-candidate
         uses: actions/checkout@v4
@@ -50,35 +58,15 @@ jobs:
           mkdir -p "$LAZYSH_RELEASE_DIRECTORY"
           cp -R fdroid/. "$LAZYSH_RELEASE_DIRECTORY/"
           bun .changeset/release-tag.ts prepare
-      - uses: actions/upload-artifact@v4
-        if: steps.prepare.outputs.enabled == 'true'
-        with:
-          name: fdroid-candidate
-          path: ${{ runner.temp }}/fdroid-release
-          if-no-files-found: error
-
-  source-build:
-    needs: candidate
-    if: needs.candidate.outputs.enabled == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    env:
-      BUILD_CONTAINER: lazysh-fdroid-${{ github.run_id }}-${{ github.run_attempt }}
-      VERSION_CODE: ${{ needs.candidate.outputs.version-code }}
-    steps:
-      - *checkout-candidate
-      - *release-bun
-      - uses: actions/download-artifact@v4
-        with:
-          name: fdroid-candidate
-          path: ${{ runner.temp }}/fdroid-release
       - name: Reclaim unused host toolchains for container build
+        if: &admitted steps.prepare.outputs.enabled == 'true'
         run: |
           df -h /
           # The pinned container supplies build toolchains; these host SDKs only consume disk.
           sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
           df -h /
       - name: Provision owned official buildserver container
+        if: *admitted
         run: |
           docker run --detach --name "$BUILD_CONTAINER" --user vagrant \
             --env ANDROID_HOME=/opt/android-sdk \
@@ -94,6 +82,9 @@ jobs:
             sdkmanager "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"
           '
       - name: Source scan exact candidate, then build with binary scans
+        if: *admitted
+        env: &version-code
+          VERSION_CODE: ${{ steps.prepare.outputs.versionCode }}
         run: |
           docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid readmeta
           docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid lint app.lazysh.client
@@ -102,6 +93,8 @@ jobs:
           docker exec --workdir /workspace --env CARGO_BUILD_JOBS=4 --env CMAKE_BUILD_PARALLEL_LEVEL=4 "$BUILD_CONTAINER" \
             /home/vagrant/fdroid-tools/bin/fdroid build --test --stop --scan-binary "app.lazysh.client:$VERSION_CODE"
       - name: Inspect real unsigned release identity and Google-free payload
+        if: *admitted
+        env: *version-code
         run: |
           docker exec --workdir /workspace/build/app.lazysh.client \
             --env LAZYSH_ANDROID_PUSH_VARIANT=fdroid \
@@ -109,7 +102,7 @@ jobs:
             --env LAZYSH_ANDROID_PUSH_APK="/workspace/tmp/app.lazysh.client_$VERSION_CODE.apk" \
             "$BUILD_CONTAINER" /home/vagrant/.local/share/lazysh-fdroid/bun-linux-x64-baseline/bun test tests/android-push-artifact.test.ts
       - name: Retain bounded source and APK receipts
-        if: always()
+        if: &admitted-always always() && steps.prepare.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: verified-tag-build-receipts
@@ -119,50 +112,38 @@ jobs:
             ${{ runner.temp }}/fdroid-release/logs
             ${{ runner.temp }}/fdroid-release/build/app.lazysh.client/apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/push-artifact/fdroid.json
       - name: Remove owned container
-        if: always()
+        if: *admitted-always
         run: docker rm --force "$BUILD_CONTAINER"
 
+  # Platform builds start with the source build instead of after a separate admission job.
+  # They hold contents-read tokens, bind the exact trusted main event SHA and produce private
+  # same-run artifacts; nothing they build is public unless `publish` admits it below.
   artifacts:
-    needs: candidate
-    if: needs.candidate.outputs.enabled == 'true'
     uses: ./.github/workflows/release-artifacts.yml
     with:
       initial: ${{ inputs.initial || false }}
     secrets: inherit
 
-  tag:
-    needs: [candidate, source-build, artifacts]
-    if: needs.candidate.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success'
+  publish:
+    needs: [source-build, artifacts]
+    if: needs.source-build.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
       - *checkout-candidate
       - *release-bun
-      - &download-installations
-        uses: actions/download-artifact@v4
+      # Runs before any step receives the write token; its last check reverifies every byte.
+      - name: Aggregate and verify every same-run installation file
+        uses: ./.github/actions/release-aggregate
         with:
-          name: verified-release-set
-          path: ${{ runner.temp }}/verified-release
-      - name: Recheck installation bytes before creating a public tag
-        run: bun .changeset/release-artifacts.ts verify "$RUNNER_TEMP/verified-release"
+          initial: ${{ inputs.initial || false }}
       - name: Recheck candidate and create only its stable ref
         env:
           GH_TOKEN: ${{ github.token }}
           LAZYSH_RELEASE_BUILD_RESULT: ${{ needs.source-build.result }}
         run: bun .changeset/release-tag.ts tag
-
-  publish:
-    needs: [candidate, tag]
-    if: needs.candidate.outputs.enabled == 'true' && needs.tag.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - *checkout-candidate
-      - *release-bun
-      - *download-installations
       - name: Publish only the complete verified installation set
         env:
           GH_TOKEN: ${{ github.token }}

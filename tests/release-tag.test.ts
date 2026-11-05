@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { candidate, initialCandidate, candidateRecipe, createStableTag, releaseEnabled, requireCleanSourceScan,
   requireCurrentRelease, type ReleasePolicy } from '../.changeset/release-tag';
-import { androidVersionCode, ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
+import { androidMetadataPath, androidVersionCode, ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
 const sha = 'a'.repeat(40);
 const policy: ReleasePolicy = await Bun.file(new URL('../.changeset/release-policy.json', import.meta.url)).json();
@@ -183,6 +183,11 @@ test('current-main admission accepts same-version first-parent progress, rejects
     await Bun.write(join(root, 'ordinary-change'), 'same version');
     git('add', '.'); git('commit', '-m', 'test: advance without changing version');
     const advanced = git('rev-parse', 'HEAD');
+    // The push trigger names the version-derived file: unchanged versions never queue release work.
+    const trigger = (Bun.YAML.parse(await Bun.file(join(source, '.github/workflows/release-tag.yml')).text()) as any).on.push;
+    expect(trigger).toEqual({ branches: ['main'], paths: [androidMetadataPath] });
+    const touched = () => git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n');
+    expect(touched()).not.toContain(androidMetadataPath);
     await Bun.write(join(root, '.changeset/release-policy.json'), JSON.stringify(policy));
     const output = join(root, 'release-output');
     const prepare = Bun.spawnSync(['bun', join(source, '.changeset/release-tag.ts'), 'prepare'], {
@@ -249,6 +254,7 @@ test('current-main admission accepts same-version first-parent progress, rejects
     await synchronizeWorkspaceVersions(root);
     await verifyRelease(root);
     git('add', '.'); git('commit', '-m', 'test: advance synchronized release version');
+    expect(touched()).toContain(androidMetadataPath);
     await requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'));
     git('checkout', '--orphan', 'test/replaced-history');
     git('commit', '-m', 'test: replace history');
@@ -273,18 +279,15 @@ test('source build frees only unused host toolchains before pulling the pinned c
   expect(provision.run).toContain('sdkmanager "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"');
 });
 
-test('workflow isolates write token after successful source and binary acceptance', async () => {
+test('the admitted source build keeps its exact scans and gates every build step on admission', async () => {
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
-  expect(workflow.concurrency.group).toBe('verified-stable-tag-${{ github.sha }}');
-  expect(workflow.env.LAZYSH_RELEASE_INITIAL).toBe('${{ inputs.initial || false }}');
-  expect(workflow.env.LAZYSH_RELEASE_EXPECTED_SHA).toBe("${{ inputs.expected-source-sha || '' }}");
-  expect(workflow.jobs.artifacts.with.initial).toBe('${{ inputs.initial || false }}');
-  expect(workflow.permissions).toEqual({ contents: 'read' });
-  expect(workflow.jobs['source-build'].if).toBe("needs.candidate.outputs.enabled == 'true'");
-  expect(workflow.jobs.tag.needs).toEqual(['candidate', 'source-build', 'artifacts']);
-  expect(workflow.jobs.tag.if).toContain("needs.source-build.result == 'success'");
-  expect(workflow.jobs.tag.permissions).toEqual({ contents: 'write' });
-  const build = workflow.jobs['source-build'].steps.filter((step: any) => step.run).map((step: any) => step.run).join('\n');
+  const steps = workflow.jobs['source-build'].steps;
+  const prepare = steps.findIndex((step: any) => step.id === 'prepare');
+  expect(steps.slice(0, prepare).map((step: any) => step.uses)).toEqual(['actions/checkout@v4', 'oven-sh/setup-bun@v2']);
+  expect(steps[prepare].run).toContain('bun .changeset/release-tag.ts prepare');
+  // Every build, scan, receipt and cleanup step runs only after admission enabled this exact source.
+  for (const step of steps.slice(prepare + 1)) expect(step.if).toMatch(/^(always\(\) && )?steps\.prepare\.outputs\.enabled == 'true'$/);
+  const build = steps.filter((step: any) => step.run).map((step: any) => step.run).join('\n');
   expect(build).toContain('release-tag.ts scan');
   expect(build).toContain('build --test --stop --scan-binary');
   expect(build).toContain('tests/android-push-artifact.test.ts');

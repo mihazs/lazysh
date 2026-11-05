@@ -1,0 +1,22 @@
+name: Aggregate verified release installation files
+description: Check every same-run platform receipt and package digest, then generate release.json, SHA256SUMS and notes
+inputs:
+  initial:
+    description: Whether this is the allowlisted initial publication
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: release-*
+        path: ${{ runner.temp }}/platform-artifacts
+    - name: Check every same-run platform package and generate release documents
+      shell: bash
+      env:
+        LAZYSH_RELEASE_INITIAL: ${{ inputs.initial }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/verified-release"
+        bun .changeset/release-artifacts.ts notes "$RUNNER_TEMP/verified-release"
+        bun .changeset/release-artifacts.ts aggregate "$RUNNER_TEMP/platform-artifacts" "$RUNNER_TEMP/verified-release"
+        bun .changeset/release-artifacts.ts verify "$RUNNER_TEMP/verified-release"

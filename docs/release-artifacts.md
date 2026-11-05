@@ -31,7 +31,7 @@ Unreleased changes. Every release also includes the exact current native
 acceptance status section from `docs/install-and-update.md`; missing or ambiguous
 status blocks notes generation. Full parity is not claimed.
 
-Both modes build platform assets before the tag job. Only the existing gate
+Both modes build platform assets before the single publication job. Only the existing gate
 creates `vVERSION`; Android, Linux and Windows receipts are required. The dependent
 publication job runs in the same workflow because a tag created with
 `GITHUB_TOKEN` does not trigger an ordinary tag-push workflow. Never overwrite a
@@ -44,7 +44,10 @@ see the [GitHub release API](https://docs.github.com/en/rest/releases/releases#u
 An explicit build-only workflow dispatch may prepare private installation assets
 for verification without creating tags/releases or changing policy. It must use
 the exact trusted main checkout, not an arbitrary caller-provided ref. All platform
-jobs use contents-read permissions; only the final tag/publication jobs may write.
+jobs use contents-read permissions; only the final publication job may write.
+In build-only dispatches with `platform: all`, a separate `aggregate` job verifies the
+full set and retains it as `verified-release-set`. The release-tag caller aggregates
+inside its publication job instead.
 Failed/incomplete builds retain diagnostic receipts and cannot publish.
 
 Immediately before tagging and publishing, the candidate must remain within the
@@ -135,6 +138,47 @@ Flags and behavior follow the
 and [NSIS command-line documentation](https://nsis.sourceforge.io/Docs/Chapter3.html).
 `/D=` and `_?=` are final raw arguments, including paths containing spaces;
 acceptance uses no Windows security-policy or CRC override.
+
+## Runner layout
+
+The release uses as few hosted runners as its acceptance checks allow:
+
+* Android: one `ubuntu-24.04` job builds both flavors with the same toolchains and
+  signer. The Google-free `foss` flavor (`--features fdroid`) builds first from
+  the pristine checkout, then `google`. The Gradle app build directory is removed
+  before each build. Each APK passes the signer, certificate, identity, version and
+  non-debuggable checks and is staged before the next build starts. Cargo keeps
+  separate artifacts per feature set, so only the shared dependencies are reused.
+  Each flavor still uploads its own `release-android-<flavor>-arm64` receipt.
+* Companion Linux x64 and arm64 stay on separate runners. The native acceptance
+  harness runs the staged executable and its CLI, WAL and installation owners, and
+  requires a matching native runner (`process.arch`). Building arm64 on an x64
+  runner would not remove the arm64 runner needed for that execution.
+* Companion macOS x64 (`macos-15-intel`) and arm64 (`macos-15`) stay separate for
+  the same reason. Rosetta would run the x64 binary on the arm64 host's macOS 15, so
+  it would not check the binary natively on x64 hardware.
+* Desktop Linux and Windows run on different operating systems.
+
+## Release caches
+
+Release jobs restore dependency downloads that main saved. They never save a cache
+and never restore build outputs, so every released binary compiles from source.
+
+* Bun: `.github/actions/setup-bun` with `restore-only: 'true'`. Install checks each
+  package against `bun.lock` integrity hashes.
+* Cargo: `.github/actions/cargo-registry` restores downloaded `.crate` archives,
+  the sparse index and git databases. It never restores `target/` or unpacked
+  sources. Main companion candidate jobs in `checks.yml` seed this cache for each
+  runner OS and architecture after `cargo fetch --locked`, and only on an exact miss.
+* Gradle: `.github/actions/android-toolchains` restores dependency jars and wrapper
+  distributions. `checks.yml` saves them from main.
+
+Caches are branch-scoped. A pull request's saved entries stay in its own scope, so it
+cannot write an entry that a main release restores. Release companion staging no
+longer uses `Swatinem/rust-cache`, which also restores `target/`. Pull request and
+main candidates still do. The F-Droid source build runs inside the pinned official
+buildserver container with its own downloads and gets no injected cache. Release
+jobs have no other sha256-pinned tool downloads to cache.
 
 Linux/Windows/macOS architecture coverage and signing status must be listed
 per file. Android ARM64 is the existing production target; emulator x86_64 debug
