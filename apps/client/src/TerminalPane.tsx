@@ -73,7 +73,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const inputLane = useRef<"keyboard" | "literal" | null>(null);
   const literalPaste = useRef(false);
   const literalCapture = useRef<string[] | null>(null);
-  const imeInput = useRef<{readonly idle:boolean;reset(): void; flush(): void; resume(): void; dismiss(): void} | null>(null);
+  const imeInput = useRef<{readonly idle:boolean;reset(): void; flush(): void; settle(): void; resume(): void; dismiss(): void} | null>(null);
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
@@ -897,8 +897,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           if (modifier) {
             if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
             if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
-            imeInput.current?.flush();
-            imeInput.current?.reset(); imeComposing.current = false;
+            imeInput.current?.settle(); imeComposing.current = false;
           }
           if (key === "ctrl" || key === "meta") cycleModifier(key);
           else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}

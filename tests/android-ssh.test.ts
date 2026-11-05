@@ -1547,7 +1547,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   } finally {logger.mockRestore();await rm(directory,{recursive:true,force:true});}
 });
 
-test('native keyless Enter observer filters foreign targets, records closed event facts and retires listeners',async()=>{
+test('native soft Enter observer filters foreign targets, settles after the Enter key press, records closed event facts and retires listeners',async()=>{
   const path=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt');
   const native=await readFile(path,'utf8'),body=native.split('fun commitOwnedLineBreak(')[1].split('var primary: Throwable? = null\n        try {\n            toolbarPreferences()')[0];
   const source=body.split('val installed = evaluate(scenario, """')[1].split('""")')[0].replaceAll('$key',JSON.stringify('owned'));
@@ -1555,8 +1555,13 @@ test('native keyless Enter observer filters foreign targets, records closed even
   const document={activeElement:area,querySelectorAll:()=>[area],addEventListener:(type:string,fn:(event:any)=>void)=>handlers.set(type,fn),removeEventListener:(type:string,fn:(event:any)=>void)=>{if(handlers.get(type)===fn)handlers.delete(type);}};
   const window:Record<string,any>={};expect(new Function('document','window',`return (${source})`)(document,window)).toBe(true);
   const foreign={target:{},get type(){throw new Error('foreign event read');}};expect(()=>handlers.get('input')!(foreign)).not.toThrow();
+  handlers.get('keydown')!({target:area,type:'keydown',key:'Unidentified',keyCode:229,isTrusted:true,isComposing:false});
+  expect(window.owned.settled).toBe(false);
+  handlers.get('keydown')!({target:area,type:'keydown',key:'Enter',isTrusted:true,isComposing:false});
   handlers.get('input')!({target:area,type:'input',inputType:'insertLineBreak',isTrusted:true,isComposing:false,data:'private'});
-  const result=window.owned.stop();expect(result).toEqual({overflow:false,original:true,events:[{kind:'line-break',trusted:true,composing:false}]});
+  expect(window.owned.settled).toBe(false);await new Promise(resolve=>setTimeout(resolve,0));expect(window.owned.settled).toBe(true);
+  const result=window.owned.stop();expect(result).toEqual({overflow:false,original:true,events:[{kind:'other-key',trusted:true,composing:false},
+    {kind:'enter',trusted:true,composing:false},{kind:'line-break',trusted:true,composing:false}]});
   expect(JSON.stringify(result)).not.toContain('private');expect(handlers.size).toBe(0);expect(window.owned).toBeUndefined();
 });
 

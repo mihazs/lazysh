@@ -100,6 +100,15 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (value === undefined) stage(area.value);
     else {reset(); send(value);}
   };
+  // A toolbar modifier needs a fresh editor context, not a new editor: blurring
+  // or toggling readOnly while focused restarts the native InputConnection,
+  // which resets the software keyboard's own shift and suggestion state.
+  const settle = () => {
+    flush(); onUnappliedEdit(null);
+    if (!focused()) {revoke(); return;}
+    if (area.value) area.value = '';
+    reset();
+  };
   const keydown = (event: KeyboardEvent) => {
     if (event.target !== area || replaying) return;
     resume();
@@ -207,7 +216,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   element.addEventListener('paste', paste, true);
   element.addEventListener('pointerdown', activate, true);
   element.addEventListener('click', activate, true);
-  return {get idle() {return !composing && !ending && !sending && !replaying && !fallbackPending && !deferred && !key229 && !keylessComposition && !helper._isComposing && !helper._isSendingComposition;}, reset() {onUnappliedEdit(null); revoke();}, clear:reset, flush, resume, dismiss, dispose() {
+  return {get idle() {return !composing && !ending && !sending && !replaying && !fallbackPending && !deferred && !key229 && !keylessComposition && !helper._isComposing && !helper._isSendingComposition;}, reset() {onUnappliedEdit(null); revoke();}, clear:reset, flush, settle, resume, dismiss, dispose() {
     onUnappliedEdit(null); revoke(); output.dispose();
     element.removeEventListener('keypress', keypress, true);
     element.removeEventListener('keydown', keydown, true);

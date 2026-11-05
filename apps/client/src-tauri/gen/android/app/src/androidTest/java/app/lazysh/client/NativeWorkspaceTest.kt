@@ -5506,14 +5506,15 @@ class NativeWorkspaceTest {
                 (()=>{const key=$key,areas=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
                   if(areas.length!==1||Object.hasOwn(window,key))return false;
                   const area=areas[0],types=['keydown','beforeinput','input','compositionstart','compositionend'];
-                  const events=[];let overflow=false;
+                  const events=[];let overflow=false,settled=false;
                   const listener=event=>{if(event.target!==area)return;if(events.length>=24){overflow=true;return;}
                     events.push({kind:event.type==='keydown'?(event.key==='Enter'?'enter':'other-key'):
                       event.type==='input'?(event.inputType==='insertLineBreak'?'line-break':'other-input'):
                       event.type==='beforeinput'?'beforeinput':'composition',trusted:event.isTrusted===true,
-                      composing:event.isComposing===true});};
+                      composing:event.isComposing===true});
+                    if(events.at(-1).kind==='enter')setTimeout(()=>{settled=true;},0);};
                   for(const type of types)document.addEventListener(type,listener,true);
-                  Object.defineProperty(window,key,{configurable:true,value:{stop:()=>{
+                  Object.defineProperty(window,key,{configurable:true,value:{get settled(){return settled||overflow;},stop:()=>{
                     for(const type of types)document.removeEventListener(type,listener,true);
                     delete window[key];const current=document.querySelectorAll('.terminal-canvas .xterm-helper-textarea');
                     return {overflow,events,original:current.length===1&&current[0]===area&&area.isConnected&&document.activeElement===area};}}});return true;})()
@@ -5525,6 +5526,9 @@ class NativeWorkspaceTest {
                 val result = ime.call("lineBreak")
                 assertTrue("Fixed native line break accepted", result.getBoolean("accepted"))
                 assertTrue("Fixed native line break read barrier returned", result.getBoolean("readReturned"))
+                // The synthetic key press is posted after the commit, so the read barrier does not order it.
+                runCatching { awaitDocument(scenario, "owned soft Enter key press settled", "window[$key]?.settled===true",
+                    deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)) }
             } catch (failure: Throwable) { primary = failure; throw failure }
             finally {
                 try { observed = JSONObject(evaluate(scenario, "window[$key]?.stop() ?? {overflow:true,events:[],original:false}")) }
@@ -5533,10 +5537,17 @@ class NativeWorkspaceTest {
             val result = checkNotNull(observed)
             val events = result.getJSONArray("events")
             val facts = (0 until events.length()).map { events.getJSONObject(it) }
-            assertTrue("INCONCLUSIVE: native IME did not deliver one trusted input-only line break",
+            // Bounded event kinds and flags only; the observer never records editor text.
+            val seen = "overflow=${result.getBoolean("overflow")} original=${result.getBoolean("original")} events=" +
+                facts.joinToString(",", "[", "]") { "${it.getString("kind")}(trusted=${it.getBoolean("trusted")},composing=${it.getBoolean("composing")})" }
+            // Chromium's ThreadedInputConnection commits "" and then sends an exact "\n" commit as a synthetic
+            // soft Enter key press (crbug.com/577967); no Android IME commit reaches the editor as input only.
+            assertTrue("INCONCLUSIVE: native IME did not deliver one trusted soft Enter key press [$seen]",
                 !result.getBoolean("overflow") && result.getBoolean("original") &&
-                    facts.count { it.getString("kind") == "line-break" && it.getBoolean("trusted") && !it.getBoolean("composing") } == 1 &&
-                    facts.none { it.getString("kind") in listOf("enter", "composition", "other-input") || !it.getBoolean("trusted") || it.getBoolean("composing") })
+                    facts.count { it.getString("kind") == "enter" && it.getBoolean("trusted") && !it.getBoolean("composing") } == 1 &&
+                    facts.none { it.getString("kind") == "composition" || !it.getBoolean("trusted") || it.getBoolean("composing") })
+            assertTrue("Soft Enter key press is consumed by the terminal, not inserted into the editor [$seen]",
+                facts.none { it.getString("kind") in listOf("line-break", "other-input") })
         }
         var primary: Throwable? = null
         try {

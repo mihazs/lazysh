@@ -119,6 +119,7 @@ public final class OwnedImeService extends InputMethodService {
         }
         if ("lineBreak".equals(method)) {
             Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
+            // The WebView input connection delivers this exact commit as a synthetic soft Enter key press.
             result.putBoolean("accepted", target.connection.commitText("\n", 1));
             // A remote read orders the fixed commit; it does not acknowledge delivery.
             result.putBoolean("readReturned", target.connection.getTextBeforeCursor(256, 0) != null);
