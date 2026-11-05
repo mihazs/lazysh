@@ -28,6 +28,18 @@ export function tmuxAttachHistoryVerified(history:readonly number[]) {
   return history.length===5 && [0,1,0,1,0].every((count,index)=>history[index]===count);
 }
 
+const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
+  'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown',
+  'Owned SSH root identity unavailable','Owned SSH root identity lost','Owned SSH listener survived teardown'];
+/** Closed teardown evidence: fixed fixture messages, supervisor status and phase only. */
+export function tmuxTeardownObservation(serverAtStop:'absent'|'live'|'exited',failure:unknown,server?:{child:{exitCode:number|null;signalCode:NodeJS.Signals|null}}) {
+  const message=(error:unknown)=>error===undefined?'none':error instanceof Error && teardownErrors.includes(error.message)?error.message:'other';
+  const code=server?.child.exitCode,signal=server?.child.signalCode;
+  return {scope:'tmux-teardown',serverAtStop,failure:message(failure),
+    supervisorExit:Number.isInteger(code) && code!>=0 && code!<=255?code:null,
+    supervisorSignal:signal==null?'none':(['SIGTERM','SIGKILL','SIGSEGV','SIGABRT','SIGHUP'] as const).find(value=>value===signal)??'other'};
+}
+
 // The pinned tmux server runs in the foreground of the fixture's private user
 // namespace with a private socket directory, so it cannot outlive its owner.
 export class TmuxFixture {
@@ -127,30 +139,21 @@ export class TmuxFixture {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
     return {name:this.name,windows:this.windows.map(({index,name,marker})=>({index,name,marker}))};
   }
-  // tmux 3.4 can crash (exit 139) in its SIGTERM shutdown while a control-mode client,
-  // such as the app's Jump binding, is still attached. Detach every remaining client and
-  // observe zero attached clients first, so the owned server exits through its clean path.
-  private async quiesce() {
-    if(!await this.server?.liveIdentity())return;
-    const attached=async()=>{
-      const text=await this.run(['list-clients','-F','#{client_control_mode}']);
-      return tmuxDisplayClients(text)+text.split('\n').filter(line=>line==='1').length;
-    };
-    if(!await attached())return;
-    await this.run(['detach-client','-s',`=${this.name}`]);
-    const deadline=performance.now()+3000;
-    while(await attached()) {
-      if(performance.now()>=deadline)throw new Error('Owned tmux clients survived detach');
-      await delay(25);
-    }
-  }
   async stop() {
     if(this.stopped)return;
-    let quiesced:unknown;
-    try{await this.quiesce();}catch(error){quiesced=error;}
-    await stopOwnedServer(this.ssh,this.server,'tmux',async()=>(await Promise.all([this.serverPid,...this.windows.map(window=>window.pane)]
-      .map(saved=>saved?.pid?this.alive(saved):false))).some(Boolean));
-    if(quiesced)throw quiesced;
+    const serverAtStop=!this.server?'absent':await this.server.liveIdentity()?'live':'exited';
+    let failure:unknown;
+    // The tmux server's clean SIGTERM exit waits for every client connection, and tmux 3.4
+    // can crash (exit 139) while a control-mode client such as the app's Jump binding is
+    // still attached. Retire the SSH tree, which owns every remote client, before the server.
+    try {
+      await stopOwnedServer(this.ssh,this.server,'tmux',async()=>(await Promise.all([this.serverPid,...this.windows.map(window=>window.pane)]
+        .map(saved=>saved?.pid?this.alive(saved):false))).some(Boolean),true);
+    } catch(error){failure=error;}
+    if(failure) {
+      try{console.error('Owned tmux teardown '+JSON.stringify(tmuxTeardownObservation(serverAtStop,failure,this.server)));}catch{/* Keep the original failure. */}
+      throw failure;
+    }
     this.stopped=true;
   }
 }

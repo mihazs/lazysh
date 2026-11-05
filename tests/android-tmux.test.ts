@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxDisplayClients,tmuxPaneRows} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxDisplayClients,tmuxPaneRows,tmuxTeardownObservation} from './support/androidTmux';
 import {listening,type OwnedProcess} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
@@ -17,6 +17,15 @@ test('tmux host readback admits only the owned two-window topology and display c
   for(const invalid of ['2\n','0\n'.repeat(9),'private\n'])expect(()=>tmuxDisplayClients(invalid)).toThrow('Owned tmux client readback invalid');
   expect(tmuxAttachHistoryVerified([0,1,0,1,0])).toBe(true);
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
+});
+
+test('tmux teardown evidence keeps only fixed fixture messages and supervisor status',()=>{
+  const server=(exitCode:number|null,signalCode:NodeJS.Signals|null)=>({child:{exitCode,signalCode}});
+  expect(tmuxTeardownObservation('live',new Error('Owned tmux root identity lost'),server(137,null))).toEqual({scope:'tmux-teardown',
+    serverAtStop:'live',failure:'Owned tmux root identity lost',supervisorExit:137,supervisorSignal:'none'});
+  for(const failure of [new Error('private /tmp/owned path'),'private text'])
+    expect(tmuxTeardownObservation('exited',failure,server(null,'SIGUSR2'))).toEqual({scope:'tmux-teardown',serverAtStop:'exited',failure:'other',supervisorExit:null,supervisorSignal:'other'});
+  expect(tmuxTeardownObservation('absent',undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -51,11 +60,17 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await client.stop();
     await owned.verifyDetachedAndReattached();
     expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2});
-    // A still-attached control-mode client, like the app's Jump binding, must not break teardown.
-    client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -f no-output,ignore-size -t '=owned-tmux'");
+    // A still-attached control-mode client, like the app's Jump binding, whose reader no
+    // longer drains its output must not break teardown: retiring SSH ends it first.
+    client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
     await wait(()=>client!.stdout.includes('%session-changed'));
+    process.kill(-client.child.pid!,'SIGSTOP');
+    // Pane echo becomes undrained control output until the client can no longer leave.
+    const pressure=await owned.ssh.client(true,`i=0; while [ $i -lt 400 ]; do tmux -L default send-keys -l -t '=owned-tmux:0' '${'x'.repeat(4000)}'; i=$((i+1)); done`);
+    await pressure.finish('owned tmux control output pressure',20000);
     await owned.stop();
-    expect(await client.finish('owned tmux control client detached by teardown',5000)).toContain('%exit');
+    process.kill(-client.child.pid!,'SIGCONT');
+    await expect(client.finish('owned tmux control client retired with SSH',5000)).rejects.toThrow('Owned fixture failed');
   } finally {
     await client?.stop();
     await owned.stop();
@@ -63,4 +78,4 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
-},30_000);
+},60_000);
