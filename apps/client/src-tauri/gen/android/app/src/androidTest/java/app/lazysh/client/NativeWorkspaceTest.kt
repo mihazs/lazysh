@@ -1,7 +1,6 @@
 package app.lazysh.client
 
 import android.content.ClipData
-import android.content.ComponentName
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
@@ -1041,8 +1040,11 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "$icon launcher icon readback", visibleStatus("Current icon: $label"))
         }
         assertEquals("A fresh install exposes only the Default launcher entry", listOf(component("default").className), launcherEntries())
-        assertEquals("The workspace itself is never a launcher entry", null, manager.queryIntentActivities(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(ComponentName(context, MainActivity::class.java)), 0).firstOrNull())
+        // Filter resolution, including disabled aliases: an explicit component would bypass intent filters.
+        assertEquals("Only the two icon aliases declare launcher filters; MainActivity never does",
+            setOf(component("default").className, component("amber").className),
+            manager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(context.packageName),
+                PackageManager.MATCH_DISABLED_COMPONENTS).map { it.activityInfo.name }.toSet())
         relaunch("Default launcher alias")
         val marker = JSONObject.quote(UUID.randomUUID().toString())
         try {
