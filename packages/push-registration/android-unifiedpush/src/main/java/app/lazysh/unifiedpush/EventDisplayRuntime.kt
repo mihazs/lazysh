@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -69,8 +70,11 @@ internal class AndroidDisplayNotifications(context:Context):DisplayNotifications
     }
     override fun post() {
         check(permitted())
-        val component=checkNotNull(app.packageManager.getLaunchIntentForPackage(app.packageName)?.component)
-        check(component.packageName==app.packageName)
+        val launch=checkNotNull(app.packageManager.getLaunchIntentForPackage(app.packageName))
+        val entry=checkNotNull(app.packageManager.resolveActivity(launch,0)?.activityInfo)
+        check(entry.packageName==app.packageName)
+        // An icon switch can disable the launcher alias; target the activity behind it, which stays enabled.
+        val component=ComponentName(app.packageName,entry.targetActivity ?: entry.name)
         // Construct afresh: no remote data, extras, URI, selector or terminal action.
         val intent=Intent(Intent.ACTION_MAIN).setComponent(component).addCategory(Intent.CATEGORY_LAUNCHER)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)

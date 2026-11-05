@@ -3,7 +3,14 @@
 Open Preferences → Import and share theme. Paste JSON or a `lazysh-theme:` code,
 then select Preview theme. Review the name, mode and sample before choosing
 Apply to app and terminal. Reading the clipboard is a separate explicit action;
-the app never reads or writes it automatically. Export produces selectable JSON
+the app never reads or writes it automatically. Read theme from clipboard uses the
+same platform path as terminal Paste: Android reads plain text through the native
+clipboard bridge (the WebView clipboard API is never used there), other targets use
+the browser clipboard API. Clipboard text goes through the same validation as pasted
+input and always stops at the preview; text over 16 KiB or an invalid theme shows
+the validation error and keeps the current draft. Android refuses clipboard text
+over 64 KiB before it reaches the app and reports that the clipboard could not be
+read. Export produces selectable JSON
 or a share code for the saved imported palette. Neither import nor export fetches
 URLs or uploads anything.
 

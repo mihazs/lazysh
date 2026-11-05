@@ -24,7 +24,7 @@ it.each(['default','unknown'])('keeps unavailable %s readback compact and preser
 it('keeps an empty native unavailable reason unknown rather than inferring an iOS requirement',async()=>{
   vi.mocked(invoke).mockResolvedValue({...status('unknown',false),reason:''});render(<AppIconPanel/>);
   await screen.findByText(t('appUnknownRefreshBeforeChanging'));
-  expect(screen.queryByText(t('iconsAlternateHomeScreenIconsRequireTheIOSApp'))).toBeNull();
+  expect(screen.queryByText(t('iconsAlternateHomeScreenIconsRequireTheMobileApp'))).toBeNull();
   expect(screen.getByRole('button',{name:'Refresh app icon'})).toHaveProperty('disabled',false);
 });
 it('waits for native completion before reporting the actual icon', async () => {

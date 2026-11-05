@@ -48,7 +48,7 @@ At audit time no CI job ran `test:et`, `test:openssh`, `test:multiplexers`, `tes
 
 | Platform | verified | implemented | partial | missing | n/a |
 | --- | --- | --- | --- | --- | --- |
-| Android | 70 | 130 | 26 | 15 | 10 |
+| Android | 70 | 132 | 25 | 14 | 10 |
 | Desktop | 74 | 124 | 29 | 18 | 6 |
 
 Most `implemented` rows are not missing features. They are reachable code whose platform proof is unit-level, mocked, ignored, macOS-only or currently red. The [Gaps](#gaps) section groups them into issues.
@@ -171,14 +171,14 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Whole-app theme | verified | verified | `apps/client/src/appearance.ts:7-17`; PP:73. `native-e2e/appearance.spec.ts:65-99` (NL); NWT:872-978 native `--theme-bg` (NAR). | — |
 | Terminal theme | verified | verified | `prefs:8-12,148-155`; PP:74-77. `e2e/theme-rendering.spec.ts:17-244` (PW). | — |
 | Custom theme import (JSON or share code) | verified | verified | `apps/client/src/ThemeImportPanel.tsx:18-22,40-49`. `e2e/theme-import.spec.ts:5-44` (PW). | — |
-| Theme import from the clipboard | partial | implemented | `ThemeImportPanel.tsx:32-35` uses `navigator.clipboard.readText`, not the native Android read path (`deviceClipboard.ts:88-97`), so the button may fail in the Android WebView; pasting into the field works. Unit tests only. | Native Android read and a device test. |
+| Theme import from the clipboard | implemented | implemented | `ThemeImportPanel.tsx` reads through `readClipboardText` (`deviceClipboard.ts`): the native Android path, the browser clipboard API elsewhere. `ThemeImportPanel.clipboard.test.tsx`; `e2e/theme-clipboard.spec.ts` (PW, mocked Android bridge and browser). NWT clipboardThemeImportReadsTheNativeClipboardWithExplicitReview (NAR): green on PR run 41995641561 (job 127145436598), not yet on main. | Green run of the device case on main. |
 | Theme import by QR | verified | implemented | `apps/client/src/themeQr.ts:62-120`; `src-tauri/theme_qr.rs:63,155`. NWT:1124 ownedQrCameraRequiresPermissionAndExplicitPreview (NAA). Desktop: decoder unit tests and `e2e/theme-qr.spec.ts:54` with a synthetic camera. | Desktop camera or image-file scan in the GUI. |
 | Theme import by deep link | verified | implemented | `src-tauri/theme_links.rs:85-115`. NWT:872 themeLinksUseFirstActivityAndWarmIntentWithExplicitReview (NAR). Desktop: mock-runtime test `theme_links.rs:153-235`; mocked `e2e/theme-links.spec.ts:7`. | Real OS URL dispatch on Linux and Windows. |
 | On-demand font download | implemented | implemented | `apps/client/src/fontDownload.ts:18-32`. `e2e/font-download.spec.ts:14,28` cover failure and CSP; the success case (`:37`) needs `LAZYSH_NOTO_LIVE=1`. | Success path in CI. |
 | Imported fonts (TTF, OTF, WOFF, TTC; four max) | verified | verified | `fonts.ts:118-150`; PP:85-94. `preferences.spec.ts:14-56` (PW). | Native file chooser not exercised. |
 | CJK fallback font | verified | verified | Covered by glyph fallback above. | — |
 | Cursor shape and blink | implemented | implemented | PP:101-102; `prefs:96-97,154`. Unit test `preferences.test.ts:49`. | Rendering test. |
-| App icon selection | missing | missing | `apps/client/src/AppIconPanel.tsx`; `packages/apple-status/src/lib.rs:172-179` reports unavailable on every non-iOS target (`native-e2e/appearance.spec.ts:69-70` asserts the notice). | Android launcher-alias icons. Desktop icon switching is not established for the reference client either. |
+| App icon selection | implemented | missing | `apps/client/src/AppIconPanel.tsx`; Android launcher aliases in `AndroidManifest.xml` with `AppIconPlugin.kt` and the `LauncherActivity` trampoline (`docs/app-icons.md`). NWT appIconAliasSwitchKeepsTheRunningWorkspaceActivity (NAR): green on PR run 41995641561 (job 127145436598), not yet on main. Desktop: `packages/apple-status/src/lib.rs` reports unavailable (`native-e2e/appearance.spec.ts:69-70`). | Green run of the device case on main. Desktop icon switching is not established for the reference client either. |
 | UI locale (en, pt-BR, es, system) | verified | verified | PP:63-66; `apps/client/src/i18n/nativeLocale.ts`. `NativeUiLocaleTest.kt:42,65` (NAR); `i18n.spec.ts:64`, `e2e/native-locale.spec.ts:5` (PW). | macOS native locale (#79). |
 | Session list or card preference | verified | verified | PP:72; `prefs:88`. `e2e/session-layout.spec.ts:45-99` (PW). | — |
 | iOS glass | n/a | n/a | iOS-only material on the reference client. | — |
@@ -500,7 +500,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | 23 | Element annotations in previews | partial / partial | #11 |
 | 24 | Dictation: real Whisper inference in CI, Parakeet on Android and Windows, cloud provider against the real service, native auto-send, model removal | missing to implemented / partial to implemented | #13, #345 |
 | 25 | Shareable uploads: Android runtime case, real-service thumbnails | implemented / implemented | #12 |
-| 26 | Appearance: Android clipboard theme import, Android app icon selection, desktop QR and deep-link dispatch, font-download success path, cursor rendering test | partial to missing / implemented to missing | #995 *(new)*; umbrella #16 |
+| 26 | Appearance: Android clipboard theme import and Android app icon selection (implemented; device cases green on PR run 41995641561, pending a green run on main), desktop QR and deep-link dispatch, font-download success path, cursor rendering test | implemented to missing | #995 *(new)*; umbrella #16 |
 | 27 | Notifications: desktop remote push and delivery, inbox and action tests, pane-level deep links, FCM registration test, red F-Droid ntfy job | implemented to partial / missing to partial | #14, #344, #945, #879 |
 | 28 | Keep-awake: desktop GUI path and focus-loss release, physical idle acceptance | verified / implemented | #81 |
 | 29 | Simulator previews: Android video touch, real control and lifecycle tests, accessibility actions | partial to missing / partial to missing | #19 |

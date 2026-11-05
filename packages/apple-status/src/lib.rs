@@ -174,8 +174,9 @@ impl<R: Runtime> AppleStatus<R> {
             Ok(AppIconStatus {
                 available: false,
                 current: "unknown".into(),
-                reason: "Alternate Home Screen icons require iOS. The app icon is unchanged."
-                    .into(),
+                reason:
+                    "Alternate Home Screen icons require iOS or Android. The app icon is unchanged."
+                        .into(),
             })
         }
     }
@@ -197,7 +198,7 @@ impl<R: Runtime> AppleStatus<R> {
         }
         #[cfg(not(target_os = "ios"))]
         {
-            Err("Alternate Home Screen icons require iOS".into())
+            Err("Alternate Home Screen icons require iOS or Android".into())
         }
     }
 

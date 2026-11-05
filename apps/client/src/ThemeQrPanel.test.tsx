@@ -133,7 +133,8 @@ it.each(['cancel','hidden','pagehide','unmount','collapse','source','name','mode
   if(action==='paste')fireEvent.click(screen.getByRole('button',{name:'Read theme from clipboard'}));
   if(action==='access')await act(async()=>{authority(true);authority();});
   expect(stop).toHaveBeenCalledTimes(1);await act(async()=>finish(payload));
-  expect(view.apply).not.toHaveBeenCalled();expect(screen.queryByRole('heading',{name:'QR fixture'})).toBeNull();expect(invoke).toHaveBeenCalledTimes(1);expect(permission).toHaveBeenCalledTimes(1);
+  // Paste may probe clipboard platform metadata; only one QR decode may be dispatched.
+  expect(view.apply).not.toHaveBeenCalled();expect(screen.queryByRole('heading',{name:'QR fixture'})).toBeNull();expect(vi.mocked(invoke).mock.calls.filter(([command])=>command!=='clipboard_is_android')).toHaveLength(1);expect(permission).toHaveBeenCalledTimes(1);
 });
 it('keeps one held original frame and camera across locale changes, then previews without applying',async()=>{
   let finish!:(value:unknown)=>void;vi.mocked(invoke).mockImplementation(()=>held<unknown>(null,resolve=>{finish=resolve;}));const view=mount();scan();await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(1));

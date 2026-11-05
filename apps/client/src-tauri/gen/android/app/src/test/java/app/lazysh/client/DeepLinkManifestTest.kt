@@ -23,7 +23,7 @@ class DeepLinkManifestTest {
         assertEquals("singleTask", activity.getAttributeNS(namespace, "launchMode"))
         assertEquals("true", activity.getAttributeNS(namespace, "exported"))
         val filters = activity.children("intent-filter")
-        assertEquals(2, filters.size)
+        assertEquals(1, filters.size)
         val route = filters.single { filter ->
             filter.children("action").any { it.getAttributeNS(namespace, "name") == "android.intent.action.VIEW" }
         }
