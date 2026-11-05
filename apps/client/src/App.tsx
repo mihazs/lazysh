@@ -1253,9 +1253,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
+  // Keep the last opened Chat reader mounted behind other views of its session, so returning
+  // from the terminal or a tool keeps its messages, reading position and unsent draft.
+  // A reader opened from reported history still retires when its view is left.
+  const [keptChat,setKeptChat]=useState<{sessionId:string;generation:number;reported:boolean}>();
+  useEffect(()=>{
+    setKeptChat(kept=>view==='chat' && activeId ? kept?.sessionId===activeId ? kept : {sessionId:activeId,generation:(kept?.generation??0)+1,reported:false}
+      : kept?.reported ? {...kept,sessionId:''} : kept);
+  },[activeId,view]);
   function openReportedHistory(source:ReportedHistorySource,expectedNavigation:number) {
     if(!mounted.current || expectedNavigation!==historyNavigationIntent.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.activity
       || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
+    // Entering Chat with reported history opens a fresh reader for it, as before.
+    if(currentView.current.view!=='chat')setKeptChat(kept=>({sessionId:source.sessionId,generation:(kept?.generation??0)+1,reported:true}));
     setReportedHistory(source);visitView('chat');
   }
   const directContext = useRef({sessionId:activeId,generation:0});
@@ -2229,10 +2239,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
-                {active.connected && !active.local && view === "chat" && (
+                {active.connected && !active.local && (view === "chat" || keptChat?.sessionId === active.id) && (
                   <ChatPanel
-                    key={active.id}
+                    key={`${active.id}:${keptChat?.sessionId === active.id ? keptChat.generation : (keptChat?.generation ?? 0) + 1}`}
                     sessionId={active.id}
+                    shown={view === "chat"}
                     onOpenTerminal={() => setView("terminal")}
                     reportedHistory={reportedHistory?.sessionId===active.id ? reportedHistory : undefined}
                     terminalInput={native && (active.attached?.kind==='tmux' || active.attached?.kind==='herdr') ? {backend:active.attached.kind,hostLabel:active.destination,terminalLabel:active.name}:undefined}

@@ -68,6 +68,17 @@ it('retires on explicit Open starting, including a failed replacement, without c
   await act(async()=>{fail({message:'Explicit replacement read failed'});});await screen.findByRole('button',{name:t('chatTerminalChoose')});
   expect(screen.queryByRole('button',{name:t('chatTerminalStop')})).toBeNull();expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);
 });
+it('a reader kept behind another view releases its confirmed destination and returns without authority',async()=>{
+  const view=await opened();await confirmed();
+  const draft=screen.getByLabelText('Draft for this terminal');fireEvent.change(draft,{target:{value:'kept unsent draft'}});
+  view.rerender(<ChatPanel sessionId="ssh-display" terminalInput={capability} shown={false}/>);
+  expect(actions()).toContainEqual({kind:'release',receipt:tmuxChatReceipt});
+  view.rerender(<ChatPanel sessionId="ssh-display" terminalInput={capability}/>);
+  await screen.findByRole('button',{name:t('chatTerminalChoose')});
+  expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();
+  expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','kept unsent draft');
+  expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);
+});
 it('source option changes retire future authority, while a previously admitted Send may still complete',async()=>{
   await opened();await confirmed();let finish!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args)=>command==='tmux_chat' && (args as {action:{kind:string}}).action.kind==='input'?new Promise(yes=>{finish=yes;}):command==='tmux_chat'?tmuxChatReply(command,args):Promise.resolve(page));
