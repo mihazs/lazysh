@@ -111,18 +111,20 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(({geometry,sessionNames})=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
+      // Herdr display replies can be slowed to mimic a network round trip.
+      const herdrReply=()=>state.herdrDelay && args.sessionId==='owned-navigation-herdr'?new Promise(resolve=>setTimeout(resolve,state.herdrDelay)):undefined;
       if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
       if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
       if(command==='connect'){const index=++state.connects;return {sessionId:index===1?'owned-navigation-ssh':index===2||!sessionNames?'other-navigation-ssh':`additional-navigation-ssh-${index}`};}
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
-      if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
+      if(command==='herdr_action'){await herdrReply();if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle',agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'r'.repeat(256)}}]};if(state.agentCount>1){
+      if(command==='herdr_tree'){await herdrReply();const tree={workspaces:[{workspace_id:'w1',label:geometry?'HERDR_'+'a'.repeat(32):'Development',focused:true,agent_status:geometry?'unknown':'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:geometry?'1':'Codex tasks',number:1,focused:true,agent_status:geometry?'unknown':'idle'}],panes:[{focused:true,agent_status:geometry?'unknown':'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:geometry?'/tmp/lazysh-h-abcdef':'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:geometry?null:'codex-builder',agent:'codex',agent_status:geometry?'unknown':'idle',agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'r'.repeat(256)}}]};if(state.agentCount>1){
         const pane=tree.panes[0],agent=tree.agents[0];
         tree.panes=Array.from({length:state.agentCount},(_,i)=>({...pane,pane_id:`w1:p${i+1}`,terminal_id:`codex-terminal-${i+1}`,focused:i===0}));
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
@@ -214,37 +216,52 @@ function nativeHerdrNavigationReady(label:string,context?:string){
   return body.replace('${JSONObject.quote(row)}',()=>JSON.stringify(nativeHerdrNavigationRow(label,context).slice('xpath='.length)));
 }
 
-test('Herdr switches keep the soft keyboard closed until the terminal or keyboard key asks for it',async({page},testInfo)=>{
+// The soft keyboard follows the focused editable control.
+async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:boolean;drawer:boolean;replyDelay?:number}){
   await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['keyboard','esc']})));
   await openClockedNavigation(page);
-  const phone=testInfo.project.name==='phone';
-  const press=(target:Locator)=>phone?target.tap():target.click();
+  const press=(target:Locator)=>touch?target.tap():target.click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
   const navigations=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations);
-  // The soft keyboard follows the focused editable control.
   const focused=()=>page.evaluate(()=>{const node=document.activeElement;return node?.matches('input,textarea,select,[contenteditable]')?node.getAttribute('aria-label')??node.tagName:null;});
-  const settle=async()=>{await page.clock.runFor(500);await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);};
-  const openSpaces=async()=>{if(phone)await press(page.getByRole('button',{name:'Open hosts',exact:true}));await press(modes.getByRole('button',{name:'Workspaces',exact:true}));};
-  if(phone)await press(page.getByRole('button',{name:'Open hosts',exact:true}));
+  const openSpaces=async()=>{if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));await press(modes.getByRole('button',{name:'Workspaces',exact:true}));};
+  const switchTo=async(label:string,expected:unknown[],input:string|null)=>{
+    await press(page.locator(nativeHerdrNavigationRow(label)));
+    // The switched display can mount and claim focus while Herdr replies are still pending.
+    for(let elapsed=0;elapsed<=2*replyDelay+500;elapsed+=100){if(touch)expect(await focused()).toBeNull();await page.clock.runFor(100);}
+    await expect.poll(navigations).toEqual(expected);
+    await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
+    expect(await focused()).toBe(input);
+  };
+  if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));
   await connectPasswordHost(page);
+  await page.evaluate(delay=>{(window as unknown as {workspaceNavigationState:{herdrDelay:number}}).workspaceNavigationState.herdrDelay=delay;},replyDelay);
   await openSpaces();
   // A pane switch adopts a new Herdr display; a tab switch reuses it.
-  await press(page.locator(nativeHerdrNavigationRow('codex-builder')));
-  await expect.poll(navigations).toEqual([{type:'focusPane',target:'w1:p1'}]);
-  await settle();
-  expect(await focused()).toBe(phone?null:'Terminal input');
+  const pane={type:'focusPane',target:'w1:p1'};
+  await switchTo('codex-builder',[pane],touch?null:'Terminal input');
   await openSpaces();
-  await press(page.locator(nativeHerdrNavigationRow('Codex tasks')));
-  await expect.poll(navigations).toEqual([{type:'focusPane',target:'w1:p1'},{type:'focusTab',target:'w1:t1'}]);
-  await settle();
-  if(!phone)return;
-  expect(await focused()).toBeNull();
+  // A switch within the active display does not reactivate its terminal, so focus stays on the chosen row, as before.
+  await switchTo('Codex tasks',[pane,{type:'focusTab',target:'w1:t1'}],null);
+  if(!touch)return;
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBe('Terminal input');
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBeNull();
   await page.locator('.terminal-canvas:visible').tap();
   await expect.poll(focused).toBe('Terminal input');
+}
+
+test('Herdr switches keep the soft keyboard closed until the terminal or keyboard key asks for it',async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';
+  await herdrSwitchKeyboard(page,{touch:phone,drawer:phone});
+});
+
+test('slow Herdr switches keep the soft keyboard closed on wide touch layouts',async({page},testInfo)=>{
+  // Above 600px the sidebar stays beside a live terminal, so no inert drawer hides early focus (phone landscape, tablets).
+  const phone=testInfo.project.name==='phone';
+  if(phone)await page.setViewportSize({width:844,height:390});
+  await herdrSwitchKeyboard(page,{touch:phone,drawer:false,replyDelay:400});
 });
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{

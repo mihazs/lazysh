@@ -1991,7 +1991,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       if(!destination)await attachTmux(source,name,'herdr',undefined,owner,assertCurrent,session=>{
         destination=session;adopted=true;intent.destination=session.id;
-        setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));
+        // Quiet in the same update that activates the new display, before its terminal mounts and claims focus.
+        setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));setQuietTerminal(session.id);
       });
       assertCurrent();
       if(!destination?.connected || destination.disposed || closingSessions.current.has(destination.id))throw new LocalUiError('herdrNavigationChanged');

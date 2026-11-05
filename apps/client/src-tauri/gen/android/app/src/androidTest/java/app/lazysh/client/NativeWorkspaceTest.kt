@@ -2633,7 +2633,8 @@ class NativeWorkspaceTest {
             do {
                 var ime: Boolean? = null
                 scenario.onActivity { ime = ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) }
-                assertFalse("$action must keep the soft keyboard closed", ime == true)
+                assertNotNull("$action needs root insets to observe the soft keyboard", ime)
+                assertFalse("$action must keep the soft keyboard closed", ime!!)
                 assertEquals("$action must not focus an editable control", "false", evaluate(scenario, editable))
                 Thread.sleep(100)
             } while (System.nanoTime() < settled)
