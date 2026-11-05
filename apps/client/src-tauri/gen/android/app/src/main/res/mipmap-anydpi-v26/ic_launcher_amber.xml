@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rendered from apps/client/src-tauri/apple/IconArtwork/amber.svg (repository-owned artwork). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <foreground android:drawable="@drawable/lazysh_amber_foreground"/>
+  <background android:drawable="@color/ic_launcher_amber_background"/>
+  <monochrome android:drawable="@drawable/lazysh_amber_monochrome"/>
+</adaptive-icon>

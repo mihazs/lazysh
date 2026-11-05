@@ -1,6 +1,7 @@
 package app.lazysh.client
 
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
@@ -957,6 +958,121 @@ class NativeWorkspaceTest {
         preferencesCategory(scenario, "reset")
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
+    }
+
+    private fun openAppearance(scenario: ActivityScenario<MainActivity>, stage: String) {
+        awaitUnlockedWorkspace(scenario, stage)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        preferencesCategory(scenario, "appearance")
+    }
+    private fun closePreferences() =
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
+    private fun webButton(label: String) =
+        onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
+    private fun visibleStatus(text: String) =
+        "Array.from(document.querySelectorAll('[role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
+
+    // The Appearance button reads the actual system clipboard through the native Android path.
+    @Test fun clipboardThemeImportReadsTheNativeClipboardWithExplicitReview() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val scenario = NativeActivityFixture.scenario
+        fun clip(text: String) = instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText("lazysh theme fixture", text)) }
+        val saved = "localStorage.getItem('lazysh.preferences.v1')"
+        val noPreview = "!document.querySelector('.theme-preview')"
+        val theme = JSONObject().put("v", 1).put("name", "Android clipboard").put("mode", "light")
+            .put("colors", JSONObject().put("background", "#f4efe6").put("foreground", "#1d1d1d")).toString()
+        openAppearance(scenario, "clipboard theme workspace")
+        try {
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
+            awaitDocument(scenario, "native clipboard platform ready",
+                "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Read theme from clipboard' && !x.disabled)")
+            val before = evaluate(scenario, saved)
+            val appTheme = evaluate(scenario, "document.documentElement.dataset.appTheme")
+            clip(theme)
+            webButton("Read theme from clipboard")
+            awaitDocument(scenario, "native clipboard theme preview", "document.querySelector('.theme-preview h3')?.textContent==='Android clipboard'")
+            assertEquals("Clipboard input fills the draft", "true", evaluate(scenario,
+                "document.querySelector(\"[aria-label='Theme JSON or share code']\")?.value===${JSONObject.quote(theme)}"))
+            assertEquals("A clipboard preview must not apply itself", before, evaluate(scenario, saved))
+            assertEquals("A clipboard preview must not change the app theme", appTheme, evaluate(scenario, "document.documentElement.dataset.appTheme"))
+            webButton("Cancel preview")
+            awaitDocument(scenario, "clipboard preview discarded", noPreview)
+            clip("{\"name\":\"" + "x".repeat(20_000) + "\"}")
+            webButton("Read theme from clipboard")
+            awaitDocument(scenario, "oversized clipboard rejected", visibleStatus("Theme input exceeds 16 KiB."))
+            assertEquals("Oversized input must not preview", "true", evaluate(scenario, noPreview))
+            clip("{\"v\":1,\"name\":\"Unsafe\",\"mode\":\"light\",\"colors\":{\"background\":\"url(evil)\",\"foreground\":\"#fff\"}}")
+            webButton("Read theme from clipboard")
+            awaitDocument(scenario, "invalid clipboard rejected", visibleStatus("Invalid theme color: background"))
+            assertEquals("Invalid input must not preview", "true", evaluate(scenario, noPreview))
+            assertEquals("Rejected input must not save preferences", before, evaluate(scenario, saved))
+        } finally {
+            instrumentation.runOnMainSync { if (Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip() }
+            closePreferences()
+        }
+    }
+
+    // Launcher entries are aliases of LauncherActivity, so switching never removes the workspace task.
+    @Test fun appIconAliasSwitchKeepsTheRunningWorkspaceActivity() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val manager = context.packageManager
+        val scenario = NativeActivityFixture.scenario
+        fun component(icon: String) = LauncherIcons.component(context, icon)
+        fun launcherEntries() = manager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            .setPackage(context.packageName), 0).map { it.activityInfo.name }
+        val original = AtomicReference<MainActivity>()
+        scenario.onActivity { original.set(it) }
+        fun relaunch(stage: String) {
+            val launch = requireNotNull(manager.getLaunchIntentForPackage(context.packageName))
+            context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED && System.nanoTime() < deadline) Thread.sleep(50)
+            scenario.onActivity { assertSame("$stage must reuse the original workspace Activity", original.get(), it) }
+        }
+        fun choose(icon: String, label: String) {
+            assertEquals("Icon selector must accept $icon", "true", evaluate(scenario, """(()=>{
+                const select=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.startsWith('Home Screen icon'))?.querySelector('select');
+                if(!select||select.disabled)return false;
+                Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSONObject.quote(icon)});
+                select.dispatchEvent(new Event('change',{bubbles:true}));return true;})()"""))
+            webButton("Apply app icon")
+            awaitDocument(scenario, "$icon launcher icon readback", visibleStatus("Current icon: $label"))
+        }
+        assertEquals("A fresh install exposes only the Default launcher entry", listOf(component("default").className), launcherEntries())
+        assertEquals("The workspace itself is never a launcher entry", null, manager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(ComponentName(context, MainActivity::class.java)), 0).firstOrNull())
+        relaunch("Default launcher alias")
+        val marker = JSONObject.quote(UUID.randomUUID().toString())
+        try {
+            openAppearance(scenario, "app icon workspace")
+            awaitDocument(scenario, "Android icon status", visibleStatus("Current icon: Default"))
+            evaluate(scenario, "window.__lazyshIconMarker=$marker")
+            choose("amber", "Amber")
+            assertEquals(PackageManager.COMPONENT_ENABLED_STATE_ENABLED, manager.getComponentEnabledSetting(component("amber")))
+            assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DISABLED, manager.getComponentEnabledSetting(component("default")))
+            assertEquals("Exactly the Amber launcher entry remains", listOf(component("amber").className), launcherEntries())
+            // Package-changed cleanup is asynchronous; give it time to act on any matching task.
+            Thread.sleep(3_000)
+            assertEquals("Switching must leave the workspace resumed", androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
+            scenario.onActivity { assertSame("Switching must keep the original Activity", original.get(), it); assertFalse(it.isFinishing) }
+            assertEquals("Switching must not reload the WebView", "true", evaluate(scenario, "window.__lazyshIconMarker===$marker"))
+            closePreferences()
+            relaunch("Amber launcher alias")
+            assertEquals("Relaunch must not reload the WebView", "true", evaluate(scenario, "window.__lazyshIconMarker===$marker"))
+            openAppearance(scenario, "app icon restore")
+            awaitDocument(scenario, "Amber readback after relaunch", visibleStatus("Current icon: Amber"))
+            choose("default", "Default")
+            assertEquals("Default restores the manifest state", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+                manager.getComponentEnabledSetting(component("default")))
+            assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, manager.getComponentEnabledSetting(component("amber")))
+            assertEquals(listOf(component("default").className), launcherEntries())
+            assertEquals("Restoring must not reload the WebView", "true", evaluate(scenario, "window.__lazyshIconMarker===$marker"))
+        } finally {
+            instrumentation.runOnMainSync { LauncherIcons.select(context, "default") }
+            runCatching { closePreferences() }
+        }
     }
 
     private class QrCameraObservation(private val rear: Set<String>) : CameraManager.AvailabilityCallback() {

@@ -29,12 +29,6 @@
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
             android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <!-- AndroidTV support -->
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
             <intent-filter >
                 <action android:name="android.intent.action.VIEW" />
@@ -46,6 +40,43 @@
             </intent-filter>
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
+
+        <!-- Launcher entries are aliases of a trampoline, never of MainActivity: Android
+             removes tasks whose base intent names a component that is disabled, so the
+             workspace task must not start from a selectable icon alias. Each alias is also
+             an Android TV (LEANBACK_LAUNCHER) entry. -->
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+        <activity-alias
+            android:name=".LauncherDefault"
+            android:targetActivity=".LauncherActivity"
+            android:enabled="true"
+            android:exported="true">
+            <!-- Default inherits the application icon, round icon and label. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherAmber"
+            android:targetActivity=".LauncherActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_amber"
+            android:roundIcon="@mipmap/ic_launcher_amber">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <service android:name=".SessionForegroundService" android:exported="false"
             android:foregroundServiceType="specialUse" android:stopWithTask="false">

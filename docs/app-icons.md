@@ -1,4 +1,6 @@
-# iOS Home Screen icons
+# App icons
+
+## iOS Home Screen icons
 
 Preferences → App icon offers Default (the existing lazysh artwork) and Amber
 (an original alternate `l_` mark). Apply app icon asks UIKit to change the actual
@@ -9,8 +11,8 @@ The default remains unchanged until you explicitly apply an alternate.
 The setting belongs to iOS on this installation. It is not saved in terminal
 preferences, exported in settings sync, or applied to other devices. Resetting
 terminal preferences does not reset the Home Screen icon: select Default and
-apply it. Desktop, Android and the browser report unavailable; changing a window
-icon is not a substitute for this feature.
+apply it. Desktop and the browser report unavailable; changing a window icon is not a
+substitute for this feature. Android is described below.
 
 Only two bundled choices are accepted. Native code checks UIKit support and the
 current device's icon declarations, runs on the main queue, serializes changes,
@@ -217,3 +219,47 @@ unexecuted; both compiled idiom resources are independently verified.
 Latest main's timed chord queue and native recovery checks are merged normally
 after retaining that successful icon run. The integrated head requires fresh
 CI; prior exact-head evidence is not relabeled as execution of the new merge.
+
+## Android launcher icons
+
+Preferences → App icon offers the same two choices on Android: Default (the
+existing adaptive launcher icon) and Amber, an adaptive icon drawn from the same
+repository-owned [amber.svg](../apps/client/src-tauri/apple/IconArtwork/amber.svg)
+path (vector foreground, `#EDC079` background, themed monochrome layer, and PNG
+fallbacks rendered from that SVG for Android 7). No vendor artwork is used.
+
+The manifest declares two launcher `activity-alias` entries, `.LauncherDefault`
+(enabled) and `.LauncherAmber` (disabled). Apply app icon enables the chosen alias
+first and then disables the other, both with `DONT_KILL_APP`, so the launcher never
+has zero entries and the process is not killed. The result is PackageManager's
+actual component state read back afterwards; a request whose readback differs is
+reported as a failure, never as success. Selecting Default restores both aliases
+to their manifest state, identical to a fresh install. Requests are refused unless
+lazysh is in the foreground. Like iOS, the choice is device-local: it is not saved
+in terminal preferences, exported, synced, or reset by Reset preferences.
+
+Android behavior when an alias changes:
+
+- Android removes every task whose base intent names a component that has just been
+  disabled, and finishes its activities, even with `DONT_KILL_APP`. If the launcher
+  aliases targeted `MainActivity`, the workspace task started from the old icon
+  would close and the WebView would be destroyed.
+- lazysh avoids this: both aliases target `LauncherActivity`, a no-display
+  trampoline excluded from recents. It brings an existing workspace task to the
+  front (or starts `MainActivity` explicitly) and finishes. The workspace task's base
+  intent is therefore always `MainActivity` itself, which is never disabled, so the
+  running Activity, its WebView and open SSH, Mosh and ET sessions stay in place.
+- The launcher redraws on its own schedule. The old icon can remain for a few
+  seconds, and a pinned shortcut or widget pointing at the old entry can disappear,
+  depending on the launcher. A remote-event notification posted before the change
+  opens the alias that was current when it was posted; if that alias is now
+  disabled, tap lazysh in the launcher instead.
+- `MainActivity` keeps only its `lazysh://` deep-link route; theme links and
+  explicit launches are unchanged.
+
+`NativeWorkspaceTest#appIconAliasSwitchKeepsTheRunningWorkspaceActivity` re-enters
+through the actual launcher alias, applies Amber and Default through the UI, and
+checks PackageManager component states, the launcher entries, that the original
+`MainActivity` instance stays resumed and that the WebView document was not
+reloaded. It runs in the emulator instrumentation job; browser tests use a mocked
+bridge and do not establish launcher behavior.

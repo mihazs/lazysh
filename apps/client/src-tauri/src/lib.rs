@@ -75,6 +75,7 @@ pub fn run() {
         .plugin(tauri_plugin_lazysh_display_idle::init())
         .plugin(clipboard::init())
         .plugin(session_background::init())
+        .plugin(app_icons::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
