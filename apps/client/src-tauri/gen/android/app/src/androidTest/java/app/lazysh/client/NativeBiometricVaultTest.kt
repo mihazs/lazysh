@@ -174,7 +174,8 @@ class NativeBiometricVaultTest {
     private fun protectedWrite(scenario: ActivityScenario<MainActivity>, plugin: VaultPlugin, key: String, value: String): String {
         val reply = scenario.startVault(plugin, "write", item(key, value))
         authenticate()
-        assertTrue("Enrolled fingerprint must complete the protected write", reply.await().resolved)
+        val written = reply.await()
+        assertTrue("Enrolled fingerprint must complete the protected write: ${written.json}", written.resolved)
         return requireNotNull(preferences().getString(key, null))
     }
 
@@ -205,7 +206,7 @@ class NativeBiometricVaultTest {
         val read = scenario.startVault(plugin, "read", item(account))
         authenticate()
         val unlocked = read.await()
-        assertTrue(unlocked.resolved)
+        assertTrue("Enrolled fingerprint must complete the protected read: ${unlocked.json}", unlocked.resolved)
         assertEquals(secret, JSONObject(unlocked.json).getString("value"))
         assertTrue(scenario.vault(plugin, "remove", item(account)).resolved)
         assertFalse("Removal deletes the stored ciphertext", preferences().contains(account))

@@ -144,13 +144,20 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
         lateinit var prompt: BiometricPrompt
         fun reject() { if (!complete) { complete = true; cancelPending = null; pendingAuthEpoch = null; cleanup(); invoke.reject("Credential authentication cancelled or unavailable") } }
         prompt = BiometricPrompt(activity as FragmentActivity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationError(code: Int, message: CharSequence) { reject() }
+            override fun onAuthenticationError(code: Int, message: CharSequence) {
+                android.util.Log.i("LazyshVault", "Credential authentication ended with code $code")
+                reject()
+            }
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 if (complete) return
                 if (!epochs.permits(authEpoch, started)) { reject(); return }
                 complete = true; cancelPending = null; pendingAuthEpoch = null
                 try { action(requireNotNull(result.cryptoObject?.cipher)) }
-                catch (_: Exception) { cleanup(); invoke.reject("Cannot use authenticated credentials") }
+                catch (error: Exception) {
+                    // Types only: never the message, which may describe key material.
+                    android.util.Log.w("LazyshVault", "Authenticated credential operation failed: ${error.javaClass.name}/${error.cause?.javaClass?.name}")
+                    cleanup(); invoke.reject("Cannot use authenticated credentials")
+                }
             }
         })
         cancelPending = { reject(); prompt.cancelAuthentication() }
