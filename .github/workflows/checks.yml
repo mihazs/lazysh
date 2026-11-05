@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer pull request push supersedes its older checks; main runs always finish so every
+# merged commit gets a complete native verification (GitHub still keeps one pending run).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # On a pull request, `changes` selects the native job groups its paths can affect and then
