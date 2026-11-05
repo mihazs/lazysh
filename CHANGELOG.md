@@ -5,6 +5,15 @@
 - Find a safely admitted default Herdr installation under the remote user’s `.local/bin` when it is absent from the command PATH of a positively identified x86_64 or arm64 Linux or macOS host; PATH remains preferred. Other architectures, hosts without `/usr/bin/uname`, `/usr/bin/id` and `/usr/bin/stat`, and homes below a symlinked directory keep PATH-only lookup. Changed default: the Herdr lookup on those hosts now includes this fallback.
 - Keep the software keyboard connected when arming the terminal toolbar's ctrl, Alt or Shift key. The terminal editor no longer blurs or becomes read-only for the tap, so SwiftKey, Gboard and other keyboards keep their Shift and suggestion state instead of restarting. Pending composition is still sent first, and the editor is still revoked when it is not focused. No defaults change.
 
+- Keep finger scrolling responsive after a pause in history while the on-screen
+  keyboard (SwiftKey, Gboard) holds a word in composition. A drag whose first
+  movement was short or sideways was dropped entirely, so a full-screen agent
+  with mouse reporting (Claude Code fullscreen, Herdr, tmux mouse mode, Mosh)
+  received no scroll and only its Jump to bottom control moved the view. A
+  toolbar key that sends the composed word no longer leaves the terminal
+  treating later drags and long-presses as part of that composition. No
+  defaults change.
+
 - Fix toolbar keys leaving the terminal scrolled into history. Toolbar keys, chord buttons, custom gesture and D-pad corner chords, the D-pad and modified keyboard shortcuts now return the terminal to the live screen after sending, as keyboard typing already did. A reader left looking at an earlier copy of an agent menu, for example after the agent redrew it, now sees the agent's answer after toolbar Enter instead of an unchanged menu. The bytes sent are unchanged. No defaults change.
 
 - Open reported agent activity in a focused mobile detail view with contextual Back and restored list position.
@@ -529,15 +538,6 @@ This is a development preview, not a stable release or a claim of complete refer
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
-
-- Keep finger scrolling responsive after a pause in history while the on-screen
-  keyboard (SwiftKey, Gboard) holds a word in composition. A drag whose first
-  movement was short or sideways was dropped entirely, so a full-screen agent
-  with mouse reporting (Claude Code fullscreen, Herdr, tmux mouse mode, Mosh)
-  received no scroll and only its Jump to bottom control moved the view. A
-  toolbar key that sends the composed word no longer leaves the terminal
-  treating later drags and long-presses as part of that composition. No
-  defaults change.
 
 - Changed companion SQLite close behavior: successful Store connections retain
   private WAL/SHM files after clean exit instead of checkpointing/deleting them
