@@ -235,7 +235,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         if std::env::var_os("LAZYSH_OWNED_CLINE_CACHE").is_some() {
             let mut only =
-                load_config_with(None, |vendor, _| vendor == core::VendorId::Cline).unwrap();
+                load_config_with(None, None, |vendor, _| vendor == core::VendorId::Cline).unwrap();
             only.cline = config.cline.clone();
             only.cline.enabled = true;
             let runtime = tokio::runtime::Builder::new_current_thread()
