@@ -2809,6 +2809,13 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     .unwrap_or_else(|error| panic!("fresh owned transport must retire during teardown: {error:?}; phase={retirement_phase}"));
     eprintln!("fresh SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={task_pending} task_completed=true");
     diagnostics.clients(servers.command(saved_server)).await;
+    // Closing an SSH connection can leave tmux 3.4 a control client that it never
+    // releases (tmux/tmux#5444), and kill-server then waits on it forever.
+    let orphans = diagnostics
+        .retire_orphaned_controls(BOUND)
+        .await
+        .unwrap_or_else(|kind| panic!("only orphaned owned control clients may remain after SSH retirement: {kind}; processes(before,after)={}; fresh_peer={}", diagnostics.failure(), diagnostics.fresh_peer()));
+    eprintln!("orphaned tmux control clients retired before kill-server: {orphans}");
     diagnostics.before_stop();
     let cleanup = servers.stop();
     drop(servers);
