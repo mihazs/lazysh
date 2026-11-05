@@ -713,7 +713,17 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     const hash=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
     expect(await readFile(remote)).toEqual(image);expect(hash(await readFile(remote))).toBe(hash(image));
     const uploaded=await stat(remote);
-    await (await panel.$('button=Upload attachment')).click();
+    gui.stage='owned Mosh repeated explicit upload conflict';
+    // A completed upload collapses the selected file behind its summary; reopen it as a user would.
+    const selectedFile=await panel.$('details.attachment-selected');
+    expect(await selectedFile.getAttribute('open')).toBeNull();
+    // WebdriverIO treats a selector ending in an image extension as an image file, so select the
+    // section's own summary (not the nested options summary) and check its text instead.
+    const summary=await panel.$('details.attachment-selected > summary');
+    expect(await summary.getText()).toContain(name);
+    await summary.click();
+    const repeat=await selectedFile.$('button=Upload attachment');await repeat.waitForClickable({timeout:5000});
+    await repeat.click();
     const conflict=await panel.$('[role="alert"]');await conflict.waitForDisplayed({timeout:5000});
     expect(await conflict.getText()).toMatch(/^Failure: /);
     expect(await (await panel.$('button=Reconnect uploads')).isExisting()).toBe(false);
