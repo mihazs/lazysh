@@ -31,6 +31,21 @@ export function tmuxAttachHistoryVerified(history:readonly number[]) {
 const teardownErrors=['Owned tmux root identity unavailable','Owned tmux root identity lost','Owned SSH descendants survived teardown',
   'Owned fixture process teardown deadline','Owned fixture descendant count exceeded','Owned tmux process survived teardown','Owned tmux server exited uncleanly',
   'Owned SSH root identity unavailable','Owned SSH root identity lost','Owned SSH listener survived teardown'];
+/** A failed tmux command keeps only a fixed class of the client's own error, never its text. */
+export function tmuxCommandFailure(stderr:string,failure:unknown) {
+  if(failure instanceof Error && failure.message.startsWith('Owned fixture deadline'))return 'deadline';
+  if(/server exited unexpectedly|lost server/.test(stderr))return 'lost-server';
+  if(/no server running|error connecting to/.test(stderr))return 'no-server';
+  if(/can't find session|session not found/.test(stderr))return 'no-session';
+  return 'other';
+}
+/** Supervisor status only: whether the namespaced server ended, and its bounded exit code or signal. */
+export function tmuxServerStatus(child?:{exitCode:number|null;signalCode:NodeJS.Signals|null}) {
+  if(!child)return {state:'absent' as const,exit:null,signal:'none'};
+  const code=child.exitCode,signal=child.signalCode;
+  return {state:code===null && signal===null?'running' as const:'exited' as const,exit:Number.isInteger(code) && code!>=0 && code!<=255?code:null,
+    signal:signal==null?'none':(['SIGTERM','SIGKILL','SIGSEGV','SIGABRT','SIGHUP'] as const).find(value=>value===signal)??'other'};
+}
 /** Attached clients by PID only; anything else is an invalid readback. */
 export function tmuxClientCount(text:string) {
   const lines=text.split('\n').filter(Boolean);
@@ -41,10 +56,8 @@ export type TmuxTeardownEvidence={serverAtStop:'absent'|'live'|'exited';clients:
 /** Closed teardown evidence: fixed fixture messages, socket count, supervisor status and timing only. */
 export function tmuxTeardownObservation(evidence:TmuxTeardownEvidence,failure:unknown,server?:{child:{exitCode:number|null;signalCode:NodeJS.Signals|null}}) {
   const message=(error:unknown)=>error===undefined?'none':error instanceof Error && teardownErrors.includes(error.message)?error.message:'other';
-  const code=server?.child.exitCode,signal=server?.child.signalCode;
-  return {scope:'tmux-teardown',...evidence,failure:message(failure),
-    supervisorExit:Number.isInteger(code) && code!>=0 && code!<=255?code:null,
-    supervisorSignal:signal==null?'none':(['SIGTERM','SIGKILL','SIGSEGV','SIGABRT','SIGHUP'] as const).find(value=>value===signal)??'other'};
+  const status=tmuxServerStatus(server?.child);
+  return {scope:'tmux-teardown',...evidence,failure:message(failure),supervisorExit:status.exit,supervisorSignal:status.signal};
 }
 
 // The pinned tmux server runs in the foreground of the fixture's private user
@@ -102,9 +115,10 @@ export class TmuxFixture {
       throw error;
     }
   }
-  private run(args:string[],server=true) {
-    return new OwnedProcess(join(this.ssh.directory,'bin/tmux'),server?['-L','default',...args]:args,this.ssh.directory,this.ssh.environment)
-      .finish('owned tmux command',3000);
+  private async run(args:string[],server=true) {
+    const command=new OwnedProcess(join(this.ssh.directory,'bin/tmux'),server?['-L','default',...args]:args,this.ssh.directory,this.ssh.environment);
+    try {return await command.finish('owned tmux command',3000);}
+    catch(error){throw new Error(`Owned tmux command failed: ${tmuxCommandFailure(command.stderr,error)}`);}
   }
   private async clients() {return tmuxClientCount(await this.run(['list-clients','-F','#{client_pid}']));}
   private panes() {return this.run(['list-panes','-s','-t',`=${this.name}`,'-F','#{window_id}|#{window_index}|#{window_name}|#{window_active}|#{pane_id}|#{pane_pid}|#{pane_dead}']);}
@@ -123,7 +137,7 @@ export class TmuxFixture {
     }
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
-  diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length};}
+  diagnostic() {return {schemaVersion:1,history:[...this.history],windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
   async verifyDetachedAndReattached() {
     const deadline=performance.now()+5000;
     while(true) {

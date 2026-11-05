@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxDisplayClients,tmuxPaneRows,tmuxTeardownObservation} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxCommandFailure,tmuxDisplayClients,tmuxPaneRows,tmuxServerStatus,tmuxTeardownObservation} from './support/androidTmux';
 import {listening,type OwnedProcess} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
@@ -30,6 +30,19 @@ test('tmux teardown evidence keeps only fixed fixture messages, counts and super
   for(const failure of [new Error('private /tmp/owned path'),'private text'])
     expect(tmuxTeardownObservation({...evidence,shutdown:'unclean'},failure,server(null,'SIGUSR2'))).toMatchObject({failure:'other',supervisorExit:null,supervisorSignal:'other'});
   expect(tmuxTeardownObservation({serverAtStop:'absent',clients:null,detached:'not-requested',sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
+});
+
+test('tmux command failures and supervisor status keep only fixed classes and bounded codes',()=>{
+  const failed=new Error('Owned fixture failed: owned tmux command; exit=1');
+  expect(tmuxCommandFailure('server exited unexpectedly\n',failed)).toBe('lost-server');
+  expect(tmuxCommandFailure('no server running on /tmp/private/default\n',failed)).toBe('no-server');
+  expect(tmuxCommandFailure("can't find session: private\n",failed)).toBe('no-session');
+  expect(tmuxCommandFailure('private text',failed)).toBe('other');
+  expect(tmuxCommandFailure('',new Error('Owned fixture deadline: owned tmux command'))).toBe('deadline');
+  expect(tmuxServerStatus({exitCode:null,signalCode:null})).toEqual({state:'running',exit:null,signal:'none'});
+  expect(tmuxServerStatus({exitCode:139,signalCode:null})).toEqual({state:'exited',exit:139,signal:'none'});
+  expect(tmuxServerStatus({exitCode:null,signalCode:'SIGUSR1'})).toEqual({state:'exited',exit:null,signal:'other'});
+  expect(tmuxServerStatus()).toEqual({state:'absent',exit:null,signal:'none'});
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -63,7 +76,7 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await wait(()=>client!.stdout.includes(beta.marker));
     await client.stop();
     await owned.verifyDetachedAndReattached();
-    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2});
+    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],windows:2,server:{state:'running',exit:null,signal:'none'}});
     // A still-attached control-mode client, like the app's Jump binding, whose reader no
     // longer drains its output must not break teardown: retiring SSH ends it first.
     client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
