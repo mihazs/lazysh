@@ -176,6 +176,8 @@ struct InitializationWorker {
     exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sql_phase: Option<failure_record::Phase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bootstrap_marks: Option<[Option<u64>; 7]>,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum InitializationRecord {
@@ -297,10 +299,32 @@ impl InitializationWorker {
             sqlite_code,
             exit_code: output.status.code(),
             sql_phase,
+            bootstrap_marks: None,
         })
     }
 
     fn valid(&self) -> bool {
+        if let Some(marks) = self.bootstrap_marks {
+            if self.origin != WorkerOrigin::Initialization
+                || marks[6].is_none()
+                || marks
+                    .iter()
+                    .flatten()
+                    .any(|value| Some(*value) > self.open_elapsed_us)
+                || marks
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .any(|pair| pair[0] > pair[1])
+                || marks[..6]
+                    .windows(2)
+                    .any(|pair| pair[0].is_none() && pair[1].is_some())
+            {
+                return false;
+            }
+        }
         if (self.sql_phase.is_some()
             && (self.origin != WorkerOrigin::ConcurrentHooks
                 || !matches!(
@@ -375,6 +399,7 @@ impl InitializationWorker {
             sqlite_code,
             exit_code: None,
             sql_phase: None,
+            bootstrap_marks: observed.bootstrap_marks,
         })
     }
 }
@@ -400,6 +425,7 @@ pub(super) fn transient_workers(hold: std::time::Duration, workers: &[super::Con
     assert_eq!(workers.len(), 16, "transient worker count changed");
     emit_workers(workers.iter().enumerate().map(|(worker, observed)| {
         let mut record = InitializationWorker::observed(0, worker as u8, observed)?;
+        record.bootstrap_marks = None;
         record.origin = WorkerOrigin::TransientLock;
         record.actual_hold_us = Some(u64::try_from(hold.as_micros()).ok()?);
         Some(record)
@@ -436,6 +462,7 @@ const FAILED_TESTS: &[&str] = &[
     "cline_root_lifecycle_preserves_native_identity_and_prints_without_profile_changes",
     "cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows",
     "cli_updates_apply_all_explicit_flags_and_new_processes_observe_them",
+    "bootstrap_observation_tracks_real_store_per_thread",
     "concurrent_hooks_preserve_every_event",
     "concurrent_ingest_recovers_after_a_transient_database_lock",
     "config_is_print_only_and_contains_supported_hooks",
@@ -482,6 +509,7 @@ const FAILED_TESTS: &[&str] = &[
     "storage_trace::initialization_failed_harness_footers_keep_only_static_names",
     "storage_trace::initialization_failed_test_names_are_closed_bounded_and_deduplicated",
     "storage_trace::initialization_projection_exports_only_bounded_closed_records",
+    "storage_trace::bootstrap_marks_are_worker_bound_and_privacy_checked",
     "storage_trace::initialization_worker_projection_keeps_timing_without_raw_causes",
     "storage_trace::initialization_worker_stage_drift_still_fails",
     "storage_trace::worker_origins_keep_independent_epochs_and_strict_bounds",
@@ -794,6 +822,7 @@ fn rejects_worker_fields(value: &serde_json::Value, changes: &[(&str, serde_json
 
 fn contended_observation() -> super::ContendedWorker {
     super::ContendedWorker {
+        bootstrap_marks: None,
         started_after: std::time::Duration::from_micros(17),
         open_elapsed: std::time::Duration::from_micros(3_001_000),
         total_elapsed: std::time::Duration::from_micros(3_001_009),
@@ -880,6 +909,7 @@ fn initialization_worker_projection_keeps_timing_without_raw_causes() {
     );
     assert!(initialization_projection(format!("{rows}{line}").as_bytes()).is_none());
     let opaque = super::ContendedWorker {
+        bootstrap_marks: None,
         result: Err(lazysh_agent::Error::Device("private payload")),
         ..observed
     };
@@ -1192,6 +1222,7 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
 #[should_panic(expected = "unexpected initialization worker stage")]
 fn initialization_worker_stage_drift_still_fails() {
     let observed = super::ContendedWorker {
+        bootstrap_marks: None,
         started_after: std::time::Duration::ZERO,
         open_elapsed: std::time::Duration::ZERO,
         total_elapsed: std::time::Duration::ZERO,
@@ -1418,4 +1449,25 @@ fn trace_export_rejects_symlinks_and_hard_links_without_reading_them() {
     fs::hard_link(&target, &link).unwrap();
     assert!(copy_excerpt(&link, &dir.path().join("hardlink-excerpt")).is_err());
     assert_eq!(fs::read(target).unwrap(), b"fixture sentinel");
+}
+
+#[test]
+fn bootstrap_marks_are_worker_bound_and_privacy_checked() {
+    let mut observed = contended_observation();
+    observed.bootstrap_marks = Some([Some(1), Some(2), None, None, None, None, Some(5)]);
+    let record = InitializationWorker::observed(2, 7, &observed).unwrap();
+    assert!(record.valid());
+    let line = InitializationRecord::Worker(record).line();
+    let projected = initialization_projection(line.as_bytes()).unwrap();
+    assert_eq!(projected.len(), 1);
+    assert!(!line.contains("private"));
+    let invalid = line.replace("[1,2,null,null,null,null,5]", "[2,1,null,null,null,null,5]");
+    assert_ne!(invalid, line);
+    assert!(initialization_projection(invalid.as_bytes()).is_none());
+    let injected = line.replace(
+        "\"bootstrapMarks\":",
+        "\"privatePath\":\"secret\",\"bootstrapMarks\":",
+    );
+    assert_ne!(injected, line);
+    assert!(initialization_projection(injected.as_bytes()).is_none());
 }

@@ -5,6 +5,9 @@ version.workspace = true
 edition = "2021"
 description = "Lifecycle event companion with explicit opt-in bound relay publishing"
 
+[features]
+storage-observation = []
+
 [dependencies]
 lazysh-account-usage = { path = "../../packages/account-usage", features = ["collector"] }
 lazysh-notification-client = { path = "../../packages/notification-client" }

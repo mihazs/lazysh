@@ -776,8 +776,38 @@ fn simultaneous_initialization_and_ingest_preserve_every_event() {
     }
 }
 
+#[cfg(feature = "storage-observation")]
+#[test]
+fn bootstrap_observation_tracks_real_store_per_thread() {
+    let enabled = std::env::var_os("LAZYSH_BOOTSTRAP_OBSERVATION").as_deref()
+        == Some(std::ffi::OsStr::new("1"));
+    let dir = tempfile::tempdir().unwrap();
+    std::thread::scope(|scope| {
+        let workers = (0..2)
+            .map(|_| {
+                let path = dir.path();
+                scope.spawn(move || {
+                    drop(Store::open(path).unwrap());
+                    let marks = lazysh_agent::take_bootstrap_observation();
+                    assert_eq!(marks.is_some(), enabled);
+                    if let Some(marks) = marks {
+                        assert!(marks.iter().all(Option::is_some));
+                        assert!(marks.windows(2).all(|pair| pair[0] <= pair[1]));
+                        assert!(lazysh_agent::take_bootstrap_observation().is_none());
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
+    assert!(lazysh_agent::take_bootstrap_observation().is_none());
+}
+
 #[derive(Debug)]
 struct ContendedWorker {
+    bootstrap_marks: Option<[Option<u64>; 7]>,
     started_after: std::time::Duration,
     open_elapsed: std::time::Duration,
     total_elapsed: std::time::Duration,
@@ -811,6 +841,10 @@ impl ContendedWorker {
         let started_after = started.duration_since(epoch);
         let opened = Store::open(directory);
         let open_elapsed = started.elapsed();
+        #[cfg(feature = "storage-observation")]
+        let bootstrap_marks = lazysh_agent::take_bootstrap_observation();
+        #[cfg(not(feature = "storage-observation"))]
+        let bootstrap_marks = None;
         let (stage, result) = match opened {
             Ok(mut store) => match store.ingest(normalized, chrono::Utc::now()) {
                 Ok(()) => ("complete", Ok(())),
@@ -819,6 +853,7 @@ impl ContendedWorker {
             Err(error) => ("open", Err(error)),
         };
         ContendedWorker {
+            bootstrap_marks,
             started_after,
             open_elapsed,
             total_elapsed: started.elapsed(),

@@ -12,6 +12,11 @@ pub mod relay;
 pub mod reported_history;
 pub mod settings;
 pub mod skills;
+#[cfg(feature = "storage-observation")]
+mod storage_observation;
+#[cfg(feature = "storage-observation")]
+#[doc(hidden)]
+pub use storage_observation::take_bootstrap_observation;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
@@ -499,8 +504,12 @@ impl Store {
         // One deadline covers native bootstrap coordination, sidecar admission
         // and SQLite's schema/mode waits rather than adding another wait budget.
         let bootstrap_deadline = Instant::now() + Duration::from_secs(3);
+        #[cfg(feature = "storage-observation")]
+        let mut observation = storage_observation::Observation::new();
         let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)
             .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e))?;
+        #[cfg(feature = "storage-observation")]
+        observation.mark(0);
         // Inspect ephemeral paths inside the same lock as initialization: another
         // initializer must not unlink its rollback journal during these checks.
         // SQLite owns sidecar descriptors; never open/close them here because
@@ -509,6 +518,8 @@ impl Store {
             check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))
                 .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
         }
+        #[cfg(feature = "storage-observation")]
+        observation.mark(1);
         let mut connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -517,6 +528,8 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
         .map_err(|e| storage_failure(StoragePhase::SqliteOpen, e.into()))?;
+        #[cfg(feature = "storage-observation")]
+        observation.mark(2);
         // Short-lived hooks must not checkpoint/unlink shared WAL state when
         // another Store is admitting its sidecars. FULL commit synchronization
         // and SQLite's normal automatic checkpoints remain unchanged.
@@ -540,6 +553,8 @@ impl Store {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|e| storage_failure(StoragePhase::Synchronous, e.into()))?;
+        #[cfg(feature = "storage-observation")]
+        observation.mark(3);
         let mode: String = connection
             .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
             .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
@@ -552,7 +567,11 @@ impl Store {
         connection
             .execute_batch("PRAGMA journal_size_limit=1048576;")
             .map_err(|e| storage_failure(StoragePhase::JournalSize, e.into()))?;
+        #[cfg(feature = "storage-observation")]
+        observation.mark(4);
         initialize_schema(&mut connection)?;
+        #[cfg(feature = "storage-observation")]
+        observation.mark(5);
         connection
             .busy_handler(Some(wait_for_storage))
             .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
