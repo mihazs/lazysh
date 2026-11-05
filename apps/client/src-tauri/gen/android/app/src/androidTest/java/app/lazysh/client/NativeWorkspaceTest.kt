@@ -2436,6 +2436,115 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The host harness owns this pinned tmux server and its two pane processes. This
+    // case drives only the packaged UI: discovery, attach, Jump To, the numbered
+    // window control, tab-close detach and reattach. The host independently proves
+    // the remote window state and that the original server and panes survived.
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String) {
+        val server = tmux.getString("name")
+        require(server == "owned-tmux") { "Owned tmux fixture required" }
+        val windows = tmux.getJSONArray("windows")
+        require(windows.length() == 2) { "Owned tmux topology required" }
+        val alpha = windows.getJSONObject(0)
+        val beta = windows.getJSONObject(1)
+        require(alpha.getInt("index") == 0 && alpha.getString("name") == "alpha" && beta.getInt("index") == 1 && beta.getString("name") == "beta")
+        for (window in listOf(alpha, beta)) require(Regex("TMUX_(ALPHA|BETA)_[a-f0-9]{32}").matches(window.getString("marker")))
+        val child = "$parent / $server"
+        val labels = JSONArray(listOf(parent, child))
+        val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
+        require(observer.length <= 4096)
+        val jumpPanel = "section[aria-label='tmux Jump To']"
+        fun title(window: JSONObject) = "${window.getInt("index")}: ${window.getString("name")}"
+        fun click(xpath: String) = onWebView().withElement(findElement(Locator.XPATH, xpath)).perform(webScrollIntoView()).perform(webClick())
+        fun visible(target: JSONObject, other: JSONObject, stage: String) {
+            sessionView(scenario, "Terminal")
+            val forbidden = JSONArray(listOf(other.getString("marker")))
+            awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,$labels,1,${JSONObject.quote(target.getString("marker"))},$forbidden);})()")
+        }
+        fun attach(active: JSONObject, stage: String) {
+            sessionView(scenario, "Sessions")
+            val expected = JSONArray(listOf(alpha, beta).map { title(it) + if (it === active) " · active" else "" })
+            awaitDocument(scenario, "live tmux sessions discovered $stage", """
+                (()=>{const panels=document.querySelectorAll('.tool-panel.multiplexer-panel');if(panels.length!==1)return false;
+                  const panel=panels[0],sessions=Array.from(panel.querySelectorAll('.mux-list > details'));
+                  if(panel.querySelector('.loading,[role=alert]') || sessions.length!==1)return false;
+                  const expected=$expected,windows=Array.from(sessions[0].querySelectorAll(':scope > details > summary')).map(x=>x.textContent.trim());
+                  const attach=Array.from(panel.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote("Attach $server")});
+                  return (panel.querySelector('p.muted')?.textContent??'').startsWith('tmux available') &&
+                    sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$server · 2 windows")} &&
+                    windows.length===expected.length && windows.every((x,i)=>x===expected[i]) && attach.length===1 && !attach[0].disabled;})()
+            """)
+            click("//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='Attach $server']")
+            awaitDocument(scenario, "owned tmux display attached $stage", """
+                (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');
+                  return tabs.length===2 && tabs[1].textContent.trim()===${JSONObject.quote(child)} && tabs[1].getAttribute('aria-selected')==='true';})()
+            """)
+        }
+        fun jump(target: JSONObject, current: JSONObject) {
+            sessionView(scenario, "Terminal")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Workspaces']")).perform(webClick())
+            // The current marker must come from the live tmux binding, including a switch made by the numbered control.
+            awaitDocument(scenario, "live tmux Jump To marks ${title(current)} current", """
+                (()=>{const panels=document.querySelectorAll(${JSONObject.quote(jumpPanel)});
+                  if(panels.length!==1 || panels[0].querySelector('[role=status],[role=alert]'))return false;
+                  const buttons=Array.from(panels[0].querySelectorAll('.mux-row button')),marked=buttons.filter(x=>x.getAttribute('aria-current')==='location');
+                  return buttons.length===2 && marked.length===1 && marked[0].textContent.trim()===${JSONObject.quote(title(current) + " · Current")} &&
+                    buttons.some(x=>x.textContent.trim()===${JSONObject.quote(title(target))} && !x.disabled);})()
+            """)
+            click("//section[@aria-label='tmux Jump To']//button[normalize-space(.)='${title(target)}']")
+            awaitDocument(scenario, "tmux Jump To reached ${title(target)}", """
+                (()=>{const panel=document.querySelector(${JSONObject.quote(jumpPanel)});
+                  return !panel || (!panel.querySelector('[role=status],[role=alert]') &&
+                    panel.querySelector('.mux-row button[aria-current=location]')?.textContent.trim()===${JSONObject.quote(title(target) + " · Current")});})()
+            """)
+        }
+        fun numbered(target: JSONObject) {
+            sessionView(scenario, "Sessions")
+            val button = "Window ${target.getInt("index")}"
+            val region = "section[aria-label='tmux prefix shortcuts']"
+            val ready = "Array.from(document.querySelectorAll(${JSONObject.quote("$region button")})).filter(x=>x.textContent.trim()===${JSONObject.quote(button)} && !x.disabled).length===1"
+            awaitDocument(scenario, "tmux numbered window control ready", ready)
+            click("//section[@aria-label='tmux prefix shortcuts']//button[normalize-space(.)='$button']")
+            awaitDocument(scenario, "tmux numbered window control sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
+        }
+        fun detach(stage: String) {
+            endOwnedConnection(scenario, child)
+            awaitDocument(scenario, "tmux display detached $stage", """
+                (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');return tabs.length===1 && tabs[0].textContent.trim()===${JSONObject.quote(parent)};})()
+            """)
+            if (evaluate(scenario, "document.querySelector('.session-tabs [role=tab]')?.getAttribute('aria-selected')==='true'") != "true") {
+                if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, parent)
+                else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(1) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
+            }
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            attach(alpha, "before detach")
+            visible(alpha, beta, "attached tmux shows its current window")
+            jump(beta, alpha)
+            visible(beta, alpha, "tmux Jump To shows the selected window")
+            numbered(alpha)
+            visible(alpha, beta, "tmux numbered window control shows its window")
+            jump(beta, alpha)
+            visible(beta, alpha, "tmux Jump To returns to the selected window")
+            detach("by closing its tab")
+            attach(beta, "after detach")
+            visible(beta, alpha, "reattached tmux shows the same selected window and pane")
+            detach("after reattach")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, tab-close detach and reattach completed")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                if (evaluate(scenario, present("button[aria-label='Disconnect $child']")) == "true") endOwnedConnection(scenario, child)
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -2505,6 +2614,7 @@ class NativeWorkspaceTest {
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
+    @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
 
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
@@ -2892,7 +3002,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false) {
+        require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
         require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
@@ -2927,6 +3038,7 @@ class NativeWorkspaceTest {
         require(requireDpad == fixture.has("dpad")) { "Owned D-pad fixture mode mismatch" }
         require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
+        require(requireTmux == fixture.has("tmux")) { "Owned tmux fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -3366,6 +3478,8 @@ class NativeWorkspaceTest {
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (requireTmux) {
+                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name)
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {
@@ -3556,7 +3670,8 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario, workspaceElementVisible(menu)) == "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
             }
-            val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
+            val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name)
+                else if (requireTmux) listOf("$name / ${fixture.getJSONObject("tmux").getString("name")}", name) else listOf(name)
             for (ownedName in ownedNames) {
                 cleanupUi {
                     cleanupStage = SshUiCleanupStage.SESSION_SELECT

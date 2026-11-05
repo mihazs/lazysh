@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {sshCommand,receiverProbeErrors} from './support/sshFixture';
@@ -199,6 +200,14 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
   await androidSshAcceptance(undefined,undefined,true);
 },610_000);
 
+// The owned fixture stops after the acceptance; a cleanup failure never replaces its original error.
+async function ownedAndroidAcceptance(stage:'Herdr'|'tmux',owned:{stop():Promise<void>},run:()=>Promise<void>) {
+  let primary=false;
+  try {await run();}
+  catch(error){primary=true;throw error;}
+  finally {await androidSshCleanup(primary,[[stage,()=>owned.stop()]]);}
+}
+
 // Real tools are explicit; ordinary host checks never download or guess a binary.
 for(const mosh of [false,true]) {
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN || (mosh && !process.env.LAZYSH_NATIVE_MOSH_SERVER))(`owned Herdr ${mosh?'Mosh':'SSH'} exec reads its real companion transcript in the private namespace`,async()=>{
@@ -365,19 +374,19 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as co
   const moshBinary=transport==='mosh'?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined;
   if(transport==='mosh' && !moshBinary)throw new Error('Explicit pinned Mosh server required for Android Herdr entry');
   const owned=await HerdrFixture.start(herdrTools(),moshBinary);
-  let primary=false;
-  try {await androidSshAcceptance(undefined,owned,false,false,transport==='mosh');}
-  catch(error){primary=true;throw error;}
-  finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
+  await ownedAndroidAcceptance('Herdr',owned,()=>androidSshAcceptance(undefined,owned,false,false,transport==='mosh'));
 },610_000);
 
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes',async()=>{
   const owned=await HerdrFixture.start(herdrTools(),undefined,true);
-  let primary=false;
-  try {await androidSshAcceptance(undefined,owned,false,false,false,true);}
-  catch(error){primary=true;throw error;}
-  finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
+  await ownedAndroidAcceptance('Herdr',owned,()=>androidSshAcceptance(undefined,owned,false,false,false,true));
+},610_000);
+
+// Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
+  const owned=await TmuxFixture.start();
+  await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
 },610_000);
 
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{

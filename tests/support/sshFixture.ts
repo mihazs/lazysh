@@ -80,7 +80,7 @@ async function retireDescendants(parent:OwnedPid) {
   }
   if((await Promise.all(owned.map(same))).some(Boolean))throw new Error('Owned SSH descendants survived teardown');
 }
-export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH',cleanSupervisorExit=false) {
+export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'|'tmux'='SSH',cleanSupervisorExit=false) {
   let primary:unknown;
   try {
     const root=await daemon.liveIdentity();
@@ -91,9 +91,32 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
-  if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':'ssh-stop');throw primary;}
+  if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;}
+}
+// Retire a namespaced tool server, prove its owned processes are gone, then stop SSH.
+export async function stopOwnedServer(ssh:SshFixture,server:OwnedProcess|undefined,label:'Herdr'|'tmux',survived:()=>Promise<boolean>) {
+  let failure:unknown;
+  try {
+    if(server)await stopOwnedTree(server,label,true);
+    if(await survived())throw new Error(label==='Herdr'?'Owned Herdr receiver survived teardown':'Owned tmux process survived teardown');
+  } catch(error){failure=error;}
+  try{await ssh.stop();}catch(error){failure??=error;}
+  if(failure)throw failure;
 }
 export type HerdrTools={herdrBinary:string;agentBinary:string;receiverBinary:string};
+// Shared tool fixtures keep XDG state and the tmux socket directory inside the owned fixture.
+const toolDirectories=[['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_STATE_HOME','state'],['XDG_RUNTIME_DIR','runtime'],['TMUX_TMPDIR','tmux']] as const;
+async function privateEnvironment(directory:string,path:string,children:readonly (readonly [string,string])[]) {
+  const environment:NodeJS.ProcessEnv={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:path,SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
+  for(const [key,child] of children) {const value=join(directory,child);await mkdir(value,{mode:0o700});environment[key]=value;}
+  return environment;
+}
+async function installOwnedBinary(directory:string,name:string,binary:string) {
+  if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit current owned fixture binary required');
+  const bin=join(directory,'bin');await mkdir(bin,{mode:0o700,recursive:true});
+  await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
+  return bin;
+}
 // Two actual native installation budgets, plus explicit SSH/UI setup and teardown.
 export const companionFixtureBudget=2*240_000+120_000;
 export class SshFixture {
@@ -104,11 +127,14 @@ export class SshFixture {
   get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
   readonly username=userInfo().username;
   private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false,private readonly toolNamespace?:string[]) {this.nonce=nonce;}
-  herdrServer(args:string[]) {
-    if(!this.toolNamespace || !this.environment)throw new Error('Owned Herdr namespace required');
-    return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin/herdr'),...args],this.directory,this.environment);
+  herdrServer(args:string[]) {return this.namespacedServer('herdr',args);}
+  tmuxServer(args:string[]) {return this.namespacedServer('tmux',args);}
+  private namespacedServer(name:'herdr'|'tmux',args:string[]) {
+    if(!this.toolNamespace || !this.environment)throw new Error(`Owned ${name==='herdr'?'Herdr':'tmux'} namespace required`);
+    return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin',name),...args],this.directory,this.environment);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string}={}) {
+    if(options.tmuxBinary && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
     const ownedRoot=!!tools || options.ownedReceiverRoot===true;
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
@@ -116,7 +142,8 @@ export class SshFixture {
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
     if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
-    const directory=await mkdtemp(join(tools||options.companion?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
+    // tmux socket paths must stay below the Unix socket path limit.
+    const directory=await mkdtemp(join(tools||options.companion||options.tmuxBinary?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
     try {
       await chmod(directory,0o700);
@@ -141,34 +168,18 @@ export class SshFixture {
           if(await stat(candidate).then(value=>value.isFile()).catch(()=>false)){subsystem=candidate;break;}
         }
         if(!subsystem)throw new Error('Owned file-transfer fixture requires installed OpenSSH SFTP server');
-        if(!tools) {
-          environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
-          for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
-            const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
-          }
-        }
+        if(!tools)environment=await privateEnvironment(directory,'/usr/bin:/bin',[['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]);
       }
       if(tools) {
-        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
-        for(const [name,binary] of [['herdr',tools.herdrBinary],['lazysh-agent',tools.agentBinary],['owned-terminal-receiver',tools.receiverBinary]]) {
-          if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit current owned fixture binary required');
-          await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
-        }
-        environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:bin+':/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
-        for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_STATE_HOME','state'],['XDG_RUNTIME_DIR','runtime'],['TMUX_TMPDIR','tmux']]) {
-          const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
-        }
+        let bin='';
+        for(const [name,binary] of [['herdr',tools.herdrBinary],['lazysh-agent',tools.agentBinary],['owned-terminal-receiver',tools.receiverBinary]])bin=await installOwnedBinary(directory,name,binary);
+        environment=await privateEnvironment(directory,bin+':/usr/bin:/bin',toolDirectories);
       }
-      if(options.moshBinary) {
-        const binary=options.moshBinary;
-        if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit owned Mosh binary required');
-        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700,recursive:true});
-        await copyFile(binary,join(bin,'mosh-server'));await chmod(join(bin,'mosh-server'),0o700);
-        environment!.PATH=bin+':/usr/bin:/bin';
-      }
+      if(options.tmuxBinary)environment=await privateEnvironment(directory,await installOwnedBinary(directory,'tmux',options.tmuxBinary)+':/usr/bin:/bin',toolDirectories);
+      if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
-      const commandSeconds=options.companion || options.sharedNavigation || options.ownedReceiverRoot?companionFixtureBudget/1000:90;
+      const commandSeconds=options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
@@ -217,6 +228,8 @@ export class SshFixture {
         // Herdr shares this owned filesystem while retaining Bun's PID/network
         // namespace, so receiver PID/start records remain directly verifiable.
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
+        // tmux keeps the host root view, including the host /proc, so pane PIDs stay directly verifiable.
+        else if(options.tmuxBinary)toolNamespace=namespace;
         daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);

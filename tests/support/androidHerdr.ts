@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
 import {OwnedProcess,identity,type OwnedPid} from './ownedProcess';
-import {SshFixture,stopOwnedTree,type HerdrTools} from './sshFixture';
+import {SshFixture,stopOwnedServer,type HerdrTools} from './sshFixture';
 import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
@@ -298,13 +298,8 @@ export class HerdrFixture {
   }
   async stop() {
     if(this.stopped)return;
-    let failure:unknown;
-    try {
-      if(this.server)await stopOwnedTree(this.server,'Herdr',true);
-      if(await this.receiverAlive() || await this.receiverAlive(this.historyReceiver) || (await Promise.all(this.navigationReceivers.map(({receiver})=>this.receiverAlive(receiver)))).some(Boolean))throw new Error('Owned Herdr receiver survived teardown');
-    } catch(error){failure=error;}
-    try{await this.ssh.stop();}catch(error){failure??=error;}
-    if(failure)throw failure;
+    await stopOwnedServer(this.ssh,this.server,'Herdr',async()=>await this.receiverAlive() || await this.receiverAlive(this.historyReceiver)
+      || (await Promise.all(this.navigationReceivers.map(({receiver})=>this.receiverAlive(receiver)))).some(Boolean));
     this.stopped=true;
   }
 }
