@@ -162,6 +162,22 @@ it('arms toolbar modifiers without restarting the focused keyboard editor',()=>{
     expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['ls ','\x03']);
   } finally {focused.mockRestore();}
 });
+it('still revokes an unfocused keyboard editor when a toolbar modifier is armed',()=>{
+  savePreferences({...defaults,toolbar:['ctrl']});
+  const documentFocus=vi.spyOn(document,'hasFocus').mockReturnValue(false);
+  installCompositionHelper();
+  try {
+    const owner=mountInputOwner();owner.textarea.focus();owner.textarea.value='stale';
+    Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
+    fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
+    expect([owner.textarea.readOnly,owner.textarea.value]).toEqual([true,'']);
+    documentFocus.mockReturnValue(true);
+    fireEvent.click(owner.textarea);owner.textarea.focus();
+    expect(owner.textarea.readOnly).toBe(false);
+    act(()=>{owner.textarea.value='c';fireEvent.input(owner.textarea,{data:'c',inputType:'insertText'});});
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x03']);
+  } finally {documentFocus.mockRestore();}
+});
 
 function dpadFixture(initial="") {
   vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
