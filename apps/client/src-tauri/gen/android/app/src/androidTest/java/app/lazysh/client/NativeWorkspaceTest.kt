@@ -3353,6 +3353,7 @@ class NativeWorkspaceTest {
                 val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
                     "$panel > .tool-bar > button"))
                 button.perform(webScrollIntoView())
+                println("lazysh companion action: iteration=$expected boundary=afterScroll")
                 val companionReadinessObservation = """
                     (()=>{const p=document.querySelector(${JSONObject.quote(panel)});
                       const direct=Array.from(document.querySelectorAll(${JSONObject.quote("$panel > .tool-bar > button")}));
@@ -3378,7 +3379,9 @@ class NativeWorkspaceTest {
                     " && Array.from(document.querySelectorAll('$panel > .tool-bar > button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)" +
                     " && document.querySelector('$panel')?.getAttribute('data-install-outcome')===${JSONObject.quote(if(reused) "installed" else "idle")}",
                     observe = { remaining -> evaluate(scenario, companionReadinessObservation, remaining) })
+                println("lazysh companion action: iteration=$expected boundary=afterReady")
                 button.perform(webClick())
+                println("lazysh companion action: iteration=$expected boundary=afterClick")
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
                 var recheck = "none"
