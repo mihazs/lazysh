@@ -352,8 +352,8 @@ it('imports an encrypted private key file, shows its OpenSSH fingerprint and log
     await (await panel.$(`code=${fingerprint}`)).waitForDisplayed({timeout:20_000});
     expect((await (await panel.$('textarea[readonly]')).getValue()).trim().split(/\s+/).slice(0,2).join(' ')).toBe(authorized);
     await (await panel.$('button=Use for connection')).click();
-    // The identity panel's read-only public key stays open, so select the editable private key field.
-    expect(await (await connect.$('textarea:not([readonly])')).getValue()===encrypted).toBe(true);
+    // The identity panel stays open beside the connection form, so select the connection's own private key field.
+    expect(await (await (await connect.$('label*=Private key (OpenSSH or PEM)')).$('textarea')).getValue()===encrypted).toBe(true);
     expect(await (await (await connect.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()===passphrase).toBe(true);
     await (await connect.$('button=Connect')).click();
   });
