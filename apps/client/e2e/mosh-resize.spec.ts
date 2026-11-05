@@ -254,11 +254,14 @@ test('actual App installs Mosh framing before early output and fits only remote 
     await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit(data),bytes(captured.frames[1].bytesHex));
     await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
   }
+  // The composer sheet covers the output: neither it nor a viewport change while it is open requests a Mosh resize.
   const beforeCompose=(await state()).resizes.length;await page.getByRole('button',{name:'Compose',exact:true}).click();
-  await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeCompose);await expect(rows).toHaveCount(6);
+  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toBeFocused();
+  await page.setViewportSize({width:830,height:590});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  expect((await state()).resizes.length).toBe(beforeCompose);await expect(rows).toHaveCount(6);
   await page.getByRole('button',{name:'Close composer',exact:true}).click();
-  const beforeViewport=(await state()).resizes.length;await page.setViewportSize({width:830,height:590});
-  await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeViewport);await expect(rows).toHaveCount(6);
+  await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeCompose);await expect(rows).toHaveCount(6);
   await page.evaluate(data=>{const s=Reflect.get(window,'nativeMoshApp');s.emit(data);s.closed();},bytes(captured.frames[3].bytesHex));
   await expect(rows).toHaveCount(12);await expect(rows.last()).toContainText('OWNED_ROW_11');
   const final=await state();expect(final.writes).toEqual([]);expect(final.resizes.some(size=>size.cols===40&&size.rows===6)).toBe(false);
