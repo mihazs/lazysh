@@ -1,6 +1,6 @@
 # Free-software Web Push server foundation
 
-The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. Google and FOSS Android builds with UnifiedPush selected support explicit native enrollment and separately opted-in local event display. The server alone does not enable either. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours. Actual distributor event/display acceptance is still pending under #422; the existing real ntfy acceptance establishes enrollment only.
+The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. Google and FOSS Android builds with UnifiedPush selected support explicit native enrollment and separately opted-in local event display. The server alone does not enable either. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours. Scoped owned-emulator ntfy challenge and event-display acceptance is recorded in [#810](https://github.com/mihazs/lazysh/issues/810); physical-device and signed-release runtime acceptance remain open.
 
 ## Configure an explicit destination policy
 
@@ -55,7 +55,7 @@ no endpoint, key, prompt, transcript or host path enters the event. Legacy event
 webhook and encrypted enrollment-challenge formats are unchanged. Transport
 acceptance does not establish native receipt or display. The current Android
 receiver requires separate native display consent and bounded durable replay
-admission. Actual distributor event/display acceptance remains pending.
+admission. An owned ntfy emulator case exercised this delivery path; see [the verification boundary](unifiedpush-enrollment.md#verification-boundary-and-remaining-acceptance).
 
 ### Local Android notification consent
 
@@ -128,7 +128,7 @@ The existing finite outbox, three-attempt ceiling, retry delay, 24-hour event ex
 
 Reset/revoke cancels pending work and removes stored active/pending subscription snapshots; SQLite deletion is not secure erasure against the owning OS account or backups. The private database/configuration contains endpoint capabilities and keys needed for delivery. Protect it as carefully as the admin capability. Public status/receipts and fixed errors do not expose these values. There is no message-content logging or history endpoint.
 
-An enrollment challenge POST admitted before reset/revoke may still reach the old endpoint, but its confirmation is then rejected. Likewise an event admitted before cancellation may already have reached the push service. No cancellation recalls remote effects. HTTP 2xx means only that the configured push service accepted the encrypted request. The separate real ntfy fixture establishes authenticated native enrollment and encrypted challenge routing; it has not yet established event display. Actual event notification, process death/reboot, Doze and physical-device/vendor background behavior remain unverified. No APNs/FCM delivery is added.
+An enrollment challenge POST admitted before reset/revoke may still reach the old endpoint, but its confirmation is then rejected. Likewise an event admitted before cancellation may already have reached the push service. No cancellation recalls remote effects. HTTP 2xx means only that the configured push service accepted the encrypted request. Owned ntfy emulator cases exercised authenticated enrollment, encrypted challenge routing and private generic event display with the Activity backgrounded and process alive. Process death/reboot, Doze and physical-device/vendor background behavior remain unverified. No APNs/FCM delivery is added.
 
 ## Protocol and implementation provenance
 

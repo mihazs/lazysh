@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Correct Android UnifiedPush and Firebase-free notification setup guidance, including the separate relay and display consent steps.
+
 - Add support, security and code-of-conduct policies, contributor paths and a first-contribution walkthrough. No application defaults change.
 
 - Show reported prepaid spend-cap percentages in AI usage details and the compact usage button. Keep formatted monetary amounts and over-cap numbers intact; uncapped balances and missing percentages remain unmetered.

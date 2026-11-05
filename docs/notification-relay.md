@@ -2,7 +2,7 @@
 
 `lazysh-notifications` is an optional Rust service for one account and one fixed HTTPS destination: an authenticated webhook by default, or an explicitly selected Gotify application. It is **disabled by default**. This foundation does not register mobile devices, send APNs/FCM messages, install agent hooks, or make suspended native apps reachable. Existing local notifications and native registration remain separate.
 
-An explicit alternative [encrypted Web Push server mode](web-push-server.md) adds private device enrollment/challenge primitives for the free-software push path. It does not yet connect Android enrollment or establish native notification delivery; the webhook mode below remains unchanged.
+The separate [encrypted Web Push server mode](web-push-server.md) supports explicit Google/FOSS Android UnifiedPush enrollment and separately consented bound-event display. The webhook mode below remains unchanged; see [Android setup](push-registration.md#firebase-free-android-setup) for the distributor and relay steps.
 
 ## Run a private relay
 

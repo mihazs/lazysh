@@ -12,7 +12,7 @@ The native client persists an original request ID and a fresh device credential 
 
 After bootstrap, the existing explicit distributor selection runs with the server's public VAPID key. A current non-temporary endpoint is uploaded privately. Only a successfully decrypted, bounded challenge for that exact connector instance/device/generation can be confirmed. A challenge arriving before the subscription HTTP response waits in one bounded in-memory slot until its ID matches that response. Plaintext fallback, event messages, malformed/unknown fields, duplicates, stale instances and wrong identities cannot grant native confirmation.
 
-Use **Refresh registration status** to inspect progress. Endpoint verification does not enable the server destination, send host history or display notifications. Even if an operator separately enables the server, this Android slice continues ignoring event/display messages. Full delivery is separate work.
+Use **Refresh registration status** to inspect progress. Endpoint verification does not enable the server destination, send host history or enable notification display. To receive bound events, configure the server for `bound-v2`, explicitly enable delivery and use **Review remote notification display** for separate native consent. See [Web Push server setup](web-push-server.md#local-android-notification-consent).
 
 ## Storage, cancellation and trust
 
@@ -24,12 +24,12 @@ Pause retires local registration before cleanup; queued/late operations must ret
 
 Production uses pinned Apache-2.0 OkHttp 5.5.1 with normal Android TLS certificate/hostname validation, no environment/system proxy, no redirects, no automatic connection retry, a three-second connection budget and ten-second whole-call timeout. Responses are bounded to 4 KiB; decrypted challenges to 2 KiB. Synchronous OS/Keystore/filesystem work remains subject to platform behavior. There is no production certificate, resolver, HTTP-client or test-trust override. Tests may inject a fake protocol driver into an isolated controller, without changing the production transport.
 
-Normal Android FCM and iOS APNs registration are unchanged; private relay enrollment is rejected outside the F-Droid Android build. Existing local inbox notifications remain independent.
+Normal Android FCM and iOS APNs registration are separate; private UnifiedPush relay enrollment is supported on Google and FOSS Android builds. Existing local inbox notifications remain independent.
 
 ## Verification boundary and remaining acceptance
 
-Planned native project gates are Kotlin/JUnit lifecycle interleavings, frontend protected-command consent tests, Rust unsupported-platform checks, and actual Android Keystore/ciphertext-corruption/strict-parser instrumentation on an owned F-Droid APK. Those parser tests receive a synthetic decrypted flag; they are not SDK decryption, actual distributor, background or notification-presentation proof.
+The owned API 36 emulator qualification used official ntfy server 2.34.0 and FOSS distributor 1.25.2 with both Google and FOSS debug builds. It covered encrypted challenge confirmation, one background callback with private generic notification display, replay rejection and authenticated pause. The Activity was backgrounded while the process remained alive. See [#810](https://github.com/mihazs/lazysh/issues/810) and [#422](https://github.com/mihazs/lazysh/issues/422) for the scoped evidence.
 
-Real interoperability requires a separately pinned FOSS distributor/server and owned emulator/private network: bootstrap through the production native transport, register with the returned VAPID key, capture only finite ownership receipts, route the server's actual encrypted challenge through the distributor/SDK, and observe server confirmation plus native verified state. TLS must remain verified; any fixture CA belongs only to the owned test environment, never a production override. Device/process death, response-loss recovery, rotation, revocation, duplicate/replayed messages and background behavior need separate observed outcomes. A free-software ntfy setup is one candidate, subject to executable verification; no distributor acceptance is claimed here.
+This does not establish signed ARM64 release behavior, physical-device or vendor Doze delivery, process death/reboot recovery, arbitrary clock skew, or active FCM provider switching. TLS verification remains required; the fixture's private CA does not change production trust.
 
 Primary sources: [UnifiedPush AND_3.1.0](https://unifiedpush.org/developers/spec/android/), the pinned official connector 3.3.5 source APIs, [ntfy's Android/F-Droid behavior](https://docs.ntfy.sh/subscribe/phone/), and [OkHttp's maintained release history](https://github.com/lysine-dev/okhttp/blob/main/CHANGELOG.md). The HTTP pin includes the upstream AOSP trust-store certificate correction; these source statements do not establish runtime acceptance.
