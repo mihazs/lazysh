@@ -155,7 +155,8 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
                 try { action(requireNotNull(result.cryptoObject?.cipher)) }
                 catch (error: Exception) {
                     // Types only: never the message, which may describe key material.
-                    android.util.Log.w("LazyshVault", "Authenticated credential operation failed: ${error.javaClass.name}/${error.cause?.javaClass?.name}")
+                    val code = (error.cause as? android.security.KeyStoreException)?.let { if (Build.VERSION.SDK_INT >= 33) it.numericErrorCode else null }
+                    android.util.Log.w("LazyshVault", "Authenticated credential operation failed: ${error.javaClass.name}/${error.cause?.javaClass?.name} code=$code")
                     cleanup(); invoke.reject("Cannot use authenticated credentials")
                 }
             }
@@ -191,9 +192,10 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
             val name = envelope.alias ?: alias
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, requireNotNull(key(name, false, biometric)), GCMParameterSpec(128, Base64.decode(envelope.iv, Base64.NO_WRAP)))
-            cipher.updateAAD(item.key.toByteArray(Charsets.UTF_8))
             val encrypted = Base64.decode(envelope.ciphertext, Base64.NO_WRAP)
+            // Feed AAD only after authentication: Keystore rejects any per-use operation step before it.
             val decrypt = { unlocked: Cipher ->
+                unlocked.updateAAD(item.key.toByteArray(Charsets.UTF_8))
                 val bytes = unlocked.doFinal(encrypted)
                 try { val result = JSObject(); result.put("value", String(bytes, Charsets.UTF_8)); invoke.resolve(result) } finally { bytes.fill(0) }
             }
@@ -210,10 +212,10 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
             val bytes = requireNotNull(item.value).toByteArray(Charsets.UTF_8); item.value = null; plaintext = bytes
             val name = if (item.biometric) "$alias.biometric.${UUID.randomUUID()}" else alias
             if (item.biometric) newAlias = name
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, requireNotNull(key(name, true, item.biometric))); cipher.updateAAD(item.key.toByteArray(Charsets.UTF_8))
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, requireNotNull(key(name, true, item.biometric)))
             val cleanup = { bytes.fill(0); newAlias?.let { try { store().deleteEntry(it) } catch (_: Exception) {} }; Unit }
             val encrypt = { unlocked: Cipher ->
-                val encrypted = try { unlocked.doFinal(bytes) } finally { bytes.fill(0) }
+                val encrypted = try { unlocked.updateAAD(item.key.toByteArray(Charsets.UTF_8)); unlocked.doFinal(bytes) } finally { bytes.fill(0) }
                 val encoded = Base64.encodeToString(unlocked.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP)
                 check(prefs.edit().putString(item.key, if (item.biometric) "v2b:$name:$encoded" else encoded).commit()); removeAlias(previous); invoke.resolve()
             }
