@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
-import TerminalComposer from './TerminalComposer';
+import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type {UnappliedTerminalEdit} from "./terminalIme";
@@ -70,6 +70,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   modifierState.current = {ctrl, ctrlLocked, meta, metaLocked, shift};
   const inputLane = useRef<"keyboard" | "literal" | null>(null);
   const literalPaste = useRef(false);
+  const literalCapture = useRef<string[] | null>(null);
   const imeInput = useRef<{reset(): void; flush(): void; resume(): void; dismiss(): void} | null>(null);
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
@@ -92,7 +93,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   }
   function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; cancelDpad();}
   function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);} state.shift = false; setShift(false);}
-  function pasteLiteral(text: string) {imeInput.current?.flush(); literalPaste.current = true; try {session.terminal.paste(text);} finally {literalPaste.current = false;}}
+  /** With submit, the accepted paste bytes and a separate Enter leave as one paced sequence. */
+  function pasteLiteral(text: string, submit = false) {
+    imeInput.current?.flush();
+    const accepted: string[] = [];
+    literalPaste.current = true; literalCapture.current = submit ? accepted : null;
+    try {session.terminal.paste(text);} finally {literalPaste.current = false; literalCapture.current = null;}
+    const pasted = accepted.join("");
+    if (pasted && session.connected) void writeInput('terminal-user', [pasted, "\r"]).catch(error => reportError(captureUiError(error)));
+  }
   const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent, owner?:InputOwner) => boolean>(() => false);
   const [unappliedEdit, setUnappliedEdit] = useState<UnappliedTerminalEdit | null>(null);
   const editReview = useRef<HTMLDetailsElement>(null);
@@ -135,6 +144,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const searchLine = useRef(-1);
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
+  const composingRef = useRef(composing);
+  composingRef.current = composing;
   const [draft, setDraft] = useState("");
   // Expanded input tools share the keyboard-sized workspace.
   useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
@@ -453,6 +464,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         }
         if (!pointerInput) inputLane.current = null;
       }
+      if (literalPaste.current && literalCapture.current) {literalCapture.current.push(value); return;}
       if (session.connected) void writeInput(userInput ? 'terminal-user' : 'terminal-nonuser', value, owner).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output;
@@ -484,6 +496,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
       }
       if (!activeRef.current || element.clientWidth <= 0) return;
+      // The composer covers the output; its keyboard and toolbar changes never reach the PTY.
+      if (composingRef.current) return;
       // A closed Mosh screen retains its final canonical rows. A later stock
       // fit could discard its bottom rows when the final cursor is above them.
       if (session.moshResize) {
@@ -531,6 +545,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active]);
 
+  // Covered output keeps its size and session but leaves focus and the accessibility tree.
+  useEffect(() => {container.current?.toggleAttribute('inert', composing);}, [composing]);
   useEffect(() => {
     if (active) requestAnimationFrame(() => { fit.current?.(); if (composing) focusTerminal(composerInput.current); else focusTerminal(); });
   }, [active, session, composing]);
@@ -770,12 +786,17 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       <button>{t('terminalNext')}</button><button type="button" onClick={() => search(-1)}>{t('terminalPrevious')}</button><button type="button" onClick={() => {setSearching(false); focusTerminal();}}>{t('terminalCloseSearch')}</button>
       <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
+    <div className="terminal-stage">
     <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput}
-      disabled={!session.connected || !draft}
-      onPaste={() => {pasteLiteral(draft); setDraft(""); focusTerminal();}}
+      disabled={!session.connected} sendEnter={preferences.composerSendEnter}
+      onSubmit={() => {
+        if (!session.connected || !composerDraftReady(draftRef.current, preferences.composerSendEnter)) return;
+        pasteLiteral(draftRef.current, preferences.composerSendEnter); setDraft(""); setComposing(false); focusTerminal();
+      }}
       onClose={() => setComposing(false)}
       onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.();} : undefined} />}
+    </div>
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
     {dpadEnabled && <div ref={dpadElement} className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{

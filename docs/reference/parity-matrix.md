@@ -157,7 +157,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | IME composition in the terminal (agent TUIs) | verified | implemented | `apps/client/src/terminalIme.ts`; `terminal.ts:36-55`. NWT:4705-4969 ownedSshImeTransactionsThroughRealUi with a real IME service over SSH (`tests/android-ssh-host.test.ts:186`, NAR). Desktop: Chromium-emulated composition only (`e2e/terminal-ime.spec.ts`, SS:739-842). | Real WebKitGTK input method in the Linux GUI suite. |
-| Compose before sending (Composer, then Paste draft) | verified | verified | `apps/client/src/TerminalComposer.tsx`; TP:742-746. NWT:3350-3458 over real SSH (NAR); `i18n.spec.ts:44-63` (PW). | — |
+| Compose before sending (Composer sheet, then Send: paste plus a separate Enter) | verified | verified | `apps/client/src/TerminalComposer.tsx`; TP:742-746. NWT:3350-3458 over real SSH (NAR); `i18n.spec.ts:44-63` (PW). | — |
 | Mixed Latin/CJK cell alignment | implemented | implemented | Stock xterm width rules (no unicode11 addon); CJK face limited to CJK code points (`apps/client/src/fonts.ts:94`). `e2e/theme-rendering.spec.ts:117` checks colour only. | Cell-width rendering test. |
 | Configurable glyph fallback | verified | verified | `prefs:53,95`; PP:80,87-92; `fonts.ts:94,111-113`. `preferences.spec.ts:14-39` (import, select, reload; PW). | — |
 | IME in the Chat composer | implemented | implemented | `apps/client/src/ChatPanel.tsx:562` (composition guards). Unit tests `ChatPanel.test.tsx:281`, `ChatPanel.terminalInput.test.tsx:41`. | Device IME case in Chat. |

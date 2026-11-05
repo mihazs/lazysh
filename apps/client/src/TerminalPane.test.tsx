@@ -460,15 +460,46 @@ describe("terminal interactions", () => {
       owner.emit('\x1b[1;1R',false);expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[1;1R');
     } finally {windowFocus.mockRestore();hidden.mockRestore();}
   });
-  it('preserves guarded composer paste with a focused composer instead of the terminal editor',()=>{
+  it.each([true,false])('submits a guarded composer paste from a focused composer with sendEnter=%s',sendEnter=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
     try {
-      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(text));
+      savePreferences({...defaults,composerSendEnter:sendEnter});
+      // xterm brackets the literal paste itself while the remote enables mode 2004.
+      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(`\x1b[200~${text}\x1b[201~`));
       fireEvent.click(screen.getByRole('button',{name:'Compose'}));
-      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'owned draft'}});composer.focus();
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'first line\nsecond line'}});composer.focus();
       expect(document.activeElement).toBe(composer);
-      fireEvent.click(screen.getByRole('button',{name:'Paste draft'}));
-      expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','owned draft');
+      fireEvent.click(screen.getByRole('button',{name:sendEnter?'Send':'Paste draft'}));
+      expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('first line\nsecond line');
+      if(sendEnter){
+        expect(mocks.writeSequence).toHaveBeenCalledExactlyOnceWith('ssh',['\x1b[200~first line\nsecond line\x1b[201~','\r']);
+        expect(mocks.write).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[200~first line\nsecond line\x1b[201~');
+        expect(mocks.writeSequence).not.toHaveBeenCalled();
+      }
+      expect(screen.queryByLabelText('Compose text')).toBeNull();
+      expect(document.activeElement).toBe(owner.textarea);
+      fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+      expect(screen.getByLabelText('Compose text')).toHaveProperty('value','');
+    } finally {windowFocus.mockRestore();}
+  });
+  it('never sends Enter for a whitespace-only draft or a paste the terminal did not accept',()=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      const owner=mountInputOwner();
+      fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'  \n '}});
+      const send=screen.getByRole('button',{name:'Send'});
+      expect(send).toHaveProperty('disabled',true);
+      fireEvent.keyDown(composer,{key:'Enter',ctrlKey:true});
+      expect(terminal.paste).not.toHaveBeenCalled();
+      // A rejected view drops the paste, so no bare Enter may follow it.
+      terminal.paste.mockImplementation(()=>{});
+      fireEvent.change(composer,{target:{value:'ls'}});fireEvent.keyDown(composer,{key:'Enter',ctrlKey:true});
+      expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('ls');
+      expect(mocks.write).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
+      expect(owner.reportError).not.toHaveBeenCalled();
     } finally {windowFocus.mockRestore();}
   });
 
@@ -1052,7 +1083,7 @@ describe("terminal interactions", () => {
     expect(terminal.paste).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Compose text") as HTMLTextAreaElement).value).toBe("cd hello");
     fireEvent.change(screen.getByLabelText("Compose text"), {target: {value: "你好"}});
-    fireEvent.click(screen.getByRole("button", {name: "Paste draft"}));
+    fireEvent.click(screen.getByRole("button", {name: "Send"}));
     expect(terminal.paste).toHaveBeenCalledWith("你好");
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "Find"}));
@@ -1087,8 +1118,8 @@ function LocaleTerminal() {
   return <><TerminalPane session={session} active reportError={setError}/>{error && <p role="alert">{uiErrorText(error)}</p>}</>;
 }
 it.each([
-  ["pt-BR","Compor","Compor texto","Colar rascunho"],
-  ["es","Redactar","Redactar texto","Pegar borrador"],
+  ["pt-BR","Compor","Compor texto","Enviar"],
+  ["es","Redactar","Redactar texto","Enviar"],
 ] as const)("renders actual %s terminal controls while retaining draft and terminal identity",async(locale,compose,label,paste)=>{
   render(<LocaleTerminal/>);
   const canvas=document.querySelector(".terminal-canvas");
@@ -1334,12 +1365,13 @@ it("portals only the active terminal controls into the existing header and retai
     expect(within(target).getAllByRole('button')).toHaveLength(2);
     fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
     fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'c'}});
-    const paste=screen.getByRole('button',{name:'Paste draft'});
-    expect(paste.textContent).toBe(''); expect(paste.querySelector('svg')).not.toBeNull();
+    const send=screen.getByRole('button',{name:'Send'});
+    expect(send.textContent).toBe('Send'); expect(send.querySelector('svg')).not.toBeNull();
     fireEvent.click(screen.getByRole('button',{name:'Close composer'}));
     fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
     expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
-    fireEvent.click(screen.getByRole('button',{name:'Paste draft'})); expect(terminal.paste).toHaveBeenCalledWith('c');
+    fireEvent.click(screen.getByRole('button',{name:'Send'})); expect(terminal.paste).toHaveBeenCalledWith('c');
+    expect(screen.queryByLabelText('Compose text')).toBeNull();
     view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
     expect(target.childElementCount).toBe(0);
     view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
@@ -1391,6 +1423,22 @@ it('routes every Mosh fit path through proposals and guarded intents without cle
     access();session.connected=true;render(<TerminalPane session={session} active reportError={reportError}/>);
     expect(controller.onResizeIntent).toHaveBeenCalledTimes(2);expect(controller.requestSize.mock.calls.length).toBeGreaterThan(count);
   } finally {width.mockRestore();}
+});
+
+it('covers the output while composing without fitting the terminal, then fits once it is visible again',()=>{
+  const width=vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(400);
+  try{
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    const canvas=screen.getByLabelText('Terminal for Host');
+    expect(canvas.hasAttribute('inert')).toBe(true);
+    mocks.fit.mockClear();
+    act(()=>savePreferences({...getPreferences(),fontSize:18}));
+    expect(mocks.fit).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByLabelText('Compose text'),{key:'Escape'});
+    expect(canvas.hasAttribute('inert')).toBe(false);
+    expect(mocks.fit).toHaveBeenCalled();
+  }finally{width.mockRestore();}
 });
 
 it('keeps ordinary non-Mosh fits and resize notifications on the stock path',async()=>{

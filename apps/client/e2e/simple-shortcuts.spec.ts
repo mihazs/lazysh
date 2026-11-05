@@ -2,10 +2,10 @@ import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceContr
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
-    window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
+    window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
@@ -26,7 +26,8 @@ async function fixture(page:Page) {
         if(window.simpleShortcutWriteFailure)throw {kind:window.simpleShortcutWriteFailure,message:'Owned queue failure'};
         return;
       }
-      if (['local_resize','local_ack','local_disconnect'].includes(command))return;
+      if (command==='local_resize'){window.simpleShortcutResizes.push({cols:args.cols as number,rows:args.rows as number});return;}
+      if (['local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected shortcut fixture command: ${command}`);
     }}});
@@ -57,16 +58,18 @@ test('expanded D-pad keeps the composer editable in a keyboard-sized viewport',a
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   const editor=page.getByLabel('Compose text',{exact:true});
   await expect(page.getByRole('button',{name:'D-pad up',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'dpad',exact:true})).toHaveAttribute('aria-pressed','false');
+  // Touch layouts yield the key row to the composer sheet; the D-pad still closes.
+  await expect(page.locator('.terminal-keys').getByRole('button',{name:'dpad',exact:true,includeHidden:true})).toHaveAttribute('aria-pressed','false');
   for(const height of [659,360]){
     await page.setViewportSize({width:411,height});
+    if(height===360)await page.getByRole('button',{name:'Compose',exact:true}).click();
     await page.screenshot({path:testInfo.outputPath(`dpad-compose-${height}.png`)});
     expect((await editor.boundingBox())!.height).toBeGreaterThan(16);
     await editor.fill('Owned draft');
-    await page.getByRole('button',{name:'Paste draft',exact:true}).click();
-    await expect(editor).toHaveValue('');
+    await page.getByRole('button',{name:'Send',exact:true}).click();
+    await expect(editor).toHaveCount(0);
   }
-  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['Owned draft','Owned draft']);
+  expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['Owned draft','\r'],['Owned draft','\r']]);
 });
 
 test('D-pad context menus are cancelled without consuming unrelated menus or terminal input',async({page},testInfo)=>{
@@ -812,10 +815,13 @@ test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and pr
   await alt();
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await page.getByLabel('Compose text',{exact:true}).fill('x');
-  await page.getByRole('button',{name:'Paste draft',exact:true}).click();
-  await expect.poll(writes).toEqual(['x']);
+  await page.evaluate(()=>{window.simpleShortcutSteps=[];});
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  // The latched Alt modifies neither the literal draft nor its separate Enter.
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['x','\r']]);
+  await expect(page.getByLabel('Compose text',{exact:true})).toHaveCount(0);
   await expect(keys.getByRole('button',{name:'Alt',exact:true})).toHaveAttribute('aria-pressed','true');
-  await page.getByRole('button',{name:'Close composer',exact:true}).click(); await clear();
+  await clear();
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000h\x1b[?1006h'));
   await input.focus();
   await page.locator('.xterm-screen').click({position:{x:12,y:12}});
@@ -911,7 +917,7 @@ for(const truncated of [false,true])test(`skipped inline input review keeps Comp
   else {await copy.click();await expect.poll(()=>page.evaluate(()=>window.simpleShortcutCopies)).toEqual(['èy']);}
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('keep my draft');
-  await expect(page.getByRole('button',{name:'Paste draft',exact:true})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Send',exact:true})).toBeEnabled();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx']);
   await page.getByRole('button',{name:'Close composer',exact:true}).click();
   await page.locator('.xterm-screen').click({position:{x:12,y:12}});
@@ -1129,4 +1135,114 @@ test('resizing at the bottom keeps following terminal output',async({page},testI
   await page.setViewportSize({width:390,height:550});
   await page.evaluate(()=>window.simpleShortcutOutput('FOLLOWED_OUTPUT\r\n'));
   await expect(screen).toContainText('FOLLOWED_OUTPUT');
+});
+
+test.describe('terminal composer sheet',()=>{
+  const steps=(page:Page)=>page.evaluate(()=>window.simpleShortcutSteps);
+  const resizes=(page:Page)=>page.evaluate(()=>window.simpleShortcutResizes.length);
+  async function openComposer(page:Page) {
+    await openShortcutTerminal(page);
+    await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+    // The remote program asks for bracketed paste, as shells and agent CLIs do.
+    await page.evaluate(()=>window.simpleShortcutOutput('$ \x1b[?2004h'));
+    await expect.poll(()=>page.evaluate(()=>window.simpleShortcutResizes.length)).toBeGreaterThan(0);
+    const before=await resizes(page);
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
+    await expect(editor).toBeFocused();
+    return {editor,before};
+  }
+
+  test('Send pastes a multi-line draft as one bracketed paste, then a separate Enter, without resizing the PTY',async({page},testInfo)=>{
+    const {editor,before}=await openComposer(page);
+    const sheet=page.locator('.terminal-composer-sheet');
+    const stage=await page.locator('.terminal-stage:visible').boundingBox();
+    await expect.poll(()=>sheet.boundingBox()).toEqual(stage);
+    if(testInfo.project.name==='phone')await expect(page.locator('.terminal-keys')).toBeHidden();
+    else await expect(page.getByText('Ctrl+Enter to send',{exact:true})).toBeVisible();
+    await editor.pressSequentially('first line');await editor.press('Enter');await editor.pressSequentially('second line');
+    await expect(page.getByText('22 characters · 2 lines',{exact:true})).toBeVisible();
+    expect(await steps(page)).toEqual([]);
+    await page.screenshot({path:testInfo.outputPath('composer-sheet.png'),animations:'disabled'});
+    await page.getByRole('button',{name:'Send',exact:true}).click();
+    await expect.poll(()=>steps(page)).toEqual([['\x1b[200~first line\rsecond line\x1b[201~','\r']]);
+    await expect(sheet).toHaveCount(0);
+    await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+    await expect(page.locator('.terminal-keys')).toBeVisible();
+    expect(await resizes(page)).toBe(before);
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await expect(editor).toHaveValue('');
+    await expect(page.getByRole('button',{name:'Send',exact:true})).toBeDisabled();
+    await editor.fill('  \n  ');
+    await expect(page.getByRole('button',{name:'Send',exact:true})).toBeDisabled();
+    await editor.press('Control+Enter');
+    expect(await steps(page)).toHaveLength(1);
+    await editor.fill('echo ok');await editor.press('Control+Enter');
+    await expect.poll(()=>steps(page)).toEqual([['\x1b[200~first line\rsecond line\x1b[201~','\r'],['\x1b[200~echo ok\x1b[201~','\r']]);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).not.toContain('\r');
+  });
+
+  test('Escape and Close return to the terminal and keep the draft without sending',async({page})=>{
+    const {editor,before}=await openComposer(page);
+    await editor.fill('keep\nthis draft');
+    await editor.press('Escape');
+    await expect(editor).toHaveCount(0);
+    await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await expect(editor).toHaveValue('keep\nthis draft');await expect(editor).toBeFocused();
+    await page.getByRole('button',{name:'Close composer',exact:true}).click();
+    await expect(editor).toHaveCount(0);
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await page.getByRole('button',{name:'Clear draft',exact:true}).click();
+    await expect(editor).toHaveValue('');await expect(editor).toBeFocused();
+    expect(await steps(page)).toEqual([]);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+    expect(await resizes(page)).toBe(before);
+  });
+
+  test('turning off Send Enter restores paste without Enter and labels the action Paste draft',async({page})=>{
+    await fixture(page);
+    await openPreferenceCategory(page,'Input');
+    const option=page.getByRole('checkbox',{name:'Send Enter after pasting the draft',exact:true});
+    await expect(option).toBeChecked();
+    await option.uncheck();
+    expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).composerSendEnter)).toBe(false);
+    await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+    if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+    await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+    await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?2004h'));
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Send',exact:true})).toHaveCount(0);
+    const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
+    await editor.fill('git status');
+    await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[200~git status\x1b[201~']);
+    expect(await steps(page)).toEqual([]);
+    await expect(editor).toHaveCount(0);
+    await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+  });
+
+  test('the sheet keeps its editor and actions above a soft keyboard that only shrinks the visual viewport',async({page},testInfo)=>{
+    test.skip(testInfo.project.name!=='phone','Soft keyboard');
+    await openShortcutTerminal(page);
+    // WebKit-style keyboards keep the layout viewport and shrink only the visual viewport.
+    await page.evaluate(()=>{
+      const target=new EventTarget(), keyboard={height:window.innerHeight};
+      Object.defineProperties(target,{offsetTop:{value:0},offsetLeft:{value:0},scale:{value:1},width:{value:window.innerWidth},height:{get:()=>keyboard.height}});
+      Object.defineProperty(window,'visualViewport',{configurable:true,value:target});
+      Reflect.set(window,'showKeyboard',(height:number)=>{keyboard.height=window.innerHeight-height;target.dispatchEvent(new Event('resize'));});
+    });
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
+    await editor.fill('above the keyboard');
+    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(336));
+    const visible=await page.evaluate(()=>window.innerHeight-336);
+    for(const control of [editor,page.getByRole('button',{name:'Send',exact:true}),page.getByRole('button',{name:'Close composer',exact:true})])
+      await expect.poll(async()=>{const box=(await control.boundingBox())!;return box.y+box.height<=visible;}).toBe(true);
+    expect((await editor.boundingBox())!.height).toBeGreaterThanOrEqual(96);
+    await page.screenshot({path:testInfo.outputPath('composer-keyboard.png'),animations:'disabled'});
+    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(0));
+    await expect.poll(async()=>(await page.getByRole('button',{name:'Send',exact:true}).boundingBox())!.y).toBeGreaterThan(visible);
+  });
 });

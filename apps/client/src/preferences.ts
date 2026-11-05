@@ -79,6 +79,8 @@ export type Preferences = {
   gestureChords: Partial<Record<GestureSlot, string>>;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
+  /** The composer's primary action submits the pasted draft with a separate Enter. */
+  composerSendEnter: boolean;
 };
 export const defaults: Preferences = {
   version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
@@ -87,7 +89,7 @@ export const defaults: Preferences = {
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false,
   toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
-  chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false,
+  chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
 const key = "lazysh.preferences.v1";
@@ -132,6 +134,7 @@ export function parsePreferences(value: unknown): Preferences {
     optionAsMeta: p.optionAsMeta === true,
     screenReader: p.screenReader === true,
     autoHideToolbar: p.autoHideToolbar === true,
+    composerSendEnter: p.composerSendEnter !== false,
     pinchZoom: p.pinchZoom !== false,
     bodyGestures: Object.fromEntries(bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])])) as Preferences["bodyGestures"],
     gestureChords,

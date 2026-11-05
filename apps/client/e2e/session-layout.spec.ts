@@ -127,59 +127,49 @@ for (const width of [360, 384, 393, 412]) {
 }
 
 for (const width of [360, 412]) for (const fontSize of [14, 32]) {
-  test(`phone composer and special keys preserve fitted terminal rows at ${width}px width and ${fontSize}px text`, async ({page}) => {
+  test(`phone composer covers terminal output without resizing it at ${width}px width and ${fontSize}px text`, async ({page}) => {
     await page.addInitScript(size => localStorage.setItem('lazysh.preferences.v1', JSON.stringify({version: 1, fontSize: size})), fontSize);
     await page.setViewportSize({width, height: 844});
     await page.goto('/');
     await openSessions(page);
     await page.keyboard.press('Escape');
+    const canvas = page.locator('.terminal-canvas:visible');
+    const grid = () => canvas.evaluate(element => {
+      const screen = element.querySelector('.xterm-screen')!;
+      return {width: screen.clientWidth, height: screen.clientHeight};
+    });
+    const expectFittedRows = () => expect.poll(() => canvas.evaluate(element => {
+      const screen = element.querySelector('.xterm-screen')!;
+      return screen.clientHeight > 0 && screen.clientHeight <= element.clientHeight;
+    })).toBe(true);
+    await expectFittedRows();
+    const sizes = () => page.evaluate(() => (window as unknown as {terminalSizes: unknown[]}).terminalSizes.length);
     await expect(page.getByRole('button', {name: 'Compose', exact: true})).toHaveCount(1);
     await page.getByRole('button', {name: 'Compose', exact: true}).click();
     const composer = page.locator('.terminal-compose:visible');
     const editor=composer.getByRole('textbox',{name:'Compose text',exact:true});
+    await expect(editor).toBeFocused();
+    const frozen = await grid(), resizes = await sizes();
     const draft='Owned composer draft';
-    await editor.fill(draft);
-    const naturalHeight = (await composer.boundingBox())!.height;
+    const longDraft=Array.from({length:40},(_,index)=>`Draft line ${index} wraps with enough words to fill the editor`).join('\n');
     for (const height of [420, 844]) {
       await page.setViewportSize({width, height});
-      const canvas = page.locator('.terminal-canvas:visible');
-      const expectFittedRows = () => expect.poll(() => canvas.evaluate(element => {
-        const screen = element.querySelector('.xterm-screen')!;
-        return screen.clientHeight > 0 && screen.clientHeight <= element.clientHeight;
-      })).toBe(true);
-      await expectFittedRows();
-      const initialHeight=(await editor.boundingBox())!.height;
-      const longDraft=Array.from({length:40},(_,index)=>`Draft line ${index} wraps with enough words to fill the compact editor`).join('\n');
-      expect(await editor.evaluate(()=>CSS.supports('field-sizing','content'))).toBe(true);
+      // The sheet replaces output and the key row; the terminal grid and PTY keep their size underneath.
+      const keys = page.locator('.terminal-pane:visible .terminal-keys');
+      if (test.info().project.name === 'phone') await expect(keys).toBeHidden(); else await expect(keys).toBeVisible();
+      const stage = (await page.locator('.terminal-stage:visible').boundingBox())!;
+      await expect.poll(() => composer.boundingBox()).toEqual(stage);
+      expectInViewport(stage,width,height);
       await editor.fill(longDraft);
-      await expect(page.getByLabel('Compose text',{exact:true})).toHaveValue(longDraft);
-      if(height===844)await expect.poll(async()=>(await editor.boundingBox())!.height).toBeGreaterThan(initialHeight);
-      expect((await editor.boundingBox())!.height).toBeLessThanOrEqual(height*.25+1);
-      const readable=await editor.evaluate(node=>({height:node.clientHeight,lineHeight:parseFloat(getComputedStyle(node).lineHeight)}));
-      expect(Number.isFinite(readable.lineHeight)).toBe(true);expect(readable.lineHeight).toBeGreaterThan(0);expect(readable.height).toBeGreaterThanOrEqual(readable.lineHeight);
-      expect(await editor.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-      const rowFloor=await canvas.evaluate(node=>parseFloat(node.style.minHeight));
-      expect(rowFloor).toBeGreaterThan(0);expect((await canvas.boundingBox())!.height).toBeGreaterThanOrEqual(rowFloor);
-      expect((await editor.boundingBox())!.y+(await editor.boundingBox())!.height).toBeLessThanOrEqual((await composer.locator('.terminal-compose-actions').boundingBox())!.y);
-      for(const name of ['Paste draft','Close composer'])await expect(composer.getByRole('button',{name,exact:true})).toBeInViewport({ratio:0.9});
-      await page.screenshot({path:test.info().outputPath(`composer-${width}-${fontSize}-${height}.png`)});
-      await editor.evaluate(node=>node.style.setProperty('field-sizing','fixed'));
-      await expect(editor).toHaveValue(longDraft);
-      expect(await editor.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
-      await editor.evaluate(node=>node.style.removeProperty('field-sizing'));
-      await editor.fill(draft);
-      await expectFittedRows();
-      for (const element of [canvas, page.locator('.terminal-keys:visible'), page.getByRole('button', {name: 'esc', exact: true}), page.getByRole('button', {name: 'tab', exact: true})]) {
-        const bounds = (await element.boundingBox())!;
-        expectInViewport(bounds,width,height);
-      }
-      const field = (await composer.getByRole('textbox', {name: 'Compose text', exact: true}).boundingBox())!;
+      const field = (await editor.boundingBox())!;
+      expect(field.height).toBeGreaterThanOrEqual(height === 420 ? 96 : 400);
+      expect(await editor.evaluate(node=>node.scrollHeight>node.clientHeight && node.scrollWidth<=node.clientWidth)).toBe(true);
       const actionBounds = [];
-      for (const name of ['Paste draft', 'Close composer']) {
+      for (const name of ['Close composer', 'Clear draft', 'Send']) {
         const action = composer.getByRole('button', {name, exact: true});
         await expect(action).toBeInViewport();
         await expect(action.locator('svg')).toHaveCount(1);
-        expect(await action.textContent()).toBe('');
+        expect(await action.textContent()).toBe(name === 'Send' ? 'Send' : '');
         const bounds = (await action.boundingBox())!;
         expect(bounds.width).toBeGreaterThanOrEqual(44);
         expect(bounds.height).toBeGreaterThanOrEqual(44);
@@ -187,19 +177,19 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         expectInViewport(bounds,width,height);
         actionBounds.push(bounds);
       }
-      actionBounds.sort((left,right)=>left.x-right.x);
-      expect(actionBounds[0].x + actionBounds[0].width).toBeLessThanOrEqual(actionBounds[1].x);
-      await expect(editor).toHaveValue(draft);
-      if (height === 420) {
-        await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
-        await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
-        await (await workspaceControl(page,'Preferences')).click();
-        await openPreferenceCategory(page,'Appearance');
-        await page.getByRole('spinbutton', {name: 'Font size', exact: true}).fill(fontSize === 14 ? '32' : '14');
-        await page.keyboard.press('Escape');
-        await expectFittedRows();
-      } else expect((await composer.boundingBox())!.height).toBe(naturalHeight);
+      for (let index = 1; index < actionBounds.length; index++) expect(actionBounds[index-1].x + actionBounds[index-1].width).toBeLessThanOrEqual(actionBounds[index].x);
+      await page.screenshot({path:test.info().outputPath(`composer-${width}-${fontSize}-${height}.png`)});
+      expect(await grid()).toEqual(frozen);
+      expect(await sizes()).toBe(resizes);
     }
+    await editor.fill(draft);
+    await editor.press('Escape');
+    await expect(composer).toHaveCount(0);
+    await expect(canvas.locator('.xterm-helper-textarea')).toBeFocused();
+    await expectFittedRows();
+    expect(await sizes()).toBe(resizes);
+    await page.getByRole('button', {name: 'Compose', exact: true}).click();
+    await expect(editor).toHaveValue(draft);
   });
 }
 
