@@ -833,12 +833,13 @@ test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and pr
   await clear(); await keys.getByRole('button',{name:'ctrl',exact:true}).click();
   await expect(input).toBeFocused();
   if ((page.viewportSize()?.width??1280)<=600) {
-    const bounds=await keys.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
+    // Each toolbar row is its own horizontal scroller.
+    const line=keys.locator('.terminal-keys-row').first(),bounds=await line.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
     const y=bounds.y+bounds.height/2, x=bounds.x+bounds.width-30;
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
     for (const offset of [30,80,160]) await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-offset,y}]});
     await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-    await expect.poll(()=>keys.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    await expect.poll(()=>line.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
     expect(await writes()).toEqual([]);
   }
 });

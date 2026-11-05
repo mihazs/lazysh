@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import PreferencesPanel from "./PreferencesPanel";
-import { defaults, getPreferences, savePreferences, parseChord } from "./preferences";
+import { defaults, getPreferences, savePreferences, parseChord, toolbarRows } from "./preferences";
 afterEach(() => cleanup());
 
 function mountPreferences(...summaries:string[]) {
@@ -103,6 +103,44 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByLabelText('Control'));
     expectRejectedShortcutDrafts(['b你好','abcdefghi','a,','1']);
   });
+  it("rearranges toolbar rows without dragging through key actions, keyboard shortcuts and announcements", () => {
+    savePreferences({...defaults, toolbar: ["esc", "ctrl", "tab"]});
+    mountPreferences('Keyboard and gestures', 'Toolbar keys and order');
+    const status = screen.getByRole("status");
+    fireEvent.change(screen.getByLabelText("Toolbar rows"), {target: {value: "2"}});
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["esc", "ctrl", "tab"], []]);
+    const tab = screen.getByRole("button", {name: "tab"});
+    tab.focus();
+    fireEvent.keyDown(tab, {key: "ArrowDown", altKey: true});
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["esc", "ctrl"], ["tab"]]);
+    expect(status.textContent).toBe("tab moved to row 2, position 1");
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: "tab"}));
+    fireEvent.keyDown(document.activeElement!, {key: "ArrowLeft", altKey: true});
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["esc", "ctrl", "tab"], []]);
+    fireEvent.keyDown(screen.getByRole("button", {name: "esc"}), {key: "ArrowLeft", altKey: true});
+    expect(status.textContent).toBe("esc cannot move further");
+    // A single tap opens the same moves for pointer and screen-reader users.
+    fireEvent.click(screen.getByRole("button", {name: "esc"}));
+    const actions = screen.getByRole("group", {name: "Move esc"});
+    expect(document.activeElement).toBe(actions.querySelector("button"));
+    fireEvent.click(screen.getByRole("button", {name: "Move esc to row 2"}));
+    fireEvent.click(screen.getByRole("button", {name: "Move esc later"}));
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["ctrl", "tab"], ["esc"]]);
+    // Escape closes the key actions first instead of leaving the settings page.
+    fireEvent.keyDown(document.activeElement!, {key: "Escape"});
+    expect(screen.queryByRole("group", {name: "Move esc"})).toBeNull();
+    expect(screen.getByRole("region", {name: "Toolbar keys and order"}).hidden).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: "esc"}));
+    fireEvent.keyDown(document.activeElement!, {key: "Delete"});
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["ctrl", "tab"], []]);
+    expect(status.textContent).toBe("esc removed");
+    expect(document.activeElement).toBe(screen.getByRole("button", {name: "Add esc"}));
+    fireEvent.click(screen.getByRole("button", {name: "Add esc"}));
+    expect(toolbarRows(getPreferences().toolbar)).toEqual([["ctrl", "tab"], ["esc"]]);
+    expect(status.textContent).toBe("esc added to row 2, position 1");
+    fireEvent.change(screen.getByLabelText("Toolbar rows"), {target: {value: "1"}});
+    expect(getPreferences().toolbar).toEqual(["ctrl", "tab", "esc"]);
+  });
   it("persists theme and reordered toolbar, rejects invalid theme import, and resets", () => {
     savePreferences({...defaults});
     mountPreferences('Appearance and fonts');
@@ -114,6 +152,7 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByRole("button",{name:"Back"}));
     fireEvent.click(screen.getByRole("button",{name:"Keyboard and gestures"}));
     fireEvent.click(screen.getByRole("button",{name:"Toolbar keys and order"}));
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
     expect(getPreferences().toolbar.slice(0, 2)).toEqual(["ctrl", "esc"]);
     fireEvent.click(screen.getByRole("button",{name:"Back"}));

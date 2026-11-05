@@ -1,0 +1,16 @@
+/* Terminal toolbar rows: each configured row is its own horizontal line. */
+.terminal-keys[data-rows] {
+  flex-direction: column;
+  overflow-x: visible;
+}
+.terminal-keys-row {
+  display: flex;
+  gap: inherit;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.terminal-keys-row > button {
+  flex-shrink: 0;
+}
