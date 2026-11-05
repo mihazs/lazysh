@@ -9,7 +9,7 @@ export {parseHerdrAgents} from './useHerdrNavigation';
 export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,onRestoreHostTools}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;onRestoreHostTools?:(restored:()=>void)=>void}) {
   useUi();
   useAccessSnapshot();
-  const {data,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=useHerdrNavigation({sessionId,herdrSession,visible});
+  const {data,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=useHerdrNavigation({sessionId,herdrSession,visible,reports});
   const references=reportedSessionCounts(data?.rows??[]);
   const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase())))??[];
   return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>

@@ -815,9 +815,16 @@ Codex panes even when the companion report list is empty or unavailable. A singl
 running Herdr server is selected automatically. If several are running, choose a
 server; only the selected server is queried, not every server in the list.
 
-Herdr statuses retain their meaning, including Idle and Unknown. They are separate
-from companion lifecycle reports and do not establish approval, input or transcript
-authority. Search the live Herdr section by agent, project or pane. Discovery stops
+Herdr statuses retain their meaning, including Idle and Unknown, and always take
+precedence. Herdr 0.9.3 reports an idle Codex prompt as Unknown: it has no screen
+rule for that state, and its Codex integration reports only the session ID. When
+Herdr reports Unknown for a pane, its Herdr-reported Codex, Claude Code or OpenCode
+session ID is unique among the live panes, and exactly one companion report from
+this connection has that agent and session ID, the pane shows that report's
+lifecycle state instead: Working, Needs attention (a permission request or
+attention notification) or Done. Workspace and tab summaries stay Herdr's own.
+Without that exact match the pane stays Unknown. Live states do not establish
+approval, input or transcript authority. Search the live Herdr section by agent, project or pane. Discovery stops
 while the Agents view is hidden. Failed reads remove the previous live results;
 check the terminal when a status cannot be read.
 
