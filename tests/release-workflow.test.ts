@@ -86,8 +86,8 @@ test('release jobs bind the exact event source and restore dependency downloads 
       }
     }
   }
-  expect([...restored].sort()).toEqual(['~/.bun/install/cache', '~/.cargo/git/db/', '~/.cargo/registry/cache/',
-    '~/.cargo/registry/index/', '~/.gradle/caches/modules-2', '~/.gradle/wrapper/dists']);
+  expect([...restored].sort()).toEqual(['${{ runner.temp }}/lazysh-parakeet-onnxruntime-cache', '~/.bun/install/cache',
+    '~/.cargo/git/db/', '~/.cargo/registry/cache/', '~/.cargo/registry/index/', '~/.gradle/caches/modules-2', '~/.gradle/wrapper/dists']);
 });
 
 test('only main companion candidates seed crate downloads; pull requests never save', async () => {

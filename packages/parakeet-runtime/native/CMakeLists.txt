@@ -63,6 +63,28 @@ file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${CMAKE_BINARY_DIR}/vendor"
   PATTERNS "${prefix}/CMakeLists.txt" "${prefix}/LICENSE"
     "${prefix}/cmake/*" "${prefix}/sherpa-onnx/*" "${prefix}/toolchains/*")
 set(upstream "${CMAKE_BINARY_DIR}/vendor/${prefix}")
+# A predownloaded copy of the pinned Linux x86_64 ORT archive replaces upstream's download.
+# Its recipe takes a same-named file from the top build directory, and FetchContent still
+# checks the upstream hash; refusing a drifted pin keeps the copy from being ignored silently.
+if(DEFINED ENV{LAZYSH_PARAKEET_ORT_ARCHIVE})
+  if(NOT (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64"))
+    message(FATAL_ERROR "LAZYSH_PARAKEET_ORT_ARCHIVE is pinned for Linux x86_64 only")
+  endif()
+  set(ort_name "onnxruntime-linux-x64-static_lib-1.28.2-glibc2_17.zip")
+  set(ort_hash "2dada92465b40a16fb5011956d93eaf90e3091cf621a953e5371a5e6a687794e")
+  file(READ "${upstream}/cmake/onnxruntime-linux-x86_64-static.cmake" ort_recipe)
+  string(FIND "${ort_recipe}" "/${ort_name}\")" ort_url_at)
+  string(FIND "${ort_recipe}" "\"SHA256=${ort_hash}\"" ort_hash_at)
+  if(ort_url_at EQUAL -1 OR ort_hash_at EQUAL -1)
+    message(FATAL_ERROR "Upstream no longer pins ${ort_name} with the expected SHA-256")
+  endif()
+  file(SHA256 "$ENV{LAZYSH_PARAKEET_ORT_ARCHIVE}" ort_actual)
+  if(NOT ort_actual STREQUAL ort_hash)
+    message(FATAL_ERROR "Pinned ONNX Runtime archive checksum mismatch")
+  endif()
+  configure_file("$ENV{LAZYSH_PARAKEET_ORT_ARCHIVE}" "${CMAKE_BINARY_DIR}/${ort_name}" COPYONLY)
+  message(STATUS "Using the verified predownloaded ONNX Runtime archive")
+endif()
 add_subdirectory("${upstream}" upstream EXCLUDE_FROM_ALL)
 add_library(lazysh-parakeet-native STATIC bridge.cc)
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")

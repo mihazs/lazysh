@@ -62,6 +62,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - &cargo-registry
         uses: ./.github/actions/cargo-registry
+      # The Linux client links the pinned prebuilt static ORT; restore-only, verified every time.
+      - if: matrix.target == 'linux-x64'
+        uses: ./.github/actions/parakeet-onnxruntime
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config
       - if: runner.os == 'macOS'

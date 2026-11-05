@@ -4,6 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=native");
     for name in [
         "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "LAZYSH_PARAKEET_ORT_ARCHIVE",
         "CMAKE_TOOLCHAIN_FILE",
         "CMAKE_BUILD_PARALLEL_LEVEL",
         "SHERPA_ONNXRUNTIME_INCLUDE_DIR",

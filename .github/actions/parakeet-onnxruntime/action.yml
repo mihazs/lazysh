@@ -1,0 +1,37 @@
+name: Provide the pinned Parakeet ONNX Runtime archive
+description: Restore or download the pinned Linux x64 static ORT archive, verify it and point the Parakeet build at it
+inputs:
+  seed:
+    description: On a main push only, save a verified archive after an exact cache miss
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # The upstream recipe would otherwise download this same pinned archive from GitHub in every
+    # build script run. Restored bytes are used only when they match the pin; pull requests and
+    # release jobs read main-saved entries and never save their own.
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-parakeet-onnxruntime-cache
+        key: lazysh-parakeet-onnxruntime-v1-2dada92465b40a16fb5011956d93eaf90e3091cf621a953e5371a5e6a687794e
+    - shell: bash
+      env:
+        # Upstream pin: cmake/onnxruntime-linux-x86_64-static.cmake of the sherpa-onnx revision in
+        # packages/parakeet-runtime/native/CMakeLists.txt, which refuses a drifted copy.
+        ORT_NAME: onnxruntime-linux-x64-static_lib-1.28.2-glibc2_17.zip
+        ORT_SHA256: 2dada92465b40a16fb5011956d93eaf90e3091cf621a953e5371a5e6a687794e
+        ORT_SIZE: '24400093'
+        ORT_URL: https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-linux-x64-static_lib-1.28.2-glibc2_17.zip
+      run: |
+        archive="$RUNNER_TEMP/lazysh-parakeet-onnxruntime/$ORT_NAME"
+        mkdir -p "${archive%/*}"
+        LAZYSH_PINNED_DOWNLOADS="$RUNNER_TEMP/lazysh-parakeet-onnxruntime-cache" sh .github/scripts/pinned-download.sh "$ORT_SHA256" "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 300 --max-filesize "$ORT_SIZE" --retry 6 --retry-delay 10 --retry-all-errors "$ORT_URL"
+        test "$(stat -c%s "$archive")" -eq "$ORT_SIZE"
+        printf '%s  %s\n' "$ORT_SHA256" "$archive" | sha256sum --check --strict
+        echo "LAZYSH_PARAKEET_ORT_ARCHIVE=$archive" >> "$GITHUB_ENV"
+    - if: inputs.seed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-parakeet-onnxruntime-cache
+        key: ${{ steps.restore.outputs.cache-primary-key }}
