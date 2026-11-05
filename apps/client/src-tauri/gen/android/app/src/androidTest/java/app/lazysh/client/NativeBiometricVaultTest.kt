@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
@@ -32,6 +33,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
 import javax.crypto.Cipher
+import javax.crypto.IllegalBlockSizeException
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -202,7 +204,12 @@ class NativeBiometricVaultTest {
                 doFinal(Base64.decode(parts[3], Base64.NO_WRAP))
             }
         }
-        assertTrue("The Keystore must refuse to decrypt without a fingerprint", bypass.isFailure)
+        // A per-use key refuses init, or caches the Keystore's refusal of the AAD step for doFinal;
+        // any other failure (decoding, parsing) would not prove the missing authentication.
+        val refusal = bypass.exceptionOrNull()
+        assertTrue("The Keystore must refuse to decrypt without a fingerprint: ${refusal?.javaClass?.name}/${refusal?.cause?.javaClass?.name}",
+            refusal is UserNotAuthenticatedException ||
+                (refusal is IllegalBlockSizeException && refusal.cause is android.security.KeyStoreException))
         val read = scenario.startVault(plugin, "read", item(account))
         authenticate()
         val unlocked = read.await()
@@ -286,33 +293,62 @@ class NativeBiometricVaultTest {
         !covered(scenario) && js(scenario, "Boolean(window.__TAURI_INTERNALS__?.invoke&&document.querySelector(\"button[aria-label='Add host']\"))") == "true"
     }
 
-    /** Reaches Security preferences through the visible Preferences control and its category list. */
+    /**
+     * One step toward Security preferences through the visible Preferences control and its
+     * category list; true once the resume-lock toggle is rendered. Each step is idempotent, so a
+     * workspace remount that closes Preferences mid-wait is followed by navigating there again.
+     */
+    private fun towardSecurity(scenario: ActivityScenario<MainActivity>): Boolean = !covered(scenario) && js(scenario,
+        "(()=>{if(document.querySelector('.access-lock-toggle'))return true;" +
+            "const e=document.querySelector(\".settings-navigation button[data-settings-target='security']\")||" +
+            "document.querySelector('.settings-detail-header button')||document.querySelector(\"button[aria-label='Preferences']\");" +
+            "e?.click();return false})()") == "true"
+
     private fun security(scenario: ActivityScenario<MainActivity>) {
         workspace(scenario)
-        if (js(scenario, "Boolean(document.querySelector('.access-lock-toggle'))") != "true")
-            click(scenario, "document.querySelector(\"button[aria-label='Preferences']\")")
-        val category = "document.querySelector(\".settings-navigation button[data-settings-target='security']\")"
-        until("security preferences") {
-            js(scenario, "Boolean(document.querySelector('.access-lock-toggle'))") == "true" ||
-                js(scenario, "(()=>{const e=$category||document.querySelector('.settings-detail-header button');e?.click();return false})()") == "true"
-        }
+        until("security preferences") { towardSecurity(scenario) }
     }
 
+    private val lockCheckbox = "document.querySelector('.access-lock-toggle input')"
+
     private fun lockToggle(scenario: ActivityScenario<MainActivity>, enabled: Boolean) {
-        val checkbox = "document.querySelector('.access-lock-toggle input')"
+        val checkbox = lockCheckbox
         security(scenario)
         until("resume lock setting") { js(scenario, "Boolean($checkbox&&!$checkbox.disabled)") == "true" }
         click(scenario, checkbox)
         // Enabling writes then verifies a new proof; disabling verifies the current proof.
         repeat(if (enabled) 2 else 1) { authenticate() }
-        // A committed policy is a new access authority: the workspace remounts by design,
-        // closing Preferences, so the committed state is read back from a fresh visit.
+        // A committed policy is a new access authority: the workspace remounts by design and closes
+        // Preferences, possibly after this point, so every poll first re-opens Security if needed.
+        until("resume lock committed") {
+            towardSecurity(scenario) && js(scenario, "$checkbox?.checked===$enabled&&!$checkbox.disabled") == "true"
+        }
+    }
+
+    /** Leaves the shared Activity unlocked and without a resume lock, whatever step failed. */
+    private fun disableResumeLock(scenario: ActivityScenario<MainActivity>) {
+        if (covered(scenario)) {
+            device.wait(Until.findObject(By.text(COVER_UNLOCK).pkg(context.packageName)), 20_000)?.click()
+            authenticate()
+            until("cleanup unlock") { !covered(scenario) }
+        }
         security(scenario)
-        until("resume lock committed") { js(scenario, "$checkbox?.checked===$enabled&&!$checkbox.disabled") == "true" }
+        until("resume lock state") { js(scenario, "Boolean($lockCheckbox&&!$lockCheckbox.disabled)") == "true" }
+        if (js(scenario, "$lockCheckbox.checked") == "true") lockToggle(scenario, false)
     }
 
     @Test fun resumeLockOpensOnlyForEnrolledFingerprint() {
         val scenario = NativeActivityFixture.scenario
+        var failure: Throwable? = null
+        try { resumeLockCase(scenario) } catch (error: Throwable) { failure = error; throw error } finally {
+            // Report the first failure; a failed cleanup is attached to it instead of hiding it.
+            runCatching { disableResumeLock(scenario) }.exceptionOrNull()?.let { cleanup ->
+                failure?.addSuppressed(cleanup) ?: throw cleanup
+            }
+        }
+    }
+
+    private fun resumeLockCase(scenario: ActivityScenario<MainActivity>) {
         lockToggle(scenario, true)
         scenario.moveToState(Lifecycle.State.CREATED)
         scenario.moveToState(Lifecycle.State.RESUMED)
@@ -329,7 +365,6 @@ class NativeBiometricVaultTest {
         authenticate()
         until("enrolled fingerprint unlock") { !covered(scenario) }
         assertTrue(device.wait(Until.gone(By.text(COVER_UNLOCK).pkg(context.packageName)), 20_000))
-        lockToggle(scenario, false)
     }
 
     @Test fun privateKeyExportNeedsEnrolledFingerprintAndHostDeletionRemovesKeystoreEntry() {
