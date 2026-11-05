@@ -340,7 +340,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       const terminal=session.terminal,area=terminal.textarea,buffer=terminal.buffer.active,view=pasteView.current;
       return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.terminal===terminal
         &&view.id===session.id&&view.terminal===terminal&&view.connected&&activeRef.current&&mounted.current&&access.current()
-        &&!document.hidden&&document.hasFocus()&&!imeComposing.current&&imeInput.current?.idle===true&&!terminal.hasSelection()
+        &&!document.hidden&&document.hasFocus()&&!composingIme()&&imeInput.current?.idle===true&&!terminal.hasSelection()
         &&area===document.activeElement&&!area?.readOnly&&area?.value===''
         &&terminal.modes.mouseTrackingMode==='none'&&buffer.type==='normal'&&Number.isInteger(buffer.baseY)&&buffer.baseY>=0&&buffer.viewportY===buffer.baseY
         &&!document.querySelector('[role="dialog"][aria-modal="true"]');
