@@ -1,5 +1,5 @@
 import './WorkspaceHierarchy.css';
-import {WorkspaceToolsCarousel} from './WorkspaceToolsCarousel';
+import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel} from './WorkspaceToolsCarousel';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
@@ -1209,8 +1209,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [sync, setSync] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [mobileTools, setMobileTools] = useState(false);
-  /** The Workspace tools page last shown for each session. */
-  const toolPages = useRef(new Map<string, string>());
   const [about, setAbout] = useState(false);
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
@@ -2450,7 +2448,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="workspace-tools-content">
-            <WorkspaceToolsCarousel initialPage={toolPages.current.get(active?.id??'')} onPageChange={page=>toolPages.current.set(active?.id??'',page)} pages={[
+            <WorkspaceToolsCarousel initialPage={rememberedToolsPage()} onPageChange={rememberToolsPage} pages={[
               ...(active?[{id:'session',title:t('appSessionViews'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('appSessionViews')}>
                 <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
                 {primaryTools.map(mobileToolButton)}

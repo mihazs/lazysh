@@ -1570,6 +1570,8 @@ it('restores Auto by probing transports again rather than restoring its last SSH
 });
 
 it('starts Workspace tools on seven primary destinations with the other tool groups as labelled pages',async()=>{
+  const stored=new Map<string,string>();
+  vi.stubGlobal('localStorage',{setItem:(key:string,value:string)=>stored.set(key,value),getItem:(key:string)=>stored.get(key)??null,removeItem:(key:string)=>stored.delete(key),length:0});
   const user=await connectForNavigation('short-tools');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
   const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
@@ -1601,11 +1603,16 @@ it('starts Workspace tools on seven primary destinations with the other tool gro
   await user.click(tabs[1]);
   await user.click(within(dialog).getByRole('button',{name:'Transcript'}));
   expect(screen.queryByRole('dialog',{name:'Workspace tools'})).toBeNull();
-  // Reopening the sheet returns to the page last used in this workspace.
+  // Reopening the sheet returns to the page last turned to, which outlives this session.
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
   const reopened=within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('tabpanel');
   expect(reopened.getAttribute('aria-label')).toBe('More tools, 2 of 4');
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+  // A restarted app with a new connection still opens on that page.
+  cleanup();
+  const restarted=await connectForNavigation('short-tools-restarted');
+  await restarted.click(screen.getByRole('button',{name:'Workspace tools'}));
+  expect(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('tabpanel').getAttribute('aria-label')).toBe('More tools, 2 of 4');
 });
 
 it('exposes remote push settings from Workspace tools',async()=>{

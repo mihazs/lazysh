@@ -101,6 +101,10 @@ async function openWorkspaceGroup(page:Page,group:keyof typeof toolPageNames){
   // Without a session the sheet has one page and no page tabs.
   if(!await tab.count())return;
   await tab.click();await expect(tab).toHaveAttribute('aria-selected','true');
+  // Wait for the page turn to settle so measurements and screenshots show the page in place.
+  const shown=dialog.locator(`#${await tab.getAttribute('aria-controls')}`);
+  await expect.poll(()=>shown.evaluate(node=>
+    Math.abs(node.getBoundingClientRect().left-node.parentElement!.getBoundingClientRect().left)<2)).toBe(true);
 }
 
 async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?:string[]){
@@ -900,6 +904,12 @@ test('Workspace tools swipe between labelled carousel pages and remember the las
     await expect(carousel.getByRole('heading',{name:label.split(',')[0],exact:true})).toBeVisible();
     // The shown page fills the track, so no other page can be tapped by accident.
     await expect.poll(()=>panel.evaluate(node=>{const page=node.getBoundingClientRect(),track=node.parentElement!.getBoundingClientRect();return Math.abs(page.left-track.left)<2&&Math.abs(page.right-track.right)<2;})).toBe(true);
+    // The sheet fits the shown page: its dots follow the last control without a band of empty space.
+    await expect.poll(()=>panel.evaluate(node=>{
+      const controls=Array.from(node.querySelectorAll('button')).map(button=>button.getBoundingClientRect().bottom);
+      const dots=node.closest('.workspace-tools-carousel')!.querySelector('[role=tablist]')!.getBoundingClientRect().top;
+      return Math.round(dots-Math.max(...controls));
+    })).toBeLessThanOrEqual(16);
   };
   await shows('Session views, 1 of 4',0);
   await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toHaveCount(0);
@@ -928,6 +938,12 @@ test('Workspace tools swipe between labelled carousel pages and remember the las
   await shows('More tools, 2 of 4',1);
   await expect(transcript).toBeInViewport({ratio:1});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await expectNoTerminalInput(page);
+  // The last page outlives the session: a restarted app reopens the sheet on it.
+  await tabs.nth(3).click();await shows('Application options, 4 of 4',3);
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+  await openConnectedWorkspaceTools(page,phone);
+  await shows('Application options, 4 of 4',3);
   await expectNoTerminalInput(page);
 });
 

@@ -15,6 +15,15 @@ const TURN_MS = 1000;
 const motion = (): ScrollBehavior => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 const pageId = (id: string) => `workspace-tools-page-${id}`;
 const tabId = (id: string) => `workspace-tools-tab-${id}`;
+const pageKey = 'lazysh.workspaceTools.page';
+
+/** The Workspace tools page last turned to, kept across reconnects and restarts. */
+export function rememberedToolsPage() {
+  try { return localStorage.getItem(pageKey) ?? undefined; } catch { return undefined; }
+}
+export function rememberToolsPage(id: string) {
+  try { localStorage.setItem(pageKey, id); } catch { /* The sheet still opens on its first page. */ }
+}
 
 /**
  * Workspace tools as swipeable pages. Touch swipes use native scroll snapping; mouse
@@ -29,8 +38,12 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
   useUi();
   const track = useRef<HTMLDivElement>(null);
   const tabs = useRef(new Map<string, HTMLButtonElement>());
-  const [selected, setSelected] = useState(() => Math.max(0, pages.findIndex(page => page.id === initialPage)));
-  const current = Math.min(selected, pages.length - 1);
+  const [selected, setSelected] = useState(() => pages.find(page => page.id === initialPage)?.id ?? pages[0]?.id);
+  const found = pages.findIndex(page => page.id === selected);
+  /** When the selected page leaves the list, the page at its former position takes over. */
+  const lastIndex = useRef(0);
+  const current = found >= 0 ? found : Math.max(0, Math.min(lastIndex.current, pages.length - 1));
+  lastIndex.current = current;
   const currentRef = useRef(current);
   currentRef.current = current;
   const pagesRef = useRef(pages);
@@ -48,7 +61,7 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
     const index = Math.max(0, Math.min(list.length - 1, next));
     const page = list[index];
     if (!page) return;
-    setSelected(index);
+    setSelected(page.id);
     changed.current?.(page.id);
     if (focus) tabs.current.get(page.id)?.focus();
   }
@@ -63,9 +76,26 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
     else node.scrollLeft = left;
   }
 
+  /** Size the track to the page in view, blending two pages' heights while a turn passes between them. */
+  function fit() {
+    const node = track.current;
+    if (!node || !node.clientWidth) return;
+    const slides = node.children as HTMLCollectionOf<HTMLElement>;
+    const position = Math.max(0, Math.min(slides.length - 1, node.scrollLeft / node.clientWidth));
+    const from = Math.floor(position), to = Math.min(slides.length - 1, from + 1);
+    const start = slides[from]?.offsetHeight ?? 0, end = slides[to]?.offsetHeight ?? start;
+    const height = Math.ceil(start + (end - start) * (position - from));
+    node.style.height = height > 0 ? `${height}px` : '';
+  }
+
+  // A page that leaves the list hands its place over without reporting a turn the user did not make.
+  const shown = pages[current]?.id;
+  useEffect(() => { if (shown && shown !== selected) setSelected(shown); }, [shown, selected]);
+
   // The first frame shows the remembered page without animating towards it.
-  useLayoutEffect(() => { align('auto'); aligned.current = true; }, []);
+  useLayoutEffect(() => { align('auto'); fit(); aligned.current = true; }, []);
   useEffect(() => { if (aligned.current) align(motion()); }, [current]);
+  useLayoutEffect(fit);
 
   useEffect(() => {
     const node = track.current;
@@ -83,17 +113,25 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
       }
       if (index !== currentRef.current) select(index);
     };
-    const scroll = () => { window.clearTimeout(timer); timer = window.setTimeout(() => settle(false), SETTLE_MS); };
+    const scroll = () => { fit(); window.clearTimeout(timer); timer = window.setTimeout(() => settle(false), SETTLE_MS); };
     const ended = () => settle(true);
     node.addEventListener('scroll', scroll, {passive: true});
     node.addEventListener('scrollend', ended);
-    const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => align('auto'));
+    // Only a width change moves the snap points; the track's own height comes from fit().
+    let width = node.clientWidth, frame = 0;
+    const observe = (callback: () => void) => typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(callback);
+    const resize = observe(() => { if (node.clientWidth !== width) { width = node.clientWidth; align('auto'); } });
+    // Refit a frame later so resizing the track never re-enters the observer loop that reported its pages.
+    const content = observe(() => { window.cancelAnimationFrame(frame); frame = window.requestAnimationFrame(fit); });
     resize?.observe(node);
+    for (const slide of Array.from(node.children)) content?.observe(slide);
     return () => {
       window.clearTimeout(timer);
       node.removeEventListener('scroll', scroll);
       node.removeEventListener('scrollend', ended);
+      window.cancelAnimationFrame(frame);
       resize?.disconnect();
+      content?.disconnect();
     };
   }, []);
 

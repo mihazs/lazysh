@@ -1520,13 +1520,26 @@ class NativeWorkspaceTest {
             (()=>{const page=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page")})).find(node=>!node.inert);
               return Boolean(page) && Math.abs(page.getBoundingClientRect().left-page.parentElement.getBoundingClientRect().left)<2;})()
         """
+        // The dots and the shown tabpanel's label must follow every swipe in the real WebView.
+        val indicated = """
+            (()=>{const carousel=document.querySelector(${JSONObject.quote("$menu .workspace-tools-carousel")});
+              const pages=Array.from(carousel?.querySelectorAll('.workspace-tools-page')??[]),shown=pages.findIndex(node=>!node.inert);
+              const tabs=Array.from(carousel?.querySelectorAll('[role=tab]')??[]),page=pages[shown];
+              if(!page||carousel.getAttribute('aria-roledescription')!=='carousel')return false;
+              if(pages.length<2)return page.getAttribute('aria-roledescription')==='page';
+              const tab=tabs.find(node=>node.getAttribute('aria-controls')===page.id);
+              return tabs.length===pages.length&&page.getAttribute('role')==='tabpanel'&&page.getAttribute('aria-roledescription')==='page'
+                &&tabs.every(node=>node.getAttribute('aria-selected')===String(node===tab))
+                &&page.getAttribute('aria-label')===tab.getAttribute('aria-label')+', '+(shown+1)+' of '+pages.length
+                &&pages.every(node=>node===page||node.getAttribute('aria-hidden')==='true');})()
+        """
         for (attempt in 0 until 4) {
-            awaitDocument(scenario, "workspace tools page settled", settled, deadline = deadline)
+            awaitDocument(scenario, "workspace tools page settled", "$settled && $indicated", deadline = deadline)
             val offset = evaluate(scenario, pageOffset).toInt()
             if (offset == 0) break
             swipeWorkspaceToolPages(scenario, menu, offset > 0)
             val remaining = if (offset > 0) offset - 1 else offset + 1
-            awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled", deadline = deadline)
+            awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled && $indicated", deadline = deadline)
         }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
