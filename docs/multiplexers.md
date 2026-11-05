@@ -155,14 +155,21 @@ their positional argument; other agents start without one.
 runs until you confirm. In order, the host runs:
 
 ```sh
+command -v -- <agent executable>                                      # agent only
 git -C <repository> worktree add -b <branch> -- <path> <base>        # worktree only
 herdr --session <server> workspace create --no-focus --label <label> --cwd <directory>
-command -v -- <agent executable>                                      # agent only
 herdr --session <server> agent start <name> --kind <kind> --pane <new root pane> --timeout 60000 [-- <prompt>]
 ```
 
-Each argument is a single POSIX-quoted word inside `sh -c`; nothing is
-interpolated by a shell. Branch names follow `git check-ref-format --branch`
+The shown commands are POSIX `sh` syntax, and each one runs under `sh` with
+exactly those arguments. The SSH exec channel passes its command string to your
+login shell, so lazysh sends a fixed `sh -c '"$@" …' sh` wrapper followed by
+each argument as its own single-quoted word, with `'` and `\` written as `"'"`
+and `"\\"`. POSIX login shells (such as sh, dash, bash, zsh and ksh) and fish read every
+such word literally, so quotes, `;`, `$(…)` and backticks in labels, paths,
+branches or prompts, including directory names reported by the host, are never
+run as shell syntax. Other login shells, such as csh, tcsh or nushell, are not
+covered. Branch names follow `git check-ref-format --branch`
 rules; labels, paths and prompts must be one line without backslashes, paths must
 be absolute without `.` or `..` segments, and a base or prompt cannot start with
 `-`. The agent starts only through Herdr's `agent start` in the new workspace's
@@ -170,7 +177,8 @@ root pane, which waits for Herdr to detect the agent as ready. No keystrokes are
 sent to an existing pane. On success, lazysh opens the new workspace.
 
 Host errors are shown verbatim, limited to 2,000 characters with terminal
-control characters removed. When the first command fails, nothing was created.
+control characters removed. When the agent check, the worktree step or (without
+a worktree) the workspace step fails, nothing was created.
 When a later step fails (for example the worktree was created but `herdr
 workspace create` or the agent start failed), the dialog lists what already
 exists and offers to open the workspace. Nothing is rolled back: remove an unwanted
@@ -229,9 +237,14 @@ also needs `git`. It creates a temporary repository, runs each step through the 
 shows the new worktree, the Herdr snapshot shows a workspace labelled with the branch
 whose pane directory is the worktree, and a stub `codex` on `PATH` started in that
 pane with the literal prompt. Hostile but valid branch names and prompts containing
-`$(…)` and quotes stay literal; a duplicate branch creates nothing, and a missing agent
-leaves the worktree and workspace in place. The real SSH channel itself is covered by
-the existing OpenSSH fixtures, not by this case.
+`$(…)` and quotes stay literal; a duplicate branch or a missing agent creates
+nothing. The real SSH channel itself is covered by the existing OpenSSH fixtures, not
+by this case. `herdr_create::tests::login_shells_read_each_argv_word_literally` and
+the agent detection test run the generated command strings as `<shell> -c` under
+`/bin/sh` and every installed bash, zsh and fish, with values containing `'`, `\`,
+`;`, `$(…)` and backticks, and assert the argv arrives literally and nothing is
+created. Fish is skipped with a message when absent; CI installs it in
+`native-linux-runtimes` and sets `LAZYSH_REQUIRE_FISH=1` so it cannot be skipped there.
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 

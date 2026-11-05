@@ -87,9 +87,9 @@ test('worktree dialog requires an explicit agent choice and keeps partial result
   expect(plan!.request.agent.name).toMatch(/^codex-[0-9a-f]{8}$/);
   const name=plan!.request.agent.name;
   await expect(dialog.locator('ol code')).toHaveText([
+    "'command' '-v' '--' 'codex'",
     "'git' '-C' '/srv/app' 'worktree' 'add' '-b' 'feat/review' '--' '/srv/app-worktrees/review' 'main'",
     "'herdr' '--session' 'default' 'workspace' 'create' '--no-focus' '--label' 'feat/review' '--cwd' '/srv/app-worktrees/review'",
-    "'command' '-v' '--' 'codex'",
     `'herdr' '--session' 'default' 'agent' 'start' '${name}' '--kind' 'codex' '--pane' '<new-workspace-pane>' '--timeout' '60000' '--' 'review '\\''this'\\'''`,
   ]);
   await expect(dialog.getByText('becomes the first pane of the new workspace')).toBeVisible();

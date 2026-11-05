@@ -1,7 +1,8 @@
 //! Explicit Herdr workspace, Git worktree and agent creation.
 //!
-//! Every remote step is an exact argv: each element is POSIX-quoted, the
-//! script runs under `sh -c`, and nothing is typed into an existing pane. An
+//! Every remote step is an exact argv run by `sh` as `"$@"`; the SSH login
+//! shell parses each element as one quoted word and nothing else (see
+//! [`script`]), and nothing is typed into an existing pane. An
 //! agent starts only through `herdr agent start` in the new workspace's root
 //! pane after the renderer showed this plan and the user confirmed it.
 use crate::app_lock::AccessLease;
@@ -57,8 +58,8 @@ fn agent(kind: &str) -> Result<(&'static str, &'static str, bool)> {
         .ok_or_else(|| invalid("Unsupported agent kind"))
 }
 
-/// Free text is single-line, bounded and free of backslashes, so one quoting
-/// layer is exact for POSIX shells and for login shells such as fish.
+/// Free text is single-line, bounded and free of backslashes, so the plan's
+/// POSIX-quoted command stays a faithful copy-paste of what runs.
 fn text(value: &str, max: usize, message: &str) -> Result<()> {
     if value.trim().is_empty()
         || value.len() > max
@@ -248,6 +249,13 @@ fn validate<'a>(name: &str, request: &'a CreateRequest) -> Result<Validated<'a>>
 fn plan_steps(name: &str, request: &CreateRequest, pane: &str) -> Result<Vec<Step>> {
     let valid = validate(name, request)?;
     let mut steps = vec![];
+    // A missing agent fails before anything exists on the host.
+    if let Some((_, executable, _, _)) = valid.agent {
+        steps.push(step(
+            "agentCheck",
+            args(&["command", "-v", "--", executable]),
+        ));
+    }
     if let Some([repository, branch, path, base]) = valid.worktree {
         steps.push(step(
             "worktree",
@@ -271,11 +279,7 @@ fn plan_steps(name: &str, request: &CreateRequest, pane: &str) -> Result<Vec<Ste
             valid.directory,
         ]),
     ));
-    if let Some((kind, executable, agent, prompt)) = valid.agent {
-        steps.push(step(
-            "agentCheck",
-            args(&["command", "-v", "--", executable]),
-        ));
+    if let Some((kind, _, agent, prompt)) = valid.agent {
         let timeout = AGENT_START_MS.to_string();
         let mut argv = args(&[
             "herdr",
@@ -307,10 +311,35 @@ pub(crate) struct Output {
 pub(crate) trait Remote {
     async fn run(&mut self, argv: &[String], timeout: Duration) -> Result<Output>;
 }
-fn script(argv: &[String]) -> String {
-    let command = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
-    let script = format!("{command} 2>&1; printf '\\n{STATUS_MARK}%s\\n' \"$?\"");
-    format!("sh -c {}", quote(&script))
+/// One word that POSIX shells (sh, dash, bash, zsh, ksh) and fish all read as
+/// exactly `value`: single quotes hold everything except `'` and `\`, which go
+/// in double quotes (`"'"`, `"\\"`), the only forms both families parse alike.
+/// Fish treats `\'` and `\\` inside single quotes as escapes, so POSIX `'\''`
+/// quoting is not exact there.
+pub(crate) fn login_word(value: &str) -> String {
+    let mut word = String::from("'");
+    for c in value.chars() {
+        match c {
+            '\'' => word.push_str("'\"'\"'"),
+            '\\' => word.push_str("'\"\\\\\"'"),
+            c => word.push(c),
+        }
+    }
+    word.push('\'');
+    word
+}
+/// The SSH exec channel hands this string to the user's login shell, which
+/// parses it exactly once: a fixed wrapper and each argv element as its own
+/// [`login_word`]. `sh` then runs the argv as `"$@"`, so no element is ever
+/// parsed as shell syntax, and appends the exit status.
+pub(crate) fn script(argv: &[String]) -> String {
+    let wrapper = format!("\"$@\" 2>&1; s=$?; echo; echo {STATUS_MARK}$s");
+    let mut command = format!("sh -c {} sh", login_word(&wrapper));
+    for arg in argv {
+        command.push(' ');
+        command.push_str(&login_word(arg));
+    }
+    command
 }
 fn parse_status(raw: &str) -> Result<Output> {
     let invalid = || SshError::new("invalid_output", "Remote command status is missing");
@@ -404,9 +433,10 @@ fn started(text: &str, name: &str) -> bool {
     })
 }
 
-/// Runs the confirmed plan. The first step's failure is an error (nothing was
-/// created); later failures are reported with what already exists, which is
-/// kept as-is: no worktree, branch or workspace is removed automatically.
+/// Runs the confirmed plan. A failure before the worktree or workspace exists
+/// is an error (nothing was created); later failures are reported with what
+/// already exists, which is kept as-is: no worktree, branch or workspace is
+/// removed automatically.
 pub(crate) async fn execute(
     remote: &mut impl Remote,
     name: &str,
@@ -425,7 +455,7 @@ pub(crate) async fn execute(
         }
     };
     for index in 0..steps.len() {
-        let first = index == 0;
+        let first = outcome.worktree.is_none() && outcome.workspace_id.is_none();
         let stage = steps[index].stage;
         let timeout = match stage {
             "worktree" => Duration::from_secs(120),
@@ -484,14 +514,14 @@ pub struct AgentKind {
 /// Lists supported agents whose canonical executable `command -v` resolves to an
 /// executable file (dash's `command -v` also reports non-executable files).
 pub(crate) async fn agent_kinds(remote: &mut impl Remote) -> Result<Vec<AgentKind>> {
-    let mut probe = String::new();
-    for (_, executable, _, _) in AGENTS {
-        probe.push_str(&format!(
-            "if p=$(command -v -- {0} 2>/dev/null) && [ -x \"$p\" ]; then printf '%s\\n' {0}; fi; ",
-            quote(executable)
-        ));
-    }
-    let argv = args(&["sh", "-c", probe.trim_end()]);
+    // Executable names are positional parameters, so the probe has no quotes.
+    let mut argv = args(&[
+        "sh",
+        "-c",
+        r#"for e in "$@"; do if p=$(command -v -- "$e" 2>/dev/null) && [ -x "$p" ]; then echo "$e"; fi; done"#,
+        "sh",
+    ]);
+    argv.extend(AGENTS.iter().map(|row| row.1.to_owned()));
     let output = remote.run(&argv, Duration::from_secs(15)).await?;
     if output.status != 0 {
         return Err(SshError::new("remote_command_failed", failed(&output)));

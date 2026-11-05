@@ -10,12 +10,10 @@ const step=(stage:string,argv:string[])=>({stage,argv,command:argv.map(quote).jo
 function plan(server:string,{target,agent}:Request) {
   const steps=[];
   const worktree=target.type==='worktree';
+  if(agent)steps.push(step('agentCheck',['command','-v','--',agent.kind]));
   if(worktree)steps.push(step('worktree',['git','-C',target.repository,'worktree','add','-b',target.branch,'--',target.path,target.base]));
   steps.push(step('workspace',['herdr','--session',server,'workspace','create','--no-focus','--label',worktree?target.branch:target.label,'--cwd',worktree?target.path:target.directory]));
-  if(agent){
-    steps.push(step('agentCheck',['command','-v','--',agent.kind]));
-    steps.push(step('agent',['herdr','--session',server,'agent','start',agent.name,'--kind',agent.kind,'--pane','<new-workspace-pane>','--timeout','60000',...(agent.prompt?['--',agent.prompt]:[])]));
-  }
+  if(agent)steps.push(step('agent',['herdr','--session',server,'agent','start',agent.name,'--kind',agent.kind,'--pane','<new-workspace-pane>','--timeout','60000',...(agent.prompt?['--',agent.prompt]:[])]));
   return {steps};
 }
 const tree={

@@ -1,18 +1,67 @@
 use super::*;
 use futures_util::FutureExt;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::process::Command;
 
-/// Runs each step exactly as the SSH exec channel would: `sh -c <script>`.
-struct Local<F: Fn(&mut Command)>(F);
+/// Runs each step exactly as the SSH exec channel would: the login shell gets
+/// `-c <script>`.
+struct Local<F: Fn(&mut Command)> {
+    login: Vec<String>,
+    configure: F,
+}
+fn sh<F: Fn(&mut Command)>(configure: F) -> Local<F> {
+    Local {
+        login: args(&["/bin/sh"]),
+        configure,
+    }
+}
 impl<F: Fn(&mut Command)> Remote for Local<F> {
     async fn run(&mut self, argv: &[String], _timeout: Duration) -> Result<Output> {
-        let mut command = Command::new("/bin/sh");
-        (self.0)(&mut command);
-        let output = command.arg("-c").arg(script(argv)).output()?;
-        assert!(output.status.success(), "wrapper must always exit 0");
+        let mut command = Command::new(&self.login[0]);
+        (self.configure)(&mut command);
+        let output = command
+            .args(&self.login[1..])
+            .arg("-c")
+            .arg(script(argv))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "wrapper must always exit 0 under {:?}: {}",
+            self.login,
+            String::from_utf8_lossy(&output.stderr)
+        );
         parse_status(&String::from_utf8(output.stdout).unwrap())
     }
+}
+fn on_path(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+/// `/bin/sh` plus every installed bash, zsh and fish, invoked as sshd invokes a
+/// login shell (`<shell> -c <command>`), without user startup files. Fish is
+/// skipped explicitly when absent, unless `LAZYSH_REQUIRE_FISH` is set (CI).
+fn login_shells() -> Vec<Vec<String>> {
+    let mut shells = vec![args(&["/bin/sh"])];
+    for (name, flags) in [
+        ("bash", &["--norc"][..]),
+        ("zsh", &["-f"]),
+        ("fish", &["--no-config"]),
+    ] {
+        match on_path(name) {
+            Some(path) => {
+                let mut login = vec![path.to_string_lossy().into_owned()];
+                login.extend(args(flags));
+                shells.push(login);
+            }
+            None if name == "fish" && std::env::var_os("LAZYSH_REQUIRE_FISH").is_some() => {
+                panic!("LAZYSH_REQUIRE_FISH is set but fish is not on PATH")
+            }
+            None => eprintln!("skipping the {name} login shell: not installed"),
+        }
+    }
+    shells
 }
 /// Scripted replies; records every argv it receives.
 #[derive(Default)]
@@ -61,12 +110,12 @@ fn plan_shows_exact_quoted_argv_for_hostile_literals() {
     assert_eq!(
         commands,
         [
-            ("workspace", "'herdr' '--session' 's'\\''$(x)' 'workspace' 'create' '--no-focus' '--label' 'a;$(touch nope)'\\''' '--cwd' '/srv/it'\\''s here'"),
             ("agentCheck", "'command' '-v' '--' 'claude'"),
+            ("workspace", "'herdr' '--session' 's'\\''$(x)' 'workspace' 'create' '--no-focus' '--label' 'a;$(touch nope)'\\''' '--cwd' '/srv/it'\\''s here'"),
             ("agent", "'herdr' '--session' 's'\\''$(x)' 'agent' 'start' 'claude-1a2b' '--kind' 'claude' '--pane' '<new-workspace-pane>' '--timeout' '60000' '--' 'say '\\''hi'\\'' $(id)'"),
         ]
     );
-    assert_eq!(plan.steps[0].argv[7], "a;$(touch nope)'");
+    assert_eq!(plan.steps[1].argv[7], "a;$(touch nope)'");
 }
 
 #[test]
@@ -145,7 +194,7 @@ fn rejects_hostile_or_invalid_branches_paths_and_agent_fields() {
 fn wrapper_preserves_literal_argv_and_status_through_real_sh() {
     let hostile = "a'b $(touch nope) `id` \"q\" ; | &".to_owned();
     let dir = tempfile::tempdir().unwrap();
-    let mut local = Local(|c: &mut Command| {
+    let mut local = sh(|c: &mut Command| {
         c.current_dir(dir.path());
     });
     let out = now(local.run(
@@ -165,6 +214,48 @@ fn wrapper_preserves_literal_argv_and_status_through_real_sh() {
     assert_eq!((out.status, out.text.as_str()), (3, "bad\n"));
     assert!(!dir.path().join("nope").exists());
     assert!(parse_status("no marker").is_err());
+}
+
+/// Values a hostile host directory name, branch or prompt could carry. The
+/// fish cases broke out of POSIX `'\''` quoting nested inside `sh -c '…'`.
+const HOSTILE: &[&str] = &[
+    "a' ; touch INJECTED1 ; '",
+    "a'; touch INJECTED3 #",
+    "it's",
+    "$(touch INJECTED4)",
+    "`touch INJECTED5`",
+    "\\'",
+    "\\\\'\\",
+    "back\\slash",
+    "\"q\" $HOME ~ * ? [a] {b,c} (d) %self $status",
+    "; | & < > ! #",
+    "two\nlines",
+    "",
+];
+
+#[test]
+fn login_shells_read_each_argv_word_literally() {
+    for login in login_shells() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut local = Local {
+            login: login.clone(),
+            configure: |c: &mut Command| {
+                c.current_dir(dir.path()).env("HOME", home.path());
+            },
+        };
+        let mut argv = args(&["printf", "%s|"]);
+        argv.extend(args(HOSTILE));
+        let out = now(local.run(&argv, Duration::ZERO)).unwrap();
+        let expected: String = HOSTILE.iter().map(|v| format!("{v}|")).collect();
+        assert_eq!(
+            (out.status, out.text.as_str()),
+            (0, expected.as_str()),
+            "{login:?}"
+        );
+        let created: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(created.is_empty(), "{login:?} created {created:?}");
+    }
 }
 
 /// The worktree step succeeded and the workspace step failed: report, never roll back.
@@ -240,27 +331,45 @@ fn reports_partial_success_without_rolling_back() {
         ])
     );
 
-    // A missing agent binary stops before anything is sent to the new pane.
+    // A missing agent binary fails first, before any worktree or workspace exists.
     let mut remote = Scripted {
-        replies: [(0, String::new()), (0, CREATED.into()), (1, String::new())].into(),
+        replies: [(1, String::new())].into(),
         ..Default::default()
     };
-    let outcome = now(execute(
+    let error = now(execute(
         &mut remote,
         "default",
         &worktree_request(serde_json::json!({"kind":"codex","name":"codex-a1"})),
     ))
-    .unwrap();
-    assert_eq!(outcome.workspace_id.as_deref(), Some("w7"));
-    assert_eq!(outcome.failure.unwrap().stage, "agentCheck");
-    assert_eq!(remote.calls.len(), 3);
+    .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(&error).unwrap()["message"],
+        "codex was not found on the host PATH (command -v)"
+    );
+    assert_eq!(remote.calls, [args(&["command", "-v", "--", "codex"])]);
+
+    // A failing worktree step after a passing agent check still created nothing.
+    let mut remote = Scripted {
+        replies: [
+            (0, "/usr/bin/codex\n".into()),
+            (128, "fatal: invalid reference: main\n".into()),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    assert!(now(execute(
+        &mut remote,
+        "default",
+        &worktree_request(serde_json::json!({"kind":"codex","name":"codex-a1"})),
+    ))
+    .is_err());
 
     // The agent starts in the created root pane, and Herdr errors stay readable.
     let mut remote = Scripted {
         replies: [
+            (0, "/usr/bin/codex\n".into()),
             (0, String::new()),
             (0, CREATED.into()),
-            (0, "/usr/bin/codex\n".into()),
             (
                 1,
                 format!(
@@ -328,18 +437,26 @@ fn agent_detection_lists_only_executables_found_by_command_v() {
             .unwrap();
     }
     std::fs::write(dir.path().join("claude"), "not executable").unwrap();
-    let mut local = Local(|c: &mut Command| {
-        c.env_clear().env("PATH", dir.path());
-    });
-    let kinds = now(agent_kinds(&mut local)).unwrap();
-    let found: Vec<_> = kinds
-        .iter()
-        .map(|k| (k.kind, k.executable, k.prompt))
-        .collect();
-    assert_eq!(
-        found,
-        [("codex", "codex", true), ("cursor", "cursor-agent", false)]
-    );
+    for login in login_shells() {
+        let mut local = Local {
+            login: login.clone(),
+            configure: |c: &mut Command| {
+                c.env_clear()
+                    .env("PATH", dir.path())
+                    .env("HOME", dir.path());
+            },
+        };
+        let kinds = now(agent_kinds(&mut local)).unwrap();
+        let found: Vec<_> = kinds
+            .iter()
+            .map(|k| (k.kind, k.executable, k.prompt))
+            .collect();
+        assert_eq!(
+            found,
+            [("codex", "codex", true), ("cursor", "cursor-agent", false)],
+            "{login:?}"
+        );
+    }
 }
 
 #[test]
@@ -414,7 +531,7 @@ fn real_herdr_worktree_workspace_and_agent() {
         }
     }
     let _guard = Server(server);
-    let mut remote = Local(configure);
+    let mut remote = sh(configure);
     let shell = |remote: &mut Local<_>, text: &str| {
         let out = now(remote.run(&args(&["sh", "-c", text]), Duration::ZERO)).unwrap();
         assert_eq!(out.status, 0, "{text}: {}", out.text);
@@ -551,9 +668,9 @@ fn real_herdr_worktree_workspace_and_agent() {
         .contains("already exists"));
     assert_eq!(count(&mut remote), before);
 
-    // An agent missing from PATH leaves the created worktree and workspace in place.
+    // An agent missing from PATH fails first: no worktree, branch or workspace.
     let kept = format!("{repo_text}-worktrees/kept");
-    let partial = now(execute(
+    let missing = now(execute(
         &mut remote,
         "default",
         &request(serde_json::json!({
@@ -561,9 +678,27 @@ fn real_herdr_worktree_workspace_and_agent() {
             "agent":{"kind":"maki","name":"maki-lazysh1"},
         })),
     ))
-    .unwrap();
-    assert_eq!(partial.failure.as_ref().unwrap().stage, "agentCheck");
-    assert!(partial.workspace_id.is_some() && std::path::Path::new(&kept).join("sub/f").exists());
-    assert_eq!(count(&mut remote), before + 1);
+    .unwrap_err();
+    assert!(serde_json::to_value(&missing).unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("maki was not found"));
+    assert!(!std::path::Path::new(&kept).exists());
+    let branch_check = args(&[
+        "git",
+        "-C",
+        &repo_text,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "refs/heads/kept",
+    ]);
+    assert_ne!(
+        now(remote.run(&branch_check, Duration::ZERO))
+            .unwrap()
+            .status,
+        0
+    );
+    assert_eq!(count(&mut remote), before);
     shell(&mut remote, "herdr --session default server stop");
 }
