@@ -481,12 +481,13 @@ pub struct AgentKind {
     executable: &'static str,
     prompt: bool,
 }
-/// Lists supported agents whose canonical executable `command -v` resolves.
+/// Lists supported agents whose canonical executable `command -v` resolves to an
+/// executable file (dash's `command -v` also reports non-executable files).
 pub(crate) async fn agent_kinds(remote: &mut impl Remote) -> Result<Vec<AgentKind>> {
     let mut probe = String::new();
     for (_, executable, _, _) in AGENTS {
         probe.push_str(&format!(
-            "if command -v -- {0} >/dev/null 2>&1; then printf '%s\\n' {0}; fi; ",
+            "if p=$(command -v -- {0} 2>/dev/null) && [ -x \"$p\" ]; then printf '%s\\n' {0}; fi; ",
             quote(executable)
         ));
     }
@@ -681,6 +682,6 @@ pub async fn herdr_repository(
         .await
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "herdr_create_tests.rs"]
 mod tests;
