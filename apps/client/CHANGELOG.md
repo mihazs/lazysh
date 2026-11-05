@@ -1,5 +1,29 @@
 # @lazysh/client
 
+## 1.12.0
+
+### Minor Changes
+
+- abe7b15: Import SSH private keys from a file, reject public-key files with a specific error at inspection and connection, and document host-key pin custody.
+- 62fe53b: Add an opt-in per-host option that asks the SSH server to set `LC_TERMINAL=lazysh` for new SSH terminals and multiplexer attachments. It is off by default, needs the server's `AcceptEnv` to admit `LC_TERMINAL`, and is not sent by Mosh or ET sessions.
+- 86e89e4: Show plan, question and turn-state cards in native Chat. The companion projects recorded Claude Code `TodoWrite`, `AskUserQuestion` and `ExitPlanMode` calls, Codex `update_plan`, `request_user_input` and plan-mode items, and OpenCode `todowrite` and `question` parts into display-only cards. Conversation views for Claude Code, Codex and OpenCode V1 report a working, waiting, idle or stopped turn derived from recorded lifecycle records; anything else stays unknown. Question cards list the options and send the user to the terminal to answer, because Chat cannot choose options in an agent prompt. Existing tool cards, cursors and prompt targets are unchanged.
+
+### Patch Changes
+
+- 8826db9: Make recorded conversation draft controls compact and show attachments in a focused mobile view while retaining explicit staging, upload and confirmed-input behavior.
+- b765278: Add support, security and code-of-conduct policies and a first-contribution walkthrough without changing runtime behavior.
+- 7dab9a5: Admit each owned Android Mosh resize acceptance phase only after its observation stays unchanged, so a Mosh frame drawn before Herdr repaints or an intermediate keyboard layout no longer becomes the phase baseline. This test-only repair keeps every original resize, keyboard-crossing and guarded Herdr Chat receiver assertion and does not change terminal behavior.
+- 9c5fa30: Display provider-reported prepaid spend-cap percentages without estimating unknown quotas or changing uncapped balances.
+- f86dd1a: Keep a terminal reader in history while output streams and across width, height and Mosh viewport resizes, and keep bottom-following Mosh sessions following after the viewport grows.
+- 19998d0: Reduce workspace clutter around the session manager action.
+- Updated dependencies [5406843]
+- Updated dependencies [816f09b]
+  - @lazysh/account-usage@1.12.0
+  - @lazysh/common@1.12.0
+  - @lazysh/display-idle@1.12.0
+  - @lazysh/et-transport@1.12.0
+  - @lazysh/mosh-transport@1.12.0
+
 ## 1.11.0
 
 ### Minor Changes
