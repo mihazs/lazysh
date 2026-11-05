@@ -2020,7 +2020,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           {remoteActive && <>
             <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
-            {active?.attached?.kind!=='tmux' && <p className="muted">{t('navigationManagerHint')}</p>}
             {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{

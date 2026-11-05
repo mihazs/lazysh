@@ -928,13 +928,16 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   await page.evaluate(()=>Reflect.get(window,'restoreNavigationReader')());
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   await expect(setup).toBeHidden();
-  for(const [locale,hint] of [
-    ['pt-BR','Use o gerenciador de sessões para descobrir e gerenciar sessões tmux, Herdr ou Zellij.'],
-    ['es','Usa el gestor de sesiones para descubrir y gestionar sesiones tmux, Herdr o Zellij.'],
-    ['en','Use the session manager to discover and manage tmux, Herdr or Zellij sessions.'],
+  await page.getByRole('button',{name:'Open session manager',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  for(const [locale,action,status] of [
+    ['pt-BR','Abrir gerenciador de sessões','O gerenciador de sessões está aberto na área de trabalho.'],
+    ['es','Abrir gestor de sesiones','El gestor de sesiones está abierto en el área de trabajo.'],
+    ['en','Open session manager','The session manager is open in the workspace.'],
   ]){
     await page.evaluate(async locale=>{const {uiI18n}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(locale);},locale);
-    await expect(page.getByText(hint,{exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
+    await expect(page.getByRole('status').filter({hasText:status})).toBeVisible();
   }
   for(const width of (phone?[320,600]:[768,1280])){
     await page.setViewportSize({width,height:420});
