@@ -1051,6 +1051,26 @@ mod desktop {
         session.credits.add_permits(bytes as usize);
         Ok(())
     }
+    /// Outstanding bytes plus the zero-credit and over-credit acknowledgment results.
+    #[cfg(test)]
+    pub(super) type RejectedOutputAcks = (u32, Result<(), String>, Result<(), String>);
+    #[cfg(test)]
+    pub(super) fn rejected_output_acks(
+        state: &LocalState,
+        id: &str,
+    ) -> Result<RejectedOutputAcks, String> {
+        let session = state.0.session(id)?;
+        session
+            .creation
+            .with_transport_output(&session.adopted, || {
+                let pending = *session
+                    .inflight
+                    .lock()
+                    .map_err(|_| "Local output lock failed")?;
+                Ok((pending, ack(state, id, 0), ack(state, id, pending + 1)))
+            })
+            .map_err(|_| "Local output access unavailable".to_string())?
+    }
     pub fn disconnect(state: &LocalState, id: &str) {
         if let Ok(sessions) = state.0.sessions.lock() {
             if let Some(session) = sessions.get(id) {
@@ -1562,8 +1582,11 @@ mod tests {
                 assert!(pending <= 256 * 1024);
             }
             assert!(pending > 240 * 1024, "pending={pending}");
-            assert!(desktop::ack(&state, &connected.session_id, 0).is_err());
-            assert!(desktop::ack(&state, &connected.session_id, pending + 1).is_err());
+            let (outstanding, zero, excessive) =
+                desktop::rejected_output_acks(&state, &connected.session_id).unwrap();
+            assert!(outstanding >= pending);
+            assert!(zero.is_err());
+            assert!(excessive.is_err());
             desktop::ack(&state, &connected.session_id, 16384).unwrap();
             let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
                 .await
