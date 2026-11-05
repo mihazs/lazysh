@@ -324,7 +324,7 @@ async fn rpc<T: Serialize>(
                 true,
                 crate::herdr_path::select(
                     &command(name, false),
-                    handle.herdr_unix.load(Ordering::Acquire),
+                    crate::herdr_path::cached(handle) == Some(true),
                 ),
             )
             .await

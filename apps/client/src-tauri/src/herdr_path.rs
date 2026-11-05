@@ -51,19 +51,43 @@ fn check_live(
     Ok(())
 }
 
+// Per-SSH-handle host evidence: unknown until probed, then reused for the life
+// of that connection. A reconnect creates a new handle and probes again.
+const UNKNOWN: u8 = 0;
+const UNIX: u8 = 1;
+const NOT_UNIX: u8 = 2;
+
+pub(crate) fn new_cache() -> std::sync::atomic::AtomicU8 {
+    std::sync::atomic::AtomicU8::new(UNKNOWN)
+}
+
+/// The cached probe result for this SSH handle, if the host was already probed.
+pub(crate) fn cached(handle: &crate::ssh::SshHandle) -> Option<bool> {
+    match handle.herdr_unix.load(std::sync::atomic::Ordering::Acquire) {
+        UNIX => Some(true),
+        NOT_UNIX => Some(false),
+        _ => None,
+    }
+}
+
 pub(crate) async fn admit(
     session: &crate::ssh::Session,
     lease: &crate::app_lock::AccessLease,
 ) -> crate::ssh::Result<bool> {
-    use std::sync::atomic::Ordering;
     check_live(session, lease)?;
-    if session.handle.herdr_unix.load(Ordering::Acquire) {
-        return Ok(true);
+    if let Some(known) = cached(&session.handle) {
+        return Ok(known);
     }
-    let positive = optional_probe(crate::companion::positive_unix(session, lease).await)?;
+    let probed = crate::companion::positive_unix(session, lease).await;
+    // Only a completed probe is cached; a transport error is retried next time.
+    let definitive = probed.is_ok();
+    let positive = optional_probe(probed)?;
     check_live(session, lease)?;
-    if positive {
-        session.handle.herdr_unix.store(true, Ordering::Release);
+    if definitive {
+        session.handle.herdr_unix.store(
+            if positive { UNIX } else { NOT_UNIX },
+            std::sync::atomic::Ordering::Release,
+        );
     }
     Ok(positive)
 }
@@ -130,16 +154,19 @@ mod tests {
     }
     #[test]
     fn trusted_default_is_found_after_path_and_hostile_paths_fail_closed() {
-        let home = tempfile::tempdir().unwrap();
-        fs::set_permissions(home.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let local = home.path().join(".local/bin");
+        let temp = tempfile::tempdir().unwrap();
+        // macOS TMPDIR is below the /var -> /private/var symlink, which the
+        // admission walk rejects by design; use the canonical directory.
+        let home = fs::canonicalize(temp.path()).unwrap();
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        let local = home.join(".local/bin");
         fs::create_dir_all(&local).unwrap();
         let fallback = local.join("herdr");
         executable(
             &fallback,
             "#!/bin/sh\nif [ \"${1-}\" = fd ]; then printf receipt >&3; else printf fallback; fi",
         );
-        let home = home.path().to_str().unwrap();
+        let home = home.to_str().unwrap();
         let result = run(home, "/usr/bin:/bin", "herdr --version");
         assert!(result.status.success());
         assert_eq!(result.stdout, b"fallback");

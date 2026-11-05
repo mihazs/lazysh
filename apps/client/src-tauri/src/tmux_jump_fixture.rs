@@ -1406,14 +1406,15 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK and Zellij"]
+#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK and Zellij (LAZYSH_TEST_ZELLIJ or /usr/bin/zellij)"]
 async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
     use crate::multiplexer::{Entry, MultiplexerKind};
     let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
+    let zellij = std::env::var("LAZYSH_TEST_ZELLIJ").unwrap_or_else(|_| "/usr/bin/zellij".into());
     for (kind, binary, user_install) in [
         (MultiplexerKind::Herdr, stock.as_str(), false),
         (MultiplexerKind::Herdr, stock.as_str(), true),
-        (MultiplexerKind::Zellij, "/usr/bin/zellij", false),
+        (MultiplexerKind::Zellij, zellij.as_str(), false),
     ] {
         let f = Fixture::with_mosh_mode_and_user_install(
             Some(std::path::Path::new(binary)),
@@ -1433,11 +1434,9 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
             let (source, _) = herdr_echo_source(&f, &state, &lease).await;
             let parent = state.session(&source.session_id).await.unwrap();
             if matches!(kind, MultiplexerKind::Herdr) && create_if_missing {
-                assert!(
-                    !parent
-                        .handle
-                        .herdr_unix
-                        .load(std::sync::atomic::Ordering::Acquire),
+                assert_eq!(
+                    crate::herdr_path::cached(&parent.handle),
+                    None,
                     "each new SSH handle starts without a cached host result"
                 );
             }
@@ -1449,11 +1448,9 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
             };
             let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
             if matches!(kind, MultiplexerKind::Herdr) {
-                assert!(
-                    parent
-                        .handle
-                        .herdr_unix
-                        .load(std::sync::atomic::Ordering::Acquire),
+                assert_eq!(
+                    crate::herdr_path::cached(&parent.handle),
+                    Some(true),
                     "Unix capability stays on the owning SSH handle"
                 );
             }
@@ -3548,10 +3545,7 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     let (app, state) = herdr_native_app(&f);
     let (source, _) = herdr_echo_source(&f, &state, &lease).await;
     let parent = state.session(&source.session_id).await.unwrap();
-    assert!(!parent
-        .handle
-        .herdr_unix
-        .load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(crate::herdr_path::cached(&parent.handle), None);
     let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
         .await
         .unwrap()

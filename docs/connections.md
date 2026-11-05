@@ -21,14 +21,23 @@ Auto retains its existing Mosh → ET → SSH order. The dialog identifies these
 
 The remote multiplexer must be installed and runnable. For Herdr, the remote
 command PATH takes precedence. On a positively identified Linux or macOS SSH
-host, lazysh can also use the official per-user `$HOME/.local/bin/herdr` location
-when that PATH has no Herdr. The executable and its parent directories must pass
-ownership, permission and no-symlink checks. The fallback requires trusted
-`/usr/bin/uname`, `/usr/bin/id` and `/usr/bin/stat`; hosts without them, including
-standard non-FHS NixOS layouts, retain PATH-only behavior. An unavailable Unix
-probe also retains PATH-only behavior; custom install directories must be on PATH.
-The capability result belongs to the current SSH connection, and a reconnect
-probes again. Selection is repeated per command and does not pin binary identity.
+host on x86_64 or arm64, lazysh can also use the official per-user
+`$HOME/.local/bin/herdr` location when that PATH has no Herdr. Positive
+identification uses the same host probe as the companion installer, so other CPU
+architectures (for example armv7 or riscv64) retain PATH-only behavior. The
+executable, `$HOME` and every parent directory must pass ownership, permission and
+no-symlink checks. The fallback fails closed, retaining PATH-only behavior, when:
+
+- `/usr/bin/uname`, `/usr/bin/id` or `/usr/bin/stat` is missing, as on standard
+  non-FHS NixOS layouts and on hosts without a merged `/usr` such as some
+  BusyBox systems that ship `/bin/uname` only;
+- any parent of `$HOME` is a symbolic link, as with a `/home` link to `/var/home`
+  on Fedora Atomic desktops;
+- the Unix probe is unavailable.
+
+Custom install directories must be on PATH. The probe result, positive or
+negative, belongs to the current SSH connection, and a reconnect probes again.
+Selection is repeated per command and does not pin binary identity.
 
 Mosh entry requires a Unix
 host and its private startup receipt; tmux also requires a verified display binding.

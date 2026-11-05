@@ -17,9 +17,27 @@ fn mosh_guard_startup_requires_the_exact_positive_fd_capability() {
     ] {
         assert!(!startup_fd_capability(rejected));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn mosh_guard_attach_receipt_runs_the_exact_guarded_startup_argv() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let herdr = bin.path().join("herdr");
+    std::fs::write(&herdr, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+    std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", &attach_receipt("own'ed $(x)")])
+        .env_clear()
+        .env("HOME", "/nonexistent")
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
     assert_eq!(
-        attach_receipt("owned"),
-        crate::herdr_path::with_path("herdr --session 'owned' --guarded-attach --startup-fd 3")
+        String::from_utf8(output.stdout).unwrap(),
+        "--session\nown'ed $(x)\n--guarded-attach\n--startup-fd\n3\n"
     );
 }
 

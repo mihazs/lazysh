@@ -714,7 +714,7 @@ impl client::Handler for HostVerifier {
 pub(crate) struct SshHandle {
     handle: Arc<client::Handle<HostVerifier>>,
     open_slots: Arc<Semaphore>,
-    pub(crate) herdr_unix: std::sync::atomic::AtomicBool,
+    pub(crate) herdr_unix: std::sync::atomic::AtomicU8,
     open_owner_gone: watch::Sender<bool>,
     forward_agent: crate::forward_agent::ForwardAgent,
     pub(crate) peer_address: Option<std::net::SocketAddr>,
@@ -1072,7 +1072,7 @@ where
     Ok(SshHandle {
         handle: Arc::new(handle),
         open_slots: Arc::new(Semaphore::new(4)),
-        herdr_unix: std::sync::atomic::AtomicBool::new(false),
+        herdr_unix: crate::herdr_path::new_cache(),
         open_owner_gone: watch::channel(false).0,
         forward_agent,
         peer_address: None,
@@ -4773,6 +4773,23 @@ mod tests {
                 original.as_bytes()
             );
         }
+    }
+    #[tokio::test]
+    async fn non_unix_herdr_probe_runs_once_per_ssh_handle() {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.server.legacy_exec.store(true, Ordering::SeqCst);
+        let probes = || fixture.server.commands.lock().unwrap().len();
+        assert!(!crate::herdr_path::admit(&fixture.session, &lease)
+            .await
+            .unwrap());
+        assert_eq!(probes(), 1, "the first admission probes the host");
+        assert!(!crate::herdr_path::admit(&fixture.session, &lease)
+            .await
+            .unwrap());
+        assert_eq!(probes(), 1, "a negative result is reused");
+        let reconnected = fixture.reconnect().await;
+        assert_eq!(crate::herdr_path::cached(&reconnected), None);
     }
     #[tokio::test]
     async fn cancelled_exec_closes_late_confirmation() {
