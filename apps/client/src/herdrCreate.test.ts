@@ -5,7 +5,7 @@ import type {HerdrTree} from './useHerdrNavigation';
 describe('Herdr creation validation',()=>{
   it('applies git branch name rules before any host call',()=>{
     for(const name of ['main','feat/x','fix/ssh-host_binding.2','$(touch${IFS}x)','a@b','ü'])expect(validBranch(name),name).toBe(true);
-    for(const name of ['','-x','HEAD','@','a..b','a b','a~1','a^','a:b','a?','a*','a[','a\\b','a/','/a','a//b','.a','a/.b','a.lock','a/b.lock/c','a@{1}','a.','a\nb','a\u007f','x'.repeat(201)])
+    for(const name of ['','-x','HEAD','@','a..b','a b','a~1','a^','a:b','a?','a*','a[','a\\b','a/','/a','a//b','.a','a/.b','a.lock','a/b.lock/c','a@{1}','a.','a\nb','a\u007f','a\u0085b','a\u009fb','x'.repeat(201)])
       expect(validBranch(name),JSON.stringify(name)).toBe(false);
   });
   it('accepts only absolute single-line paths without dot segments or backslashes',()=>{

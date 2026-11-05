@@ -14,7 +14,7 @@ export function validAbsolutePath(value:string) {
 export function validBranch(value:string) {
   if(!value || bytes(value)>200 || value==='HEAD' || value==='@')return false;
   return !(value.startsWith('-') || value.startsWith('/') || value.endsWith('/') || value.endsWith('.')
-    || value.includes('..') || value.includes('//') || value.includes('@{') || /[\x00-\x20\x7f~^:?*[\\]/.test(value)
+    || value.includes('..') || value.includes('//') || value.includes('@{') || control.test(value) || /[ ~^:?*[\\]/.test(value)
     || value.split('/').some(part=>part.startsWith('.') || part.endsWith('.lock')));
 }
 export function validBase(value:string) {
