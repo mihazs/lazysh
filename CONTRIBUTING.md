@@ -32,10 +32,30 @@ Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
 Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
-CI skips the native, companion and Herdr jobs for a pull request whose every changed
-path is documentation (`docs/**`, root `*.md`, `.changeset/*.md` and the GitHub issue
-and PR templates); client and agent still run, and pushes to `main` run everything.
 Do not substitute a passing build for device or behavioral acceptance.
+
+### Which CI jobs a pull request runs
+
+`client` and `agent` always run. On a pull request, the `changes` job runs
+`.github/scripts/native-changes.sh` over the PR range and then a fast gate (rustfmt,
+hook and CI structure tests, client type check); every native job waits for it, so a
+PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `main`
+skip the gate and run every job with the full matrix, which is the parity evidence.
+
+| Changed paths | Native jobs on the pull request |
+| --- | --- |
+| Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
+| Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime |
+| Agent: `apps/agent/**`, `packages/{common,account-usage,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary |
+| Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, auxiliary, ntfy (Google) |
+| iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
+| Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime and Herdr navigation consumers |
+| Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
+| Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
+
+Matrices fail fast on pull requests and keep every verdict on `main`. The script and
+`tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
+new input, and map an uncertain path to more jobs, never fewer.
 
 ## Conventional Commits
 

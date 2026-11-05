@@ -20,8 +20,12 @@ test('ntfy CI retains FOSS native coverage and separately builds the real Google
   const root=resolve(import.meta.dir,'..');
   const jobs=Bun.YAML.parse(await readFile(join(root,'.github/workflows/checks.yml'),'utf8')) as {jobs:Record<string,any>};
   const job=jobs.jobs['native-android-ntfy'];
-  expect(job.strategy.matrix['push-variant']).toEqual(['fdroid','google']);
-  expect(job.strategy['fail-fast']).toBe(false);
+  // tests/native-changes.test.ts covers pull request selection; pushes to main keep both variants.
+  expect(job.strategy.matrix['push-variant']).toBe('${{ fromJSON(needs.changes.outputs.ntfy_variants) }}');
+  const classifier=Bun.spawnSync(['sh',join(root,'.github/scripts/native-changes.sh')],{env:{...process.env,EVENT:'push'}});
+  expect(classifier.exitCode).toBe(0);
+  const variants=/^ntfy_variants=(.*)$/m.exec(classifier.stdout.toString())?.[1];
+  expect(JSON.parse(variants!)).toEqual(['fdroid','google']);
   expect(job['timeout-minutes']).toBe(35);
   const build=job.steps.find((step:any)=>step.name==='Build current Google APK for Firebase-free push acceptance');
   expect(build.if).toBe("matrix.push-variant == 'google'");
