@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.17.0
+
+### Minor Changes
+
+- 8c15fb0: Redesign the phone-first surfaces: agent lists with status rings, collapsible status sections and tags shared with the agent inbox, compact host rows, a floating tab bar, grouped settings lists and a true-black default theme.
+
+### Patch Changes
+
+- 2f4a19d: Keep the software keyboard's editor connection when arming a terminal toolbar modifier.
+- @lazysh/account-usage@1.17.0
+  - @lazysh/common@1.17.0
+  - @lazysh/display-idle@1.17.0
+  - @lazysh/et-transport@1.17.0
+  - @lazysh/mosh-transport@1.17.0
+
 ## 1.16.0
 
 ### Minor Changes
