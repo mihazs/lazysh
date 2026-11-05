@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
+import TerminalSelectionTools from './TerminalSelectionTools';
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type {UnappliedTerminalEdit} from "./terminalIme";
@@ -150,11 +151,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [draft, setDraft] = useState("");
   // Expanded input tools share the keyboard-sized workspace.
   useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
+  // Selection handles appear after a touch long-press; actions also after a mouse selection.
+  const [selectionTools, setSelectionTools] = useState<{handles: boolean} | null>(null);
+  useEffect(() => setSelectionTools(null), [session.id, session.terminal]);
   useEffect(()=>{
-    const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen);
+    const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen || selectionTools!==null);
     onBackChange?.(session.id,available?()=>{
       if(!activeRef.current || !mounted.current || !access.current())return false;
-      if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
+      if(selectionTools!==null)session.terminal.clearSelection();
+      else if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
       else if(link!==null)setLink(null);
       else if(searching)setSearching(false);
       else if(composing)setComposing(false);
@@ -162,7 +167,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       return true;
     }:null);
     return()=>onBackChange?.(session.id,null);
-  },[active,composing,searching,clipboard,link,dpadOpen,session.id,onBackChange]);
+  },[active,composing,searching,clipboard,link,dpadOpen,selectionTools,session.id,onBackChange]);
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -320,6 +325,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       if (!cell) return false;
       touched = nextTouchSelection(touched && session.terminal.hasSelection() ? touched : null, terminalWordAt(session.terminal, cell));
       selectTerminalRange(session.terminal, touched.range);
+      setSelectionTools({handles: true});
       press.current = null; gesture.current = null; pointers.current.clear(); cancelTaps();
       return true;
     };
@@ -329,6 +335,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         if (event.cancelable) event.preventDefault();
         cancel(); return;
       }
+      // A tap dismisses a touch selection, as on the platform's own text views.
+      if (hold && !hold.ready && !scroll?.active && touched && session.terminal.hasSelection()) {session.terminal.clearSelection(); touched = null;}
       release();
       remainder = scroll?.active && scroll.mode && activeRef.current && session.connected ? {mode: scroll.mode, height: scroll.height, pending: scroll.pending % scroll.height, direction: scroll.direction} : null;
       scroll = null;
@@ -414,6 +422,18 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
   }, [active, customTouch, preferences.screenReader, session.id, session.connected, preferences.bodyGestures]);
+
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    // xterm owns mouse selection, including its edge scrolling; offer actions once it ends.
+    let pressed = false;
+    const down = (event: MouseEvent) => {pressed = event.button === 0;};
+    const up = () => {if (pressed && activeRef.current && session.terminal.hasSelection()) setSelectionTools(current => current ?? {handles: false}); pressed = false;};
+    element.addEventListener('mousedown', down, true);
+    document.addEventListener('mouseup', up, true);
+    return () => {element.removeEventListener('mousedown', down, true); document.removeEventListener('mouseup', up, true);};
+  }, [session.id, session.terminal]);
 
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
@@ -818,6 +838,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </form>}
     <div className="terminal-stage">
     <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
+    {active && selectionTools && createPortal(<TerminalSelectionTools terminal={session.terminal} handles={selectionTools.handles}
+      onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
     {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput}
       disabled={!session.connected} sendEnter={preferences.composerSendEnter}
       onSubmit={() => {

@@ -2,4 +2,4 @@
 "@lazysh/client": minor
 ---
 
-Add long-press terminal text selection on touch screens, extendable across rows and copied as raw buffer text, without changing finger scrolling.
+Add terminal text selection with touch handles, edge auto-scroll through local history for multi-screen selections, and floating Copy, Select all and Copy screen actions; raw buffer text is copied.

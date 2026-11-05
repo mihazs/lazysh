@@ -87,7 +87,8 @@ test('toolbar Paste sends the real clipboard text to the terminal',async({page})
 
 test.describe('touch selection',()=>{
   test.beforeEach(({},testInfo)=>test.skip(testInfo.project.name!=='phone','Requires touch input.'));
-  const rows=['first OWNED_WORD tail','second line','third LAST_WORD end'];
+  // Rows 2-5 stay blank so the selection handles and actions never cover the next target.
+  const rows=['first OWNED_WORD tail','second line','','','','','third LAST_WORD end'];
   /** A still finger held past the long-press delay, optionally moved before lifting. */
   async function hold(page:Page,from:{x:number;y:number},then:{x:number;y:number}[]=[]) {
     const input=await page.context().newCDPSession(page);
@@ -108,9 +109,9 @@ test.describe('touch selection',()=>{
     await expect.poll(()=>selection(page)).toBeGreaterThan(0);
     await copy.click();
     await expect.poll(()=>readClipboard(page)).toBe('OWNED_WORD');
-    await hold(page,await cellPoint(page,2,9));
+    await hold(page,await cellPoint(page,6,9));
     await copy.click();
-    await expect.poll(()=>readClipboard(page)).toBe('OWNED_WORD tail\nsecond line\nthird LAST_WORD');
+    await expect.poll(()=>readClipboard(page)).toBe('OWNED_WORD tail\nsecond line\n\n\n\n\nthird LAST_WORD');
     // A long-press inside the selection starts a new one at that word.
     await hold(page,await cellPoint(page,1,2));
     await copy.click();
