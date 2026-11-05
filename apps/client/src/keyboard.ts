@@ -1,3 +1,5 @@
+import {useEffect, useRef} from "react";
+
 export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "closeSession" } | { action: "session"; index: number };
 
 /** App shortcuts never act inside modal dialogs or editable controls, except the terminal's own input. */
@@ -17,8 +19,43 @@ export function appShortcut(event: KeyboardEvent): AppShortcut | undefined {
   if (Object.hasOwn(actions, key)) return {action: actions[key as keyof typeof actions]};
 }
 
+/** The lowercased key of a Ctrl/Cmd+Shift chord the app may take, including from a focused terminal. */
+function shiftedChord(event: KeyboardEvent): string | undefined {
+  if (event.defaultPrevented || event.isComposing || event.repeat || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+  return appTarget(event.target) ? event.key.toLowerCase() : undefined;
+}
+
 /** Ctrl/Cmd+Shift+P opens the command palette, including from a focused terminal, whose shell keeps Ctrl/Cmd+K. */
 export function paletteShortcut(event: KeyboardEvent): boolean {
-  return !event.defaultPrevented && !event.isComposing && !event.repeat && (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey
-    && event.key.toLowerCase() === 'p' && appTarget(event.target);
+  return shiftedChord(event) === 'p';
+}
+
+export type NavigationShortcut = 'agents' | 'workspaces';
+/** The letter each Ctrl/Cmd+Shift navigation chord uses. */
+export const navigationShortcutKeys = {agents: 'A', workspaces: 'W'} as const satisfies Record<NavigationShortcut, string>;
+
+/** Ctrl/Cmd+Shift+A toggles Agents and Ctrl/Cmd+Shift+W toggles Workspaces; the shell keeps the unshifted chords. */
+export function navigationShortcut(event: KeyboardEvent): NavigationShortcut | undefined {
+  const key = shiftedChord(event);
+  return (Object.keys(navigationShortcutKeys) as NavigationShortcut[]).find(view => navigationShortcutKeys[view].toLowerCase() === key);
+}
+
+/** How a Ctrl/Cmd+Shift chord reads on this platform, as shown beside palette commands. */
+export function shiftedChordLabel(key: string, apple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)): string {
+  return apple ? `⌘⇧${key}` : `Ctrl+Shift+${key}`;
+}
+
+/** Runs `run` for chords `match` accepts, in the capture phase, before the terminal can consume them. */
+export function useCapturedShortcut<T>(match: (event: KeyboardEvent) => T | undefined | false, run: (value: T) => void) {
+  const latest = useRef({match, run}); latest.current = {match, run};
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      const value = latest.current.match(event);
+      if (value === undefined || value === false) return;
+      event.preventDefault(); event.stopPropagation();
+      latest.current.run(value);
+    };
+    window.addEventListener('keydown', keydown, true);
+    return () => window.removeEventListener('keydown', keydown, true);
+  }, []);
 }

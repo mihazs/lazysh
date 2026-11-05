@@ -27,7 +27,7 @@ it('resolves level-aware defaults by multiplexer presence and leaves explicit ch
   const resolved = (kind?: 'tmux' | 'herdr' | 'zellij') => Object.fromEntries(gestureSlots.map(slot => [slot, resolveGesture('auto', slot, kind)]).filter(([, action]) => action !== 'none'));
   const multiplexer = {twoLeft: 'nextTab', twoRight: 'previousTab', twoUp: 'nextPane', twoDown: 'previousPane', pinch: 'zoomPane', pullShallow: 'nextTab', pullDeep: 'nextSession'};
   for (const kind of ['tmux', 'herdr', 'zellij'] as const) expect(resolved(kind)).toEqual(multiplexer);
-  expect(resolved()).toEqual({twoLeft: 'nextSession', twoRight: 'previousSession', pinch: 'fontSize', pullDeep: 'nextSession'});
+  expect(resolved()).toEqual({twoLeft: 'nextSession', twoRight: 'previousSession', twoUp: 'openAgents', twoDown: 'openWorkspaces', pinch: 'fontSize', pullDeep: 'nextSession'});
   expect(resolveGesture('auto', undefined, 'tmux')).toBe('none');
   expect(resolveGesture('find', 'pullShallow', 'tmux')).toBe('find');
   expect(resolveGesture('none', 'twoLeft', undefined)).toBe('none');

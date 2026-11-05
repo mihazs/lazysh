@@ -1090,6 +1090,8 @@ const translations = {
   gestureInterruptCtrlC: ['Interromper (Ctrl+C)', 'Interrumpir (Ctrl+C)'],
   gestureNextLazyshSession: ['Próxima sessão lazysh', 'Siguiente sesión de lazysh'],
   gesturePreviousLazyshSession: ['Sessão lazysh anterior', 'Sesión anterior de lazysh'],
+  gestureOpenAgents: ['Abrir ou fechar Agentes', 'Abrir o cerrar Agentes'],
+  gestureOpenWorkspaces: ['Abrir ou fechar Espaços', 'Abrir o cerrar Espacios'],
   gestureNextZellijTab: ['Próxima aba Zellij', 'Siguiente pestaña de Zellij'],
   gesturePreviousZellijTab: ['Aba Zellij anterior', 'Pestaña anterior de Zellij'],
   gestureNextZellijPane: ['Próximo painel Zellij', 'Siguiente panel de Zellij'],

@@ -1,7 +1,7 @@
 import {t, useUi} from './i18n/core';
-import {useEffect, useId, useRef, useState, type KeyboardEvent} from 'react';
+import {useEffect, useId, useState, type KeyboardEvent} from 'react';
 import {Search, Server, TerminalSquare, Wrench, Zap} from 'lucide-react';
-import {paletteShortcut} from './keyboard';
+import {paletteShortcut, useCapturedShortcut} from './keyboard';
 import {filterPalette, firstEnabled, movePaletteSelection, type PaletteCommand, type PaletteGroup} from './paletteModel';
 import './CommandPalette.css';
 
@@ -58,6 +58,7 @@ export default function CommandPalette({commands, query, onQuery, onDone, note}:
           onMouseDown={event => event.preventDefault()} onClick={() => run(command)}>
           <Icon size={17} aria-hidden="true"/>
           <span className="command-palette-text"><strong>{command.label}</strong>{command.detail && <small>{command.detail}</small>}</span>
+          {command.shortcut && <kbd className="command-palette-shortcut">{command.shortcut}</kbd>}
           <span className="command-palette-group">{command.current ? t('paletteCurrent') : groupLabel(command.group)}</span>
         </li>;
       })}
@@ -71,14 +72,5 @@ export default function CommandPalette({commands, query, onQuery, onDone, note}:
 
 /** Opens the palette on Ctrl/Cmd+Shift+P before the terminal can consume the chord. */
 export function usePaletteShortcut(open: () => void) {
-  const latest = useRef(open); latest.current = open;
-  useEffect(() => {
-    const keydown = (event: globalThis.KeyboardEvent) => {
-      if (!paletteShortcut(event)) return;
-      event.preventDefault(); event.stopPropagation();
-      latest.current();
-    };
-    window.addEventListener('keydown', keydown, true);
-    return () => window.removeEventListener('keydown', keydown, true);
-  }, []);
+  useCapturedShortcut(paletteShortcut, open);
 }

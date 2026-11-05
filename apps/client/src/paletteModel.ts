@@ -5,6 +5,8 @@ export type PaletteCommand = Readonly<{
   group: PaletteGroup;
   label: string;
   detail?: string;
+  /** The hardware chord that runs this command outside the palette. */
+  shortcut?: string;
   keywords?: readonly string[];
   current?: boolean;
   disabled?: boolean;

@@ -87,7 +87,7 @@ import { usePreferences } from "./preferences";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
-import {appShortcut} from './keyboard';
+import {appShortcut, navigationShortcut, useCapturedShortcut, type NavigationShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
@@ -1388,6 +1388,20 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
   }
+  /** Leaves Agents or Workspaces for the terminal, as the destination heading's back control does. */
+  function returnToTerminal(focusConnections:boolean) {
+    if(wideSidebar){showNavigation('connections');if(focusConnections)navigationRef.current?.querySelector<HTMLButtonElement>('[data-workspace-mode=connections]')?.focus();}
+    else setSidebar(false);
+    setView('terminal');
+  }
+  /** Shortcuts, gestures and toolbar keys open a view for the current connection, or return to the terminal when it is open. */
+  function toggleNavigation(mode:NavigationShortcut) {
+    if(!active || navigationCovered)return;
+    if(sidebarShown && view==='terminal' && navigationEntry.mode===mode)returnToTerminal(false);
+    else showNavigation(mode);
+  }
+  const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
+  useCapturedShortcut(navigationShortcut,toggleNavigation);
   function showAgentSetup(source:LiveSession) {
     if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
       || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
@@ -1755,8 +1769,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     };
     const terminalAction = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
-      if (!detail || typeof detail !== 'object' || !('sessionId' in detail) || !('action' in detail)
-        || detail.sessionId !== activeId || (detail.action !== 'nextSession' && detail.action !== 'previousSession')) return;
+      if (!detail || typeof detail !== 'object' || !('sessionId' in detail) || !('action' in detail) || detail.sessionId !== activeId) return;
+      if (detail.action === 'openAgents' || detail.action === 'openWorkspaces') {latestNavigationToggle.current(detail.action === 'openAgents' ? 'agents' : 'workspaces'); return;}
+      if (detail.action !== 'nextSession' && detail.action !== 'previousSession') return;
       const current = sessionsRef.current.findIndex(session=>session.id===activeId && session.connected);
       if (current < 0 || !sessionsRef.current.length) return;
       const offset = detail.action === 'nextSession' ? 1 : -1;
@@ -1947,7 +1962,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         aria-label={t("appHostsAndConnections")}
       >
         {navigationEntry.mode!=='connections' && <header className="workspace-destination-heading">
-          <button type="button" className="icon-button" aria-label={t('navigationReturnTerminal')} title={t('navigationReturnTerminal')} onClick={()=>{if(wideSidebar){showNavigation('connections');navigationRef.current?.querySelector<HTMLButtonElement>('[data-workspace-mode=connections]')?.focus();}else setSidebar(false);setView('terminal');}}><ArrowLeft size={20} aria-hidden="true"/></button>
+          <button type="button" className="icon-button" aria-label={t('navigationReturnTerminal')} title={t('navigationReturnTerminal')} onClick={()=>returnToTerminal(true)}><ArrowLeft size={20} aria-hidden="true"/></button>
           <h2>{t(navigationEntry.mode==='workspaces'?'navigationWorkspaces':'appAgents')}</h2>
           {active?.connected && <button type="button" className="icon-button" aria-label={t('navigationUsageShortcut')} title={t('appUsage')} onClick={()=>visitView('usage')}><Activity size={18} aria-hidden="true"/></button>}
         </header>}

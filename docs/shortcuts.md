@@ -158,7 +158,7 @@ Two-finger swipes, the multiplexer pinch and both header pulls default to
 | Gesture | tmux, Herdr or Zellij | Plain terminal |
 | --- | --- | --- |
 | Two-finger swipe left / right | Next / previous tab (tmux window) | Next / previous lazysh session |
-| Two-finger swipe up / down | Next / previous pane | No action |
+| Two-finger swipe up / down | Next / previous pane | Open Agents / Workspaces |
 | Pinch | Zoom the active pane | Resize terminal text (when pinch resizing is on) |
 | Short header pull | Next tab | No action |
 | Long header pull | Next lazysh session | Next lazysh session |
@@ -191,6 +191,33 @@ carries long-press actions in a new optional field that older clients reject.
 Playwright phone and desktop profiles execute these gestures with Chromium touch
 input against a synthetic terminal and assert the exact input steps or Zellij
 actions. Real multiplexers and physical touch are separate acceptance gates.
+
+## Open Agents and Workspaces
+
+Press **Ctrl+Shift+A** (Cmd+Shift+A on macOS) to open Agents and **Ctrl+Shift+W**
+(Cmd+Shift+W) to open Workspaces for the current connection. Press the same
+chord again to return to the terminal; on a wide screen the sidebar goes back to
+Connections. Both chords work from a focused terminal and never reach the shell,
+which keeps Ctrl+A and Ctrl+W. They do nothing while typing in another field or
+inside a dialog. The command palette shows them beside **Agents** and
+**Workspaces**. Agents needs a connected remote session, so the chord does
+nothing in the local terminal. The chords themselves are fixed; the gestures
+and toolbar keys below are configurable.
+
+On a touch screen, a two-finger swipe up in a plain terminal opens Agents and a
+two-finger swipe down opens Workspaces. In tmux, Herdr and Zellij these swipes
+still change panes. Under Terminal touch gestures, **Open or close Agents** and
+**Open or close Workspaces** are available for every tap, swipe, header pull,
+D-pad corner and toolbar long-press slot. **Toolbar keys and order** also offers
+**Agents** and **Workspaces** keys; neither is on the default toolbar. Each opens
+its view, or returns to the terminal when that view is already open. On a phone
+the view covers the terminal, so use its back arrow (**Return to terminal**) to
+go back.
+
+Playwright drives the chords with desktop key presses, the swipes with CDP touch
+in both the phone and desktop projects, and the toolbar keys with clicks, against
+a synthetic SSH session. The Android runtime suite adds both toolbar keys to a
+real SSH connection and opens and leaves each view.
 
 ## Command palette
 

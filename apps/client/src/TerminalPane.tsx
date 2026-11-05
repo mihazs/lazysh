@@ -11,7 +11,7 @@ import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
 import { api as nativeApi } from "./bridge";
-import { bodyGestureSlots, decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
@@ -868,7 +868,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     else if (action === "hideKeyboard") session.terminal.blur();
     else if (action === "paste") void paste();
     else if (action === "copy") {const text = session.terminal.getSelection(); if (text) void copy(text);}
-    else if (action === "nextSession" || action === "previousSession") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
+    else if (action === "nextSession" || action === "previousSession" || action === "openAgents" || action === "openWorkspaces") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
     else if (action === "custom") sendChord(keys);
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
@@ -985,13 +985,14 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
         else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
         else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
+        else if (key === "agents" || key === "workspaces") runGesture(toolbarNavigationActions[key]);
         else sendKey(sequences[key] ?? key);
         if (modifier) focusTerminal();
       };
       const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
-      const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
+      const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad" && !Object.hasOwn(toolbarNavigationActions, key);
       const release = () => {stopRepeat(); releaseHold();};
-      return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
+      return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "agents" && session.local) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
         aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
         aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
         title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : alternate ? t("terminalKeyAlternate", {action: alternate.keys ?? t(gestureLabelKeys[alternate.action])}) : undefined}

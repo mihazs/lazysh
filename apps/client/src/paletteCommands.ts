@@ -1,9 +1,10 @@
 import {t} from './i18n/core';
 import type {Host} from './bridge';
 import type {PaletteCommand} from './paletteModel';
+import {navigationShortcutKeys, shiftedChordLabel} from './keyboard';
 
 type Action = () => void;
-type ActionRow = readonly [id: string, label: string, run: Action, disabled?: boolean, aliases?: readonly string[]];
+type ActionRow = readonly [id: string, label: string, run: Action, disabled?: boolean, aliases?: readonly string[], shortcut?: string];
 /** Everything the palette may offer, as currently allowed by the workspace. */
 export type PaletteContext = Readonly<{
   native: boolean;
@@ -38,12 +39,12 @@ export function paletteCommands(context: PaletteContext): PaletteCommand[] {
     {id: 'local', group: 'host', label: t('appLocalTerminalThisDevice'), keywords: [host, 'local'], disabled: !context.local.available || context.local.busy, reason: context.local.reason, run: run.local},
     ...context.hosts.map((item): PaletteCommand => ({id: `host:${item.id}`, group: 'host', label: item.name, detail: `${item.username}@${item.hostname}`, keywords: [host], run: () => run.host(item)})),
     ...context.sessions.map((item): PaletteCommand => ({id: `session:${item.id}`, group: 'session', label: item.name, detail: item.destination, keywords: [session], current: item.id === context.activeId, disabled: !item.connected, run: () => run.session(item.id)})),
-    ...context.tools.map((item): PaletteCommand => ({id: `tool:${item.id}`, group: 'tool', label: item.label, detail: active?.name, keywords: [tool, ...(toolAliases[item.id] ?? [])], current: item.id === context.currentTool, disabled: item.id === 'agents' && context.navigationBusy, run: () => run.tool(item.id)})),
+    ...context.tools.map((item): PaletteCommand => ({id: `tool:${item.id}`, group: 'tool', label: item.label, detail: active?.name, keywords: [tool, ...(toolAliases[item.id] ?? [])], current: item.id === context.currentTool, disabled: item.id === 'agents' && context.navigationBusy, shortcut: item.id === 'agents' ? shiftedChordLabel(navigationShortcutKeys.agents) : undefined, run: () => run.tool(item.id)})),
   ];
   const actions: ActionRow[] = [
     ['add-host', t('appAddANewHost'), run.addHost, !context.native, ['ssh', 'new']],
     ...(active ? [
-      ['workspaces', t('navigationWorkspaces'), run.workspaces, context.navigationBusy, ['tmux', 'zellij', 'herdr']],
+      ['workspaces', t('navigationWorkspaces'), run.workspaces, context.navigationBusy, ['tmux', 'zellij', 'herdr'], shiftedChordLabel(navigationShortcutKeys.workspaces)],
       ['switcher', t('appSwitchTerminalSession'), run.switcher, false, ['tab']],
     ] satisfies ActionRow[] : []),
     ['preferences', t('appPreferences'), run.preferences, false, ['settings']],
@@ -54,7 +55,7 @@ export function paletteCommands(context: PaletteContext): PaletteCommand[] {
     ['about', t('appAboutLazysh'), run.about, false, ['license', 'version']],
     ...(active ? [['close', t('appEndValue1Connection', {value1: active.name}), run.closeActive, false, ['close', 'disconnect']]] satisfies ActionRow[] : []),
   ];
-  for (const [id, label, handler, disabled, aliases] of actions)
-    commands.push({id: `action:${id}`, group: 'action', label, keywords: [action, ...(aliases ?? [])], disabled, run: handler});
+  for (const [id, label, handler, disabled, aliases, shortcut] of actions)
+    commands.push({id: `action:${id}`, group: 'action', label, keywords: [action, ...(aliases ?? [])], disabled, shortcut, run: handler});
   return commands;
 }

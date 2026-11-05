@@ -42,11 +42,12 @@ export function multiplexerSteps(kind: 'tmux' | 'herdr', action: MultiplexerActi
  * Level-aware defaults. In a multiplexer, horizontal two-finger swipes and a
  * short header pull move between tabs (tmux windows), vertical swipes between
  * panes and a pinch zooms the pane; a long header pull and, in a plain
- * terminal, horizontal swipes move between lazysh sessions.
+ * terminal, horizontal swipes move between lazysh sessions. A plain terminal
+ * has no panes, so its vertical swipes open Agents (up) and Workspaces (down).
  */
 const levelDefaults: Record<'multiplexer' | 'plain', Partial<Record<GestureSlot, Exclude<GestureAction, 'auto'>>>> = {
   multiplexer: {twoLeft: 'nextTab', twoRight: 'previousTab', twoUp: 'nextPane', twoDown: 'previousPane', pinch: 'zoomPane', pullShallow: 'nextTab', pullDeep: 'nextSession'},
-  plain: {twoLeft: 'nextSession', twoRight: 'previousSession', pinch: 'fontSize', pullDeep: 'nextSession'},
+  plain: {twoLeft: 'nextSession', twoRight: 'previousSession', twoUp: 'openAgents', twoDown: 'openWorkspaces', pinch: 'fontSize', pullDeep: 'nextSession'},
 };
 export function resolveGesture(action: GestureAction, slot: GestureSlot | undefined, kind: MultiplexerKind | undefined): Exclude<GestureAction, 'auto'> {
   if (action !== 'auto') return action;
