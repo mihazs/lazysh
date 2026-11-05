@@ -21,7 +21,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
 }) {
   useUi();
   useAccessSnapshot();
-  const model=useHerdrNavigation({sessionId,herdrSession,visible});
+  const model=useHerdrNavigation({sessionId,herdrSession,visible,reports});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
   const [setupView,setSetupView]=useState<{host:string;open:boolean}>();

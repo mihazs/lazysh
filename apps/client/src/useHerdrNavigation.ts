@@ -1,6 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
+import {withReportedStatus,type ReportedSessionSource} from './HerdrSessionDetails';
 
 export type ReportedSessionRef={source:string;agent:'codex'|'claude'|'opencode';kind:'id';value:string};
 function reportedSession(value:unknown,agent:unknown):ReportedSessionRef|undefined {
@@ -10,7 +11,9 @@ function reportedSession(value:unknown,agent:unknown):ReportedSessionRef|undefin
     || !boundedText(v.value,256) || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.value))return;
   return {source:v.source as string,agent:v.agent as ReportedSessionRef['agent'],kind:'id',value:v.value};
 }
-export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null;agent_session?:ReportedSessionRef};
+export type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null;agent_session?:ReportedSessionRef;
+  /** Set when an Unknown Herdr state was replaced by the exact matching companion report. */
+  status_source?:'report'};
 export type HerdrTree = {
   workspaces: {workspace_id:string;label:string;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   tabs: {workspace_id:string;tab_id:string;label:string;number:number;focused:boolean;agent_status:LiveAgent['agent_status']}[];
@@ -51,7 +54,7 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 
 
 /** One visibility- and lease-owned reader for a terminal's selected Herdr server. */
-export function useHerdrNavigation({sessionId,herdrSession,visible}:{sessionId:string;herdrSession?:string;visible:boolean}) {
+export function useHerdrNavigation({sessionId,herdrSession,visible,reports}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource}) {
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [choice,setChoice]=useState<{host:string;name:string}|null>(null);
@@ -90,7 +93,9 @@ export function useHerdrNavigation({sessionId,herdrSession,visible}:{sessionId:s
     const timer=visible?window.setInterval(()=>void read(),5000):undefined;
     return()=>{current=false;window.clearInterval(timer);};
   },[sessionId,selected,visible,invoke,lease]);
-  const data=result?.host===sessionId?result:null;
+  const owned=result?.host===sessionId?result:null;
+  const reportReadable=!!reports?.available && reports.lease.current();
+  const data=useMemo(()=>owned && withReportedStatus(owned,reports,sessionId),[owned,reports?.rows,reports?.host,reportReadable,sessionId]);
   const agentFailure=data?.snapshot && data.snapshot.agents===undefined?{host:sessionId,cause:new LocalUiError('herdrAgentsUnsupported')}:failure;
   return {data,failure,agentFailure,busy,query,setQuery,lease,refresh:()=>refresh.current(),selectServer:(name:string)=>setChoice({host:sessionId,name})};
 }

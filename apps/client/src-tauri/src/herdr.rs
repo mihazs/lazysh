@@ -664,68 +664,93 @@ mod tests {
             );
         }
     }
+    /// One isolated stock Herdr server; `bin` precedes PATH for pane programs.
+    struct RealHerdr {
+        temp: tempfile::TempDir,
+        server: std::process::Child,
+    }
+    impl RealHerdr {
+        fn start() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir(temp.path().join("bin")).unwrap();
+            // Pin the built-in detection rules; never fetch a newer catalog.
+            std::fs::write(
+                temp.path().join("config.toml"),
+                "[update]\nversion_check = false\nmanifest_check = false\n",
+            )
+            .unwrap();
+            let mut server = Self::configured(temp.path(), "herdr");
+            let server = server
+                .arg("server")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let herdr = Self { temp, server };
+            let ready = (0..100).any(|_| {
+                let ready = herdr
+                    .command("herdr")
+                    .args(["api", "snapshot"])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success();
+                if !ready {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                ready
+            });
+            assert!(ready, "isolated Herdr server did not become ready");
+            herdr
+        }
+        fn configured(home: &std::path::Path, program: &str) -> std::process::Command {
+            let mut command = std::process::Command::new(program);
+            let path = std::env::join_paths(std::iter::once(home.join("bin")).chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .unwrap();
+            command
+                .env("HOME", home)
+                .env("ZDOTDIR", home)
+                .env("SHELL", "/bin/sh")
+                .env("PATH", path)
+                .env_remove("ENV")
+                .env_remove("BASH_ENV")
+                .current_dir(home)
+                .env("XDG_CONFIG_HOME", home)
+                .env("HERDR_CONFIG_PATH", home.join("config.toml"))
+                .env_remove("HERDR_SOCKET_PATH")
+                .env_remove("HERDR_SESSION");
+            command
+        }
+        fn command(&self, program: &str) -> std::process::Command {
+            Self::configured(self.temp.path(), program)
+        }
+        fn run(&self, text: String) -> String {
+            lazysh_common::test_support::successful_output(self.command("sh").arg("-c").arg(text))
+        }
+        fn path(&self) -> &std::path::Path {
+            self.temp.path()
+        }
+    }
+    impl Drop for RealHerdr {
+        fn drop(&mut self) {
+            let _ = self.server.kill();
+            let _ = self.server.wait();
+        }
+    }
     #[test]
     #[ignore = "requires herdr on PATH; runs an isolated headless server"]
     fn real_herdr_lifecycle_and_tree() {
-        use std::process::{Command, Stdio};
-        let temp = tempfile::tempdir().unwrap();
-        let configure = |command: &mut Command| {
-            command
-                .env("HOME", temp.path())
-                .env("ZDOTDIR", temp.path())
-                .env("SHELL", "/bin/sh")
-                .env_remove("ENV")
-                .env_remove("BASH_ENV")
-                .current_dir(temp.path())
-                .env("XDG_CONFIG_HOME", temp.path())
-                .env("HERDR_CONFIG_PATH", temp.path().join("config.toml"))
-                .env_remove("HERDR_SOCKET_PATH")
-                .env_remove("HERDR_SESSION");
-        };
-        let mut server = Command::new("herdr");
-        configure(&mut server);
-        let mut server = server
-            .arg("server")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        struct Server<'a>(&'a mut std::process::Child);
-        impl Drop for Server<'_> {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let _guard = Server(&mut server);
-        let run = |text: String| {
-            let mut cmd = Command::new("sh");
-            configure(&mut cmd);
-            lazysh_common::test_support::successful_output(cmd.arg("-c").arg(text))
-        };
-        let mut ready = false;
-        for _ in 0..100 {
-            let mut cmd = Command::new("herdr");
-            configure(&mut cmd);
-            if cmd
-                .args(["api", "snapshot"])
-                .output()
-                .unwrap()
-                .status
-                .success()
-            {
-                ready = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(ready, "isolated Herdr server did not become ready");
+        let herdr = RealHerdr::start();
+        let temp = herdr.path();
+        let run = |text: String| herdr.run(text);
         let session = "default";
         run(action_command(
             session,
             &HerdrAction::CreateWorkspace {
                 label: "owned".into(),
-                directory: temp.path().to_str().unwrap().into(),
+                directory: temp.to_str().unwrap().into(),
             },
         )
         .unwrap());
@@ -788,7 +813,7 @@ mod tests {
             &HerdrAction::SplitPane {
                 target: pane,
                 horizontal: true,
-                directory: temp.path().to_str().unwrap().into(),
+                directory: temp.to_str().unwrap().into(),
             },
         )
         .unwrap());
@@ -805,7 +830,7 @@ mod tests {
             &HerdrAction::CreateTab {
                 workspace: workspace.clone(),
                 label: "tab".into(),
-                directory: temp.path().to_str().unwrap().into(),
+                directory: temp.to_str().unwrap().into(),
             },
         )
         .unwrap());
@@ -828,13 +853,120 @@ mod tests {
             session,
             &HerdrAction::CreateWorkspace {
                 label: "new workspace".into(),
-                directory: temp.path().to_str().unwrap().into(),
+                directory: temp.to_str().unwrap().into(),
             },
         )
         .unwrap());
         let tree = snapshot();
         assert_eq!(tree.workspaces.len(), 2);
         run(command(session, "server stop".into()).unwrap());
+    }
+    #[test]
+    #[ignore = "requires herdr on PATH; runs an isolated headless server"]
+    fn real_herdr_codex_state_is_detected_and_an_idle_prompt_stays_unknown() {
+        use std::os::unix::fs::PermissionsExt;
+        let herdr = RealHerdr::start();
+        let home = herdr.path();
+        // A process named `codex` repaints controlled screen and title text, so
+        // stock Herdr applies its own Codex detection rules to a known terminal.
+        let script = home.join("bin/codex");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nlast=\nwhile :; do b=$(cat \"$HOME/body\" 2>/dev/null); \
+             if [ \"$b\" != \"$last\" ]; then printf '\\033[2J\\033[H%s\\n' \"$b\"; last=$b; fi; \
+             printf '\\033]0;%s\\007' \"$(cat \"$HOME/title\" 2>/dev/null)\"; sleep 0.1; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let paint = |body: &str, title: &str| {
+            for (name, text) in [("body", body), ("title", title)] {
+                let staged = home.join(format!("{name}.next"));
+                std::fs::write(&staged, text).unwrap();
+                std::fs::rename(staged, home.join(name)).unwrap();
+            }
+        };
+        paint("\u{203a} ", "");
+        let session = "default";
+        herdr.run(
+            action_command(
+                session,
+                &HerdrAction::CreateWorkspace {
+                    label: "codex".into(),
+                    directory: home.to_str().unwrap().into(),
+                },
+            )
+            .unwrap(),
+        );
+        let snapshot =
+            || parse(&herdr.run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let tree = snapshot();
+        let workspace = &tree
+            .workspaces
+            .iter()
+            .find(|w| w.label == "codex")
+            .unwrap()
+            .workspace_id;
+        let pane = tree
+            .panes
+            .iter()
+            .find(|p| &p.workspace_id == workspace)
+            .unwrap()
+            .pane_id
+            .clone();
+        herdr.run(command(session, format!("pane run {} codex", quote(&pane))).unwrap());
+        let expect = |status: &str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let tree = snapshot();
+                let agent =
+                    tree.agents.unwrap().into_iter().find(|agent| {
+                        agent.pane_id == pane && agent.agent.as_deref() == Some("codex")
+                    });
+                if let Some(agent) = agent.filter(|agent| agent.agent_status == status) {
+                    let pane = tree
+                        .panes
+                        .iter()
+                        .find(|p| p.pane_id == agent.pane_id)
+                        .unwrap();
+                    assert_eq!(pane.agent_status, status);
+                    return agent;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Herdr never reported {status} for the codex pane"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        };
+        // Herdr 0.9.3 has no idle rule for an idle Codex prompt and reports Unknown.
+        expect("unknown");
+        paint(
+            "\u{2022} Working (12s \u{2022} esc to interrupt)\n\n\u{203a} ",
+            "",
+        );
+        expect("working");
+        paint("\u{203a} ", "Action Required");
+        expect("blocked");
+        paint("\u{203a} ", "");
+        expect("unknown");
+        // Herdr's own Codex session report is the exact pane context the client
+        // joins with a companion lifecycle report; it never changes Herdr's state.
+        herdr.run(
+            command(
+                session,
+                format!(
+                    "pane report-agent-session {} --source herdr:codex --agent codex --agent-session-id lazysh-owned-990",
+                    quote(&pane)
+                ),
+            )
+            .unwrap(),
+        );
+        let agent = expect("unknown");
+        assert_eq!(
+            serde_json::to_value(&agent.agent_session).unwrap(),
+            serde_json::json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"lazysh-owned-990"})
+        );
+        herdr.run(command(session, "server stop".into()).unwrap());
     }
     #[test]
     fn rejects_nonexact_targets_and_quotes_session_and_labels() {
