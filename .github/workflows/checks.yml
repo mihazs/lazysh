@@ -147,6 +147,8 @@ jobs:
     outputs:
       guarded-sha256: ${{ steps.guarded-artifact.outputs.sha256 }}
       stock-sha256: ${{ steps.stock-artifact.outputs.sha256 }}
+      guarded-id: ${{ steps.guarded-upload.outputs.artifact-id }}
+      stock-id: ${{ steps.stock-upload.outputs.artifact-id }}
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: "2"
@@ -298,6 +300,7 @@ jobs:
           cp "$CARGO_TARGET_DIR/debug/herdr" "$artifact/herdr"
           printf 'sha256=%s\n' "$(sha256sum "$artifact/herdr" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        id: guarded-upload
         with:
           name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/lazysh-herdr-native/guarded-artifact/herdr
@@ -352,6 +355,7 @@ jobs:
           cp "$HERDR_CI_ROOT/stock-source/LICENSE" "$HERDR_CI_ROOT/stock-artifact/LICENSE"
           printf '{"schemaVersion":1,"sourceCommit":"7b116c05bfda646af39d2524c54e70c751f57ee8","archiveSha256":"a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124","manifestSha256":"1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9","sourceFiles":1828,"binarySha256":"%s","checkout":"%s"}\n' "$STOCK_BINARY_SHA256" "$GITHUB_SHA" > "$HERDR_CI_ROOT/stock-artifact/source.json"
       - uses: actions/upload-artifact@v4
+        id: stock-upload
         with:
           name: stock-herdr-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/
@@ -361,6 +365,9 @@ jobs:
   native-linux:
     needs: [changes, herdr-native]
     if: needs.changes.outputs.linux == 'true'
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -434,9 +441,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      # A skipped or failed producer publishes no ID; fail before the download guesses one.
+      - name: Validate producer artifact ID
+        env:
+          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.guarded-id }}
+        run: &herdr-artifact-id-guard |
+          [[ "$HERDR_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo '::error::herdr-native did not publish a single artifact ID'; exit 1; }
       - uses: actions/download-artifact@v4
-        with:
-          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+        with: &guarded-herdr-download
+          artifact-ids: ${{ needs.herdr-native.outputs.guarded-id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
           path: ${{ runner.temp }}/lazysh-guarded-herdr
       - name: Verify same-run guarded binary and exercise owned SSH binding
         env:
@@ -647,6 +662,9 @@ jobs:
   native-android-runtime:
     needs: [changes, herdr-native]
     if: needs.changes.outputs.android_runtime == 'true'
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -692,11 +710,14 @@ jobs:
           shared-key: ${{ github.job == 'native-android-mosh' && 'android-mosh' || 'android-emulator' }}
           save-if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["native-android-runtime","native-android-mosh","native-android-auxiliary"]'), github.job) }}
       - run: bun install --frozen-lockfile
+      - name: Validate producer artifact ID
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
+        env:
+          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.guarded-id }}
+        run: *herdr-artifact-id-guard
       - uses: actions/download-artifact@v4
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
-        with:
-          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/lazysh-guarded-herdr
+        with: *guarded-herdr-download
       - name: Verify same-run guarded Herdr
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
         run: |
@@ -817,6 +838,9 @@ jobs:
   native-android-herdr-navigation:
     needs: [changes, herdr-native]
     if: needs.changes.outputs.android_herdr == 'true'
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -833,10 +857,17 @@ jobs:
       - *android-cache-identity
       - *android-owned-cache
       - run: bun install --frozen-lockfile
+      - &stock-herdr-guard
+        name: Validate producer artifact ID
+        env:
+          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.stock-id }}
+        run: *herdr-artifact-id-guard
       - &stock-herdr-download
         uses: actions/download-artifact@v4
         with:
-          name: stock-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.herdr-native.outputs.stock-id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
           path: ${{ runner.temp }}/lazysh-stock-herdr
       - &stock-herdr-verify
         name: Verify same-run stock Herdr
@@ -883,6 +914,9 @@ jobs:
   native-linux-runtimes:
     needs: [changes, herdr-native]
     if: needs.changes.outputs.linux_runtimes == 'true'
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -915,6 +949,7 @@ jobs:
           tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
           test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
           echo "$zellij_root" >> "$GITHUB_PATH"
+      - *stock-herdr-guard
       - *stock-herdr-download
       - *stock-herdr-verify
       - name: Put the verified stock Herdr on PATH for lifecycle tests

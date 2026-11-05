@@ -191,3 +191,40 @@ test('guarded and stock artifact retention select distinct target bytes and publ
     }
   } finally {await rm(fixture,{recursive:true,force:true});}
 });
+
+test('every Herdr consumer downloads the producer artifact by immutable ID behind a fail-closed guard',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
+  const producer=workflow.jobs['herdr-native'];
+  const isDownload=(step:any)=>String(step.uses??'').startsWith('actions/download-artifact@');
+  const consumers=Object.entries(workflow.jobs as Record<string,any>).filter(([name,job])=>name!=='herdr-native'&&
+    ([job.needs].flat().includes('herdr-native')||job.steps?.some((step:any)=>isDownload(step)&&/herdr/.test(String(step.with?.name??'')))));
+  expect(consumers.length).toBeGreaterThan(0);
+  const guards=new Set<string>();
+  for(const [name,job] of consumers){
+    expect(job.permissions,name).toEqual({contents:'read',actions:'read'});
+    const downloads=job.steps.map((step:any,index:number)=>[step,index] as const).filter(([step])=>isDownload(step));
+    expect(downloads.length,name).toBeGreaterThan(0);
+    for(const [download,index] of downloads){
+      // An attempt-scoped name cannot match the producer's attempt-1 upload on a failed-only rerun.
+      expect(download.with.name,name).toBeUndefined();
+      const flavor=/^\$\{\{ needs\.herdr-native\.outputs\.(guarded|stock)-id \}\}$/.exec(download.with['artifact-ids'])?.[1];
+      expect(flavor,name).toBeDefined();
+      expect(download.with['github-token'],name).toBe('${{ github.token }}');
+      expect(download.with['merge-multiple'],name).toBe(true);
+      const upload=producer.steps.find((step:any)=>`\${{ steps.${step.id}.outputs.artifact-id }}`===producer.outputs[`${flavor}-id`]);
+      expect(upload?.uses,name).toStartWith('actions/upload-artifact@');
+      expect(upload.with['if-no-files-found']).toBe('error');
+      const guard=job.steps.slice(0,index).findLast((step:any)=>step.env?.HERDR_ARTIFACT_ID!==undefined);
+      expect(guard?.env.HERDR_ARTIFACT_ID,name).toBe(download.with['artifact-ids']);
+      expect(guard.if,name).toBe(download.if);
+      guards.add(guard.run);
+    }
+  }
+  for(const run of guards){
+    for(const [id,valid] of [['13315783100',true],['7',true],['',false],['0',false],['012',false],['abc',false],['1 2',false],['13315783100,2',false],['1\n2',false]] as const){
+      const child=Bun.spawn(['bash','-e','-c',run],{env:{...process.env,HERDR_ARTIFACT_ID:id},stdout:'pipe',stderr:'ignore'});
+      expect(await child.exited,JSON.stringify(id)).toBe(valid?0:1);
+      if(!valid)expect(await new Response(child.stdout).text()).toContain('::error::herdr-native did not publish a single artifact ID');
+    }
+  }
+});
