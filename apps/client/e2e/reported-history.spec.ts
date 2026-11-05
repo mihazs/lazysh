@@ -14,7 +14,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
       if(command==='connect')return {sessionId:'ssh-history-exact'};
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-opaque-id',agent:'Claude Code',project:'/workspace',state:'working',updatedAt:'2026-10-24T19:30:00Z',summary:'Reported history fixture',paneId:'%3',eventCount:1}]};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-opaque-id',agent:'Claude Code',project:'/workspace',state:'working',updatedAt:'2026-10-24T19:30:00Z',summary:'Reported history fixture',paneId:'%3',eventCount:1},{sessionId:'codex-opaque-id',agent:'Codex',project:'/workspace',state:'done',updatedAt:'2026-10-24T19:20:00Z',summary:'Codex fixture without history',paneId:'%4',eventCount:1}]};
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
       if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic fixture',epoch:'1/11111111-1111-4111-8111-111111111111',ticket:0};
@@ -31,7 +31,17 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
   await page.getByLabel('Password',{exact:true}).fill('synthetic-entry');await page.getByRole('button',{name:'Connect',exact:true}).click();
   await (await workspaceControl(page,'Agents')).click();
   await page.getByRole('button',{name:'Reported agent activity',exact:true}).click();
-  await page.getByRole('button',{name:'Use reported history',exact:true}).click();
+  if(testInfo.project.name==='phone') {
+    const details=page.getByRole('region',{name:'Selected report',exact:true});
+    await page.getByRole('button',{name:'View Codex report for /workspace',exact:true}).click();
+    await expect(details).toContainText('Codex fixture without history');
+    await expect(details.getByRole('button',{name:'Use reported history',exact:true})).toHaveCount(0);
+    await details.getByRole('button',{name:'Back',exact:true}).click();
+    const row=page.getByRole('button',{name:'View Claude Code report for /workspace',exact:true});
+    await row.click();
+    await expect(row).toBeHidden();
+    await details.getByRole('button',{name:'Use reported history',exact:true}).click();
+  } else await page.getByRole('button',{name:'Use reported history',exact:true}).click();
   await expect(page.getByLabel('Transcript path',{exact:true})).toHaveValue('/workspace/Claude 世界.jsonl ');
   await expect(page.getByRole('combobox',{name:'Agent',exact:true})).toHaveValue('claude');
   await expect(page.getByRole('combobox',{name:'View',exact:true})).toHaveValue('records');

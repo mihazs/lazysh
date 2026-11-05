@@ -50,3 +50,15 @@
 .agent-panel > .tool-bar > h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .agent-panel > .tool-bar { justify-content: flex-end; padding-block: 8px; border: 0; }
 .agent-panel > .tool-bar > button { border-color: transparent; background: transparent; }
+
+.agent-report-back, .agent-report-history { display: none; }
+@media (max-width: 600px) {
+  .agent-panel[data-activity-detail] > .tool-bar,
+  .agent-panel[data-activity-detail] > .agent-board,
+  .agent-panel[data-activity-detail] .agent-discovery > :not(.agent-selected-report),
+  .agent-panel[data-activity-detail] .agent-report-clear { display: none; }
+  .agent-panel[data-activity-detail] .agent-discovery { padding-top: 12px; }
+  .agent-panel[data-activity-detail] .agent-selected-report { border: 0; border-radius: 0; padding: 0; background: transparent; }
+  .agent-panel[data-activity-detail] .agent-report-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+  .agent-panel[data-activity-detail] .agent-report-history { display: inline-flex; min-height: 44px; }
+}
