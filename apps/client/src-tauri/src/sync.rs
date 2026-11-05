@@ -1450,6 +1450,20 @@ mod tests {
     }
 
     #[test]
+    fn multi_row_toolbar_syncs_inside_the_existing_toolbar_field() {
+        let mut bundle = settings();
+        let toolbar = serde_json::json!(["esc", "ctrl", "row-break", "tab", "row-break", "left"]);
+        bundle.preferences = Some(serde_json::json!({"version":1,"toolbar":toolbar}));
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        let imported: Bundle =
+            serde_json::from_slice(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        assert_eq!(imported.preferences.unwrap()["toolbar"], toolbar);
+        // Rows never need a new key, which older peers would reject outright.
+        bundle.preferences = Some(serde_json::json!({"version":1,"toolbarRows":[["esc"]]}));
+        assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+    }
+
+    #[test]
     fn validates_production_urls_etags_and_independent_opt_in() {
         for url in [
             "http://127.0.0.1/dav/",

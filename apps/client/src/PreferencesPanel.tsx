@@ -8,7 +8,8 @@ import {useMountedAccess} from './access';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
-import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, toolbarKeyLabel, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
+import ToolbarKeysEditor from "./ToolbarKeysEditor";
+import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsPage[];after?:SettingsPage[]}={}) {
@@ -40,14 +41,6 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
   async function languageAction(action:()=>Promise<void>) {
     try {await action();if(current())setLanguageError(undefined);}
     catch (error) {if(current())setLanguageError(error instanceof PreferenceStorageError?'settings':'language');}
-  }
-  function move(item: ToolbarKey, delta: number) {
-    const toolbar = [...preferences.toolbar];
-    const index = toolbar.indexOf(item);
-    const other = index + delta;
-    if (index < 0 || other < 0 || other >= toolbar.length) return;
-    [toolbar[index], toolbar[other]] = [toolbar[other], toolbar[index]];
-    update({toolbar});
   }
   function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = gestureActions) {
     return <div key={slot}><label>{label}<select value={action} onChange={event => change(event.target.value as GestureAction)}>{allowed.map(item => <option key={item} value={item}>{t(gestureLabelKeys[item])}</option>)}</select></label>
@@ -124,8 +117,7 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
 </>},
 {id:"preferencesToolbarKeysAndOrder",title:t("preferencesToolbarKeysAndOrder"),parent:"input",content:<>
 
-      <ul>{preferences.toolbar.map((key, index) => <li key={key}><span>{toolbarKeyLabel(key)}</span><button aria-label={t("preferencesMoveValue1Earlier", {value1: key})} disabled={index === 0} onClick={() => move(key, -1)}>↑</button><button aria-label={t("preferencesMoveValue1Later", {value1: key})} disabled={index === preferences.toolbar.length - 1} onClick={() => move(key, 1)}>↓</button><button aria-label={t("preferencesRemoveValue1", {value1: key})} onClick={() => update({toolbar: preferences.toolbar.filter(item => item !== key)})}>{t("appRemove")}</button></li>)}</ul>
-      {toolbarKeys.filter(key => !preferences.toolbar.includes(key)).map(key => <button key={key} onClick={() => update({toolbar: [...preferences.toolbar, key]})}>{t("preferencesAdd")}{" "}{toolbarKeyLabel(key)}</button>)}
+      <ToolbarKeysEditor preferences={preferences} update={update} />
 
 </>},
 {id:"preferencesTextSnippets",title:t("preferencesTextSnippets"),parent:"input",content:<>

@@ -127,7 +127,8 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Reorderable terminal toolbar | implemented | implemented | PP:44-51,127-128. Add and remove through the real UI: NWT:4907-4915 (NAR), ssh.spec:214-221 (NL). Reordering is unit-only (`PreferencesPanel.test.tsx:117`). | Test that moves a key and checks the toolbar order. |
+| Reorderable terminal toolbar | verified | verified | `ToolbarKeysEditor.tsx` drag-and-drop (pointer events; touch drags start after a hold) plus key actions and Alt+Arrow/Delete shortcuts. Real pointer drags reorder, add, remove and move keys between rows, then the terminal sends their bytes: `toolbar-layout.spec.ts` (PW, phone touch and desktop mouse). Keyboard and single-tap alternatives: `PreferencesPanel.test.tsx`. Add and remove through the real UI: NWT:4907-4915 (NAR), ssh.spec:214-221 (NL). | Native drag on a physical Android device. |
+| Multi-row terminal toolbar (1–3 rows) | verified | verified | Rows are stored inside `toolbar` with a `row-break` marker (`preferences.ts`), so older clients and sync peers read one row. Terminal rows: `toolbar-layout.spec.ts` (PW); sync acceptance: `sync.rs` `multi_row_toolbar_syncs_inside_the_existing_toolbar_field`. | — |
 | Ctrl, Alt/Meta, AltGr and Shift with lock | verified | verified | TP:529-533,760-772; `apps/client/src/terminal.ts:57-61`. `i18n.spec.ts:217,233-234`, SS:757 (PW); one-shot Shift over real SSH NWT:4943-4961 (NAR). | — |
 | Arrow keys with hold-to-repeat | verified | verified | TP:20,82-86,780-787. SS:111-127 (PW); D-pad cases above. | — |
 | Enter and Backspace keys | verified | verified | `prefs:13`. Toolbar Enter over real SSH NWT:4949-4955 (NAR); SS:96-109 (PW). | Backspace is unit-only. |

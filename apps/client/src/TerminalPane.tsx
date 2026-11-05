@@ -9,13 +9,15 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
 import TerminalComposer from './TerminalComposer';
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
+import { visibleToolbarRows } from "./toolbarLayout";
+import "./ToolbarRows.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -785,8 +787,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadRightCorner')} title={preferences.gestureChords.cornerRight ?? t(gestureLabelKeys[preferences.dpadCorners.right])} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
       {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
-    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
-      {preferences.toolbar.filter(key => key !== "attach" || !attachFromComposer).map(key => {
+    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="">
+      {visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer).map((row, rowIndex, rows) => <div key={rowIndex} className="terminal-keys-row">{row.map(key => {
         const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
         const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
         const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
@@ -817,11 +819,12 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           onClick={event => {if (!repeatable || !repeated.current || event.detail === 0) action();}}>
           {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}
         </button>;
-      })}
+      })}{rowIndex === rows.length - 1 && <>
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
       <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
       <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
+      </>}</div>)}
     </div>}
   </div>;
 }

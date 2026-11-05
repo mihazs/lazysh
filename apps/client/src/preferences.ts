@@ -14,6 +14,38 @@ export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c",
 export type ToolbarKey = typeof toolbarKeys[number];
 export function toolbarKeyLabel(key: ToolbarKey): string { return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key; }
 const legacyToolbar = ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"];
+/** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
+export const toolbarRowBreak = "row-break";
+export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
+export const maxToolbarRows = 3;
+/** Rows of the stored toolbar, including empty rows; at most `maxToolbarRows`. */
+export function toolbarRows(toolbar: readonly ToolbarEntry[]): ToolbarKey[][] {
+  const rows: ToolbarKey[][] = [[]];
+  for (const entry of toolbar) {
+    if (entry !== toolbarRowBreak) rows[rows.length - 1].push(entry);
+    else if (rows.length < maxToolbarRows) rows.push([]);
+  }
+  return rows;
+}
+export function toolbarFromRows(rows: readonly (readonly ToolbarKey[])[]): ToolbarEntry[] {
+  return rows.slice(0, maxToolbarRows).flatMap((row, index): ToolbarEntry[] => index ? [toolbarRowBreak, ...row] : [...row]);
+}
+function parseToolbar(value: unknown): ToolbarEntry[] {
+  if (!Array.isArray(value)) return [...defaults.toolbar];
+  if (value.length === legacyToolbar.length && value.every((item, index) => item === legacyToolbar[index])) return [...defaults.toolbar];
+  const seen = new Set<ToolbarKey>();
+  let breaks = 0;
+  return value.filter((item): item is ToolbarEntry => {
+    if (item === toolbarRowBreak) {
+      if (breaks >= maxToolbarRows - 1) return false;
+      breaks++;
+      return true;
+    }
+    if (!toolbarKeys.includes(item as ToolbarKey) || seen.has(item as ToolbarKey)) return false;
+    seen.add(item as ToolbarKey);
+    return true;
+  });
+}
 export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 export const gestureDirections = ["left", "right", "up", "down"] as const;
 export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
@@ -37,7 +69,8 @@ export type Preferences = {
   scrollback: number;
   optionAsMeta: boolean;
   screenReader: boolean;
-  toolbar: ToolbarKey[];
+  /** Keys in order, with `toolbarRowBreak` separating up to `maxToolbarRows` rows. */
+  toolbar: ToolbarEntry[];
   snippets: { label: string; text: string }[];
   chords: { label: string; keys: string }[];
   pinchZoom: boolean;
@@ -111,7 +144,7 @@ export function parsePreferences(value: unknown): Preferences {
       if (!chord || typeof chord !== "object" || typeof chord.label !== "string" || chord.label.length < 1 || chord.label.length > 32 || typeof chord.keys !== "string") return false;
       try { parseChord(chord.keys); return true; } catch { return false; }
     }).map(({label, keys}) => ({label, keys})) : [],
-    toolbar: Array.isArray(p.toolbar) && p.toolbar.length === legacyToolbar.length && p.toolbar.every((item, index) => item === legacyToolbar[index]) ? [...defaults.toolbar] : Array.isArray(p.toolbar) ? [...new Set(p.toolbar.filter((item): item is ToolbarKey => toolbarKeys.includes(item as ToolbarKey)))].slice(0, toolbarKeys.length) : [...defaults.toolbar],
+    toolbar: parseToolbar(p.toolbar),
     snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).map(({label, text}) => ({label, text})) : [],
   };
 }

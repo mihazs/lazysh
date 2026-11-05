@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions } from "./preferences";
+import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions, toolbarFromRows, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
   it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
@@ -95,6 +95,22 @@ describe("OSC52 clipboard requests", () => {
   });
 });
 
+ it("keeps flat toolbars as one row and validates stored row breaks", () => {
+  expect(toolbarRows(parsePreferences({...defaults, toolbar: ["esc", "tab"]}).toolbar)).toEqual([["esc", "tab"]]);
+  expect(toolbarRows(defaults.toolbar)).toEqual([[...defaults.toolbar]]);
+  const stored = parsePreferences(JSON.parse(JSON.stringify({...defaults, toolbar: toolbarFromRows([["esc", "ctrl"], [], ["left", "right"]])})));
+  expect(toolbarRows(stored.toolbar)).toEqual([["esc", "ctrl"], [], ["left", "right"]]);
+  // Duplicates across rows, unknown entries and breaks beyond the third row are dropped without losing keys.
+  const hostile = parsePreferences({...defaults, toolbar: ["esc", toolbarRowBreak, "esc", "run", "tab", toolbarRowBreak, "c", toolbarRowBreak, "d", toolbarRowBreak]});
+  expect(hostile.toolbar).toEqual(["esc", toolbarRowBreak, "tab", toolbarRowBreak, "c", "d"]);
+  expect(toolbarRows(hostile.toolbar)).toEqual([["esc"], ["tab"], ["c", "d"]]);
+ });
+ it("lets a client without row support read the same keys from a multi-row toolbar", () => {
+  const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);
+  // The previous release's validator: keep known keys only, in order.
+  const previous = [...new Set(multiRow.filter(item => (toolbarKeys as readonly string[]).includes(item)))];
+  expect(previous).toEqual(["esc", "ctrl", "tab"]);
+ });
  it("upgrades only the previous default toolbar and preserves explicit customization", () => {
   expect(parsePreferences({...defaults, toolbar:["esc","ctrl","tab","c","d","paste","left","up","down","right"]}).toolbar).toEqual(defaults.toolbar);
   for (const toolbar of [[], ["meta","F12","attach","shift"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);
