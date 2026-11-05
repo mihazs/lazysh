@@ -288,7 +288,10 @@ it("does not stage IME composition or plain Enter, and clears the draft when the
   fireEvent.keyDown(input, { key: "Enter", ctrlKey: true, isComposing: true }); expect(staged).not.toHaveBeenCalled();
   fireEvent.compositionEnd(input);
   fireEvent.keyDown(input, { key: "Enter", ctrlKey: true }); expect(staged).toHaveBeenCalledOnce();
+  const help=screen.getByRole("button", {name:"How staging works"});fireEvent.click(help);
+  expect(help.getAttribute("aria-expanded")).toBe("true");
   rerender(<ChatPanel sessionId="second" />);
+  expect(help.getAttribute("aria-expanded")).toBe("false");
   expect(screen.getByLabelText("Draft for this terminal")).toHaveProperty("value", "");
   expect(screen.getByRole("button", { name: "Stage in terminal" })).toHaveProperty("disabled", true);
   window.removeEventListener("lazysh-prompt-draft", staged);

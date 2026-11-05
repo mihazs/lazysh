@@ -17,5 +17,5 @@ export function mountAttachment(options:{files?:boolean;holdReserve?:boolean;cha
   const stage=(event:Event)=>staged.push((event as CustomEvent).detail);window.addEventListener('lazysh-prompt-draft',stage);
   const host=document.createElement('div');host.className='attachment-fixture';Object.assign(host.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--background)',padding:'12px'});document.body.append(host);
   const root=createRoot(host);root.render(options.chat?<ChatPanel sessionId={attachmentSession}/>:options.files?<FilesPanel sessionId={attachmentSession}/>:<AttachmentPanel sessionId={attachmentSession}/>);
-  return {calls,copied,staged,resources,acknowledge(){acknowledge();},complete(){finish();},dispose(){root.unmount();host.remove();URL.createObjectURL=create;URL.revokeObjectURL=revoke;window.removeEventListener('lazysh-prompt-draft',stage);}};
+  return {calls,copied,staged,resources,setChatSession(sessionId:string){if(options.chat)root.render(<ChatPanel sessionId={sessionId}/>);},acknowledge(){acknowledge();},complete(){finish();},dispose(){root.unmount();host.remove();URL.createObjectURL=create;URL.revokeObjectURL=revoke;window.removeEventListener('lazysh-prompt-draft',stage);}};
 }

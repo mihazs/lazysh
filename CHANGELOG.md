@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Show the Chat attachment editor as a focused mobile view, preserving the draft and reading position when returning.
+
+- Compact recorded-conversation drafts into one editor with named attachment, refresh and terminal controls. Changed default: staging guidance opens on request from How staging works; explicit staging and confirmed terminal input remain intact.
+
 - Correct Android UnifiedPush and Firebase-free notification setup guidance, including the separate relay and display consent steps.
 
 - Add support, security and code-of-conduct policies, contributor paths and a first-contribution walkthrough. No application defaults change.
