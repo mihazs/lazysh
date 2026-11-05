@@ -1,6 +1,6 @@
 ---
-"@lazysh/client": minor
-"@lazysh/credential-vault": minor
+"@lazysh/client": patch
+"@lazysh/credential-vault": patch
 ---
 
-Verify enrolled-fingerprint credential unlock, resume lock, private-key export and host-deletion credential removal on the Android emulator, run the real Windows Credential Manager round trip, and document why Windows and Linux report biometric protection unavailable.
+Fix Android biometric-protected credentials failing to save or unlock after a successful fingerprint, and the biometric resume lock stalling on its second prompt.
