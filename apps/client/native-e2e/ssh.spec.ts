@@ -1,7 +1,7 @@
 import {expect,it,vi} from 'vitest';
 import {chmod,copyFile,lstat,mkdir,readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {OwnedSshRelay} from './sshRelay';
 import * as socketOwners from './socketOwner';
@@ -9,7 +9,7 @@ import {NativeGui} from './fixture';
 import {nativeOpenCodeManifest,nativeOpenCodeParagraphText} from './policy';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,typeText,workspaceAction} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -318,6 +318,47 @@ it('pans the expanded D-pad through one native held pointer and stops bytes in i
     try{await browser.execute(key=>{const owner=window as unknown as Record<string,{dispose():void}>;owner[key]?.dispose();delete owner[key];},traceKey);}catch(error){cleanup.push(error);}
     if(cleanup.length)throw new AggregateError(primary?[primary,...cleanup]:cleanup,'Owned D-pad pointer observation cleanup failed');
   }
+  await disconnectOwnedSsh(gui,terminal);
+});
+
+it('imports an encrypted private key file, shows its OpenSSH fingerprint and logs in as the authorized identity',async()=>{
+  fixture.captureSafe=false;
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const gui=fixture.gui=await NativeGui.start();
+  // A test-only passphrase protects a copy of the fixture's disposable user key.
+  const keys=join(gui.directory,'identity-import');await mkdir(keys,{mode:0o700});
+  const keyFile=join(keys,'id_ed25519'),passphrase=randomBytes(12).toString('hex');
+  await copyFile(join(ssh.directory,'user'),keyFile);await chmod(keyFile,0o600);
+  await sshCommand('owned identity encryption','ssh-keygen',['-q','-p','-P','','-N',passphrase,'-f',keyFile]);
+  const encrypted=await readFile(keyFile,'utf8');
+  if(encrypted===ssh.privateKey)throw new Error('Owned identity file was not re-encrypted');
+  const authorizedPublic=join(ssh.directory,'user.pub');
+  const authorized=(await readFile(authorizedPublic,'utf8')).trim().split(/\s+/).slice(0,2).join(' ');
+  const fingerprint=(await sshCommand('owned identity fingerprint','ssh-keygen',['-l','-E','sha256','-f',authorizedPublic])).trim().split(/\s+/)[1];
+  if(!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint))throw new Error('Invalid owned identity fingerprint');
+  const {terminal,owner}=await openOwnedSshWith(gui,ssh,async connect=>{
+    gui.stage='owned identity file import';
+    await (await connect.$('button=Private key')).click();
+    await (await connect.$('summary=Generate or inspect an identity')).click();
+    const panel=await connect.$('section[aria-label="SSH key management"]');await panel.waitForDisplayed();
+    await (await (await panel.$('label*=Identity source')).$('select')).selectByAttribute('value','import');
+    // WebDriver file upload fills the same input the native picker fills.
+    await (await (await panel.$('label*=Private key file')).$('input[type="file"]')).addValue(keyFile);
+    await (await panel.$('span=Loaded id_ed25519. Its contents stay in memory.')).waitForDisplayed();
+    expect(await panel.$$('textarea')).toHaveLength(0);
+    await (await (await panel.$('label*=Key passphrase')).$('input[type="password"]')).setValue(passphrase);
+    await (await panel.$('button=Inspect identity')).click();
+    gui.stage='owned identity fingerprint';
+    await (await panel.$(`code=${fingerprint}`)).waitForDisplayed({timeout:20_000});
+    expect((await (await panel.$('textarea[readonly]')).getValue()).trim().split(/\s+/).slice(0,2).join(' ')).toBe(authorized);
+    await (await panel.$('button=Use for connection')).click();
+    expect(await (await connect.$('textarea')).getValue()===encrypted).toBe(true);
+    expect(await (await (await connect.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()===passphrase).toBe(true);
+    await (await connect.$('button=Connect')).click();
+  });
+  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  const catalog=await readFile(join(gui.directory,'config','app.lazysh.client','hosts.json'),'utf8');
+  if(catalog.includes('PRIVATE KEY')||catalog.includes(passphrase))throw new Error('Owned host catalog contains imported identity material');
   await disconnectOwnedSsh(gui,terminal);
 });
 

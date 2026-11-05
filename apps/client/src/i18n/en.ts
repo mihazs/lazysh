@@ -1725,4 +1725,9 @@ export const english = {
   credentialsUse: "Use for connection",
   credentialsMemory: "Keys stay in memory here. Save credentials for a host using its connection dialog to use the OS credential store.",
   credentialsCopyFailed: "Could not copy the public key. Select and copy it manually.",
+  credentialsKeyFile: "Private key file",
+  credentialsLoadedFile: "Loaded {{name}}. Its contents stay in memory.",
+  credentialsClearFile: "Remove key file",
+  credentialsFileTooLarge: "Choose a private key file no larger than 64 KiB.",
+  credentialsFileUnreadable: "Could not read this key file. Choose it again.",
 } as const;

@@ -5,7 +5,7 @@ mod upload_path;
 use crate::app_lock::{AccessLease, AccessState, Guarded, GuardedError};
 use russh::{
     client,
-    keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
+    keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
     ChannelMsg,
 };
 use russh_sftp::{client::SftpSession, protocol::OpenFlags};
@@ -1100,10 +1100,10 @@ async fn authenticate_handle_mut(
     })?;
     let mut selected_key = None;
     let auth = if let Some(key) = private_key.as_ref().filter(|k| !k.is_empty()) {
-        let key = Arc::new(decode_secret_key(
-            key,
-            passphrase.as_ref().map(|s| s.as_str()),
-        )?);
+        let key = Arc::new(
+            crate::identities::decode_identity(key, passphrase.as_ref().map(|s| s.as_str()))
+                .map_err(|error| SshError::new(error.kind(), error.message()))?,
+        );
         if host.forward_agent {
             selected_key = Some(key.clone());
         }
@@ -3964,6 +3964,8 @@ mod tests {
 
     #[derive(Clone)]
     struct TestServer {
+        /// When set, public-key authentication accepts only this exact key.
+        authorized_key: Arc<StdMutex<Option<russh::keys::PublicKey>>>,
         clipboard_mode: Arc<AtomicUsize>,
         legacy_exec: Arc<std::sync::atomic::AtomicBool>,
         clipboard_eof: Arc<tokio::sync::Notify>,
@@ -4015,10 +4017,16 @@ mod tests {
         async fn auth_publickey(
             &mut self,
             user: &str,
-            _: &russh::keys::PublicKey,
+            key: &russh::keys::PublicKey,
         ) -> std::result::Result<server::Auth, Self::Error> {
             self.auth_attempts.fetch_add(1, Ordering::SeqCst);
-            Ok(if user == "tester" {
+            let authorized = self
+                .authorized_key
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(|expected| expected.key_data() == key.key_data());
+            Ok(if user == "tester" && authorized {
                 server::Auth::Accept
             } else {
                 server::Auth::reject()
@@ -4452,6 +4460,7 @@ mod tests {
             forward_agent: false,
         };
         let test_server = TestServer {
+            authorized_key: Arc::new(StdMutex::new(None)),
             legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
@@ -4476,6 +4485,90 @@ mod tests {
             runner.run_on_socket(config, &listener).await.unwrap();
         });
         (host, test_server, task)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn identity_files_and_generated_keys_log_in_only_as_their_exported_public_key() {
+        use crate::identities::openssh_keys;
+        let (host, server, task) = server(false).await;
+        let (_directory, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let keys = tempfile::tempdir().unwrap();
+        let passphrase = "test-only identity passphrase";
+        let path = openssh_keys::generate(
+            keys.path(),
+            "id_ed25519",
+            &["-t", "ed25519"],
+            None,
+            passphrase,
+        );
+        let private = fs::read_to_string(&path).unwrap();
+        let public = fs::read_to_string(openssh_keys::public_path(&path)).unwrap();
+        let authorize = |line: &str| {
+            *server.authorized_key.lock().unwrap() =
+                Some(russh::keys::PublicKey::from_openssh(line.trim()).unwrap());
+        };
+        let login = |private_key: String, passphrase: Option<&str>| {
+            let passphrase = passphrase.map(str::to_string);
+            let (state, host) = (&state, &host);
+            async move {
+                authenticate(state, host, None, Some(private_key), passphrase)
+                    .await
+                    .map(|_| ())
+            }
+        };
+
+        // Import from a file: the server authorizes only the file's `.pub` line.
+        authorize(&public);
+        login(private.clone(), Some(passphrase)).await.unwrap();
+        let generated = crate::identities::generate("generated test passphrase").unwrap();
+        assert_eq!(
+            login(
+                generated.private_key.clone(),
+                Some("generated test passphrase")
+            )
+            .await
+            .unwrap_err()
+            .kind,
+            "authentication_failed"
+        );
+
+        // Generate: the exported public key is exactly what the server must authorize.
+        authorize(&generated.info.public_key);
+        login(
+            generated.private_key.clone(),
+            Some("generated test passphrase"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            login(private.clone(), Some(passphrase))
+                .await
+                .unwrap_err()
+                .kind,
+            "authentication_failed"
+        );
+
+        // Public keys and locked files fail locally with specific errors before any attempt.
+        let attempts = server.auth_attempts.load(Ordering::SeqCst);
+        for (key, passphrase, kind) in [
+            (public.clone(), None, "public_key_identity"),
+            (
+                generated.info.public_key.clone(),
+                None,
+                "public_key_identity",
+            ),
+            (private.clone(), None, "identity_passphrase_required"),
+            (private.clone(), Some("incorrect"), "identity_invalid"),
+        ] {
+            let error = login(key, passphrase).await.unwrap_err();
+            assert_eq!(error.kind, kind);
+            let body = private.lines().nth(1).unwrap();
+            assert!(!error.message.contains("incorrect") && !error.message.contains(body));
+        }
+        assert_eq!(server.auth_attempts.load(Ordering::SeqCst), attempts);
+        task.abort();
     }
 
     #[tokio::test]
