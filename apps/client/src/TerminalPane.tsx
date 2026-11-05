@@ -22,6 +22,7 @@ import "@xterm/xterm/css/xterm.css";
 import { visibleToolbarRows } from "./toolbarLayout";
 import "./ToolbarRows.css";
 import "./TerminalGestures.css";
+import ToolbarPages from "./ToolbarPages";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -943,6 +944,62 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const label={left:'terminalDpadLeft',up:'terminalDpadUp',down:'terminalDpadDown',right:'terminalDpadRight'} as const;
     return <button key={direction} disabled={!session.connected} data-dpad-direction={direction} aria-label={t(label[direction])} style={dpadDirection===direction?{outline:'1px solid var(--theme-accent)'}:undefined} onClick={()=>{if(inputOwner.current)sendNamed(direction[0].toUpperCase()+direction.slice(1),undefined,inputOwner.current);}}>{labels[direction]}</button>;
   }
+  function toolbarPages() {
+    const tools = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer).map((row, rowIndex, rows) => <div key={rowIndex} className="terminal-keys-row">{row.map(key => {
+      const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
+      const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
+      const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
+      const action = () => {
+        if (modifier) {
+          if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
+          if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
+          imeInput.current?.settle(); imeComposing.current = false;
+        }
+        if (key === "ctrl" || key === "meta") cycleModifier(key);
+        else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}
+        else if (key === "shift") {modifierState.current.shift = !shift; setShift(!shift);}
+        else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
+        else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
+        else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
+        else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
+        else sendKey(sequences[key] ?? key);
+        if (modifier) focusTerminal();
+      };
+      const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
+      const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
+      const release = () => {stopRepeat(); releaseHold();};
+      return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
+        aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
+        aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
+        title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : alternate ? t("terminalKeyAlternate", {action: alternate.keys ?? t(gestureLabelKeys[alternate.action])}) : undefined}
+        data-alternate={alternate ? "" : undefined}
+        onPointerDown={event => {
+          if (key !== "attach") event.preventDefault();
+          if (alternate) {
+            releaseHold(); held.current = null;
+            if (event.button === 0) {event.currentTarget.setPointerCapture?.(event.pointerId); holdAlternate(key, alternate);}
+          }
+          else if (repeatable) {repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); startRepeat(action);}
+        }}
+        onContextMenu={alternate ? event => {event.preventDefault(); fireAlternate(key, alternate);} : undefined}
+        onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} onBlur={release}
+        onClick={event => {
+          if (alternate) {if (event.detail === 0 || !(held.current?.key === key && held.current.fired)) action(); held.current = null;}
+          else if (!repeatable || !repeated.current || event.detail === 0) action();
+        }}>
+        {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}
+      </button>;
+    })}{rowIndex === rows.length - 1 && <>
+    <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
+    <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
+    </>}</div>);
+    // Saved snippets and chords get their own page, so the configured key rows keep their layout.
+    if (!preferences.snippets.length && !preferences.chords.length) return tools;
+    return <ToolbarPages pages={[{id: "tools", content: tools}, {id: "snippets", content: <div className="terminal-keys-snippets">
+      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
+      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
+    </div>}]} />;
+  }
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
@@ -1001,57 +1058,6 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadRightCorner')} title={preferences.gestureChords.cornerRight ?? t(gestureLabelKeys[preferences.dpadCorners.right])} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
       {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
-    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="">
-      {visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer).map((row, rowIndex, rows) => <div key={rowIndex} className="terminal-keys-row">{row.map(key => {
-        const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
-        const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
-        const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
-        const action = () => {
-          if (modifier) {
-            if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
-            if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
-            imeInput.current?.settle(); imeComposing.current = false;
-          }
-          if (key === "ctrl" || key === "meta") cycleModifier(key);
-          else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}
-          else if (key === "shift") {modifierState.current.shift = !shift; setShift(!shift);}
-          else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
-          else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
-          else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
-          else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
-          else sendKey(sequences[key] ?? key);
-          if (modifier) focusTerminal();
-        };
-        const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
-        const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
-        const release = () => {stopRepeat(); releaseHold();};
-        return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
-          aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
-          aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
-          title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : alternate ? t("terminalKeyAlternate", {action: alternate.keys ?? t(gestureLabelKeys[alternate.action])}) : undefined}
-          data-alternate={alternate ? "" : undefined}
-          onPointerDown={event => {
-            if (key !== "attach") event.preventDefault();
-            if (alternate) {
-              releaseHold(); held.current = null;
-              if (event.button === 0) {event.currentTarget.setPointerCapture?.(event.pointerId); holdAlternate(key, alternate);}
-            }
-            else if (repeatable) {repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); startRepeat(action);}
-          }}
-          onContextMenu={alternate ? event => {event.preventDefault(); fireAlternate(key, alternate);} : undefined}
-          onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} onBlur={release}
-          onClick={event => {
-            if (alternate) {if (event.detail === 0 || !(held.current?.key === key && held.current.fired)) action(); held.current = null;}
-            else if (!repeatable || !repeated.current || event.detail === 0) action();
-          }}>
-          {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}
-        </button>;
-      })}{rowIndex === rows.length - 1 && <>
-      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
-      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
-      <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
-      <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
-      </>}</div>)}
-    </div>}
+    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="">{toolbarPages()}</div>}
   </div>;
 }
