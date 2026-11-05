@@ -1,3 +1,5 @@
+#[path = "ssh/client_environment.rs"]
+mod client_environment;
 #[path = "ssh/file_control.rs"]
 pub(crate) mod file_control;
 #[path = "ssh/upload_path.rs"]
@@ -142,6 +144,12 @@ pub struct Host {
     pub credentials_stored: bool,
     #[serde(default, rename = "biometricUnlock", skip_serializing_if = "is_false")]
     pub biometric_unlock: bool,
+    #[serde(
+        default,
+        rename = "clientEnvironment",
+        skip_serializing_if = "is_false"
+    )]
+    pub client_environment: bool,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -1700,6 +1708,7 @@ async fn open_terminal_for(
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
         let mut initial = request_ok(&mut channel).await?;
+        client_environment::request(handle, &channel).await?;
         if handle.forward_agent.enabled() {
             channel.agent_forward(true).await?;
             initial.extend_from_slice(&request_ok(&mut channel).await?);
@@ -3306,6 +3315,9 @@ mod tests {
     #[path = "account_usage_fixture.rs"]
     mod account_usage_fixture;
     #[cfg(unix)]
+    #[path = "client_environment_fixture.rs"]
+    mod client_environment_fixture;
+    #[cfg(unix)]
     #[path = "companion_fixture.rs"]
     mod companion_fixture;
     #[path = "host_clipboard_fixture.rs"]
@@ -3418,6 +3430,7 @@ mod tests {
             credentials_stored: false,
             jump_host_id: None,
             forward_agent: false,
+            client_environment: false,
             biometric_unlock: false,
         }
     }
@@ -3456,6 +3469,7 @@ mod tests {
             username: "user".into(),
             fingerprint: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: true,
             jump_host_id: None,
             forward_agent: false,
@@ -3679,6 +3693,7 @@ mod tests {
             username: "user".into(),
             fingerprint: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
             jump_host_id: None,
             forward_agent: false,
@@ -4456,6 +4471,7 @@ mod tests {
             fingerprint: Some(fingerprint),
             jump_host_id: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
             forward_agent: false,
         };
@@ -5417,6 +5433,7 @@ mod tests {
             fingerprint: Some("forged".into()),
             jump_host_id: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
             forward_agent: false,
         };
@@ -5915,8 +5932,16 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH; run explicitly for interoperability"]
+    async fn openssh_client_environment_reaches_remote_shell() {
+        openssh_interoperability(OpenSshCheck::ClientEnvironment).await;
+    }
+
+    #[cfg(unix)]
     enum OpenSshCheck {
         Files,
+        ClientEnvironment,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Mosh,
         #[cfg(target_os = "linux")]
@@ -5987,6 +6012,8 @@ mod tests {
                 .unwrap();
             assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
             openssh_tool_environment(dir.path(), binary, "mosh-server")
+        } else if matches!(check, OpenSshCheck::ClientEnvironment) {
+            client_environment_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::CompanionInstall) {
@@ -6053,6 +6080,7 @@ mod tests {
             fingerprint: Some(key.public_key().fingerprint(HashAlg::Sha256).to_string()),
             jump_host_id: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
             forward_agent: false,
         };
@@ -6079,6 +6107,10 @@ mod tests {
         }
         let connected = manual_session(&app.state(), &host, &user_key).await;
         let id = connected.session_id;
+        if matches!(check, OpenSshCheck::ClientEnvironment) {
+            client_environment_fixture::verify(&app.state(), &host, &user_key).await;
+            return;
+        }
         if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::verify(&app, &id, dir.path()).await;
             return;

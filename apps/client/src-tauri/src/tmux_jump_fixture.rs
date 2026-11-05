@@ -244,6 +244,7 @@ impl Fixture {
             ),
             jump_host_id: None,
             credentials_stored: false,
+            client_environment: false,
             biometric_unlock: false,
             forward_agent: false,
         };

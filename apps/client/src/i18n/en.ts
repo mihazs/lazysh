@@ -639,6 +639,8 @@ export const english = {
   "appConnectDirectly": "Connect directly",
   "appForwardThisConnectionSPrivateKeyIdentity": "Forward this connection’s private-key identity",
   "appRequireBiometricsForSavedCredentials": "Require biometrics for saved credentials",
+  "appSendClientEnvironment": "Identify lazysh to this host (LC_TERMINAL=lazysh)",
+  "appClientEnvironmentNote": "From the next SSH connection, terminals and multiplexer attachments ask the server to set LC_TERMINAL=lazysh. The server applies it only when its AcceptEnv admits LC_TERMINAL; the common default AcceptEnv LANG LC_* does. Mosh and ET sessions and panes already running in a multiplexer do not receive it.",
   "appProgramsOnThisHostCanRequestSignaturesWithYour": "Programs on this host can request signatures with your selected identity while connected. Your other keys and local SSH agent are not exposed. Requires private-key authentication.",
   "appCancel": "Cancel",
   "appSaving": "Saving…",

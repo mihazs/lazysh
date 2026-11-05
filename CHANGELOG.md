@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an opt-in per-host **Identify lazysh to this host** option that asks the SSH server to set `LC_TERMINAL=lazysh` for new SSH terminals and tmux, Herdr and Zellij attachments, so remote shells and agents can detect the client. It is off by default and applies only when the server's `AcceptEnv` admits `LC_TERMINAL` (the common default `AcceptEnv LANG LC_*` does); Mosh and ET sessions do not send it.
+
 - Show plan, question and turn-state cards in native Chat for Claude Code, Codex and OpenCode. Plans show each step with its recorded status. Questions list their options and point to the terminal for the answer, since Chat cannot choose options in an agent prompt. Conversation views show whether the agent is working, waiting for an answer, idle or stopped, based on recorded lifecycle records; other cases show an unknown state. Display only: the raw tool cards remain and no defaults change.
 
 - Show the Chat attachment editor as a focused mobile view, preserving the draft and reading position when returning.
