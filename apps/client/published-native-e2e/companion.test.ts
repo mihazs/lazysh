@@ -30,6 +30,9 @@ it('installs the published verified companion through the actual native GUI and 
   await challengeOwnedSsh(gui,ssh,terminal,owner);
   gui.stage='published companion Agents navigation';
   await (await browser.$('button[aria-label="Agents navigation"]')).click();
+  await (await browser.$('button[aria-label="Reported agent activity"]')).click();
+  const setup=await (await browser.$('.agent-panel')).$('button=Setup');await setup.waitForDisplayed({timeout:10_000});
+  if(await setup.getAttribute('aria-expanded')==='false'){await setup.waitForClickable({timeout:10_000});await setup.click();}
   const panel=await browser.$('details[aria-label="Host companion installation"]');
   await panel.waitForDisplayed({timeout:20_000});
   let firstIdentity:number[]|undefined;
