@@ -861,6 +861,8 @@ mod tests {
         assert_eq!(tree.workspaces.len(), 2);
         run(command(session, "server stop".into()).unwrap());
     }
+    // The fake `codex` is a POSIX shell script made executable with a Unix mode.
+    #[cfg(unix)]
     #[test]
     #[ignore = "requires herdr on PATH; runs an isolated headless server"]
     fn real_herdr_codex_state_is_detected_and_an_idle_prompt_stays_unknown() {
