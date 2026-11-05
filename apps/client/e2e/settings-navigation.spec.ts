@@ -1,0 +1,100 @@
+import {workspaceControl} from './fixtures/workspaceControl';
+import {expect, test, type Locator} from '@playwright/test';
+
+const name=(row:Locator)=>row.evaluate(node=>document.getElementById(node.getAttribute('aria-labelledby')??'')?.textContent??'');
+const value=(row:Locator)=>row.evaluate(node=>document.getElementById(node.getAttribute('aria-describedby')??'')?.textContent??null);
+
+test('Preferences opens a grouped list whose rows preview values and lead into sub-pages and back',async({page},testInfo)=>{
+  await page.goto('/');
+  await (await workspaceControl(page,'Preferences')).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const index=dialog.locator('.settings-index');
+  await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
+  expect(await index.locator('.settings-section-title').allTextContents()).toEqual(['Terminal','Input','Agents and notifications','Security and sync','General','Help']);
+  const section=(title:string)=>index.getByRole('region',{name:title,exact:true});
+  const rows=async(title:string)=>Promise.all((await section(title).getByRole('button').all()).map(name));
+  expect(await rows('Terminal')).toEqual(['Appearance and fonts','Terminal and accessibility']);
+  expect(await rows('Input')).toEqual(['Keyboard and gestures']);
+  expect(await rows('Agents and notifications')).toEqual(['Notifications','Notification inbox','Agents','Dictate']);
+  expect(await rows('Security and sync')).toEqual(['Security and app lock','Encrypted sync']);
+  expect(await rows('General')).toEqual(['Language and region','Shareable uploads']);
+  expect(await rows('Help')).toEqual(['About lazysh']);
+  const appearance=index.getByRole('button',{name:'Appearance and fonts',exact:true});
+  expect(await value(appearance)).toBe('lazysh · 14 px');
+  expect(await value(index.getByRole('button',{name:'Terminal and accessibility',exact:true}))).toBe('bar · 5,000 lines');
+  expect(await value(index.getByRole('button',{name:'Language and region',exact:true}))).toBe('System');
+  await expect(index.getByRole('button',{name:'Agents',exact:true})).toBeDisabled();
+  expect(await value(index.getByRole('button',{name:'Agents',exact:true}))).toBe('Open a session first');
+  await expect(index.getByRole('button',{name:'Reset settings',exact:true})).toHaveAttribute('data-tone','danger');
+  await expect(index.getByText(/^lazysh \d+\.\d+\.\d+/)).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('settings-root.png')});
+
+  await index.getByRole('button',{name:'Terminal and accessibility',exact:true}).click();
+  const terminal=dialog.locator('[data-settings-page="terminal"]');
+  await expect(terminal.getByRole('heading',{name:'Terminal and accessibility',level:2})).toBeFocused();
+  expect(await terminal.locator('h3.settings-group-title').allTextContents()).toEqual(['Cursor and history','Accessibility']);
+  await page.screenshot({path:testInfo.outputPath('settings-terminal.png')});
+  await terminal.getByRole('combobox',{name:'Cursor',exact:true}).selectOption('block');
+  await terminal.getByRole('spinbutton',{name:'History lines',exact:true}).fill('1200');
+  if(testInfo.project.name==='phone') {
+    await expect(index).toBeHidden();
+    await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  } else {
+    await expect(index).toBeVisible();
+    await expect(index.getByRole('button',{name:'Terminal and accessibility',exact:true})).toHaveAttribute('aria-current','page');
+    await page.keyboard.press('Escape');
+  }
+  await expect(index.getByRole('button',{name:'Terminal and accessibility',exact:true})).toBeFocused();
+  expect(await value(index.getByRole('button',{name:'Terminal and accessibility',exact:true}))).toBe('block · 1,200 lines');
+
+  await index.getByRole('button',{name:'Keyboard and gestures',exact:true}).click();
+  const input=dialog.locator('[data-settings-page="input"]');
+  await expect(input.getByRole('checkbox',{name:'Use Option as Meta on macOS',exact:true})).toBeVisible();
+  await input.getByRole('button',{name:'Text snippets',exact:true}).click();
+  await expect(dialog.getByRole('heading',{name:'Text snippets',level:2})).toBeFocused();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(input.getByRole('button',{name:'Text snippets',exact:true})).toBeFocused();
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(index.getByRole('button',{name:'Keyboard and gestures',exact:true})).toBeVisible();
+  await expect(dialog.locator('[data-settings-page]:visible')).toHaveCount(0);
+
+  await index.getByRole('button',{name:'About lazysh',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('dialog',{name:'About lazysh',exact:true})).toBeVisible();
+});
+
+test('Preferences search finds settings inside sub-pages and opens the matching control',async({page},testInfo)=>{
+  await page.goto('/');
+  await (await workspaceControl(page,'Preferences')).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const search=dialog.getByRole('searchbox',{name:'Search settings',exact:true});
+  await search.fill('history');
+  const results=dialog.getByRole('navigation',{name:'Search results',exact:true});
+  const found=results.getByRole('button',{name:'History lines',exact:true});
+  expect(await value(found)).toBe('Terminal and accessibility');
+  await expect(dialog.locator('.settings-section-title')).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath('settings-search.png')});
+  await found.click();
+  const field=dialog.locator('[data-settings-page="terminal"]').getByRole('spinbutton',{name:'History lines',exact:true});
+  await expect(field).toBeFocused();await expect(field).toBeInViewport();
+
+  if(testInfo.project.name==='phone')await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  else await search.focus();
+  await expect(search).toHaveValue('history');
+  await search.fill('cjk');
+  await results.getByRole('button',{name:'Imported CJK fallback',exact:true}).click();
+  await expect(dialog.locator('[data-settings-page="appearance"] details').filter({has:page.getByText('Imported fonts',{exact:true})})).toHaveAttribute('open','');
+  await expect(dialog.getByRole('combobox',{name:'Imported CJK fallback',exact:true})).toBeFocused();
+
+  if(testInfo.project.name==='phone')await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await search.fill('Snippet');
+  const snippets=results.getByRole('button',{name:'Text snippets',exact:true});
+  expect(await value(snippets)).toBe('Keyboard and gestures › Text snippets');
+  await search.fill('no such setting');
+  await expect(dialog.locator('.settings-index').getByRole('status')).toHaveText('No settings match “no such setting”.');
+  await search.press('Escape');
+  await expect(search).toHaveValue('');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.settings-section-title').first()).toHaveText('Terminal');
+  expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+});

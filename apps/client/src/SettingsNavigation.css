@@ -23,3 +23,25 @@
 @media (min-width: 900px) { .dialog:has(.settings-navigation) { width: min(920px, calc(100vw - 48px)); max-width: none; } }
 
 .preferences-content > .preferences-panel { max-width: none; }
+
+/* Grouped root list: section headers, value previews, footers, search and the destructive row. */
+.settings-index { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.settings-navigation .settings-search { position: relative; display: flex; flex-wrap: nowrap; gap: 0; align-items: center; margin: 0 0 6px; }
+.settings-navigation .settings-search > svg { position: absolute; left: 12px; color: var(--theme-muted); pointer-events: none; }
+.settings-navigation .settings-search > input[type="search"] { width: 100%; max-width: none; min-height: 40px; padding: 8px 12px 8px 36px; border: 1px solid transparent; border-radius: 12px; background: var(--ui-row, var(--theme-panel)); box-shadow: none; color: var(--theme-text); font: inherit; font-size: 15px; }
+.settings-navigation .settings-search > input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-section { display: grid; min-width: 0; margin: 0 0 14px; }
+.settings-section-title, .settings-navigation [data-settings-page] > h3.settings-group-title { margin: 10px 16px 6px; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; line-height: 1.4; text-transform: uppercase; }
+.settings-section-footer, .settings-footer { margin: 6px 16px 0; color: var(--theme-muted); font-size: 12.5px; line-height: 1.5; }
+.settings-footer { margin: 4px 0 16px; text-align: center; }
+.settings-row-text { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.settings-row-text > span { max-width: 100%; overflow-wrap: break-word; }
+.settings-row-value { color: var(--theme-muted); font-size: 13px; font-weight: 400; line-height: 1.35; }
+.settings-navigation .settings-category-list > button[data-tone="danger"] { color: var(--danger); }
+.settings-navigation .settings-category-list > button:disabled { opacity: .55; cursor: default; }
+.settings-navigation [data-settings-page] > h3.settings-group-title { margin-top: 18px; }
+.settings-navigation [data-settings-page] > h2 + h3.settings-group-title { margin-top: 4px; }
+@media (min-width: 900px) {
+  .settings-index { max-height: calc(100dvh - 160px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+}
+@media (forced-colors: active) { .settings-navigation .settings-search > input[type="search"] { border-color: CanvasText; } }

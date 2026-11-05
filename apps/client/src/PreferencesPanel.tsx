@@ -1,4 +1,4 @@
-import SettingsNavigation,{type SettingsPage} from "./SettingsNavigation";
+import SettingsNavigation,{type SettingsPage,type SettingsSection} from "./SettingsNavigation";
 import {t, useUi, formatNumber} from './i18n/core';
 import { useEffect, useRef, useState } from "react";
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
@@ -13,7 +13,23 @@ import GestureBindingField from "./GestureBindingField";
 import { bodyGestureSlots, defaults, discreteGestureActions, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
-export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsPage[];after?:SettingsPage[]}={}) {
+const themeLabels={forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const;
+const languageLabels={system:"languageSystem",en:"languageEnglish","pt-BR":"languagePortugueseBrazil",es:"languageSpanish"} as const;
+const cursorLabels={bar:"cursorBar",block:"cursorBlock",underline:"cursorUnderline"} as const;
+/** Root sections, in the order the settings list shows them; hosts add their own entries to them. */
+export const settingsSections=():SettingsSection[]=>[
+  {id:"terminal",title:t("settingsSectionTerminal")},
+  {id:"input",title:t("settingsSectionInput")},
+  {id:"agents",title:t("settingsSectionAgents")},
+  {id:"security",title:t("settingsSectionSecurity")},
+  {id:"general",title:t("settingsSectionGeneral")},
+  {id:"help",title:t("settingsSectionHelp")},
+  {id:"reset",footer:t("settingsResetFooter")},
+];
+const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):undefined;
+
+/** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
+export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[];footer?:string}={}) {
   useUi();
   const preferences = usePreferences();
   const locale=useNativeLocale();
@@ -46,27 +62,21 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
   function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = discreteGestureActions) {
     return <GestureBindingField key={slot} label={label} action={action} keys={preferences.gestureChords[slot]} allowed={allowed} onAction={change} onKeys={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />;
   }
-  return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
-    {error && <p role="alert">{uiErrorText(error)}</p>}
-    {languageError && <p role="alert">{t(languageError==='settings'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed')}</p>}
-    <SettingsNavigation pages={[...before,
-{id:"language",title:t("preferencesCategoryLanguage"),content:<>
+  const appThemeName=preferences.appTheme==="custom"?preferences.customThemeInfo?.name??t("preferencesCustom"):preferences.appTheme==="forest"?"lazysh":t(themeLabels[preferences.appTheme]);
+  const own:SettingsPage[]=[
+{id:"appearance",section:"terminal",title:t("preferencesCategoryAppearance"),value:`${appThemeName} · ${t("settingsFontSizeValue",{size:formatNumber(preferences.fontSize)})}`,content:<>
 
-    <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
-      <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
-      <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
-    </select></label>
-
-</>},
-{id:"appearance",title:t("preferencesCategoryAppearance"),content:<>
-
+    <h3 className="settings-group-title">{t("settingsGroupApp")}</h3>
     <AppIconPanel />
     <label>{t("preferencesSessionSwitcherLayout")}<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">{t("preferencesList")}</option><option value="cards">{t("preferencesCards")}</option></select></label>
-    <label>{t("preferencesAppTheme")}<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme === "forest" ? "lazysh" : t(({forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const)[theme as keyof typeof themes])}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
+    <label>{t("preferencesAppTheme")}<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme === "forest" ? "lazysh" : t(themeLabels[theme as keyof typeof themes])}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
+    <h3 className="settings-group-title">{t("settingsGroupTerminalColors")}</h3>
     <label>{t("preferencesTerminalTheme")}<select value={preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], ...(!preferences.customThemeInfo && e.target.value !== "custom" ? {customTheme: undefined} : {})})}>
-      {Object.keys(themes).map(theme => <option key={theme} value={theme}>{t(({forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const)[theme as keyof typeof themes])}</option>)}
+      {Object.keys(themes).map(theme => <option key={theme} value={theme}>{t(themeLabels[theme as keyof typeof themes])}</option>)}
       {preferences.customTheme && <option value="custom">{t("preferencesCustom")}</option>}
     </select></label>
+    <ThemeImportPanel preferences={preferences} apply={update} />
+    <h3 className="settings-group-title">{t("settingsGroupFonts")}</h3>
     <label>{t("preferencesFontSize")}<input type="number" min={10} max={32} value={preferences.fontSize} onChange={e => { if (e.target.value) update({fontSize: Number(e.target.value)}); }} /></label>
     <label>{t("preferencesFontFamily")}<input maxLength={256} value={preferences.fontFamily} onChange={e => update({fontFamily: e.target.value})} /></label>
     <label>{t("preferencesCJKFallbackFamilies")}<input maxLength={256} value={preferences.cjkFallback} onChange={e => update({cjkFallback: e.target.value})} /></label>
@@ -85,24 +95,27 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
       <ul>{fonts.fonts.map(font => <li key={font.id}><span>{font.name} ({formatNumber(font.size / 1024 / 1024, {minimumFractionDigits:2, maximumFractionDigits:2})}{" "}{t("preferencesMiB")}</span><button disabled={fontBusy} aria-label={t("preferencesDeleteFontValue1", {value1: font.name})} onClick={() => void fontAction(() => deleteFont(font.id))}>{t("preferencesDelete")}</button></li>)}</ul>
       <button disabled={fontBusy} onClick={() => void fontAction(deleteAllFonts)}>{t("preferencesDeleteAllImportedFonts")}</button>
     </details>
-    <ThemeImportPanel preferences={preferences} apply={update} />
 
 </>},
-{id:"terminal",title:t("preferencesCategoryTerminal"),content:<>
+{id:"terminal",section:"terminal",title:t("preferencesCategoryTerminal"),value:`${t(cursorLabels[preferences.cursorStyle])} · ${t("settingsHistoryLinesValue",{value:formatNumber(preferences.scrollback)})}`,content:<>
 
-    <label>{t("preferencesCursor")}<select value={preferences.cursorStyle} onChange={e => update({cursorStyle: e.target.value as Preferences["cursorStyle"]})}>{["bar", "block", "underline"].map(value => <option key={value} value={value}>{t(({bar:"cursorBar",block:"cursorBlock",underline:"cursorUnderline"} as const)[value as Preferences["cursorStyle"]])}</option>)}</select></label>
+    <h3 className="settings-group-title">{t("settingsGroupCursorAndHistory")}</h3>
+    <label>{t("preferencesCursor")}<select value={preferences.cursorStyle} onChange={e => update({cursorStyle: e.target.value as Preferences["cursorStyle"]})}>{(["bar", "block", "underline"] as const).map(value => <option key={value} value={value}>{t(cursorLabels[value])}</option>)}</select></label>
     <label><input type="checkbox" checked={preferences.cursorBlink} onChange={e => update({cursorBlink: e.target.checked})} />{t("preferencesBlinkCursor")}</label>
     <label>{t("preferencesHistoryLines")}<input type="number" min={100} max={20000} step={100} value={preferences.scrollback} onChange={e => { if (e.target.value) update({scrollback: Number(e.target.value)}); }} /></label>
     <p>{t("preferencesReducingHistoryRemovesOlderLocalLines")}</p>
+    <h3 className="settings-group-title">{t("settingsGroupAccessibility")}</h3>
     <label><input type="checkbox" checked={preferences.screenReader} onChange={e => update({screenReader: e.target.checked})} />{t("preferencesScreenReaderAnnouncements")}</label>
     <label><input type="checkbox" checked={preferences.pinchZoom} onChange={e => update({pinchZoom: e.target.checked})} />{t("preferencesPinchWithTwoFingersToResizeTerminalText")}</label>
     <label><input type="checkbox" checked={preferences.autoHideToolbar} onChange={e => update({autoHideToolbar: e.target.checked})} />{t("preferencesAutoHideToolbarInDesktopPointerLayouts")}</label>
 
 </>},
-{id:"input",title:t("preferencesCategoryInput"),content:<>
+{id:"input",section:"input",title:t("preferencesCategoryInput"),content:<>
 
+    <h3 className="settings-group-title">{t("settingsGroupKeyboard")}</h3>
     <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
     <label><input type="checkbox" checked={preferences.composerSendEnter} onChange={e => update({composerSendEnter: e.target.checked})} />{t("preferencesComposerSendEnter")}</label>
+    <h3 className="settings-group-title">{t("settingsGroupToolbarAndShortcuts")}</h3>
 
 </>},
 {id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>
@@ -123,7 +136,7 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
       <ToolbarKeysEditor preferences={preferences} update={update} />
 
 </>},
-{id:"preferencesTextSnippets",title:t("preferencesTextSnippets"),parent:"input",content:<>
+{id:"preferencesTextSnippets",title:t("preferencesTextSnippets"),parent:"input",value:count(preferences.snippets),content:<>
 
       <p>{t("preferencesSnippetsPasteLiteralTextIntoTheActiveProgramReview")}</p>
       <ul>{preferences.snippets.map((snippet, index) => <li key={index}><span>{snippet.label}</span><button aria-label={t("preferencesRemoveSnippetValue1", {value1: snippet.label})} onClick={() => update({snippets: preferences.snippets.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
@@ -132,7 +145,7 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
       <button disabled={!label.trim() || !text} onClick={() => { if (update({snippets: [...preferences.snippets, {label: label.trim(), text}]})) { setLabel(""); setText(""); } }}>{t("preferencesAddSnippet")}</button>
 
 </>},
-{id:"preferencesKeyboardChords",title:t("preferencesKeyboardChords"),parent:"input",content:<>
+{id:"preferencesKeyboardChords",title:t("preferencesKeyboardChords"),parent:"input",value:count(preferences.chords),content:<>
 
       <p>{t("preferencesSendUpTo8StepsCBST")}</p>
       <ul>{preferences.chords.map((chord, index) => <li key={index}><span>{chord.label}: {chord.keys}</span><button aria-label={t("preferencesRemoveChordValue1", {value1: chord.label})} onClick={() => update({chords: preferences.chords.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
@@ -143,14 +156,27 @@ export default function PreferencesPanel({before=[],after=[]}:{before?:SettingsP
       }} />
 
 </>},
-{id:"reset",title:t("preferencesCategoryReset"),content:<>
+{id:"language",section:"general",title:t("preferencesCategoryLanguage"),value:t(languageLabels[preferences.uiLanguage]),content:<>
+
+    <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
+      <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
+      <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
+    </select></label>
+
+</>},
+{id:"reset",section:"reset",tone:"danger",title:t("preferencesCategoryReset"),content:<>
 
     <button disabled={languageBusy} onClick={() => {void languageAction(async()=>{
       await applyPreferenceIntent({...defaults,toolbar:[...defaults.toolbar],snippets:[],customTheme:undefined,customThemeInfo:undefined},true,current);
       if(current())await fontAction(resetFontSelection);
     });}}>{t("preferencesResetPreferences")}</button>
+    <p>{t("settingsResetFooter")}</p>
 
 </>},
-...after]}/>
+  ];
+  return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
+    {error && <p role="alert">{uiErrorText(error)}</p>}
+    {languageError && <p role="alert">{t(languageError==='settings'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed')}</p>}
+    <SettingsNavigation sections={settingsSections()} footer={footer} pages={[...own,...pages]}/>
   </section>;
 }

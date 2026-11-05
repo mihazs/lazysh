@@ -158,8 +158,11 @@ test('Preferences starts with compact categories at the top and keeps drafts whi
   expect(await dialog.locator('.dialog-content').evaluate(node=>node.scrollTop)).toBe(0);
   expect(await dialog.locator('[data-settings-page]:visible').count()).toBe(0);
   await expect(dialog.getByRole('spinbutton',{name:'Font size',exact:true})).toBeHidden();
+  await expect(dialog.getByRole('searchbox',{name:'Search settings',exact:true})).toBeInViewport({ratio:0.9});
   await expect(dialog.locator('.settings-index button').first()).toBeInViewport({ratio:0.9});
+  await dialog.locator('.settings-index button').last().scrollIntoViewIfNeeded();
   await expect(dialog.locator('.settings-index button').last()).toBeInViewport({ratio:0.9});
+  await dialog.locator('.dialog-content').evaluate(node=>{node.scrollTop=0;});
   await page.screenshot({path:testInfo.outputPath('preferences-category-entry.png'),animations:'disabled'});
   await openPreferenceCategory(page,'Input');await page.getByRole('button',{name:'Text snippets',exact:true}).click();
   const name=dialog.getByRole('textbox',{name:'Snippet name',exact:true}),text=dialog.getByRole('textbox',{name:'Snippet text',exact:true});
@@ -178,8 +181,8 @@ test('Preferences starts with compact categories at the top and keeps drafts whi
   await expect(dialog.getByRole('button',{name:'Keyboard and gestures',exact:true})).toBeFocused();
   await openPreferenceCategory(page,'Appearance');
   if(testInfo.project.name==='desktop'){
-    const language=dialog.locator('.settings-index').getByRole('button',{name:'Language and region',exact:true});
-    await expect(language).toBeVisible();await language.focus();await page.keyboard.press('Shift+Tab');
+    const search=dialog.locator('.settings-index').getByRole('searchbox',{name:'Search settings',exact:true});
+    await expect(search).toBeVisible();await search.focus();await page.keyboard.press('Shift+Tab');
     await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
   }
   await page.emulateMedia({reducedMotion:'reduce',forcedColors:'active'});
