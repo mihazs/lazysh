@@ -6,8 +6,8 @@ notification. Source preparation and compilation alone are not a passing runtime
 receipt; observed results must identify their exact checkout and artifacts.
 
 The separate `native-android-ntfy` job owns a fresh API36 emulator and its own
-35-minute budget. The original Android runtime job, order and 30-minute limit are
-unchanged. Its imagefile camera arguments are used only to reuse the existing
+35-minute budget. The original Android runtime job and order are unchanged; its
+limit is 40 minutes. Its imagefile camera arguments are used only to reuse the existing
 exact emulator-process attestation; this test never opens a camera or physical
 device. No app subscription or paid provider account is required.
 
