@@ -251,15 +251,26 @@ Android behavior when an alias changes:
   running Activity, its WebView and open SSH, Mosh and ET sessions stay in place.
 - The launcher redraws on its own schedule. The old icon can remain for a few
   seconds, and a pinned shortcut or widget pointing at the old entry can disappear,
-  depending on the launcher. A remote-event notification posted before the change
-  opens the alias that was current when it was posted; if that alias is now
-  disabled, tap lazysh in the launcher instead.
+  depending on the launcher. A remote-event notification targets `LauncherActivity`
+  behind the current alias rather than the alias itself, so one posted before the
+  change still opens the workspace afterwards.
 - `MainActivity` keeps only its `lazysh://` deep-link route; theme links and
   explicit launches are unchanged.
 
+Updating an existing install: the first version with launcher aliases changes the
+launcher component from `.MainActivity` to `.LauncherDefault` for every Android
+install, whether or not App icon is ever used. The launcher treats this as a new
+entry. Depending on the launcher, a home-screen icon or shortcut pinned under the
+previous version can move, be re-mapped to the new entry or disappear after the
+update. Add lazysh again from the app drawer if its icon is missing; sessions,
+hosts and preferences are not affected.
+
 `NativeWorkspaceTest#appIconAliasSwitchKeepsTheRunningWorkspaceActivity` re-enters
-through the actual launcher alias, applies Amber and Default through the UI, and
-checks PackageManager component states, the launcher entries, that the original
+through the actual launcher alias (asserting the launch intent resolves to
+`.LauncherDefault`, then `.LauncherAmber`, and waiting for the trampoline to be
+destroyed and the original `MainActivity` to pause and resume, with no second
+workspace task), applies Amber and Default through the UI, and checks PackageManager
+component states, the launcher entries, that the original
 `MainActivity` instance stays resumed and that the WebView document was not
 reloaded. It runs in the emulator instrumentation job; browser tests use a mocked
 bridge and do not establish launcher behavior.
