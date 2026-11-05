@@ -553,6 +553,9 @@ jobs:
         run: bunx turbo run test:rust --filter=@lazysh/account-usage
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Exercise the actual Windows Credential Manager round trip and chunked deletion
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p tauri-plugin-lazysh-vault --lib -- --ignored --exact tests::os_vault_roundtrip chunked::tests::windows_credential_manager_deletion_leaves_no_chunks
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
         run: |
@@ -762,6 +765,7 @@ jobs:
             tmux) bun run test:android-tmux; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
+            biometric) bun run test:android-biometric; exit $? ;;
             auxiliary) ;;
             *) printf "%s\n" "Unknown Android runtime owner" >&2; exit 1 ;;
             esac;
@@ -976,8 +980,9 @@ jobs:
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: auxiliary
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-auxiliary-results
       VITE_LAZYSH_QR_CAMERA_TRACE: '1'
-    steps:
+    steps: &android-emulator-only-steps
       - *source-checkout
       - *source-bun
       - *android-toolchains
@@ -990,9 +995,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lazysh-android-auxiliary-results
+          name: ${{ env.LAZYSH_ANDROID_RUNTIME_ARTIFACT }}
           path: *android-runtime-result-paths
           if-no-files-found: warn
+
+  # Owns the emulator lock screen: it sets a disposable PIN, enrolls a fingerprint and
+  # answers touch requests, so it never shares an emulator with other instrumentation.
+  native-android-biometric:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: biometric
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-biometric-results
+    steps: *android-emulator-only-steps
 
   native-android-ntfy:
     needs: changes

@@ -50,7 +50,8 @@
     "build:android:fdroid": "turbo run build:android:fdroid --filter=@lazysh/client",
     "test:android-fdroid": "turbo run test:android-fdroid --filter=@lazysh/client",
     "test:android-ntfy": "turbo run test:android-ntfy --filter=@lazysh/client",
-    "test:android-qr": "turbo run test:android-qr --filter=@lazysh/client"
+    "test:android-qr": "turbo run test:android-qr --filter=@lazysh/client",
+    "test:android-biometric": "turbo run test:android-biometric --filter=@lazysh/client"
   },
   "devDependencies": {
     "@changesets/cli": "3.0.3",
