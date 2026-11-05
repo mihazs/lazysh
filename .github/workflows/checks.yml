@@ -366,6 +366,11 @@ jobs:
       - uses: actions/checkout@v4
       - *source-bun
       - *pinned-download-cache
+      # Every Parakeet build script run reads this verified archive instead of downloading ORT.
+      # Only this job seeds the main cache; native-linux-runtimes restores the same entry.
+      - uses: ./.github/actions/parakeet-onnxruntime
+        with:
+          seed: 'true'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -884,6 +889,7 @@ jobs:
       - *source-checkout
       - *source-bun
       - *pinned-download-cache
+      - uses: ./.github/actions/parakeet-onnxruntime
       - uses: dtolnay/rust-toolchain@stable
       - name: Install build, OpenSSH, nss_wrapper, tmux, login shell and official ET build dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
