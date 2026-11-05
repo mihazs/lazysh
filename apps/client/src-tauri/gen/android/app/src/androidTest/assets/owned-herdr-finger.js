@@ -74,7 +74,7 @@ function ownedHerdrObserveFinger(window, key, screens, geometry=null) {
     Number.isInteger(geometry.rowCount)&&geometry.rowCount>=3&&geometry.rowCount<=4096?{height:geometry.rowHeight,count:geometry.rowCount}:null;
   if(geometry&&(!boundRect||!boundMetrics))return false;
   const ownerDocument=screen.ownerDocument;
-  let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
+  let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true,bindingRejected=false;
   let wheels=0,wheelUp=0,wheelDown=0,wheelZero=0,wheelInvalid=0;
   const terminal=screen.parentElement,surface=terminal?.querySelector('.xterm-viewport'),textarea=terminal?.querySelector('.xterm-helper-textarea');
   const globalEvents=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture','touchstart','touchmove','touchend','touchcancel'];
@@ -107,13 +107,16 @@ function ownedHerdrObserveFinger(window, key, screens, geometry=null) {
       if(trace.length===24){overflow=true;return;}
       const touch=event.type.startsWith('touch'),point=touch?(event.changedTouches?.[0]??event.touches?.[0]):event;
       if(landing===null&&event.isTrusted===true&&(event.type==='pointerdown'||event.type==='touchstart')) {
+        // An unreadable first landing stays rejected: the binding is proven only by the comparison below.
+        bindingRejected=boundRect!==null;
         landing=observeLanding(event.target,point);
         if(boundRect) {
           const current=ownedHerdrPublicRows(screen,canvas,ownerDocument);
-          valid=valid&&landing.state==='observed'&&landing.screenConnected&&landing.canvasConnected&&landing.targetOwned&&landing.hitOwned&&
+          bindingRejected=!(landing.state==='observed'&&landing.screenConnected&&landing.canvasConnected&&landing.targetOwned&&landing.hitOwned&&
             screen.ownerDocument===ownerDocument&&screen.parentElement===terminal&&terminal?.parentElement===canvas&&
             landing.screenRect.every((value,index)=>value===boundRect[index])&&current!==null&&
-            current.rowHeight===boundMetrics.height&&current.rows.length===boundMetrics.count;
+            current.rowHeight===boundMetrics.height&&current.rows.length===boundMetrics.count);
+          valid=valid&&!bindingRejected;
         }
       }
       if(event.type==='pointerdown' && canvas.contains(event.target))pointerIdentity=event.pointerId;
@@ -171,7 +174,7 @@ function ownedHerdrObserveFinger(window, key, screens, geometry=null) {
     sample:()=>{
       return {...reading(),baseline,visual:visual(),wheelRecords:wheelRecords.slice(),wheelRecordsOverflow,
         active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
-        held:starts===1 && moves>0,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice(),landing}};
+        held:starts===1 && moves>0,bindingRejected,moves:Math.min(2,moves),wheels,wheelUp,wheelDown,wheelZero,wheelInvalid,global:{state:traceAvailable?'observed':'unavailable',overflow,events:trace.slice(),landing}};
     },dispose:()=>{events.forEach(type=>canvas.removeEventListener(type,record,true));canvas.removeEventListener('wheel',wheel,true);globalEvents.forEach(type=>window.removeEventListener(type,globalRecord,true));}}});
   return true;
 }

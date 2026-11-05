@@ -183,7 +183,7 @@ test('gesture qualification uses current public cells after bootstrap expansion,
   expect(current.rect).not.toEqual(bootstrap.rect);
 });
 
-test.each(['missing','unitless','nonfinite','oversized','line-height','foreign','disconnected','throwing','bucket'] as const)('gesture qualification fails closed on %s public row metrics',async invalid=>{
+test.each(['missing','unitless','nonfinite','oversized','line-height','foreign','disconnected','throwing','origin-beyond-rows'] as const)('gesture qualification fails closed on %s public rows',async invalid=>{
   const geometry=await oracle('ownedHerdrSwipeGeometry'),f=swipeGeometryFixture();
   if(invalid==='missing')f.rowState.count=0;
   if(invalid==='unitless')f.rowState.height='20';
@@ -193,9 +193,11 @@ test.each(['missing','unitless','nonfinite','oversized','line-height','foreign',
   if(invalid==='foreign')f.rowState.foreign=true;
   if(invalid==='disconnected')f.rowState.connected=false;
   if(invalid==='throwing')f.rowState.throws=true;
-  if(invalid==='bucket')f.rowState.height=f.rowState.lineHeight='1px';
+  // Valid 1px cells put the quarter-point (70px into a 280px screen) at row 70, beyond the 14 rendered rows.
+  if(invalid==='origin-beyond-rows')f.rowState.height=f.rowState.lineHeight='1px';
   const result=geometry([f.screen],f.viewport,2.625,f.document,true);
-  expect(result.ready).toBe(false);expect(JSON.stringify(result)).not.toMatch(/private|NaNpx/);
+  expect(result.ready).toBe(false);
+  expect(result.diagnostic.stage).toBe(invalid==='origin-beyond-rows'?'row-origin':'row-metrics');expect(JSON.stringify(result)).not.toMatch(/private|NaNpx/);
 });
 
 test.each(['unchanged','changed','metrics','row-count','foreign','disconnected','unavailable'] as const)('calibrated first DOWN keeps its original geometry or retires on %s landing',async state=>{
@@ -219,7 +221,8 @@ test.each(['unchanged','changed','metrics','row-count','foreign','disconnected',
   globalHooks.get('pointerdown')!({type:'pointerdown',isTrusted:true,eventPhase:1,target:f.screen,pointerId:7,clientX:105,clientY:90});
   hooks.get('touchstart')!({type:'touchstart',isTrusted:true,target:f.screen,touches:[{identifier:7}]});
   const sample=window.bound.sample();
-  expect(sample.active).toBe(state==='unchanged');expect(JSON.stringify(sample)).not.toContain('private');
+  expect(sample.active).toBe(state==='unchanged');expect(sample.bindingRejected).toBe(state!=='unchanged');
+  expect(JSON.stringify(sample)).not.toContain('private');
   window.bound.dispose();expect(hooks.size).toBe(0);expect(globalHooks.size).toBe(0);
 });
 

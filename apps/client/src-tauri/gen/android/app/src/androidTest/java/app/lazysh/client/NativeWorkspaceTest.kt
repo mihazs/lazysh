@@ -2161,6 +2161,7 @@ class NativeWorkspaceTest {
                     assertTrue("Owned short drag delivery exceeded original cohort budget: ended=$ended dispatches=$dispatches sample=$lastFingerSample", remaining > 0)
                     val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                     lastFingerSample = sample
+                    assertFalse("Owned first DOWN landed outside its calibrated geometry: sample=$sample", sample.getBoolean("bindingRejected"))
                     val events = sample.getJSONObject("global").getJSONArray("events")
                     val touchStarts = (0 until events.length()).count { events.getJSONObject(it).getString("type") == "touchstart" }
                     val cancelled = (0 until events.length()).any { events.getJSONObject(it).getString("type") == "touchcancel" }
@@ -2185,6 +2186,7 @@ class NativeWorkspaceTest {
                     assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
                     val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                     lastFingerSample = sample
+                    assertFalse("Owned first DOWN landed outside its calibrated geometry: sample=$sample", sample.getBoolean("bindingRejected"))
                     samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
                     assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                     val row = sample.getInt("row")
@@ -2193,9 +2195,17 @@ class NativeWorkspaceTest {
                 }
             }
             try {
-                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned native gesture requires remaining original cohort budget", remaining > 0)
-                val installation=JSONObject(fingerRead(fingerObservation, remaining))
+                // Geometry that is still settling after the previous redraw is re-measured; nothing retargets after DOWN.
+                var installation: JSONObject
+                while (true) {
+                    val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                    assertTrue("Owned native gesture requires remaining original cohort budget", remaining > 0)
+                    installation = JSONObject(fingerRead(fingerObservation, remaining))
+                    if (installation.getBoolean("installed") || installation.getJSONObject("geometry").getBoolean("ready")) break
+                    val pause = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime()).coerceAtMost(50)
+                    assertTrue("Owned current finger geometry did not settle within original cohort budget: ${installation.getJSONObject("geometry").optJSONObject("diagnostic")}", pause > 0)
+                    Thread.sleep(pause)
+                }
                 assertTrue("Owned current finger geometry and observation required: ${installation.optJSONObject("geometry")?.optJSONObject("diagnostic")}", installation.getBoolean("installed"))
                 val measured=installation.getJSONObject("geometry")
                 val shortRowHeight=measured.getDouble("rowHeight")
