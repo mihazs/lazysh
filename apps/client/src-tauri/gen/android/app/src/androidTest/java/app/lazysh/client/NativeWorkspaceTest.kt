@@ -1803,14 +1803,21 @@ class NativeWorkspaceTest {
               const result=ownedMoshHistory(root),rows=owned?Array.from(root.querySelectorAll('.xterm-rows > div')):[];
               const cursor=rows.findIndex(row=>row.querySelector('.xterm-cursor'));
               const editor=owned?root.querySelector('.xterm-helper-textarea'):null,viewport=window.visualViewport;
-              return {...result,owned,cursorRow:cursor<0?null:cursor,
+              const sheet=owned?pane.parentElement?.querySelector(':scope > .terminal-composer-sheet'):null,cover=sheet?.getBoundingClientRect();
+              return {...result,owned,cursorRow:cursor<0?null:cursor,domRows:rows.length,
+                composing:Boolean(sheet&&cover.height>0&&document.activeElement===sheet.querySelector('textarea')&&pane.hasAttribute('inert')&&
+                  sheet.contains(document.elementFromPoint(cover.left+cover.width/2,cover.top+cover.height/2))),
                 painted:rows.some(row=>/OWNED_MOSH_ROW_[0-9]{3}/.test(row.textContent)),
                 editable:Boolean(editor&&!editor.readOnly&&!editor.disabled),
                 centerOwned:Boolean(owned&&viewport?.scale===1&&viewport.offsetLeft===0&&viewport.offsetTop===0&&
                   root.contains(document.elementFromPoint(innerWidth/2,innerHeight/2)))};
             })()
         """.trimIndent()
-        fun awaitPhase(stage: String, keyboard: Boolean?, dismissKeyboard: Boolean = false, accept: (JSONObject) -> Boolean): JSONObject {
+        // The native IME state of the sample under acceptance.
+        var phaseIme: Boolean? = null
+        // A covered phase samples the terminal under the composer sheet, which pauses fitting,
+        // so its stale geometry is not a measured viewport fit; only its DOM rows are compared.
+        fun awaitPhase(stage: String, keyboard: Boolean?, dismissKeyboard: Boolean = false, covered: Boolean = false, accept: (JSONObject) -> Boolean): JSONObject {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             // Mosh can paint a resized frame before Herdr repaints it, and IME
             // animations dispatch intermediate layouts. Admit only a settled sample.
@@ -1834,7 +1841,7 @@ class NativeWorkspaceTest {
                         imeVisible != null && (keyboard == null || imeVisible == keyboard)
                 }
                 val state = JSONObject(evaluate(scenario, observation, remaining.coerceAtMost(1000)))
-                require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "painted", "editable", "centerOwned"))
+                require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "domRows", "composing", "painted", "editable", "centerOwned"))
                 last = state.toString().also { require(it.length <= 256) } + " ime=$imeVisible ready=$ready dismissals=$dismissals"
                 val now = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
                 if (dismissKeyboard && keyboard == false && dismissals < 3 && shown.admit(now, imeVisible == true, "ime")) {
@@ -1844,10 +1851,11 @@ class NativeWorkspaceTest {
                     device.pressBack()
                     continue
                 }
-                val matches = ready && state.getBoolean("owned") && state.getBoolean("valid") && state.getBoolean("painted") &&
-                    (history < 0 || state.getInt("historyRows") == history) && accept(state)
+                phaseIme = imeVisible
+                val matches = ready && state.getBoolean("owned") && state.getBoolean("painted") && state.getBoolean("composing") == covered &&
+                    (covered || (state.getBoolean("valid") && (history < 0 || state.getInt("historyRows") == history))) && accept(state)
                 if (settled.admit(now, matches, "$state ime=$imeVisible") && System.nanoTime() < deadline) {
-                    println("lazysh Mosh resize: phase=$stage rows=${state.getInt("rows")} cursor=${state.opt("cursorRow")} history=${state.getInt("historyRows")} keyboard=$imeVisible")
+                    println("lazysh Mosh resize: phase=$stage rows=${state.opt("rows")} domRows=${state.getInt("domRows")} cursor=${state.opt("cursorRow")} history=${state.opt("historyRows")} keyboard=$imeVisible")
                     return state
                 }
                 val pause = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtMost(50)
@@ -1873,9 +1881,14 @@ class NativeWorkspaceTest {
             device.pressBack()
             val expanded = awaitPhase("keyboard-grow", false) { it.getInt("rows") > keyboard.getInt("rows") }
             button("Compose")
-            val composed = awaitPhase("compose-shrink", true) { it.getInt("rows") < expanded.getInt("rows") }
+            // The sheet covers the output and pauses fitting: the soft keyboard it raises must
+            // leave the original terminal rows, and so the remote Mosh size, unchanged.
+            awaitPhase("compose-cover", true, covered = true) { it.getInt("domRows") == expanded.getInt("rows") }
             button("Close composer")
-            awaitPhase("compose-grow", null) { it.getInt("rows") > composed.getInt("rows") }
+            // Closing refits to the current viewport: fewer rows while the keyboard stays up, else the original rows.
+            awaitPhase("compose-refit", null) {
+                if (phaseIme == true) it.getInt("rows") < expanded.getInt("rows") else it.getInt("rows") == expanded.getInt("rows")
+            }
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
             val portrait = awaitPhase("portrait", false, dismissKeyboard = true) { true }
             scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
@@ -3318,7 +3331,15 @@ class NativeWorkspaceTest {
                 clickButton("Stage in terminal")
                 awaitDocument(scenario, "recorded draft staged without Send", "document.querySelector('.terminal-compose textarea')?.value===" + JSONObject.quote(draft))
                 assertEquals("Stage does not send the draft", "false", evaluate(scenario, screenContains(draft)))
-                owner();clickButton("Close composer");terminalProof(true);owner()
+                owner();clickButton("Close composer")
+                // Close keeps the unsent staged draft for this terminal; reopening shows it unsent.
+                clickButton("Compose")
+                awaitDocument(scenario, "closed composer keeps the unsent staged draft", "document.querySelector('.terminal-compose textarea')?.value===" + JSONObject.quote(draft))
+                assertEquals("Reopening the kept draft does not send it", "false", evaluate(scenario, screenContains(draft)))
+                // Clear it so the fresh proof below types into an empty draft.
+                clickButton("Clear draft")
+                awaitDocument(scenario, "cleared staged draft", "document.querySelector('.terminal-compose textarea')?.value===''")
+                terminalProof(true);owner()
                 println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage and fresh original SSH proof completed")
             } catch (failure: Throwable) {primary = failure;throw failure}
             finally {

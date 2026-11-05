@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxDisplayClients,tmuxPaneRows,tmuxTeardownObservation} from './support/androidTmux';
+import {TmuxFixture,tmuxAttachHistoryVerified,tmuxClientCount,tmuxDisplayClients,tmuxPaneRows,tmuxTeardownObservation} from './support/androidTmux';
 import {listening,type OwnedProcess} from './support/androidSsh';
 
 test('tmux host readback admits only the owned two-window topology and display clients',()=>{
@@ -15,18 +15,21 @@ test('tmux host readback admits only the owned two-window topology and display c
   expect(tmuxDisplayClients('')).toBe(0);
   expect(tmuxDisplayClients('1\n0\n1\n')).toBe(1);
   for(const invalid of ['2\n','0\n'.repeat(9),'private\n'])expect(()=>tmuxDisplayClients(invalid)).toThrow('Owned tmux client readback invalid');
+  expect(tmuxClientCount('')).toBe(0);
+  expect(tmuxClientCount('123\n456\n')).toBe(2);
+  for(const invalid of ['0\n','12a\n','1\n'.repeat(9),'/dev/pts/1\n'])expect(()=>tmuxClientCount(invalid)).toThrow('Owned tmux client readback invalid');
   expect(tmuxAttachHistoryVerified([0,1,0,1,0])).toBe(true);
   for(const history of [[0,1,0],[0,1,0,1],[0,1,2,1,0],[1,0,1,0],[0,1,0,1,0,1,0]])expect(tmuxAttachHistoryVerified(history)).toBe(false);
 });
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
   const server=(exitCode:number|null,signalCode:NodeJS.Signals|null)=>({child:{exitCode,signalCode}});
-  const evidence={serverAtStop:'live' as const,sockets:4,shutdown:'deadline' as const,exitMs:10000};
+  const evidence={serverAtStop:'live' as const,clients:1,detached:'all' as const,sockets:4,shutdown:'deadline' as const,exitMs:10000};
   expect(tmuxTeardownObservation(evidence,new Error('Owned tmux root identity lost'),server(137,null))).toEqual({scope:'tmux-teardown',
     ...evidence,failure:'Owned tmux root identity lost',supervisorExit:137,supervisorSignal:'none'});
   for(const failure of [new Error('private /tmp/owned path'),'private text'])
     expect(tmuxTeardownObservation({...evidence,shutdown:'unclean'},failure,server(null,'SIGUSR2'))).toMatchObject({failure:'other',supervisorExit:null,supervisorSignal:'other'});
-  expect(tmuxTeardownObservation({serverAtStop:'absent',sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
+  expect(tmuxTeardownObservation({serverAtStop:'absent',clients:null,detached:'not-requested',sockets:null,shutdown:'not-requested',exitMs:null},undefined)).toMatchObject({failure:'none',supervisorExit:null,supervisorSignal:'none'});
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -80,4 +83,21 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
   expect(await listening(owned.ssh.port)).toBe(false);
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown detaches a running control-mode client through the server before retiring SSH',async()=>{
+  const owned=await TmuxFixture.start();
+  // Like the app's Jump binding, this control client is still attached and draining when teardown starts.
+  const client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -f no-output,ignore-size -t '=owned-tmux'");
+  try {
+    const deadline=performance.now()+5000;
+    while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+    await owned.stop();
+    // The server's detach ends the control client normally; an SSH signal would not report %exit.
+    expect(await client.finish('owned tmux control client detached by teardown',5000)).toContain('%exit');
+  } finally {
+    await client.stop();
+    await owned.stop();
+  }
+  await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
 },60_000);

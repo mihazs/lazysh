@@ -2298,7 +2298,7 @@ test('native Mosh resize observation never reads a replaced terminal owner',asyn
   const pane={querySelector(){throw new Error('private replaced pane read');}},tab={};
   const document={querySelector:(selector:string)=>selector==='owned-canvas'?pane:tab};
   const window={owned:{document,pane:{},root,tab}};
-  expect(new Function('window','document',`return (${expression});`)(window,document)).toEqual({valid:false,rows:null,historyRows:null,owned:false,cursorRow:null,painted:false,editable:false,centerOwned:false});
+  expect(new Function('window','document',`return (${expression});`)(window,document)).toEqual({valid:false,rows:null,historyRows:null,owned:false,cursorRow:null,domRows:0,composing:false,painted:false,editable:false,centerOwned:false});
 });
 
 test('native toolbar paint observation distinguishes latched Shift from released momentary keys without fixed theme colors',async()=>{
