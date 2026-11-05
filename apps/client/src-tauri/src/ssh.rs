@@ -565,27 +565,35 @@ pub async fn delete_host(
             let _guard = state.credential_guard(&host_id).await;
             let state = state.inner().clone();
             crate::vault::credential_worker(_guard, lease.clone(), move || {
-                if state
-                    .config()?
-                    .hosts
-                    .iter()
-                    .any(|host| host.jump_host_id.as_deref() == Some(&host_id))
-                {
-                    return Err(SshError::new(
-                        "host_in_use",
-                        "Remove routes using this bastion before deleting it",
-                    ));
-                }
-                if state.host(&host_id)?.credentials_stored {
-                    crate::vault::remove(&app, &host_id)
-                        .map_err(|message| SshError::new("storage", message))?;
-                }
-                remove_host_metadata(&state, &host_id)
+                delete_host_record(&state, &host_id, |id| crate::vault::remove(&app, id))
             })
             .await
             .map_err(|_| SshError::new("storage", "Host deletion failed"))?
         })
         .await
+}
+/// Saved credentials leave the OS store before the host record, so a failed
+/// removal keeps the host and its `credentialsStored` flag for an explicit retry.
+pub(crate) fn delete_host_record(
+    state: &AppState,
+    host_id: &str,
+    remove_credentials: impl FnOnce(&str) -> std::result::Result<(), String>,
+) -> Result<()> {
+    if state
+        .config()?
+        .hosts
+        .iter()
+        .any(|host| host.jump_host_id.as_deref() == Some(host_id))
+    {
+        return Err(SshError::new(
+            "host_in_use",
+            "Remove routes using this bastion before deleting it",
+        ));
+    }
+    if state.host(host_id)?.credentials_stored {
+        remove_credentials(host_id).map_err(|message| SshError::new("storage", message))?;
+    }
+    remove_host_metadata(state, host_id)
 }
 fn remove_host_metadata(state: &AppState, host_id: &str) -> Result<()> {
     let mut config = state.config()?;

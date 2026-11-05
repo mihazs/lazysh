@@ -3,15 +3,10 @@ package app.lazysh.client
 import android.content.Context
 import android.util.Base64
 import app.lazysh.vault.VaultPlugin
-import app.tauri.plugin.Invoke
-import com.fasterxml.jackson.databind.ObjectMapper
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -19,34 +14,8 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeVaultTest {
-    private data class Response(val callback: Long, val json: String)
-    private class Reply {
-        val completed = CountDownLatch(1)
-        val response = AtomicReference<Response>()
-        fun invoke(command: String, args: JSONObject) = Invoke(1, command, 1, 2, { callback, json ->
-            response.set(Response(callback, json)); completed.countDown()
-        }, args.toString(), ObjectMapper())
-        fun await(): Response {
-            assertTrue("Native vault response timed out", completed.await(30, TimeUnit.SECONDS))
-            return response.get()
-        }
-    }
-    private fun call(scenario: ActivityScenario<MainActivity>, plugin: VaultPlugin, command: String, args: JSONObject): Response {
-        val reply = Reply()
-        scenario.onActivity {
-            val invoke = reply.invoke(command, args)
-            when (command) {
-                "read" -> plugin.read(invoke)
-                "write" -> plugin.write(invoke)
-                "remove" -> plugin.remove(invoke)
-                "exists" -> plugin.exists(invoke)
-                "capability" -> plugin.capability(invoke)
-                "cancel" -> plugin.cancel(invoke)
-                else -> error("Unknown fixture command")
-            }
-        }
-        return reply.await()
-    }
+    private fun call(scenario: ActivityScenario<MainActivity>, plugin: VaultPlugin, command: String, args: JSONObject) =
+        scenario.vault(plugin, command, args)
 
     @Test fun keystoreRoundtripStoresOnlyCiphertextAndRejectsTampering() {
         run { val scenario = NativeActivityFixture.scenario
@@ -90,10 +59,10 @@ class NativeVaultTest {
             assertEquals(1L, capability.callback)
             val available = JSONObject(capability.json).getBoolean("available")
             android.util.Log.i("lazysh-instrumentation", "Strong biometric enrollment available=$available")
-            val reply = Reply()
+            val reply = VaultReply()
             scenario.onActivity {
                 plugin.write(reply.invoke("write", JSONObject().put("key", account).put("value", "temporary fixture").put("biometric", true)))
-                if (available) plugin.cancel(Reply().invoke("cancel", JSONObject().put("authEpoch", 1)))
+                if (available) plugin.cancel(VaultReply().invoke("cancel", JSONObject().put("authEpoch", 1)))
             }
             assertEquals(2L, reply.await().callback)
             val presence = call(scenario, plugin, "exists", JSONObject().put("key", account))

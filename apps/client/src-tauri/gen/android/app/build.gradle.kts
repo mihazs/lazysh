@@ -71,7 +71,7 @@ val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { p
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
-    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance")
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance","lazyshBiometricAcceptance")
         .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
     val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
         "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
@@ -248,6 +248,12 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/qr-camera"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/qr-camera"
+        }
+    }
+    if (providers.gradleProperty("lazyshBiometricAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/biometric-vault"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/biometric-vault"
         }
     }
     if (providers.gradleProperty("lazyshFdroidAcceptance").orNull == "true") {

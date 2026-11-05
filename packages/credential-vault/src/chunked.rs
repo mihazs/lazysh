@@ -225,4 +225,28 @@ mod tests {
             );
         }
     }
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires the runner's real Windows Credential Manager"]
+    fn windows_credential_manager_deletion_leaves_no_chunks() {
+        let service = format!(
+            "app.lazysh.client.chunk-test-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let store = crate::WindowsStore(&service);
+        let value = "saved-private-key-世界".repeat(300);
+        set(&store, "host", &value).unwrap();
+        let generation = manifest(&store, "host").unwrap().active.unwrap();
+        assert!(generation.parts > 1, "fixture must span several entries");
+        let parts: Vec<_> = (0..generation.parts)
+            .map(|index| part("host", &generation, index))
+            .collect();
+        assert_eq!(get(&store, "host").unwrap(), Some(value));
+        delete(&store, "host").unwrap();
+        assert_eq!(get(&store, "host").unwrap(), None);
+        assert_eq!(store.read("host").unwrap(), None);
+        for key in parts {
+            assert_eq!(store.read(&key).unwrap(), None, "orphaned chunk {key}");
+        }
+    }
 }

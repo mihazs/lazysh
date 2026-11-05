@@ -363,14 +363,20 @@ it('imports an encrypted private key file, shows its OpenSSH fingerprint and log
   await disconnectOwnedSsh(gui,terminal);
 });
 
-it('saves credentials in a disposable Secret Service and reconnects only after explicit saved-host consent',async()=>{
+/** Logs in once with "Save credentials" and proves exactly one disposable Secret Service item exists. */
+async function savedCredentialSsh() {
   fixture.captureSafe=false;
   const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
   const gui=fixture.gui=await NativeGui.startWithDisposableVault();
   await gui.assertDisposableCredential('empty');
-  const {browser,terminal,owner}=await openOwnedRememberedSsh(gui,ssh);
-  await challengeOwnedSsh(gui,ssh,terminal,owner);
+  const opened=await openOwnedRememberedSsh(gui,ssh);
+  await challengeOwnedSsh(gui,ssh,opened.terminal,opened.owner);
   await gui.assertDisposableCredential('saved');
+  return {ssh,gui,...opened};
+}
+
+it('saves credentials in a disposable Secret Service and reconnects only after explicit saved-host consent',async()=>{
+  const {ssh,gui,browser,terminal,owner}=await savedCredentialSsh();
   let savedHostId:string|undefined;
   const catalogState=async(stored:boolean)=>{
     const path=join(gui.directory,'config','app.lazysh.client','hosts.json');
@@ -424,6 +430,23 @@ it('saves credentials in a disposable Secret Service and reconnects only after e
   expect(await (await (await forgotten.$('label*=Key passphrase (if encrypted)')).$('input[type="password"]')).getValue()==='').toBe(true);
   await (await forgotten.$('button=Cancel')).click();await forgotten.waitForDisplayed({reverse:true});
   expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+});
+
+it('deleting a host that holds saved credentials removes its Secret Service item with its catalog record',async()=>{
+  const {gui,browser,terminal}=await savedCredentialSsh();
+  await disconnectOwnedSsh(gui,terminal);
+  gui.stage='owned saved-credential host deletion';
+  const connect=await browser.$('button[aria-label="Connect to Owned SSH GUI host"]');
+  // Row actions appear on hover or focus; hovering is the pointer path to them.
+  await connect.moveTo();
+  const remove=await browser.$('button[aria-label="Delete Owned SSH GUI host"]');
+  await remove.waitForEnabled({timeout:20_000});await remove.click();
+  const confirm=await browser.$('[role="dialog"][aria-label="Delete host"]');await confirm.waitForDisplayed();
+  await (await confirm.$('button.danger-button')).click();
+  await connect.waitForExist({reverse:true});
+  await gui.assertDisposableCredential('empty');
+  const catalog=JSON.parse(await readFile(join(gui.directory,'config','app.lazysh.client','hosts.json'),'utf8')) as {name?:unknown}[];
+  expect(catalog.some(host=>host.name==='Owned SSH GUI host')).toBe(false);
 });
 
 it('enters the saved Herdr default through Mosh in the actual GUI and queues only confirmed input to its original receiver',async()=>{

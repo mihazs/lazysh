@@ -489,6 +489,60 @@ mod tests {
         }
     }
     #[test]
+    fn deleting_a_host_removes_saved_credentials_before_its_record() {
+        use std::cell::RefCell;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        let bastion = Host {
+            id: "bastion".into(),
+            ..host()
+        };
+        let routed = Host {
+            id: "routed".into(),
+            jump_host_id: Some("bastion".into()),
+            ..host()
+        };
+        let plain = Host {
+            id: "plain".into(),
+            ..host()
+        };
+        state
+            .sync_add_hosts(&[], vec![host(), bastion, routed, plain], &[])
+            .unwrap();
+        for id in ["one", "bastion"] {
+            state.mark_credentials(id, true).unwrap();
+        }
+        let removed = RefCell::new(Vec::new());
+        let record = |id: &str| -> Result<(), String> {
+            removed.borrow_mut().push(id.to_owned());
+            Ok(())
+        };
+        let failed =
+            crate::ssh::delete_host_record(&state, "one", |_| Err("keyring locked".into()));
+        assert!(failed.is_err());
+        assert!(
+            state.host("one").unwrap().credentials_stored,
+            "failed removal keeps the retry path"
+        );
+
+        crate::ssh::delete_host_record(&state, "one", record).unwrap();
+        assert!(state.host("one").is_err());
+        crate::ssh::delete_host_record(&state, "plain", record).unwrap();
+        assert_eq!(
+            *removed.borrow(),
+            ["one"],
+            "hosts without saved credentials never touch the store"
+        );
+
+        assert!(crate::ssh::delete_host_record(&state, "bastion", record).is_err());
+        assert!(state.host("bastion").unwrap().credentials_stored);
+        assert_eq!(
+            removed.borrow().len(),
+            1,
+            "a referenced bastion keeps its credentials"
+        );
+    }
+    #[test]
     fn stored_credentials_bind_to_verified_host_identity() {
         let host = host();
         let credentials = Credentials {

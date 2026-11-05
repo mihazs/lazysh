@@ -91,12 +91,16 @@ test('independent Android auxiliary owners have their own finite native job and 
   expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
   // Only the documentation-only gate precedes it; no client or Herdr build prerequisite.
   expect(auxiliary.needs).toBe('changes');
-  expect(auxiliary.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'auxiliary',VITE_LAZYSH_QR_CAMERA_TRACE:'1'});
+  expect(auxiliary.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'auxiliary',LAZYSH_ANDROID_RUNTIME_ARTIFACT:'lazysh-android-auxiliary-results',VITE_LAZYSH_QR_CAMERA_TRACE:'1'});
+  // The lock-screen owner reuses these steps on its own emulator.
+  const biometric=workflow.jobs['native-android-biometric'];
+  expect(biometric.steps).toBe(auxiliary.steps);
+  expect(biometric.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'biometric',LAZYSH_ANDROID_RUNTIME_ARTIFACT:'lazysh-android-biometric-results'});
   for(const name of ['Grant this runner access to KVM','Run native Android instrumentation'])
     expect(auxiliary.steps.find(step=>step.name===name)).toEqual(guarded.steps.find(step=>step.name===name));
   expect(auxiliary.steps.some(step=>step.name==='Install native Mosh fixture dependencies'||step.name==='Verify native GUI namespace prerequisites'||step.name==='Build the pinned official Mosh fixture outside the checkout'||step.name==='Build real companion and receiver for owned Android cases'||step.uses==='actions/download-artifact@v4')).toBe(false);
-  const outputs=[guarded,auxiliary,workflow.jobs['native-android-herdr-navigation'],workflow.jobs['native-android-mosh']].map(job=>{const output=job.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!;return {...output,name:job.env?.LAZYSH_ANDROID_RUNTIME_ARTIFACT??output.name};});
-  expect(new Set(outputs.map(output=>output.name)).size).toBe(4);
+  const outputs=[guarded,auxiliary,workflow.jobs['native-android-herdr-navigation'],workflow.jobs['native-android-mosh'],biometric].map(job=>{const output=job.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!;return {...output,name:job.env?.LAZYSH_ANDROID_RUNTIME_ARTIFACT??output.name};});
+  expect(new Set(outputs.map(output=>output.name)).size).toBe(5);
   expect(outputs[1].name).toBe('lazysh-android-auxiliary-results');
   expect(outputs[1].path).toBe(outputs[0].path);
 });
@@ -121,7 +125,7 @@ test('standalone native Mosh has its own bounded emulator owner without a client
 test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
   const name='Fingerprint Android native build tools';
   const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
-  for(const job of ['native-android','native-android-runtime','native-android-mosh','native-android-herdr-navigation','native-android-auxiliary','native-android-ntfy']) {
+  for(const job of ['native-android','native-android-runtime','native-android-mosh','native-android-herdr-navigation','native-android-auxiliary','native-android-biometric','native-android-ntfy']) {
     const steps=workflow.jobs[job].steps;
     const fingerprint=steps.findIndex(step=>step.name===name);
     const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
