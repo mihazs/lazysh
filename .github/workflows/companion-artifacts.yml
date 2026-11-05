@@ -45,9 +45,9 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
-          bun-version: 1.3.14
+          restore-only: 'true'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
@@ -55,11 +55,19 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools binutils build-essential libssl-dev pkg-config
       - if: runner.os == 'macOS'
         run: brew install openssl@3 pkgconf
-      - uses: Swatinem/rust-cache@v2
+      # Candidates may reuse compiled targets: pull requests restore but never save, main saves.
+      # Release staging never restores target/ and compiles every staged executable from source.
+      - if: ${{ !inputs.stage }}
+        uses: Swatinem/rust-cache@v2
         with:
           key: companion-${{ matrix.triple }}
-          # Pull request candidates restore but never save; release staging is unchanged.
           save-if: ${{ github.event_name != 'pull_request' }}
+      # Release staging restores main's crate downloads only; main candidates seed those entries
+      # for every runner OS/architecture a release uses. Pull requests keep rust-cache's copy.
+      - if: ${{ inputs.stage || github.event_name != 'pull_request' }}
+        uses: ./.github/actions/cargo-registry
+        with:
+          seed: ${{ !inputs.stage }}
       - run: bun install --frozen-lockfile
       - name: Build final production target without test-only dependencies
         run: cargo build --release --locked --package lazysh-agent --bin lazysh-agent --target ${{ matrix.triple }}

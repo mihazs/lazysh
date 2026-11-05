@@ -1,0 +1,32 @@
+name: Restore the Cargo registry downloads
+description: Restore main's crate downloads and index (never build outputs); only trusted main pushes may seed them
+inputs:
+  seed:
+    description: On a main push only, fetch every locked crate and save an exact-miss entry
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # Only downloaded .crate archives, the sparse index and git databases: never target/ or
+    # unpacked sources, so every release binary still compiles from source. Main-scoped entries
+    # are written only by main pushes; pull request saves are PR-scoped and unreadable here.
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: cargo-registry-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-registry-v1-${{ runner.os }}-${{ runner.arch }}-
+    - if: inputs.seed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo fetch --locked
+    - if: inputs.seed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ steps.restore.outputs.cache-primary-key }}

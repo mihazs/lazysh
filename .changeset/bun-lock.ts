@@ -38,7 +38,7 @@ export function androidVersionCode(version: unknown): number {
   return Number(code);
 }
 
-const androidMetadataPath = 'apps/client/android-version.properties';
+export const androidMetadataPath = 'apps/client/android-version.properties';
 const androidMetadata = (version: string) => `versionName=${version}\nversionCode=${androidVersionCode(version)}\n`;
 
 function verifyAndroidConfig(config: any) {

@@ -1,15 +1,35 @@
 name: Set up the pinned Bun
 description: Install the pinned Bun and restore its package install cache keyed by bun.lock
+inputs:
+  restore-only:
+    description: Restore main's install cache without ever saving one (release jobs)
+    default: 'false'
 runs:
   using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: 1.3.14
+    # One cache identity for both modes below.
+    - id: cache
+      shell: bash
+      env:
+        LOCK_HASH: ${{ hashFiles('bun.lock') }}
+      run: |
+        prefix="bun-install-$RUNNER_OS-$RUNNER_ARCH-"
+        printf 'key=%s\nprefix=%s\n' "$prefix$LOCK_HASH" "$prefix" >> "$GITHUB_OUTPUT"
     # `bun install --frozen-lockfile` checks every cached package against bun.lock's integrity
     # hashes. An exact hit saves nothing; a pull request saves only when it changes bun.lock.
-    - uses: actions/cache@v4
+    - if: inputs.restore-only != 'true'
+      uses: actions/cache@v4
       with:
         path: ~/.bun/install/cache
-        key: bun-install-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
-        restore-keys: bun-install-${{ runner.os }}-${{ runner.arch }}-
+        key: ${{ steps.cache.outputs.key }}
+        restore-keys: ${{ steps.cache.outputs.prefix }}
+    # Release jobs run on main, so they can restore only main-saved entries; they never save.
+    - if: inputs.restore-only == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ steps.cache.outputs.key }}
+        restore-keys: ${{ steps.cache.outputs.prefix }}

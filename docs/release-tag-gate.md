@@ -4,7 +4,12 @@
 installers for explicitly allowlisted publication and each future individually
 merged Changesets version. Historical versions are not backfilled. Publication is enabled by default;
 setting `enabled` to false stops new release admission and publication API calls.
-Ordinary unchanged-version main pushes skip release builds successfully.
+Main pushes start this workflow only when they change
+`apps/client/android-version.properties`. Release consistency requires that file to
+equal the version-derived name/code, so every version transition rewrites it and an
+unchanged version cannot. Ordinary pushes therefore queue no release job. The filter
+only avoids queueing work; admission still decides. A missed push can be repeated
+with an ordinary main dispatch (`initial: false`), which runs the same admission.
 Apple releases remain deferred. Official F-Droid inclusion and free-software
 remote push acceptance (#344) remain pending: the corresponding policy fields
 record that separate status and do not gate GitHub publication. No official
@@ -62,9 +67,26 @@ state and Google-free graph/manifest/dex assertions must pass. Receipts persist
 and the owned container is removed even on failure. This is the ordinary local
 container build path, not a claim of Vagrant `--server` execution or hermeticity.
 
-Only the dependent tag and publication jobs have contents-write tokens. Every
-platform installation build and the independent F-Droid source build must pass
-before tagging. Tagging and publication require the exact verified candidate
+## Job graph and runner queue
+
+A release takes two runner-queue entries on its critical path and ten runner slots
+(previously five entries and fourteen slots). Each GitHub-hosted job waits in the
+account-wide queue, so stages that run one after another add queue time.
+
+1. `source-build` starts with admission and recipe preparation, which were a
+   separate `candidate` job. Each later step requires `enabled == 'true'` from that
+   admission. The platform builds in `release-artifacts.yml` start in the same queue
+   entry. They bind the exact trusted main event SHA, hold contents-read tokens and
+   produce private same-run artifacts only.
+2. `publish` needs both, and requires admission `enabled`, a successful source build
+   and successful platform builds. It aggregates and reverifies every downloaded
+   receipt, package digest, `release.json` and `SHA256SUMS`, then creates the tag and
+   publishes. This replaces the separate aggregate, tag and publish jobs.
+
+Only `publish` has a contents-write token, and only its tag and publication steps
+receive it. They run after aggregation and verification. Every platform
+installation build and the independent F-Droid source build must pass before
+tagging. Tagging and publication require the exact verified candidate
 within observed main’s bounded first-parent ancestry (at most 4097 commits).
 A newer main version does not supersede it, and newer source is not executed or
 substituted. Side ancestry or replaced main history is rejected. Existing lightweight
@@ -76,7 +98,7 @@ repository tag protection remains separate. The main-head check and reference
 creation are separate API requests, so main can advance between them; the tag
 always names the verified candidate rather than an inferred moving branch.
 The normal GITHUB_TOKEN does not trigger downstream workflows through tags;
-installation publication is an explicit dependent job in the same workflow.
+installation publication follows tagging in the same job.
 It rechecks every package/checksum, creates a draft, verifies each uploaded asset's
 acknowledged digest, and publishes only after all uploads succeed. The final PATCH
 uses `make_latest: legacy` to select latest by creation date and semantic version
@@ -90,6 +112,9 @@ See [release-artifacts.md](release-artifacts.md) for signing and activation limi
 
 `bun run test:release` runs the native Bun release tests. The tag tests use
 in-memory HTTP responses and do not create real refs, containers or builds.
+`tests/release-workflow.test.ts` expands the release workflows for a release push
+and checks the job graph: queue entries, runner slots, publication dependencies,
+write scope, exact checkout source, uploaded targets and restore-only caches.
 Official API reference: [Git references](https://docs.github.com/en/rest/git/refs),
 [least-privilege workflow tokens](https://docs.github.com/en/actions/reference/security/secure-use),
 and [F-Droid metadata](https://f-droid.org/docs/Build_Metadata_Reference/).
