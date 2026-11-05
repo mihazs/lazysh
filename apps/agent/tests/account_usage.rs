@@ -253,3 +253,23 @@ fn only_a_private_context_free_notification_free_profile_can_start_external_cli(
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn invalid_automatic_codex_home_reports_unavailable_without_host_state_or_path_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = owned_command(directory.path(), &directory.path().join("no-tools"))
+        .env("CODEX_HOME", "owned-private-invalid-relative-home")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["state"], "unavailable");
+    assert_eq!(response["source"], "builtin");
+    assert!(response["report"].is_null());
+    assert!(!String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("owned-private-invalid"));
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
