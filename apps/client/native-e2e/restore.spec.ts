@@ -28,7 +28,13 @@ it('restores the same durable tmux pane after the app is killed, only after expl
   gui.stage='owned application kill and relaunch';
   const owner=await gui.killAndRelaunch();
   const relaunched=gui.browser!;
-  await relaunched.waitUntil(async()=>await clients()===0,{timeout:20_000,timeoutMsg:'Killed application left its tmux client attached'});
+  // A dead tmux server must not read as a lingering client.
+  let tmuxFailure:unknown;
+  await relaunched.waitUntil(async()=>{
+    try{const attached=await clients();tmuxFailure=undefined;return attached===0;}catch(error){tmuxFailure=error;return false;}
+  },{timeout:20_000,timeoutMsg:'Killed application left its tmux client attached'}).catch(error=>{
+    throw tmuxFailure?new Error('Owned tmux server unavailable after the application kill',{cause:tmuxFailure}):error;
+  });
   const banner=await relaunched.$('.workspace-restore');await banner.waitForDisplayed({timeout:30_000});
   const restore=await banner.$('button=Restore previous workspace');
   // Restore stays disabled until the saved hosts load; a click before that is a no-op.
