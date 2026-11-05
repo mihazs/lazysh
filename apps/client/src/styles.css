@@ -1016,6 +1016,11 @@ button svg {
   max-height: calc(100dvh - 50px);
   overflow: auto;
 }
+/* The page body owns absolutely positioned descendants (such as .sr-only labels), so they never
+   overflow the non-scrollable backdrop where focusing them would push the heading off screen. */
+.dialog-content {
+  position: relative;
+}
 .dialog-heading {
   display: flex;
   align-items: center;

@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
+- Fix the phone Preferences page sliding up after adding a toolbar key from Available keys, which pushed its title and Close button off the top of the screen where they could not be scrolled back. Hidden screen-reader labels in the page now stay inside its scrolling body, so moving focus to the next available key scrolls only the settings list. No defaults change.
+
 - Find a safely admitted default Herdr installation under the remote user’s `.local/bin` when it is absent from the command PATH of a positively identified x86_64 or arm64 Linux or macOS host; PATH remains preferred. Other architectures, hosts without `/usr/bin/uname`, `/usr/bin/id` and `/usr/bin/stat`, and homes below a symlinked directory keep PATH-only lookup. Changed default: the Herdr lookup on those hosts now includes this fallback.
+
 - Keep the software keyboard connected when arming the terminal toolbar's ctrl, Alt or Shift key. The terminal editor no longer blurs or becomes read-only for the tap, so SwiftKey, Gboard and other keyboards keep their Shift and suggestion state instead of restarting. Pending composition is still sent first, and the editor is still revoked when it is not focused. No defaults change.
 
 - Fix toolbar keys leaving the terminal scrolled into history. Toolbar keys, chord buttons, custom gesture and D-pad corner chords, the D-pad and modified keyboard shortcuts now return the terminal to the live screen after sending, as keyboard typing already did. A reader left looking at an earlier copy of an agent menu, for example after the agent redrew it, now sees the agent's answer after toolbar Enter instead of an unchanged menu. The bytes sent are unchanged. No defaults change.
