@@ -1,0 +1,35 @@
+name: Set up the pinned Android toolchains
+description: Install Java 21, the pinned Android platforms, build tools and NDK, and restore Gradle downloads
+outputs:
+  gradle-cache-hit:
+    description: Whether the restored Gradle downloads exactly matched the current Gradle files
+    value: ${{ steps.gradle-cache.outputs.cache-hit }}
+  gradle-cache-key:
+    description: The Gradle download cache key computed before any build regenerates Gradle files
+    value: ${{ steps.gradle-cache.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    # Only Gradle's checksum-addressed dependency jars and wrapper distributions; build outputs
+    # stay uncached. Standalone Mosh never runs Gradle. checks.yml saves the one shared entry
+    # from native-android-runtime on main.
+    - id: gradle-cache
+      if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
+        key: gradle-v1-${{ runner.os }}-${{ hashFiles('apps/client/src-tauri/gen/android/**/*.gradle*', 'apps/client/src-tauri/gen/android/**/gradle-wrapper.properties', 'apps/client/src-tauri/gen/android/gradle.properties', 'apps/client/src-tauri/gen/android/gradle/*.toml', 'packages/*/android*/**/*.gradle*') }}
+        restore-keys: gradle-v1-${{ runner.os }}-
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+    - uses: android-actions/setup-android@v4
+      with:
+        packages: platform-tools
+    - shell: bash
+      run: sdkmanager 'platforms;android-36' 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;29.0.14206865'
+    - shell: bash
+      run: echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"

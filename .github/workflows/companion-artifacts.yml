@@ -14,7 +14,9 @@ permissions:
 jobs:
   binary:
     strategy:
-      fail-fast: false
+      # Pull request candidates stop at the first red platform; release staging (push or
+      # dispatch) keeps every platform's verdict.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         include:
           - {os: ubuntu-24.04, target: linux-agent-x64, triple: x86_64-unknown-linux-musl}
@@ -56,6 +58,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: companion-${{ matrix.triple }}
+          # Pull request candidates restore but never save; release staging is unchanged.
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: bun install --frozen-lockfile
       - name: Build final production target without test-only dependencies
         run: cargo build --release --locked --package lazysh-agent --bin lazysh-agent --target ${{ matrix.triple }}

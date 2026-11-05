@@ -6,7 +6,7 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; if?: string; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string; 'disk-size'?: string } }[] }>;
+  jobs: Record<string, { needs?:string|string[]; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; if?: string; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string; 'disk-size'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -89,7 +89,8 @@ test('independent Android auxiliary owners have their own finite native job and 
   expect(auxiliary).toBeDefined();
   expect(auxiliary['timeout-minutes']).toBe(30);
   expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
-  expect(auxiliary.needs).toBeUndefined();
+  // Only the documentation-only gate precedes it; no client or Herdr build prerequisite.
+  expect(auxiliary.needs).toBe('changes');
   expect(auxiliary.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'auxiliary',VITE_LAZYSH_QR_CAMERA_TRACE:'1'});
   for(const name of ['Grant this runner access to KVM','Run native Android instrumentation'])
     expect(auxiliary.steps.find(step=>step.name===name)).toEqual(guarded.steps.find(step=>step.name===name));
@@ -102,8 +103,8 @@ test('independent Android auxiliary owners have their own finite native job and 
 
 test('standalone native Mosh has its own bounded emulator owner without a client or Herdr prerequisite',()=>{
   const mosh=workflow.jobs['native-android-mosh'],guarded=workflow.jobs['native-android-runtime'];
-  expect(mosh.needs).toBeUndefined();
-  expect(guarded.needs).toBe('herdr-native');
+  expect(mosh.needs).toBe('changes');
+  expect(guarded.needs).toEqual(['changes','herdr-native']);
   expect(guarded.env?.GUARDED_HERDR_SHA256).toBe('${{ needs.herdr-native.outputs.guarded-sha256 }}');
   expect(mosh['timeout-minutes']).toBe(30);
   expect(mosh['runs-on']).toBe(guarded['runs-on']);
