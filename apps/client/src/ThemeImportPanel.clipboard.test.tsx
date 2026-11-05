@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { api } from './bridge';
 import { accessSnapshot, applyAccessStatus } from './access';
@@ -73,4 +73,19 @@ it('ignores repeated clicks while a native read is held', async () => {
   finish({ kind: 'text', text: theme });
   await screen.findByRole('region', { name: 'Theme preview' });
   expect(api.clipboardRead).toHaveBeenCalledTimes(1);
+});
+
+it('answers a tap after a failed platform check and reads on the next tap once the retry succeeds', async () => {
+  applyAccessStatus({ ...accessSnapshot().status!, generation: String(BigInt(accessSnapshot().status!.generation) + 1n) });
+  vi.mocked(api.clipboardIsAndroid).mockRejectedValueOnce(new Error('bridge unavailable'));
+  await prepareClipboardPlatform();
+  vi.mocked(api.clipboardRead).mockResolvedValue({ kind: 'text', text: theme });
+  render(<ThemeImportPanel preferences={defaults} apply={vi.fn()} />);
+  const button = screen.getByRole('button', { name: 'Read theme from clipboard' });
+  fireEvent.click(button);
+  expect((await screen.findByRole('status')).textContent).toBe(t('themeClipboardCouldNotBeReadPasteTheThemeInto'));
+  expect(api.clipboardRead).not.toHaveBeenCalled();
+  await waitFor(() => expect(button).toHaveProperty('disabled', false));
+  fireEvent.click(button);
+  expect((await screen.findByRole('region', { name: 'Theme preview' })).querySelector('h3')?.textContent).toBe('Clipboard dusk');
 });

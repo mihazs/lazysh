@@ -37,7 +37,11 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
     invalidateQr();
     if (clipboardRead.current) return;
     // Platform metadata is never fetched inside this gesture; a retry needs a new click.
-    if (clipboardPlatform.phase!=='ready') {void clipboardPlatform.retry();return;}
+    if (clipboardPlatform.phase!=='ready') {
+      // A failed check still answers the tap, while the retry prepares the next read.
+      if (clipboardPlatform.phase==='error') setMessage({kind:'error',cause:new LocalUiError('themeClipboardCouldNotBeReadPasteTheThemeInto')});
+      void clipboardPlatform.retry();return;
+    }
     const read=new AbortController();clipboardRead.current=read;setReading(true);
     try {
       const value=await readClipboardText(read.signal);
