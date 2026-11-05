@@ -150,6 +150,48 @@ real SSH with a frozen input window for revocation/output progress, an owned PTY
 for queue ordering, and explicit OpenSSH/Mosh/ET protocol interoperability fixtures.
 These checks do not establish physical mobile timing parity.
 
+## Multiplexer gestures, header pulls and long-press keys
+
+Two-finger swipes, the multiplexer pinch and both header pulls default to
+**Level-aware default**. The action depends on the terminal:
+
+| Gesture | tmux, Herdr or Zellij | Plain terminal |
+| --- | --- | --- |
+| Two-finger swipe left / right | Next / previous tab (tmux window) | Next / previous lazysh session |
+| Two-finger swipe up / down | Next / previous pane | No action |
+| Pinch | Zoom the active pane | Resize terminal text (when pinch resizing is on) |
+| Short header pull | Next tab | No action |
+| Long header pull | Next lazysh session | Next lazysh session |
+
+Choose another action for any of these slots under Terminal touch gestures. The
+new **Next / previous multiplexer tab or window**, **Next / previous multiplexer
+pane** and **Zoom multiplexer pane** actions work in all three multiplexers:
+Zellij through its CLI actions, tmux and Herdr by sending the prefix saved in
+their shortcut panel (Ctrl+b by default) and the default binding. tmux has no
+default previous-pane key, so that action types `select-pane -t :.-` at tmux's
+command prompt; Herdr focuses panes by direction, so next and previous move right
+and left. On a terminal without a multiplexer these actions report an error and
+send nothing. Zoom is a toggle in all three multiplexers, so pinching in or out
+zooms an unzoomed pane and restores a zoomed one. **Pinch in tmux, Herdr or
+Zellij** can also be set to **Resize terminal text** or **No action**.
+
+A header pull is a one-finger downward drag that starts on the session header. A
+label names the action once the pull reaches the short depth (56 CSS pixels) and
+changes at the long depth (144); release runs it, while pulling back above the
+short depth or dragging sideways cancels it. With both pull slots set to **No
+action**, lazysh leaves touches on the header alone.
+
+Select a toolbar key in **Toolbar keys and order** to give it a **Long-press**
+action. Holding that key for half a second, right-clicking it or pressing the
+context-menu key runs the action once; a quick press still sends the key.
+Modifier keys keep their tap and lock cycle, and keys without a long-press action
+keep hold-to-repeat. Keys with one show a small corner mark. Settings sync
+carries long-press actions in a new optional field that older clients reject.
+
+Playwright phone and desktop profiles execute these gestures with Chromium touch
+input against a synthetic terminal and assert the exact input steps or Zellij
+actions. Real multiplexers and physical touch are separate acceptance gates.
+
 ## Command palette
 
 Press **Ctrl+K** (Cmd+K on macOS) outside the terminal, or **Ctrl+Shift+P**

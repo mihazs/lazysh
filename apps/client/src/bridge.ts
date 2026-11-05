@@ -130,7 +130,7 @@ export const api = {
     invoke<void>(sessionId.startsWith('local:') ? 'local_write' : "write_stdin", { sessionId, data }),
   writeSequence: (sessionId: string, steps: string[]) =>
     invoke<void>(sessionId.startsWith('local:') ? 'local_write' : 'write_stdin', {sessionId, data:'', steps}),
-  zellijNavigate: (sessionId: string, name: string, type: 'nextTab' | 'previousTab' | 'nextPane' | 'previousPane') =>
+  zellijNavigate: (sessionId: string, name: string, type: 'nextTab' | 'previousTab' | 'nextPane' | 'previousPane' | 'zoomPane') =>
     invoke<void>('zellij_action', {sessionId, name, action:{type}}),
   ackOutput: (sessionId: string, bytes: number) =>
     // Native permits only bounded accounting for already-delivered bytes across lock generations.

@@ -22,7 +22,7 @@ describe("terminal preferences trust boundary", () => {
     expect(parseChordSteps('text: 你好,, 😀 ')).toEqual([' 你好,, 😀 ']);
     expect(parseChord('F12, M-h Enter')).toBe(parseChordSteps('F12, M-h Enter').join(''));
   });
-  it('round-trips explicit Zellij gesture actions without changing existing defaults', () => {
+  it('round-trips explicit Zellij gesture actions and defaults new two-finger, pinch and pull slots to level-aware actions', () => {
     const prefs=parsePreferences(JSON.parse(JSON.stringify({...defaults,
       bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab',swipeRight:'previousZellijTab'},
       gestures:{...defaults.gestures,left:'nextZellijPane',right:'previousZellijPane'},
@@ -31,8 +31,10 @@ describe("terminal preferences trust boundary", () => {
     expect(prefs.bodyGestures.swipeRight).toBe('previousZellijTab');
     expect(prefs.gestures.left).toBe('nextZellijPane');
     expect(prefs.gestures.right).toBe('previousZellijPane');
-    expect(parsePreferences({version:1}).gestures).toEqual({left:'none',right:'none',up:'none',down:'none'});
-    expect(parsePreferences({version:1}).bodyGestures.swipeLeft).toBe('none');
+    expect(parsePreferences({version:1}).gestures).toEqual({left:'auto',right:'auto',up:'auto',down:'auto'});
+    expect(parsePreferences({version:1}).bodyGestures).toEqual({tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none',pinch:'auto',pullShallow:'auto',pullDeep:'auto'});
+    // Explicit choices stored by earlier versions are kept, including "none".
+    expect(parsePreferences({version:1,gestures:{left:'none',right:'none',up:'none',down:'none'}}).gestures).toEqual({left:'none',right:'none',up:'none',down:'none'});
   });
   it('uses the extended light palette only for Paper or explicit light metadata', () => {
     const colors = {background:'#ffffff',foreground:'#111111',red:'#123456',brightRed:'#abcdef'};
@@ -83,12 +85,27 @@ describe("keyboard chords", () => {
     for (const sequence of ["", "Ctrl+Ctrl+c", "Meta+c", "Ctrl+1", "Shift+1", "__proto__", "toString", "F13", "a ".repeat(9), "\x1b", "Contrl-b", "C-b,,T", "text:\x1b", "text:"]) expect(() => parseChord(sequence)).toThrow();
     const p = parsePreferences({...defaults, chords: [{label: "next", keys: "Ctrl+b n"}, {label: "bad", keys: "Ctrl+wat"}], gestures: {left: "evil", right: "tab", up: "find"}});
     expect(p.chords).toEqual([{label: "next", keys: "Ctrl+b n"}]);
-    expect(p.gestures).toEqual({left: "none", right: "tab", up: "find", down: "none"});
+    expect(p.gestures).toEqual({left: "auto", right: "tab", up: "find", down: "auto"});
   });
   it("keeps gesture chord content bound to a slot and drops malformed imported mappings", () => {
     const preferences = parsePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, doubleTap: "custom", swipeLeft: "nextSession", tap: "unknown"}, gestureChords: {doubleTap: "C-b, T", twoLeft: "Contrl-x", unknown: "C-c"}});
     expect(preferences.bodyGestures).toMatchObject({doubleTap: "custom", swipeLeft: "nextSession", tap: "none"});
     expect(preferences.gestureChords).toEqual({doubleTap: "C-b, T"});
+  });
+  it("keeps level-aware and text-size actions to the slots that give them a meaning", () => {
+    const preferences = parsePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: "auto", swipeLeft: "fontSize", pinch: "fontSize", pullShallow: "fontSize", pullDeep: "zoomPane"}, gestures: {...defaults.gestures, up: "fontSize"}, dpadCorners: {left: "auto", right: "zoomPane"}});
+    expect(preferences.bodyGestures).toMatchObject({tap: "none", swipeLeft: "none", pinch: "fontSize", pullShallow: "auto", pullDeep: "zoomPane"});
+    expect(preferences.gestures.up).toBe("auto");
+    expect(preferences.dpadCorners).toEqual({left: "interrupt", right: "zoomPane"});
+  });
+  it("stores toolbar long-press actions only for non-modifier keys with known actions and valid chords", () => {
+    const stored = JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarAlternates: {
+      esc: {action: "zoomPane"}, "-": {action: "custom", keys: "text:_"}, tab: {action: "custom", keys: "Contrl-x"},
+      ctrl: {action: "paste"}, c: {action: "auto"}, d: {action: "none"}, enter: "paste", unknown: {action: "paste"},
+    }})));
+    expect(stored.toolbarAlternates).toEqual({esc: {action: "zoomPane"}, "-": {action: "custom", keys: "text:_"}, tab: {action: "custom"}});
+    // Without long-press actions the snapshot carries no new field, so older sync peers still accept it.
+    expect(Object.hasOwn(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarAlternates: {ctrl: {action: "paste"}}}))), "toolbarAlternates")).toBe(false);
   });
 });
 

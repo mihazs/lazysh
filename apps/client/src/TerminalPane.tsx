@@ -10,7 +10,8 @@ import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import TerminalSelectionTools from './TerminalSelectionTools';
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
+import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
@@ -20,6 +21,7 @@ import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
 import { visibleToolbarRows } from "./toolbarLayout";
 import "./ToolbarRows.css";
+import "./TerminalGestures.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -28,6 +30,12 @@ type InputCaller = 'terminal-user' | 'terminal-nonuser' | 'named-key' | 'chord' 
 type InputOwner = {session: LiveSession; disposed: boolean};
 type DpadDirection = keyof typeof arrowLabelKeys;
 type DpadGesture = {readonly shift:boolean;pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;terminal:LiveSession['terminal'];id:string};
+type PullDepth = 'pullShallow' | 'pullDeep';
+/** A header pull starts after 12 CSS pixels downward; 56 reaches the short depth and 144 the long one. */
+const pullStart = 12, pullShallow = 56, pullDeep = 144;
+/** Pinch text sizing follows the fingers; a discrete pinch action needs a clearer change of distance. */
+const pinchResize = .08, pinchAction = .25;
+const alternateHold = 500;
 
 export function terminalWebUrl(value: string): string | undefined {
   if (value.length > 4096 || /[\s\x00-\x1f\x7f-\x9f\\]/.test(value) || !/^https?:\/\//i.test(value)) return;
@@ -88,6 +96,22 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     stopRepeat();const owner:typeof repeat.current={shift};repeat.current=owner;
     const tick=()=>{if(repeat.current!==owner)return;repeatShift.current=owner.shift;try{action();}finally{repeatShift.current=undefined;}};
     owner.delay=setTimeout(()=>{if(repeat.current!==owner)return;repeated.current=true;tick();if(repeat.current===owner&&!document.hidden)owner.timer=setInterval(tick,80);},delay);
+  }
+  // A toolbar key with a long-press action runs it once after a hold instead of repeating.
+  const held = useRef<{key: ToolbarKey; fired: boolean; timer?: ReturnType<typeof setTimeout>} | null>(null);
+  function releaseHold() {if (held.current) clearTimeout(held.current.timer);}
+  function holdAlternate(key: ToolbarKey, alternate: ToolbarAlternate) {
+    releaseHold();
+    const owner: NonNullable<typeof held.current> = {key, fired: false};
+    owner.timer = setTimeout(() => {if (held.current === owner) fireAlternate(key, alternate);}, alternateHold);
+    held.current = owner;
+  }
+  /** Runs at most once per press, whether the hold timer or the platform's context menu comes first. */
+  function fireAlternate(key: ToolbarKey, alternate: ToolbarAlternate) {
+    if (held.current?.key === key && held.current.fired) return;
+    releaseHold();
+    held.current = {key, fired: true};
+    if (activeRef.current && session.connected && mounted.current && access.current() && !document.hidden) runGesture(alternate.action, undefined, alternate.keys);
   }
   function cancelDpad() {
     stopRepeat();dpad.current.gesture=null;dpad.current.blocked=dpad.current.pointers.size>0;dpad.current.suppressClick=true;
@@ -266,7 +290,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     element.addEventListener('touchstart',start,{passive:false});
     return()=>element.removeEventListener('touchstart',start);
   },[active,session.id,session.terminal,session.connected,dpadEnabled,preferences.screenReader]);
-  const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || Object.values(preferences.bodyGestures).some(action => action !== "none"));
+  const multiplexer = session.local ? undefined : session.attached?.kind;
+  const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
 
   useEffect(() => {
     const visibility = () => {if (document.hidden) {imeInput.current?.reset(); clearModifiers(); repeated.current = true;}};
@@ -275,7 +300,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   }, []);
   useEffect(() => subscribeAccess(() => {if (!access.current()) {imeInput.current?.reset(); clearModifiers();}}), []);
   useEffect(() => {if (!active || !session.connected) imeInput.current?.reset();}, [active, session.connected, session.id]);
-  useEffect(() => {if (!active || !session.connected || !toolbarVisible) clearModifiers(); return stopRepeat;}, [active, session.connected, toolbarVisible, session.id]);
+  useEffect(() => {if (!active || !session.connected || !toolbarVisible) clearModifiers(); return () => {stopRepeat(); releaseHold(); held.current = null;};}, [active, session.connected, toolbarVisible, session.id]);
   useEffect(() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}, [customTouch]);
   useEffect(() => {if (!active) cancelTaps(); return cancelTaps;}, [active, session.id, preferences.bodyGestures]);
 
@@ -446,6 +471,57 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
   }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.terminal, session.connected, preferences.bodyGestures]);
+
+  // Pulling the session header down runs the short or long pull action on release.
+  const [pull, setPull] = useState<PullDepth | null>(null);
+  const runPull = useRef<(depth: PullDepth) => void>(() => {});
+  runPull.current = depth => {
+    if (activeRef.current && mounted.current && access.current() && !document.hidden && !document.querySelector('[role="dialog"][aria-modal="true"]')) runGesture(preferences.bodyGestures[depth], depth);
+  };
+  // Without a pull action the header keeps its native touch scrolling.
+  const pulls = (['pullShallow', 'pullDeep'] as const).some(depth => resolveGesture(preferences.bodyGestures[depth], depth, multiplexer) !== "none");
+  useEffect(() => {
+    const header = controlsTarget?.closest('header');
+    if (!header || !active || preferences.screenReader || !pulls) return;
+    let start: {x: number; y: number; id: number; pulling: boolean; depth: PullDepth | null} | null = null;
+    const reset = () => {start = null; setPull(null);};
+    const down = (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      reset();
+      if (touch) start = {x: touch.clientX, y: touch.clientY, id: touch.identifier, pulling: false, depth: null};
+    };
+    const move = (event: TouchEvent) => {
+      if (!start) return;
+      const touch = event.touches.length === 1 && event.touches[0].identifier === start.id ? event.touches[0] : undefined;
+      if (!touch) {reset(); return;}
+      const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+      if (!start.pulling) {
+        if (dy < pullStart) {if (Math.hypot(dx, dy) >= pullStart) reset(); return;}
+        if (Math.abs(dx) > dy) {reset(); return;}
+        start.pulling = true;
+      }
+      if (event.cancelable) event.preventDefault();
+      const depth = dy >= pullDeep ? 'pullDeep' : dy >= pullShallow ? 'pullShallow' : null;
+      if (depth !== start.depth) {start.depth = depth; setPull(depth);}
+    };
+    const up = () => {
+      const depth = start?.pulling ? start.depth : null;
+      reset();
+      if (depth) runPull.current(depth);
+    };
+    header.addEventListener('touchstart', down, {passive: true});
+    header.addEventListener('touchmove', move, {passive: false});
+    header.addEventListener('touchend', up);
+    header.addEventListener('touchcancel', reset);
+    return () => {
+      header.removeEventListener('touchstart', down);
+      header.removeEventListener('touchmove', move);
+      header.removeEventListener('touchend', up);
+      header.removeEventListener('touchcancel', reset);
+      setPull(null);
+    };
+  }, [controlsTarget, active, preferences.screenReader, session.id, pulls]);
+  const pullAction = pull ? resolveGesture(preferences.bodyGestures[pull], pull, multiplexer) : "none";
 
   useEffect(() => {
     const element = container.current;
@@ -721,16 +797,35 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       return true;
     } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
-  function runGesture(action: GestureAction, slot?: GestureSlot) {
+  function navigationReady() {
+    return mounted.current && access.current() && activeRef.current && session.connected && !imeComposing.current && !session.terminal.hasSelection();
+  }
+  function navigateZellij(name: string, type: MultiplexerAction) {
+    imeInput.current?.flush();
+    zellijBusy.current = true;
+    void api.zellijNavigate(session.id, name, type)
+      .catch(error => {if (mounted.current && access.current() && activeRef.current && session.connected) reportError(errorMessage(error));})
+      .finally(() => {zellijBusy.current = false;});
+  }
+  /** Tab, pane and zoom actions reach the attached multiplexer: Zellij through its CLI, tmux and Herdr through their prefix keys. */
+  function runMultiplexer(action: MultiplexerAction) {
+    if (!navigationReady()) return;
+    if (!multiplexer || !session.attached) {reportError(new LocalUiError('terminalMultiplexerRequired')); return;}
+    if (multiplexer === 'zellij') {if (!zellijBusy.current) navigateZellij(session.attached.name, action); return;}
+    const prefix = storedPrefix(multiplexer);
+    if (!validPrefix(prefix)) {reportError(new LocalUiError('muxShortcutInvalid')); return;}
+    imeInput.current?.flush();
+    void writeInput('gesture', multiplexerSteps(multiplexer, action, prefix)).catch(error => reportError(captureUiError(error)));
+    followLive();
+  }
+  function runGesture(requested: GestureAction, slot?: GestureSlot, keys = slot ? preferences.gestureChords[slot] : undefined) {
+    const action = resolveGesture(requested, slot, multiplexer);
+    if (isMultiplexerAction(action)) {runMultiplexer(action); return;}
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {
-      if (!mounted.current || !access.current() || !activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
+      if (!navigationReady() || zellijBusy.current) return;
       if (session.local || session.attached?.kind !== 'zellij') {reportError(new LocalUiError('terminalZellijRequired')); return;}
-      imeInput.current?.flush();
-      zellijBusy.current = true;
-      void api.zellijNavigate(session.id, session.attached.name, zellijActions[action as keyof typeof zellijActions])
-        .catch(error => {if (mounted.current && access.current() && activeRef.current && session.connected) reportError(errorMessage(error));})
-        .finally(() => {zellijBusy.current = false;});
+      navigateZellij(session.attached.name, zellijActions[action as keyof typeof zellijActions]);
       return;
     }
     if (action === "find") {setSearching(true); requestAnimationFrame(() => focusTerminal(searchInput.current));}
@@ -740,12 +835,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     else if (action === "paste") void paste();
     else if (action === "copy") {const text = session.terminal.getSelection(); if (text) void copy(text);}
     else if (action === "nextSession" || action === "previousSession") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
-    else if (action === "custom") {
-      sendChord(slot ? preferences.gestureChords[slot] : undefined);
-    }
+    else if (action === "custom") sendChord(keys);
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
-      if (keys && session.connected) {imeInput.current?.flush(); void writeInput('gesture', keys).catch(error => reportError(captureUiError(error)));}
+      if (keys && session.connected) {imeInput.current?.flush(); void writeInput('gesture', keys).catch(error => reportError(captureUiError(error))); followLive();}
     }
   }
   function cancelTaps() {
@@ -790,14 +883,25 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     gesture.current.moved.clear();
     const [a, b] = [...pointers.current.values()];
     const scale = Math.hypot(a.x - b.x, a.y - b.y) / gesture.current.distance;
-    if (preferences.pinchZoom && Math.abs(scale - 1) >= .08) {
+    if (pinch(scale, gesture.current)) {
       gesture.current.zoomed = true;
       if (event.cancelable) event.preventDefault();
-      const fontSize = Math.max(10, Math.min(32, Math.round(gesture.current.fontSize * scale)));
+    }
+  }
+  /** In a multiplexer the pinch runs its configured action once; elsewhere it resizes terminal text. */
+  function pinch(scale: number, start: NonNullable<typeof gesture.current>) {
+    const resolved = multiplexer ? resolveGesture(preferences.bodyGestures.pinch, "pinch", multiplexer) : "fontSize";
+    if (resolved === "fontSize") {
+      if (!preferences.pinchZoom || Math.abs(scale - 1) < pinchResize) return false;
+      const fontSize = Math.max(10, Math.min(32, Math.round(start.fontSize * scale)));
       if (fontSize !== preferences.fontSize) {
         try {savePreferences({...preferences, fontSize});} catch {reportError(new LocalUiError('terminalFontSaveFailed'));}
       }
+      return true;
     }
+    if (resolved === "none" || Math.abs(scale - 1) < pinchAction) return false;
+    if (!start.zoomed) runGesture(resolved, "pinch");
+    return true;
   }
   function pointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const start = gesture.current;
@@ -815,9 +919,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       const [a, b] = [...pointers.current.values()];
       const dx = (a.x + b.x) / 2 - start.x, dy = (a.y + b.y) / 2 - start.y;
       const scale = Math.hypot(a.x - b.x, a.y - b.y) / start.distance;
-      if (preferences.pinchZoom && Math.abs(scale - 1) >= .08) {
-        try {savePreferences({...preferences, fontSize: Math.max(10, Math.min(32, Math.round(start.fontSize * scale)))});} catch {reportError(new LocalUiError('terminalFontSaveFailed'));}
-      } else if (Math.max(Math.abs(dx), Math.abs(dy)) >= 60) {
+      if (!pinch(scale, start) && Math.max(Math.abs(dx), Math.abs(dy)) >= 60) {
         const direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
         const slot = {left: "twoLeft", right: "twoRight", up: "twoUp", down: "twoDown"}[direction] as GestureSlot;
         runGesture(preferences.gestures[direction], slot);
@@ -865,6 +967,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
     <div className="terminal-stage">
+    {pull && pullAction !== "none" && <div className="terminal-pull" role="status" data-depth={pull}>{t("terminalPullRelease", {action: pullAction === "custom" ? preferences.gestureChords[pull] ?? "" : t(gestureLabelKeys[pullAction])})}</div>}
     <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {active && selectionTools && createPortal(<TerminalSelectionTools terminal={session.terminal} handles={selectionTools.handles}
       onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
@@ -909,14 +1012,28 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           else sendKey(sequences[key] ?? key);
           if (modifier) focusTerminal();
         };
-        const repeatable = !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
+        const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
+        const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
+        const release = () => {stopRepeat(); releaseHold();};
         return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
           aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
           aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
-          title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : undefined}
-          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); startRepeat(action);}}}
-          onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onLostPointerCapture={stopRepeat} onBlur={stopRepeat}
-          onClick={event => {if (!repeatable || !repeated.current || event.detail === 0) action();}}>
+          title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : alternate ? t("terminalKeyAlternate", {action: alternate.keys ?? t(gestureLabelKeys[alternate.action])}) : undefined}
+          data-alternate={alternate ? "" : undefined}
+          onPointerDown={event => {
+            if (key !== "attach") event.preventDefault();
+            if (alternate) {
+              releaseHold(); held.current = null;
+              if (event.button === 0) {event.currentTarget.setPointerCapture?.(event.pointerId); holdAlternate(key, alternate);}
+            }
+            else if (repeatable) {repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); startRepeat(action);}
+          }}
+          onContextMenu={alternate ? event => {event.preventDefault(); fireAlternate(key, alternate);} : undefined}
+          onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} onBlur={release}
+          onClick={event => {
+            if (alternate) {if (event.detail === 0 || !(held.current?.key === key && held.current.fired)) action(); held.current = null;}
+            else if (!repeatable || !repeated.current || event.detail === 0) action();
+          }}>
           {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}
         </button>;
       })}{rowIndex === rows.length - 1 && <>

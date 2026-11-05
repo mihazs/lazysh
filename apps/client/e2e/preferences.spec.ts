@@ -103,21 +103,21 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await expect(page.getByText('Agent pane: F12, M-h', {exact: true})).toBeVisible();
 });
 
-test('explicit Zellij tab and pane gesture actions persist without changing defaults and reset cleanly', async ({page}) => {
+test('explicit Zellij tab and pane gesture actions persist and reset to their defaults', async ({page}) => {
   await page.goto('/');
   await openGestureSettings(page);
-  const bindings=[['Swipe left','nextZellijTab'],['Swipe right','previousZellijTab'],['Two-finger swipe left','nextZellijPane'],['Two-finger swipe right','previousZellijPane']];
-  for(const [label,action] of bindings){
+  const bindings=[['Swipe left','nextZellijTab','none'],['Swipe right','previousZellijTab','none'],['Two-finger swipe left','nextZellijPane','auto'],['Two-finger swipe right','previousZellijPane','auto']];
+  for(const [label,action,initial] of bindings){
     const select=page.getByRole('combobox',{name:label,exact:true});
-    await expect(select).toHaveValue('none');
+    await expect(select).toHaveValue(initial);
     await select.selectOption(action);
   }
   await page.reload();
   await openGestureSettings(page);
   for(const [label,action] of bindings) await expect(page.getByRole('combobox',{name:label,exact:true})).toHaveValue(action);
-  await expect(page.getByRole('combobox',{name:'Two-finger swipe up',exact:true})).toHaveValue('none');
+  await expect(page.getByRole('combobox',{name:'Two-finger swipe up',exact:true})).toHaveValue('auto');
   await page.getByRole('button',{name:'Reset gestures',exact:true}).click();
-  for(const [label] of bindings) await expect(page.getByRole('combobox',{name:label,exact:true})).toHaveValue('none');
+  for(const [label,,initial] of bindings) await expect(page.getByRole('combobox',{name:label,exact:true})).toHaveValue(initial);
 });
 
 

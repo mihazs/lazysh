@@ -476,6 +476,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "autoHideToolbar",
             "composerSendEnter",
             "dismissKeyboardOnOverscroll",
+            "toolbarAlternates",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
         validate_theme_preferences(object)?;
@@ -1474,6 +1475,15 @@ mod tests {
         // Rows never need a new key, which older peers would reject outright.
         bundle.preferences = Some(serde_json::json!({"version":1,"toolbarRows":[["esc"]]}));
         assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+    }
+
+    #[test]
+    fn toolbar_long_press_actions_are_an_accepted_settings_field() {
+        let mut bundle = settings();
+        bundle.preferences = Some(
+            serde_json::json!({"version":1,"toolbarAlternates":{"esc":{"action":"zoomPane"}}}),
+        );
+        validate_bundle(&bundle, Scope::Settings).unwrap();
     }
 
     #[test]
