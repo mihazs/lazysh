@@ -33,6 +33,18 @@ it('stages a private file, uploads only on explicit action, and exposes a quoted
   expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh-one', text: 'My own prompt' });
   window.removeEventListener('lazysh-prompt-draft', staged);
 });
+it('saves to a private host /tmp file by default and shows the path the host chose', async () => {
+  vi.mocked(api.uploadFile).mockResolvedValue({path:'/tmp/lazysh-0123456789ab-report.txt'});
+  render(<AttachmentPanel sessionId="ssh-one" />);
+  fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [file()] } });
+  const destination = await screen.findByLabelText('Destination path');
+  expect(destination).toHaveProperty('value', '');
+  expect(document.getElementById(destination.getAttribute('aria-describedby')!)?.textContent).toBe('Leave empty to save a private copy under /tmp with a unique name. Enter a path to save it there instead.');
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  await screen.findByLabelText('Host path');
+  expect(api.uploadFile).toHaveBeenCalledExactlyOnceWith('ssh-one', 'report.txt', [104, 101, 108, 108, 111], attachmentReceipt, true);
+  expect(screen.getByLabelText('Host path')).toHaveProperty('value', "'/tmp/lazysh-0123456789ab-report.txt'");
+});
 it('cancels before upload, rejects invalid destination, and reports native no-overwrite errors', async () => {
   vi.mocked(api.uploadFile).mockRejectedValue({ message: 'Remote file already exists' });
   render(<AttachmentPanel sessionId="ssh-one" />);
@@ -87,7 +99,7 @@ it('flattens an explicit crop to PNG before the bounded upload', async () => {
   await screen.findByLabelText('Host path');
   expect(context.translate).toHaveBeenCalledWith(-10, -0);
   expect(HTMLCanvasElement.prototype.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
-  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', './shot-edited.png', [1, 2, 3],attachmentReceipt);
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', 'shot-edited.png', [1, 2, 3],attachmentReceipt,true);
 });
 
 it('cancelling held PNG encoding never reserves or uploads its late final bytes',async()=>{

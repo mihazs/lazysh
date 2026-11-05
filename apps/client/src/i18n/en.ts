@@ -1687,6 +1687,8 @@ export const english = {
   attachmentPaste: "Paste clipboard image",
   attachmentMetadata: "{{name}} · {{bytes}} bytes",
   attachmentDestination: "Destination path",
+  attachmentTemporaryPlaceholder: "Private file in /tmp",
+  attachmentTemporaryHint: "Leave empty to save a private copy under /tmp with a unique name. Enter a path to save it there instead.",
   attachmentEditing: "Crop or annotate PNG/JPEG",
   attachmentDrawingHint: "Draw on the image. The cyan border shows the crop and is excluded from the upload. Coordinates are in original pixels; edits upload as PNG.",
   attachmentCropX: "Crop x",

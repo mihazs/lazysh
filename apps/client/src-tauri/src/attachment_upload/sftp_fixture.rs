@@ -193,7 +193,7 @@ async fn cancellation_of_real_stalled_resolution_and_write_closes_the_owned_stre
         let sending = tokio::spawn(async move {
             work.run(ssh::transfer_sftp(
                 client,
-                "new attachment.txt".into(),
+                ssh::Destination::Path("new attachment.txt".into()),
                 vec![7; 65536],
             ))
             .await
@@ -315,7 +315,12 @@ async fn cancellation_retires_blocked_init_or_write_without_peer_drain() {
         let sending = tokio::spawn(async move {
             work.run(async {
                 let client = russh_sftp::client::SftpSession::new(stream).await?;
-                ssh::transfer_sftp(client, "new attachment.txt".into(), vec![7; 65536]).await
+                ssh::transfer_sftp(
+                    client,
+                    ssh::Destination::Path("new attachment.txt".into()),
+                    vec![7; 65536],
+                )
+                .await
             })
             .await
         });
@@ -446,7 +451,7 @@ async fn check_canonical(peer: Peer, input: &str, expected: Option<&str>) {
     let (client, server) = tokio::io::duplex(262144);
     let task = tokio::spawn(russh_sftp::server::run(server, peer));
     let client = russh_sftp::client::SftpSession::new(client).await.unwrap();
-    let result = ssh::transfer_sftp(client, input.into(), vec![]).await;
+    let result = ssh::transfer_sftp(client, ssh::Destination::Path(input.into()), vec![]).await;
     match expected {
         Some(path) => {
             assert_eq!(result.unwrap().path, path);

@@ -150,8 +150,9 @@ export const api = {
     remoteInvoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
   cancelUpload: (sessionId: string, uploadId: string) =>
     remoteInvoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
-  uploadFile: (sessionId: string, path: string, data: number[], uploadId: string) =>
-    remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId }),
+  /** `temporary` sends only a file name; the host saves a private, uniquely named file under /tmp. */
+  uploadFile: (sessionId: string, path: string, data: number[], uploadId: string, temporary = false) =>
+    remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
   diff: (sessionId: string, path: string, staged = false) =>
     remoteInvoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>

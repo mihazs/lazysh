@@ -474,7 +474,7 @@ jobs:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
           cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
-          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure)
+          cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure)
           for case_name in "${cases[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact

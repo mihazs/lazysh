@@ -1,7 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {controlContrast} from './fixtures/controlContrast';
-import {attachmentDraft,attachmentUploadedPath,attachmentSession} from '../src/test/attachmentData';
+import {attachmentDraft,attachmentReceipt,attachmentUploadedPath,attachmentSession} from '../src/test/attachmentData';
 import {shellPath} from '../src/attachment';
 async function openChat(page:Page) {
   await openLocalizedApp(page,'en');
@@ -75,6 +75,24 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} Chat attachment keeps th
   await action.click();await expect(action).toHaveAttribute('aria-expanded','true');
   await expect(owner.locator('.chat-draft-help')).toBeVisible();
   await action.click();await expect(owner.locator('.chat-draft-help')).toBeHidden();
+  await page.evaluate(()=>window.attachment.dispose());
+});
+
+test('Chat attachment defaults to a private host /tmp file and adds the path the host chose',async({page})=>{
+  const chosen="/tmp/lazysh-0123456789ab-build log's.txt";
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async uploadedPath=>{const {mountAttachment}=await import('/e2e/fixtures/AttachmentHarness.tsx');window.attachment=mountAttachment({chat:true,uploadedPath});},chosen);
+  const owner=page.locator('.attachment-fixture');
+  await owner.getByRole('button',{name:'Add attachment',exact:true}).click();
+  await owner.getByLabel('Choose attachment',{exact:true}).setInputFiles({name:"build log's.txt",mimeType:'text/plain',buffer:Buffer.from('ok')});
+  const destination=owner.getByRole('textbox',{name:'Destination path',exact:true});
+  await expect(destination).toHaveValue('');await expect(destination).toHaveAttribute('placeholder','Private file in /tmp');
+  await expect(destination).toHaveAccessibleDescription('Leave empty to save a private copy under /tmp with a unique name. Enter a path to save it there instead.');
+  await owner.getByRole('button',{name:'Upload attachment',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='upload_file').map(call=>call.args))).toEqual([{sessionId:attachmentSession,path:"build log's.txt",data:[111,107],uploadId:attachmentReceipt,temporary:true}]);
+  await page.evaluate(()=>window.attachment.complete());
+  await owner.getByRole('button',{name:'Add uploaded path to Chat draft',exact:true}).click();
+  await expect(owner.locator('.chat-composer textarea')).toHaveValue(shellPath(chosen));
   await page.evaluate(()=>window.attachment.dispose());
 });
 

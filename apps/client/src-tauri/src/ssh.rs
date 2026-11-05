@@ -26,6 +26,7 @@ use tokio::{
     sync::{mpsc, watch, Mutex, Semaphore},
     time::timeout,
 };
+pub(crate) use upload_path::Destination;
 use zeroize::Zeroizing;
 
 pub(crate) const FILE_LIMIT: u64 = 1024 * 1024;
@@ -2619,8 +2620,16 @@ async fn upload_file(
     .await?
     .into_inner()
     .map_err(GuardedError::from)?;
-    crate::attachment_upload::upload_file(lease, state, session_id, reserved.upload_id, path, data)
-        .await
+    crate::attachment_upload::upload_file(
+        lease,
+        state,
+        session_id,
+        reserved.upload_id,
+        path,
+        data,
+        None,
+    )
+    .await
 }
 // Closing the raw SFTP session drops its close-owned channel even when the
 // transfer future is dropped by cancellation, access revocation or timeout.
@@ -2637,11 +2646,13 @@ impl Drop for UploadSftp {
 pub(crate) async fn transfer_file(
     session: &Session,
     lease: &AccessLease,
-    path: String,
+    destination: Destination,
     data: Vec<u8>,
     ownership: &crate::attachment_upload::Work,
 ) -> Result<crate::attachment_upload::Uploaded> {
-    check_path(&path)?;
+    check_path(match &destination {
+        Destination::Path(path) | Destination::Temporary(path) => path,
+    })?;
     if data.len() > UPLOAD_LIMIT {
         return Err(SshError::new(
             "file_too_large",
@@ -2661,7 +2672,7 @@ pub(crate) async fn transfer_file(
             ownership.cancellation(),
             ownership.retention(),
         );
-        transfer_sftp(SftpSession::new(stream).await?, path, data).await
+        transfer_sftp(SftpSession::new(stream).await?, destination, data).await
     })
     .await
     .map_err(|_| {
@@ -2683,20 +2694,36 @@ pub(crate) async fn transfer_file(
 }
 pub(crate) async fn transfer_sftp(
     sftp: SftpSession,
-    path: String,
+    destination: Destination,
     data: Vec<u8>,
 ) -> Result<crate::attachment_upload::Uploaded> {
     let sftp = UploadSftp(Some(sftp));
-    let path = upload_path::destination(sftp.0.as_ref().unwrap(), path).await?;
+    let upload_path::Target { path, private } =
+        upload_path::target(sftp.0.as_ref().unwrap(), destination).await?;
+    let attributes = russh_sftp::protocol::FileAttributes {
+        permissions: private.then_some(PRIVATE_FILE),
+        ..russh_sftp::protocol::FileAttributes::empty()
+    };
     let mut file = sftp
         .0
         .as_ref()
         .unwrap()
-        .open_with_flags(
+        .open_with_flags_and_attributes(
             path.clone(),
             OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+            attributes,
         )
         .await?;
+    // Confirm privacy before any byte reaches a directory other accounts can list.
+    if private {
+        if let Err(error) = keep_private(&file).await {
+            let _ = file.shutdown().await;
+            return Err(SshError::new(
+                "upload_not_private",
+                format!("{}. An empty new file may remain at {path}.", error.message),
+            ));
+        }
+    }
     if let Err(error) = file.write_all(&data).await {
         let _ = file.shutdown().await;
         return Err(SshError::new(
@@ -2706,6 +2733,27 @@ pub(crate) async fn transfer_sftp(
     }
     file.shutdown().await?;
     Ok(crate::attachment_upload::Uploaded { path })
+}
+const PRIVATE_FILE: u32 = 0o600;
+const SHARED_ACCESS: u32 = 0o077;
+async fn keep_private(file: &russh_sftp::client::fs::File) -> Result<()> {
+    let exposed = |mode: Option<u32>| mode.is_none_or(|mode| mode & SHARED_ACCESS != 0);
+    if !exposed(file.metadata().await?.permissions) {
+        return Ok(());
+    }
+    // Some servers ignore open attributes; restrict the new file explicitly.
+    file.set_metadata(russh_sftp::protocol::FileAttributes {
+        permissions: Some(PRIVATE_FILE),
+        ..russh_sftp::protocol::FileAttributes::empty()
+    })
+    .await?;
+    if exposed(file.metadata().await?.permissions) {
+        return Err(SshError::new(
+            "upload_not_private",
+            "The host could not make the temporary attachment private",
+        ));
+    }
+    Ok(())
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -3437,6 +3485,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
+    #[cfg(unix)]
+    #[path = "temporary_attachment_fixture.rs"]
+    mod temporary_attachment_fixture;
     #[cfg(unix)]
     #[path = "transcript_image_fixture.rs"]
     mod transcript_image_fixture;
@@ -6066,6 +6117,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires owned OpenSSH; run explicitly for interoperability"]
+    async fn openssh_attachments_default_to_private_unique_tmp_files() {
+        openssh_interoperability(OpenSshCheck::TemporaryAttachments).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH; run explicitly for interoperability"]
     async fn openssh_client_environment_reaches_remote_shell() {
         openssh_interoperability(OpenSshCheck::ClientEnvironment).await;
     }
@@ -6081,6 +6139,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         Clipboard,
         TranscriptImages,
+        TemporaryAttachments,
         CompanionInstall,
         AccountUsage,
     }
@@ -6215,6 +6274,10 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::TemporaryAttachments) {
+            temporary_attachment_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         #[cfg(target_os = "linux")]
@@ -6856,6 +6919,7 @@ mod tests {
                     reserved.upload_id.clone(),
                     destination,
                     data,
+                    None,
                 )
                 .await
                 .unwrap()
