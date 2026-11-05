@@ -81,13 +81,14 @@ export type Preferences = {
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
   composerSendEnter: boolean;
+  dismissKeyboardOnOverscroll: boolean;
 };
 export const defaults: Preferences = {
   version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
-  optionAsMeta: false, screenReader: false,
+  optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
   toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
@@ -135,6 +136,7 @@ export function parsePreferences(value: unknown): Preferences {
     screenReader: p.screenReader === true,
     autoHideToolbar: p.autoHideToolbar === true,
     composerSendEnter: p.composerSendEnter !== false,
+    dismissKeyboardOnOverscroll: p.dismissKeyboardOnOverscroll === true,
     pinchZoom: p.pinchZoom !== false,
     bodyGestures: Object.fromEntries(bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])])) as Preferences["bodyGestures"],
     gestureChords,

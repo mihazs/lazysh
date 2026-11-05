@@ -820,6 +820,7 @@ export const english = {
   "preferencesUseOptionAsMetaOnMacOS": "Use Option as Meta on macOS",
   preferencesComposerSendEnter: "Send Enter after pasting the draft",
   "preferencesScreenReaderAnnouncements": "Screen reader announcements",
+  "preferencesDismissKeyboardOnOverscroll": "Hide keyboard when scrolling past local history bottom",
   "preferencesPinchWithTwoFingersToResizeTerminalText": "Pinch with two fingers to resize terminal text",
   "preferencesAutoHideToolbarInDesktopPointerLayouts": "Auto-hide toolbar in desktop pointer layouts",
   "preferencesTerminalTouchGestures": "Terminal touch gestures",

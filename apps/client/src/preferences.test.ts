@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions, toolbarFromRows, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('keeps past-bottom keyboard dismissal opt-in for old, invalid and stored settings',()=>{
+    for(const value of [undefined,null,false,1,'true',{}])expect(parsePreferences({...defaults,dismissKeyboardOnOverscroll:value}).dismissKeyboardOnOverscroll).toBe(false);
+    expect(defaults.dismissKeyboardOnOverscroll).toBe(false);
+    expect(parsePreferences(JSON.parse(JSON.stringify({...defaults,dismissKeyboardOnOverscroll:true}))).dismissKeyboardOnOverscroll).toBe(true);
+  });
   it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
     expect(parseChord('Shift+Enter')).toBe('\x1b[13;2u');
     expect(parseChord('S-Enter')).toBe('\x1b[13;2u');

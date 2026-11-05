@@ -44,6 +44,8 @@
 
 - Keep a terminal reader in history while output streams and across resizes: a finger scroll that starts at the live bottom no longer snaps back to new output, width changes keep the same logical line after reflow, and a taller viewport (for example, closing the on-screen keyboard) no longer moves a Mosh reader or stops a Mosh session at the bottom from following output.
 
+- Add an optional gesture to hide the keyboard when scrolling past the bottom of local terminal history. It is off by default; remote mouse scrolling, alternate screens and active text composition keep their existing behavior. Settings snapshots from this version always include the new preference, so older clients reject them until they are updated.
+
 - Add a reference-client parity matrix for Android and desktop that records each sub-behavior as verified, implemented, partial, missing or not applicable, with test and CI evidence and the issue that owns each gap. Documentation only; no application defaults change.
 
 - Preserve terminal Enter delivered as an input-only line break, including an explicitly selected toolbar Shift modifier.
