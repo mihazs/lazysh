@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.14.0
+
+### Minor Changes
+
+- 61371ba: Add terminal text selection with touch handles, edge auto-scroll through local history for multi-screen selections, and floating Copy, Select all and Copy screen actions; raw buffer text is copied.
+
+### Patch Changes
+
+- 31a5fc0: Keep the opened Chat transcript reader, its reading position and unsent draft when returning from the terminal or another session view. Following pauses while hidden, confirmed terminal destinations are still released on leaving, and reported-history readers still retire.
+- 7ad3229: Find the owned Android recorded Conversation Refresh control by its accessible name, matching the icon-only Refresh button, so the Refresh observation reaches the real control instead of finding no text-labelled button. This test-only repair keeps the single-button, enabled, started-then-settled and exact-message assertions and does not change application behavior.
+- @lazysh/account-usage@1.14.0
+  - @lazysh/common@1.14.0
+  - @lazysh/display-idle@1.14.0
+  - @lazysh/et-transport@1.14.0
+  - @lazysh/mosh-transport@1.14.0
+
 ## 1.13.0
 
 ### Minor Changes
