@@ -184,6 +184,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | UI locale (en, pt-BR, es, system) | verified | verified | PP:63-66; `apps/client/src/i18n/nativeLocale.ts`. `NativeUiLocaleTest.kt:42,65` (NAR); `i18n.spec.ts:64`, `e2e/native-locale.spec.ts:5` (PW). | macOS native locale (#79). |
 | Session list or card preference | verified | verified | PP:72; `prefs:88`. `e2e/session-layout.spec.ts:45-99` (PW). | — |
 | iOS glass | n/a | n/a | iOS-only material on the reference client. | — |
+| Borderless controls and glass chrome | implemented | implemented | Design tokens in `apps/client/src/styles.css` (`--ui-fill`, `--ui-control-border`, `--ui-focus-ring`, `--ui-glass-*`) and the Glass section of `apps/client/src/ui-surfaces.css`. `e2e/glass-design.spec.ts` (PW, phone and desktop, lazysh, midnight and paper): computed borders, cyan, focus ring, backdrop blur, worst-underlay text contrast and the reduced-transparency and more-contrast fallbacks. | Native Android WebView rendering of `backdrop-filter`. |
 
 ## Secure storage and sync
 

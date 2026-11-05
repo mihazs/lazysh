@@ -49,6 +49,6 @@
   }
 }
 
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .chat-panel .chat-draft-header { background: var(--theme-panel, var(--surface)); backdrop-filter: none; }
 }

@@ -53,7 +53,7 @@ body { background: var(--theme-bg); }
 .text-button:hover:not(:disabled) { background: transparent; text-decoration: underline; }
 input, select, textarea { border-radius: var(--ui-radius-sm); background: var(--theme-control); }
 input[type="search"] {
-  border-color: var(--ui-hairline-strong); border-radius: 999px; min-height: 44px; padding-left: 40px;
+  border-color: var(--ui-control-border); border-radius: 999px; min-height: 44px; padding-left: 40px;
   background: var(--theme-control) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2393a0b0' stroke-width='2' stroke-linecap='round' viewBox='0 0 24 24'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 15px 50%;
 }
 .segmented { border: 1px solid transparent; border-radius: 999px; background: var(--theme-control); padding: 3px; }
@@ -430,7 +430,7 @@ input[type="search"] {
 .settings-navigation .settings-category-list > button:hover:not(:disabled) { background: var(--ui-row-pressed); }
 .settings-navigation .settings-category-list > button[aria-current="page"] { border-radius: 0; color: var(--theme-text); background: var(--ui-row-pressed); }
 .settings-icon { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 9px; color: #fff; background: #3a7bd5; }
-.settings-icon[data-tone="1"] { background: #2f9e8f; }
+.settings-icon[data-tone="1"] { background: #2f7d4a; }
 .settings-icon[data-tone="2"] { background: #8b5cf6; }
 .settings-icon[data-tone="3"] { background: #3b4352; }
 .settings-icon[data-tone="4"] { background: #d97706; }
@@ -552,7 +552,7 @@ input[type="search"] {
 }
 
 /* ---------- Fallbacks ---------- */
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .sidebar > .workspace-navigation-modes { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (forced-colors: active) {
@@ -562,4 +562,29 @@ input[type="search"] {
   .preferences-content [data-settings-page] > label > input[type="checkbox"] { appearance: auto; -webkit-appearance: auto; width: 20px; height: 20px; }
   .preferences-content [data-settings-page] > label > input[type="checkbox"]::after { content: none; }
   .status-ring circle { stroke: CanvasText; }
+}
+
+/* ---------- Glass ----------
+ * One material for floating chrome: the terminal toolbar and desktop dialogs join the header,
+ * sheets and tab bar. Translucency never drops below the theme's measured contrast floor, and
+ * every surface turns opaque without backdrop-filter, with reduced transparency, increased
+ * contrast or forced colours. Cards stay solid for reading and keep only the soft top highlight. */
+.host-list, .settings-navigation .settings-category-list,
+.preferences-content [data-settings-page] > :is(details, fieldset, ul) { box-shadow: var(--ui-glass-highlight); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background: color-mix(in srgb, black 90%, transparent)) {
+  :root .terminal-keys {
+    background: var(--ui-glass-surface); -webkit-backdrop-filter: var(--ui-glass-blur); backdrop-filter: var(--ui-glass-blur);
+    box-shadow: var(--ui-glass-highlight);
+  }
+  @media (min-width: 601px) {
+    :root .dialog-backdrop > .dialog { background: var(--ui-glass-surface); -webkit-backdrop-filter: var(--ui-glass-blur); backdrop-filter: var(--ui-glass-blur); }
+    /* The sticky detail header frosts what scrolls beneath it without painting a second band of glass. */
+    :root .dialog:has(.settings-navigation) .settings-detail-header { background: transparent; -webkit-backdrop-filter: var(--ui-glass-frost); backdrop-filter: var(--ui-glass-frost); }
+    :root .dialog-backdrop > .dialog { box-shadow: var(--ui-glass-highlight), var(--ui-glass-shadow); }
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root .terminal-keys { background: var(--theme-bg); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  :root .dialog-backdrop > .dialog { background: var(--theme-panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root .dialog:has(.settings-navigation), :root .dialog:has(.settings-navigation) .settings-detail-header { background: var(--theme-bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }

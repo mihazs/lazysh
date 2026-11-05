@@ -123,7 +123,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
     if (selected?.size) {
       try {
         const rect = validateCrop(crop, selected.size);
-        context.strokeStyle = '#22d3ee'; context.lineWidth = Math.max(2, selected.size.width / 300);
+        context.strokeStyle = getComputedStyle(canvas.current).getPropertyValue('--theme-accent').trim() || '#b4bdf8'; context.lineWidth = Math.max(2, selected.size.width / 300);
         context.strokeRect(rect.x, rect.y, rect.width, rect.height);
       } catch { /* Keep invalid crop values editable; upload validates them. */ }
     }

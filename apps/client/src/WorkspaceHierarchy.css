@@ -1,4 +1,4 @@
-.agent-section-jumps button[aria-pressed=true] { border-color: var(--accent); background: var(--theme-control); color: var(--theme-text); }
+.agent-section-jumps button[aria-pressed=true] { border-color: var(--ui-control-border); background: var(--ui-fill-selected); color: var(--theme-text); }
 .workspace-navigation-scroll > [hidden] { display: none; }
 
 /* Work destinations share one title; source controls remain local to their content. */
@@ -13,7 +13,7 @@
 .workspace-session-summary strong { font-size: 13px; font-weight: 500; }
 .agent-section-jumps { display: flex; gap: 20px; padding: 0 4px; border-bottom: 1px solid var(--theme-border); }
 .agent-section-jumps button { flex: 0 1 auto; min-height: 44px; padding: 8px 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); }
-.agent-section-jumps button[aria-pressed=true] { background: transparent; border-color: transparent; border-bottom-color: var(--accent); color: var(--theme-text); }
+.agent-section-jumps button[aria-pressed=true] { background: transparent; border-color: transparent; box-shadow: inset 0 -2px var(--accent); color: var(--theme-text); }
 @media (max-width: 600px) {
   .sidebar:not([data-navigation=connections]) { padding: max(10px, env(safe-area-inset-top)) 18px max(8px, env(safe-area-inset-bottom)); }
   .sidebar:not([data-navigation=connections]) > .workspace-navigation-modes { order: 10; flex-shrink: 0; margin: 10px -6px 0; }
