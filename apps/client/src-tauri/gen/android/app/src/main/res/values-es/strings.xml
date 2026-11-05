@@ -1,4 +1,9 @@
 <resources>
     <string name="session_notification_channel">Conexiones de terminal</string>
-    <string name="session_notification_active">Las conexiones de terminal están activas</string>
+    <string name="session_notification_title">lazysh se está ejecutando</string>
+    <plurals name="session_notification_sessions">
+        <item quantity="one">%d sesión activa</item>
+        <item quantity="many">%d de sesiones activas</item>
+        <item quantity="other">%d sesiones activas</item>
+    </plurals>
 </resources>

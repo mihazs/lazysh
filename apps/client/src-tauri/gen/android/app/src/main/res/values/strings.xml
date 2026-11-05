@@ -2,5 +2,9 @@
     <string name="app_name">"lazysh"</string>
     <string name="main_activity_title">"lazysh"</string>
     <string name="session_notification_channel">Terminal connections</string>
-    <string name="session_notification_active">Terminal connections are active</string>
+    <string name="session_notification_title">lazysh is running</string>
+    <plurals name="session_notification_sessions">
+        <item quantity="one">%d active session</item>
+        <item quantity="other">%d active sessions</item>
+    </plurals>
 </resources>

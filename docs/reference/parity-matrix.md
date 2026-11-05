@@ -95,6 +95,7 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Zellij initial attach without automatic restoration | implemented | implemented | Restore skips Zellij (`App.tsx:1524-1526`); `workspace-relaunch.spec.ts` asserts no Zellij attach and that its descriptor stays offered (PW). Real attach `zellij.rs:97` runs in `NLR` (`test:multiplexers`). | Same limit as the reference client; First green `NLR` run on `main` makes desktop `verified`. |
 | Optional client environment flag | implemented | implemented | Opt-in per host, off by default: SSH terminal and multiplexer attach channels request `LC_TERMINAL=lazysh` without `want_reply` (`src-tauri/src/ssh/client_environment.rs`). Real OpenSSH `ssh::tests::openssh_client_environment_reaches_remote_shell` (`AcceptEnv LANG LC_*`; enabled shell and command receive it, disabled shell does not), registered in the NL owned-OpenSSH step. | Passes locally; counts as verified once NL runs it green on `main`. Android runtime case. Mosh and ET do not send it. |
 | Mosh survives backgrounding and SSH control loss | verified | verified | NWT:2487,2723-2753 ownedMoshSurvivesBusyBackgroundThroughRealUi (`tests/android-ssh-host.test.ts:194`, NAR); ssh.spec:540 (UDP daemon survives client and server SSH closure; NL). | No IP-roaming or network-switch test (`docs/multiplexers.md:233-235`); Windows has no Mosh. |
+| Ongoing notification while sessions run in the background | implemented | n/a | Low-importance `specialUse` foreground service notification "lazysh is running" with the live terminal session count from the native workers (`SessionForegroundService.kt:67-87`, `session_background.rs`); POST_NOTIFICATIONS asked once per install on Android 13+, a denial only hides the notification (`SessionBackgroundPlugin.kt`, JVM `SessionBackgroundStateTest`). NWT:2999,3068,3135 ownedMoshSurvivesBusyBackgroundThroughRealUi checks the ongoing title and count while at Home, taps it in the real shade back to the same Activity and terminal, and its removal after the last session (`tests/android-ssh-host.test.ts:195`, NAR). Same in the Google and F-Droid builds. | First green NAR run on `main` makes it verified. The denied-permission path has only the JVM policy test. Desktop has no equivalent. |
 
 ## Terminal and history
 
@@ -445,7 +446,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Live Activities, Dynamic Island, watchOS | n/a | n/a | iOS/watchOS only on the reference client (`packages/apple-status/src/lib.rs:3,165-251`). The Android connection foreground notification (`SessionForegroundService.kt:33-36`) is not an agent-status equivalent. | — |
+| Live Activities, Dynamic Island, watchOS | n/a | n/a | iOS/watchOS only on the reference client (`packages/apple-status/src/lib.rs:3,165-251`). The Android connection foreground notification (`SessionForegroundService.kt:67-87`) is not an agent-status equivalent. | — |
 
 ## Desktop
 

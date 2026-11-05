@@ -7255,10 +7255,11 @@ mod tests {
             ..
         } = json_terminal_fixture().await;
         let (updates, mut background) = mpsc::unbounded_channel();
-        state.background = crate::session_background::Controller::start(move |revision, active| {
-            updates.send((revision, active)).unwrap();
-            async { Ok(()) }
-        });
+        state.background =
+            crate::session_background::Controller::start(move |revision, sessions| {
+                updates.send((revision, sessions > 0)).unwrap();
+                async { Ok(()) }
+            });
         let parent = state.session(&parent_id.session_id).await.unwrap();
         let access = AccessState::disabled();
         let (finish, finishing) = tokio::sync::oneshot::channel();
@@ -7349,10 +7350,11 @@ mod tests {
         let (host, _, server_task) = server(false).await;
         let (_directory, mut state) = fixture_state();
         let (background_updates, mut observed_background) = mpsc::unbounded_channel();
-        state.background = crate::session_background::Controller::start(move |revision, active| {
-            background_updates.send((revision, active)).unwrap();
-            async { Ok(()) }
-        });
+        state.background =
+            crate::session_background::Controller::start(move |revision, sessions| {
+                background_updates.send((revision, sessions > 0)).unwrap();
+                async { Ok(()) }
+            });
         state.config().unwrap().hosts.push(host.clone());
         let connected = start_session(
             &state,
