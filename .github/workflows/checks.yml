@@ -854,8 +854,8 @@ jobs:
       - *source-bun
       - *pinned-download-cache
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install build, OpenSSH, tmux and official ET build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev
+      - name: Install build, OpenSSH, nss_wrapper, tmux and official ET build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
         # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
@@ -920,6 +920,13 @@ jobs:
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
         if: ${{ !cancelled() }}
         run: bun run test:openssh
+      # Owned loopback sshd with an nss_wrapper account; Mosh and ET stay off its PATH.
+      - name: Exercise password, encrypted-key, rotated host-key, bastion, agent-forwarding and Auto fallback logins over real OpenSSH
+        if: ${{ !cancelled() }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --list --ignored | grep -c ': test$' | grep -Fx 6
+          bun run test:openssh-connections
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
         run: bun run test:multiplexers

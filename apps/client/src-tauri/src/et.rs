@@ -499,7 +499,8 @@ pub(crate) mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let process = std::process::Command::new(server)
+        let process = &mut std::process::Command::new(server);
+        process
             .arg("--port")
             .arg(address.port().to_string())
             .args(["--bindip", "127.0.0.1", "--serverfifo"])
@@ -511,28 +512,14 @@ pub(crate) mod tests {
             .env("PATH", "/usr/bin:/bin")
             .env("SHELL", "/bin/sh")
             .env("HOME", directory)
-            .env("LANG", "C.UTF-8")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
+            .env("LANG", "C.UTF-8");
         let mut server = Server {
-            process,
+            process: crate::ssh::test_support::spawn_quiet(process),
             fifo: fifo.clone(),
             terminal: terminal.clone(),
         };
-        timeout(Duration::from_secs(5), async {
-            loop {
-                assert!(server.process.try_wait().unwrap().is_none());
-                if tokio::net::TcpStream::connect(address).await.is_ok() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
+        crate::ssh::test_support::wait_for_listener(&mut server.process, address, String::new)
+            .await;
         let invalid = Options {
             server_path: directory
                 .join("missing-helper")

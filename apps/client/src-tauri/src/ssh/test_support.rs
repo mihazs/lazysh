@@ -111,3 +111,34 @@ pub(crate) fn changed_host_bindings(original: &Host) -> Vec<(&'static str, Host)
     })
     .collect()
 }
+
+/// Spawns an owned fixture server with no inherited terminal I/O.
+pub(crate) fn spawn_quiet(command: &mut std::process::Command) -> std::process::Child {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+/// Waits for an owned fixture server to accept TCP, failing fast if it exits first.
+pub(crate) async fn wait_for_listener(
+    child: &mut std::process::Child,
+    address: std::net::SocketAddr,
+    diagnostics: impl Fn() -> String,
+) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                panic!("owned server exited before listening: {}", diagnostics());
+            }
+            if tokio::net::TcpStream::connect(address).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("owned server did not listen in time");
+}
