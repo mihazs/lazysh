@@ -1,5 +1,11 @@
 # @lazysh/push-registration
 
+## 1.12.0
+
+### Patch Changes
+
+- 8f15891: Correct Firebase-free Android setup guidance and distinguish tested delivery from remaining device limits.
+
 ## 1.11.0
 
 No changes in this release.

@@ -1,5 +1,12 @@
 # @lazysh/account-usage
 
+## 1.12.0
+
+### Patch Changes
+
+- 5406843: Follow Cline CLI credential-store overrides for quota discovery and reads without silently selecting another login or using another provider's OAuth credential. Validate the pinned store schema and bounded regular-file inputs, and follow the saved Cline account selection rather than token-expiry ranking.
+- 816f09b: Honor a valid host CODEX_HOME for automatic account discovery without a usage profile, keeping explicit configuration authoritative and invalid paths unavailable.
+
 ## 1.11.0
 
 No changes in this release.
