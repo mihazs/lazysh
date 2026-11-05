@@ -87,6 +87,8 @@ import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 import {appShortcut} from './keyboard';
+import CommandPalette, {usePaletteShortcut} from './CommandPalette';
+import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
@@ -1186,6 +1188,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
+  usePaletteShortcut(() => setPalette(true));
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
@@ -1780,6 +1783,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       if(mounted.current)setClosingIds([...closingSessions.current]);
     }
   }
+  function closePalette() { setPalette(false); setSearch(""); }
   function chooseHost(host: Host) {
     setHostLaunch(undefined);
     setConnectingHost(host);
@@ -1882,11 +1886,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       throw cause;
     } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}
   }
-  const shownHosts = hosts.filter((host) =>
-    `${host.name} ${host.hostname} ${host.username}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
 
   const workspaceRestoreControls = <>
     <div className="workspace-restore-row">
@@ -2360,54 +2359,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {palette && (
-        <Dialog
-          title={t("appJumpToAHost")}
-          close={() => {
-            setPalette(false);
-            setSearch("");
-          }}
-        >
-          <div className="palette-search">
-            <Search size={18} />
-            <input
-              aria-label={t("appSearchSavedHosts")}
-              placeholder={t("appSearchHostsOrAddresses")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <div className="palette-list">
-            <button disabled={!localCapability.available || openingLocal} title={localCapability.reason} onClick={()=>void openLocalTerminal()}><TerminalSquare size={18}/><span>{t("appLocalTerminalThisDevice")}</span></button>
-            {shownHosts.map((host) => (
-              <button key={host.id} onClick={() => chooseHost(host)}>
-                <Server size={18} />
-                <span>
-                  <strong>{host.name}</strong>
-                  <small>
-                    {host.username}@{host.hostname}
-                  </small>
-                </span>
-                <ChevronRight size={15} />
-              </button>
-            ))}
-            {shownHosts.length === 0 && (
-              <p className="muted">
-                {native
-                  ? t("appNoMatchingHostsAddOneToStartAConnection")
-                  : t("appOpenTheNativeAppToManageSSHHosts")}
-              </p>
-            )}
-          </div>
-          <button
-            className="add-host-button"
-            disabled={!native}
-            onClick={() => {
-              setPalette(false);
-              setEditor("new");
-            }}
-          >
-            <Plus size={16} />{" "}{t("appAddANewHost")}</button>
+        <Dialog title={t("paletteTitle")} close={closePalette}>
+          <CommandPalette query={search} onQuery={setSearch} onDone={closePalette} note={native ? undefined : t("appOpenTheNativeAppToManageSSHHosts")}
+            commands={paletteCommands({native, hosts, sessions, activeId, tools: sessionViews, currentTool: view, navigationBusy: pendingMuxRequest,
+              local: {available: localCapability.available, busy: openingLocal, reason: localCapability.reason},
+              run: {host: chooseHost, local: () => void openLocalTerminal(), addHost: () => setEditor("new"), session: chooseLiveSession,
+                tool: id => id === "agents" ? showNavigation("agents") : visitView(id as View), workspaces: () => showNavigation("workspaces"),
+                switcher: () => setSwitcher(true), closeActive: () => { if (active) void closeSession(active); },
+                preferences: () => setPreferences(true), push: () => setPushSettings(true), inbox: () => setInbox(true),
+                sync: () => setSync(true), sharing: () => setSharing(true), about: () => setAbout(true)}})}/>
         </Dialog>
       )}
       {preferences && (

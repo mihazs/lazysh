@@ -1,0 +1,23 @@
+.file-media {
+  display: block;
+  max-width: 100%;
+  max-height: 65vh;
+  margin: 18px;
+  object-fit: contain;
+}
+.file-preview-toggle {
+  margin: 12px 18px 0;
+}
+.file-markdown {
+  padding: 4px 18px 18px;
+  color: var(--theme-text, #c8d7bb);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.file-markdown pre {
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--surface);
+  white-space: pre;
+  overflow: auto;
+}

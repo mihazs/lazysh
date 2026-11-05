@@ -1182,16 +1182,12 @@ it("focuses host search when opened with the command palette shortcut", async ()
   render(<App />);
   await screen.findByRole("button", { name: "Connect to Home" });
   await user.keyboard("{Control>}k{/Control}");
-  const search = await screen.findByRole("textbox", {
-    name: "Search saved hosts",
+  const search = await screen.findByRole("combobox", {
+    name: "Search hosts, sessions and commands",
   });
   expect(document.activeElement).toBe(search);
   await user.keyboard("missing-host");
-  expect(
-    await screen.findByText(
-      "No matching hosts. Add one to start a connection.",
-    ),
-  ).toBeTruthy();
+  expect(await screen.findByText("No matching hosts or commands.")).toBeTruthy();
 });
 
 it('keeps restore gated on host loading and explicit action while exposing its limitations on demand',async()=>{
@@ -1611,16 +1607,38 @@ it('opens Apple status for the exact active session and routes review to agents'
   await user.click(screen.getByRole('button',{name:'Review Apple approval'}));
   expect(await screen.findByText('Agent companion')).toBeTruthy();
 });
+it('runs workspace tools and application actions from the keyboard-only command palette',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'palette-session'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  await user.keyboard('{Control>}k{/Control}');
+  const search=await screen.findByRole('combobox',{name:'Search hosts, sessions and commands'});
+  expect(within(screen.getByRole('listbox')).getByRole('option',{name:/^Home.*Current$/})).toBeTruthy();
+  await user.keyboard('usage{Enter}');
+  await screen.findByRole('button',{name:'Use latest report for Watch'});
+  expect(screen.queryByRole('dialog',{name:'Command palette'})).toBeNull();
+  expect(search.isConnected).toBe(false);
+  await user.keyboard('{Control>}k{/Control}');
+  await user.keyboard('prefs');
+  expect(screen.getAllByRole('option')[0].textContent).toContain('Preferences');
+  await user.keyboard('{Enter}');
+  expect(await screen.findByRole('dialog',{name:'Preferences'})).toBeTruthy();
+  await user.keyboard('{Escape}');
+  await user.keyboard('{Control>}k{/Control}');
+  await user.keyboard('terminal{Escape}');
+  expect(screen.queryByRole('dialog',{name:'Command palette'})).toBeNull();
+  await screen.findByRole('button',{name:'Use latest report for Watch'});
+});
 it('honors the connection shortcut and protects credential dialogs from global shortcuts',async()=>{
   const user=userEvent.setup();
   render(<App/>);
   await screen.findByRole('button',{name:'Connect to Home'});
   await user.keyboard('{Control>}n{/Control}');
-  expect(screen.getByLabelText('Search saved hosts')).toBeTruthy();
-  await user.click(screen.getByRole('button',{name:/Home.*dev@home.local/}));
+  expect(screen.getByLabelText('Search hosts, sessions and commands')).toBeTruthy();
+  await user.click(screen.getByRole('option',{name:/Home.*dev@home.local/}));
   await user.click(screen.getByLabelText('Password'));
   await user.keyboard('{Control>}k{/Control}');
-  expect(screen.queryByLabelText('Search saved hosts')).toBeNull();
+  expect(screen.queryByLabelText('Search hosts, sessions and commands')).toBeNull();
   expect(screen.getByLabelText('Password')).toBeTruthy();
 });
 it('switches tabs by numbered shortcut and accepts gestures only from the active session',async()=>{

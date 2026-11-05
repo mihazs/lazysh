@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Turn the Ctrl/Cmd+K host picker into a command palette that also finds open sessions, the current connection's tools (Files, Diff, Sessions, Preview, Transcript, Agents and more) and actions such as Preferences, sync, the notification inbox and About, with fuzzy, accent-insensitive matching and arrow/Enter/Esc keyboard control. Files now shows PNG, JPEG, GIF and WebP images up to 2 MiB, shows SVG only as an inert image, and renders Markdown without raw HTML, active links or remote images. Changed defaults: Ctrl/Cmd+Shift+P now opens the palette even from a focused terminal instead of reaching the shell, and Markdown files in Files open rendered, with **Show source** for the text.
+
 - Discover Cline quota credentials from the CLI-selected provider store, data directory or profile instead of always reading the home-directory default. Preserve explicit usage paths and API-key priority; missing or malformed selected stores do not fall back to another login. Follow the CLI-selected Cline account instead of ranking accounts by token expiry; validate every store entry against the pinned structural schema and bound regular-file reads. Other providers and invalid selected auth cannot replace the selected account or its quota cache. Nondefault environment-selected stores are unavailable on Windows; existing explicit auth paths and API keys remain available.
 
 - Honor host `CODEX_HOME/auth.json` during automatic AI account discovery when no usage profile exists. Invalid nonempty paths report usage unavailable instead of selecting another account; explicit profiles, paths and disabled providers remain authoritative.

@@ -74,8 +74,9 @@ export function parseActivity(value:unknown,agent:string,view?:string):Activity|
   return value as Activity;
 }
 
-export function ChatMarkdown({text}:{text:string}) {
-  return <Markdown components={{img:()=> <span>{t('chatImagePlaceholder')}</span>,a:({children})=> <span>{children}</span>}}>{text}</Markdown>;
+/** Markdown without raw HTML, remote images or active links; `image` replaces each image. */
+export function ChatMarkdown({text,image}:{text:string;image?:string}) {
+  return <Markdown components={{img:()=> <span>{image ?? t('chatImagePlaceholder')}</span>,a:({children})=> <span>{children}</span>}}>{text}</Markdown>;
 }
 
 const planStatus={pending:'chatPlanPending',in_progress:'chatPlanInProgress',completed:'chatPlanCompleted',cancelled:'chatPlanCancelled'} as const;

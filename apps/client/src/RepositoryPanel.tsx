@@ -3,11 +3,12 @@ import { useMountedAccess, useProtectedApi } from './access';
 import { useProtectedInvoke } from './access';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import Markdown from 'react-markdown';
+import {ChatMarkdown} from './ChatInteraction';
 import { api as nativeApi } from './bridge';
 import {fileErrorText, type FileErrorState} from './SessionTools';
 import {captureUiError, LocalUiError} from './i18n/localError';
 import CodePreview from './CodePreview';
+import {imageUrl, previewKind} from './mediaPreview';
 import {usePreferences} from './preferences';
 import {fontFamilyFor,useDeviceFonts} from './fonts';
 
@@ -32,7 +33,6 @@ function annotationLabel(note: Annotation) {
   if (!note.diff) return `${note.repository}/${note.file}:${note.line}`;
   return t('repoDiffReference', {path: annotationPath(note), stage: t(note.diff.staged ? 'repoStaged' : 'repoUnstaged'), side: t(note.diff.side === 'before' ? 'repoBefore' : 'repoAfter'), rename: note.diff.originalPath ? t('repoDiffRename', {from: note.diff.originalPath, to: note.file}) : ''});
 }
-type Image = { mime: string; data: number[] };
 type Line = { before?: number; after?: number; left?: string; right?: string; kind: 'context' | 'change' | 'hunk' };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
@@ -68,14 +68,6 @@ function readReview(sessionId: string): Review | undefined {
     if (isObject(value) && validText(value.path) && validText(value.file) && (value.revision === '' || validOid(value.revision)) && (value.staged === undefined || typeof value.staged === 'boolean')) return value as Review;
   } catch { /* Storage is optional. */ }
 }
-function imageUrl(value: unknown): string {
-  if (!isObject(value) || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(String(value.mime)) || !Array.isArray(value.data) || value.data.length > 2097152 || value.data.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return invalidResponse();
-  const image = value as Image;
-  let binary = '';
-  for (let offset = 0; offset < image.data.length; offset += 16384) binary += String.fromCharCode(...image.data.slice(offset, offset + 16384));
-  return `data:${image.mime};base64,${btoa(binary)}`;
-}
-
 export function diffLines(patch: string): Line[] {
   const rows: Line[] = [];
   let before = 0, after = 0;
@@ -173,7 +165,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
     const current = ++request.current;
     setSelected(filePath); setContent(null); setDiff(null); setPreview(''); setBusy(true); setError(''); setMarkdown(false);
     try {
-      if (staged === undefined && /\.(png|jpe?g|gif|webp)$/i.test(filePath) && (!entry || entry.kind === 'blob')) {
+      if (staged === undefined && previewKind(filePath) === 'image' && (!entry || entry.kind === 'blob')) {
         const value = imageUrl(await invoke('repository_image', { sessionId, path: repositoryPath, filePath, objectId: entry?.oid || null }));
         if (ownsRequest(current)) setPreview(value);
       } else if (entry) {
@@ -269,7 +261,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
       {content && (content.binary ? <p>{t('repoBinary',{bytes:formatNumber(content.bytes)})}</p> : <>
         {selected.toLowerCase().endsWith('.md') && <button onClick={() => setMarkdown(!markdown)}>{markdown ? t('repoSource') : t('repoMarkdown')}</button>}
         <div className="tool-bar"><label>{t('repoCommentLine')}<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>{t('repoAddComment')}</button></div>
-        {markdown ? <Markdown components={{ img: () => <span>{t('repoRemoteImage')}</span>, a: ({ children }) => <span>{children}</span> }}>{content.text || ''}</Markdown> : <CodePreview path={selected} text={content.text || ''} />}
+        {markdown ? <ChatMarkdown text={content.text || ''} image={t('repoRemoteImage')} /> : <CodePreview path={selected} text={content.text || ''} />}
       </>)}
       {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffRows.map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{diffLineNumber('before', line.before)}</td><td><pre>{line.left}</pre></td><td>{diffLineNumber('after', line.after)}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>

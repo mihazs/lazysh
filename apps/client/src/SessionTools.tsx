@@ -1,9 +1,10 @@
 import {captureUiError, errorMessage, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi, formatNumber} from './i18n/core';
-import { useProtectedApi } from './access';
+import { useProtectedApi, useProtectedInvoke } from './access';
 import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
-import CodePreview from './CodePreview';
+import FilePreview, {type FileContent} from './FilePreview';
+import {IMAGE_PREVIEW_LIMIT, imageUrl, previewKind} from './mediaPreview';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -28,12 +29,11 @@ const join = (parent: string, child: string) =>
 export function FilesPanel({ sessionId }: { sessionId: string }) {
   useUi();
   const api = useProtectedApi(nativeApi);
+  const invoke = useProtectedInvoke();
   const [path, setPath] = useState(".");
   const [draft, setDraft] = useState(".");
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [content, setContent] = useState<{ path: string; text: string } | null>(
-    null,
-  );
+  const [content, setContent] = useState<FileContent | null>(null);
   const [error, setError] = useState<FileErrorState>("");
   const [loading, setBusy] = useState(false);
   const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
@@ -83,8 +83,15 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     setBusy(true);
     setError("");
     try {
-      const text = await api.readFile(sessionId, next);
-      if (current === request.current) setContent({ path: next, text });
+      if (previewKind(entry.name) === 'image') {
+        if (entry.size > IMAGE_PREVIEW_LIMIT) throw new LocalUiError('filesImageTooLarge');
+        // The native reader rejects symlinks and sniffs PNG, JPEG, GIF or WebP bytes.
+        const image = imageUrl(await invoke('repository_image', { sessionId, path, filePath: entry.name, objectId: null }));
+        if (current === request.current) setContent({ path: next, image });
+      } else {
+        const text = await api.readFile(sessionId, next);
+        if (current === request.current) setContent({ path: next, text });
+      }
     } catch (e) {
       if (current === request.current) setError(captureUiError(e));
     } finally {
@@ -232,7 +239,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           {content ? (
             <>
               <div className="preview-heading">{content.path}</div>
-              <CodePreview key={content.path} path={content.path} text={content.text}/>
+              <FilePreview key={content.path} content={content}/>
             </>
           ) : (
             <div className="panel-empty">

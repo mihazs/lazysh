@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { appShortcut } from "./keyboard";
+import { appShortcut, paletteShortcut } from "./keyboard";
 afterEach(() => {document.body.innerHTML = "";});
 function shortcut(key: string, target: Element = document.body, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {key, ctrlKey: true, bubbles: true, cancelable: true, ...options});
@@ -31,5 +31,21 @@ describe("hardware app shortcuts", () => {
     const inputs = document.querySelectorAll("textarea");
     expect(shortcut("1", inputs[0])).toEqual({action: "session", index: 0});
     expect(shortcut("1", inputs[1])).toBeUndefined();
+  });
+  it("opens the palette with Ctrl/Cmd+Shift+P from the terminal input, but not from fields, dialogs or other chords", () => {
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><input><div role="dialog"><button></button></div>';
+    const press = (target: Element, options: KeyboardEventInit) => {
+      let result = false;
+      target.addEventListener("keydown", e => {result = paletteShortcut(e as KeyboardEvent);}, {once: true});
+      target.dispatchEvent(new KeyboardEvent("keydown", {key: "P", shiftKey: true, bubbles: true, cancelable: true, ...options}));
+      return result;
+    };
+    const [terminal, input, dialog] = [document.querySelector("textarea")!, document.querySelector("input")!, document.querySelector("button")!];
+    expect(press(terminal, {ctrlKey: true})).toBe(true);
+    expect(press(document.body, {metaKey: true})).toBe(true);
+    expect(press(input, {ctrlKey: true})).toBe(false);
+    expect(press(dialog, {ctrlKey: true})).toBe(false);
+    for (const options of [{ctrlKey: true, altKey: true}, {ctrlKey: true, shiftKey: false}, {ctrlKey: true, repeat: true}, {shiftKey: true}]) expect(press(document.body, options)).toBe(false);
+    expect(shortcut("P", document.body, {shiftKey: true})).toBeUndefined();
   });
 });
