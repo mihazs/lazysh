@@ -14,6 +14,7 @@ import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCau
 import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
 import RecordedImagePreview from './RecordedImagePreview';
+import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -205,15 +206,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [draft, setDraft] = useState("");
   const [attachmentOpen,setAttachmentOpen]=useState(false);
   const chatRoot=useRef<HTMLElement>(null),attachmentButton=useRef<HTMLButtonElement>(null),attachmentBack=useRef<HTMLButtonElement>(null);
-  const attachmentReturn=useRef<{session:string;scroller:HTMLElement|null;top:number}|null>(null);
+  const attachmentReturn=useRef<{session:string}&ScrollPosition|null>(null);
   const [draftHelpOpen,setDraftHelpOpen]=useState(false);
   const draftId=useId(),draftHelpId=useId();
   const currentSession=useRef(sessionId);currentSession.current=sessionId;
   function toggleAttachment(open:boolean) {
     if(open && window.matchMedia?.('(max-width: 600px)').matches) {
-      let scroller=chatRoot.current?.parentElement??null;
-      while(scroller && (!/^(auto|scroll)$/.test(getComputedStyle(scroller).overflowY) || scroller.scrollHeight<=scroller.clientHeight))scroller=scroller.parentElement;
-      attachmentReturn.current={session:sessionId,scroller,top:scroller?.scrollTop??window.scrollY};
+      attachmentReturn.current={session:sessionId,...captureScrollPosition(chatRoot.current)};
     }
     setAttachmentOpen(open);
   }
@@ -224,12 +223,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     const active=document.activeElement;
     if(active!==document.body && active!==attachmentButton.current && active!==attachmentBack.current && !chatRoot.current.contains(active))return;
     if(attachmentOpen) {
-      if(saved.scroller)saved.scroller.scrollTop=0;else window.scrollTo(window.scrollX,0);
+      restoreScrollPosition(saved,0);
       attachmentBack.current?.focus({preventScroll:true});
     } else {
       attachmentReturn.current=null;
       if(attachmentButton.current?.isConnected)attachmentButton.current.focus({preventScroll:true});
-      if(saved.scroller?.isConnected)saved.scroller.scrollTop=saved.top;else if(!saved.scroller)window.scrollTo(window.scrollX,saved.top);
+      restoreScrollPosition(saved);
     }
   },[attachmentOpen,sessionId,access]);
   useEffect(()=>{

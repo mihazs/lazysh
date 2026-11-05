@@ -123,6 +123,12 @@ test('clearing report details visibly restores the selected row in a long activi
     const elsewhere=await page.evaluateHandle(()=>{const button=document.createElement('button');button.textContent='External focus';document.body.append(button);button.focus();window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true}));return button;});
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
     expect(await elsewhere.evaluate(node=>document.activeElement===node)).toBe(true);await elsewhere.evaluate(node=>node.remove());
+    await row.click();await expect(search).toBeHidden();
+    await page.evaluate(async()=>{const {agentBoardRecord}=await import('/src/test/agentBoardData.ts');window.agentBoard.setReports(Array.from({length:29},(_,index)=>({...agentBoardRecord,sessionId:`long-report-${index}`,agent:'Codex',state:'working',project:`/work/${index}`,summary:`Synthetic work ${index}`})));});
+    await expect(details).toHaveCount(0,{timeout:10_000});
+    await expect(search).toBeVisible();await expect(search).toHaveValue('/work/');
+    await expect(page.locator('.agent-panel[data-activity-detail]')).toHaveCount(0);
+    await expect(page.getByRole('button',{name:'View Codex report for /work/28',exact:true})).toBeVisible();
   }
   await page.screenshot({path:testInfo.outputPath('report-clear-visible-row.png')});
 });
