@@ -1,8 +1,15 @@
 import {workspaceControl} from './fixtures/workspaceControl';
-import {expect, test, type Locator} from '@playwright/test';
+import {expect, test, type Locator, type Page} from '@playwright/test';
 
 const name=(row:Locator)=>row.evaluate(node=>document.getElementById(node.getAttribute('aria-labelledby')??'')?.textContent??'');
 const value=(row:Locator)=>row.evaluate(node=>document.getElementById(node.getAttribute('aria-describedby')??'')?.textContent??null);
+/** Opens Preferences and returns its dialog, search field and search results. */
+async function openSearch(page:Page) {
+  await page.goto('/');
+  await (await workspaceControl(page,'Preferences')).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  return {dialog,search:dialog.getByRole('searchbox',{name:'Search settings',exact:true}),results:dialog.getByRole('navigation',{name:'Search results',exact:true})};
+}
 
 test('Preferences opens a grouped list whose rows preview values and lead into sub-pages and back',async({page},testInfo)=>{
   await page.goto('/');
@@ -11,7 +18,7 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   const index=dialog.locator('.settings-index');
   await expect(dialog.getByRole('button',{name:'Close Preferences',exact:true})).toBeFocused();
   expect(await index.locator('.settings-section-title').allTextContents()).toEqual(['Terminal','Input','Agents and notifications','Security and sync','General','Help']);
-  const section=(title:string)=>index.getByRole('region',{name:title,exact:true});
+  const section=(title:string)=>index.getByRole('navigation',{name:title,exact:true});
   const rows=async(title:string)=>Promise.all((await section(title).getByRole('button').all()).map(name));
   expect(await rows('Terminal')).toEqual(['Appearance and fonts','Terminal and accessibility']);
   expect(await rows('Input')).toEqual(['Keyboard and gestures']);
@@ -23,8 +30,13 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   expect(await value(appearance)).toBe('lazysh · 14 px');
   expect(await value(index.getByRole('button',{name:'Terminal and accessibility',exact:true}))).toBe('bar · 5,000 lines');
   expect(await value(index.getByRole('button',{name:'Language and region',exact:true}))).toBe('System');
-  await expect(index.getByRole('button',{name:'Agents',exact:true})).toBeDisabled();
-  expect(await value(index.getByRole('button',{name:'Agents',exact:true}))).toBe('Open a session first');
+  const agents=index.getByRole('button',{name:'Agents',exact:true});
+  await expect(agents).toBeDisabled();
+  expect(await value(agents)).toBe('Open a session first');
+  await agents.focus();await expect(agents).toBeFocused();
+  await agents.dispatchEvent('click');await expect(dialog).toBeVisible();
+  expect(await value(index.getByRole('button',{name:'Encrypted sync',exact:true}))).toBe('Desktop and mobile apps only');
+  expect(await index.getByRole('region').count()).toBe(0);
   await expect(index.getByRole('button',{name:'Reset settings',exact:true})).toHaveAttribute('data-tone','danger');
   await expect(index.getByText(/^lazysh \d+\.\d+\.\d+/)).toBeVisible();
   await page.screenshot({path:testInfo.outputPath('settings-root.png')});
@@ -64,12 +76,8 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
 });
 
 test('Preferences search finds settings inside sub-pages and opens the matching control',async({page},testInfo)=>{
-  await page.goto('/');
-  await (await workspaceControl(page,'Preferences')).click();
-  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
-  const search=dialog.getByRole('searchbox',{name:'Search settings',exact:true});
+  const {dialog,search,results}=await openSearch(page);
   await search.fill('history');
-  const results=dialog.getByRole('navigation',{name:'Search results',exact:true});
   const found=results.getByRole('button',{name:'History lines',exact:true});
   expect(await value(found)).toBe('Terminal and accessibility');
   await expect(dialog.locator('.settings-section-title')).toHaveCount(0);
@@ -97,4 +105,39 @@ test('Preferences search finds settings inside sub-pages and opens the matching 
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.settings-section-title').first()).toHaveText('Terminal');
   expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+});
+
+test('Preferences search reveals every result chosen in turn and Back clears it before closing',async({page},testInfo)=>{
+  const {dialog,search,results}=await openSearch(page);
+  const appearance=dialog.locator('[data-settings-page="appearance"]');
+  const back=()=>page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})));
+  // Phones hide the results while a page is open; wide screens keep them beside the page.
+  const toResults=async(row:string)=>{
+    if(testInfo.project.name!=='phone')return;
+    await back();
+    await expect(results.getByRole('button',{name:row,exact:true})).toBeFocused();
+  };
+  await search.fill('font');
+  await expect(dialog.locator('.settings-index').getByRole('status')).toHaveText(/^\d+ settings found$/);
+  await results.getByRole('button',{name:'Font size',exact:true}).click();
+  await expect(appearance.getByRole('spinbutton',{name:'Font size',exact:true})).toBeFocused();
+  await toResults('Font size');
+  await results.getByRole('button',{name:'Font family',exact:true}).click();
+  await expect(appearance.getByRole('textbox',{name:'Font family',exact:true})).toBeFocused();
+  await toResults('Font family');
+  const summary=appearance.locator('summary').filter({hasText:/^Imported fonts$/}),imported=summary.locator('..');
+  await expect(imported).not.toHaveAttribute('open','');
+  await results.getByRole('button',{name:'Imported fonts',exact:true}).click();
+  await expect(imported).toHaveAttribute('open','');
+  await expect(summary).toBeFocused();
+  await expect(summary).toBeInViewport();
+
+  await back();
+  await expect(results.getByRole('button',{name:'Imported fonts',exact:true})).toBeFocused();
+  await back();
+  await expect(search).toHaveValue('');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.settings-section-title').first()).toHaveText('Terminal');
+  await back();
+  await expect(dialog).toHaveCount(0);
 });

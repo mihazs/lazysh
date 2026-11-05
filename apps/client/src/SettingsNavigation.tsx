@@ -1,6 +1,6 @@
 import {Bell,Bot,ChevronLeft,ChevronRight,CloudUpload,Globe,Hand,Inbox,Info,Keyboard,KeyRound,MessageSquareText,Mic,Palette,RefreshCw,RotateCcw,Search,Server,ShieldCheck,SquareTerminal,type LucideIcon} from 'lucide-react';
 import {useId,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
-import {t,useUi} from './i18n/core';
+import {formatNumber,t,useUi} from './i18n/core';
 import './SettingsNavigation.css';
 
 /**
@@ -40,10 +40,14 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
   const ids=useId();
   const [selected,setSelected]=useState<string>();
   const [query,setQuery]=useState('');
+  // Bumped on every chosen row so a result on the page already open still reveals its setting.
+  const [revealing,setRevealing]=useState(0);
   const root=useRef<HTMLDivElement>(null);
   const field=useRef<HTMLInputElement>(null);
   const restore=useRef<string|undefined>(undefined);
   const reveal=useRef<string|undefined>(undefined);
+  /** The setting name of the row that opened each page, so leaving it refocuses that same row. */
+  const openers=useRef(new Map<string,string|undefined>());
   const positions=useRef(new Map<string|undefined,number>());
   const current=pages.find(page=>page.id===selected && page.content!==undefined);
   const back=useRef<()=>boolean>(()=>false);
@@ -53,11 +57,16 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
     restore.current=returning;setSelected(id);
   }
   function open(page:SettingsPage,match?:string) {
+    if(page.disabled)return;
     if(page.onSelect){page.onSelect();return;}
-    reveal.current=match;go(page.id);
+    reveal.current=match;openers.current.set(page.id,match);setRevealing(count=>count+1);go(page.id);
   }
+  /** Back clears a search at the root, then leaves the open page; false lets Preferences close. */
   back.current=()=>{
-    if(!current)return false;
+    if(!current) {
+      if(!field.current?.value)return false;
+      setQuery('');return true;
+    }
     go(current.parent,current.id);return true;
   };
   useLayoutEffect(()=>{
@@ -74,11 +83,13 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
       found.scrollIntoView?.({block:'center'});
       return;
     }
-    const target=restore.current
-      ?Array.from(node.querySelectorAll<HTMLButtonElement>('[data-settings-target]')).find(button=>button.dataset.settingsTarget===restore.current && !button.closest('[hidden]'))
+    const left=restore.current;
+    const rows=left?Array.from(node.querySelectorAll<HTMLButtonElement>('[data-settings-target]')).filter(button=>button.dataset.settingsTarget===left && !button.closest('[hidden]')):[];
+    const target=left
+      ?rows.find(button=>button.dataset.settingsMatch===openers.current.get(left))??rows[0]
       :page?.querySelector<HTMLElement>('h2');
     target?.focus({preventScroll:true});
-  },[selected]);
+  },[selected,revealing]);
   useLayoutEffect(()=>{
     const nativeBack=(event:Event)=>{
       if(Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1)!==root.current?.closest('[role="dialog"]'))return;
@@ -102,15 +113,18 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
   /** The accessible name stays the setting's title; its value preview is the description. */
   function row(page:SettingsPage,key:string,label=page.title,detail=page.value,match?:string) {
     const name=`${ids}${key}-name`,value=`${ids}${key}-value`;
-    return <button type="button" key={key} data-settings-target={page.id} data-tone={page.tone} disabled={page.disabled} aria-labelledby={name} aria-describedby={detail?value:undefined}
+    // A disabled row stays focusable so keyboard and screen-reader users still reach its reason.
+    return <button type="button" key={key} data-settings-target={page.id} data-settings-match={match} data-tone={page.tone} aria-disabled={page.disabled||undefined} aria-labelledby={name} aria-describedby={detail?value:undefined}
       aria-current={selected===page.id || current?.parent===page.id?'page':undefined} onClick={()=>open(page,match)}>
       {icon(page.id)}
       <span className="settings-row-text"><span id={name}>{label}</span>{detail && <span className="settings-row-value" id={value}>{detail}</span>}</span>
       {!page.tone && <ChevronRight size={17} aria-hidden="true"/>}
     </button>;
   }
-  function links(parent:string|undefined,entries:SettingsPage[],label=parent?pages.find(page=>page.id===parent)?.title:t('appPreferences')) {
-    return <nav className="settings-category-list" aria-label={label}>{entries.map(page=>row(page,page.id))}</nav>;
+  /** One navigation landmark per titled group; an untitled group or a sub-page's rows add none. */
+  function links(entries:SettingsPage[],labelledBy?:string) {
+    const rows=entries.map(page=>row(page,page.id));
+    return labelledBy?<nav className="settings-category-list" aria-labelledby={labelledBy}>{rows}</nav>:<div className="settings-category-list">{rows}</div>;
   }
   function grouped() {
     const top=pages.filter(page=>!page.parent);
@@ -119,11 +133,11 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
     return [...sections.map(section=>({section,entries:top.filter(page=>page.section===section.id)})),{section:{id:''} as SettingsSection,entries:rest}]
       .filter(({entries})=>entries.length).map(({section,entries})=>{
         const heading=section.title?`${ids}section-${section.id}`:undefined;
-        return <section className="settings-section" key={section.id||'other'} aria-labelledby={heading}>
+        return <div className="settings-section" key={section.id||'other'}>
           {heading && <h3 className="settings-section-title" id={heading}>{section.title}</h3>}
-          {links(undefined,entries,section.title)}
+          {links(entries,heading)}
           {section.footer && <p className="settings-section-footer">{section.footer}</p>}
-        </section>;
+        </div>;
       });
   }
   /** Page titles, values and every setting name rendered inside the mounted pages. */
@@ -143,26 +157,27 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
   }
   const path=(page:SettingsPage)=>[pages.find(owner=>owner.id===page.parent)?.title,page.title].filter(Boolean).join(' › ');
   const results=query.trim()?search():undefined;
+  const found=results && (results.length?t('settingsResultCount',{count:results.length,value:formatNumber(results.length)}):t('settingsNoResults',{query:query.trim()}));
   return <div className="settings-navigation" ref={root} data-selected={!!current}>
     <aside className="settings-index">
       <label className="settings-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('settingsSearch')}</span>
         <input ref={field} type="search" value={query} placeholder={t('settingsSearch')} autoComplete="off" enterKeyHint="search" data-initial-focus="skip"
           onChange={event=>setQuery(event.target.value)}/></label>
+      {/* Always mounted so assistive technology announces each new result count or the empty state. */}
+      <p className={results?.length===0?'settings-section-footer':'sr-only'} role="status">{found}</p>
       {results
-        ?<section className="settings-section" aria-label={t('settingsSearchResults')}>
-          {results.length
-            ?<nav className="settings-category-list settings-results" aria-label={t('settingsSearchResults')}>
-              {results.map((result,index)=>row(result.page,`result-${index}`,result.label,result.match || result.page.parent ? path(result.page) : result.page.value,result.match))}
-            </nav>
-            :<p className="settings-section-footer" role="status">{t('settingsNoResults',{query:query.trim()})}</p>}
-        </section>
+        ?results.length>0 && <div className="settings-section">
+          <nav className="settings-category-list settings-results" aria-label={t('settingsSearchResults')}>
+            {results.map((result,index)=>row(result.page,`result-${index}`,result.label,result.match || result.page.parent ? path(result.page) : result.page.value,result.match))}
+          </nav>
+        </div>
         :grouped()}
       {!results && footer && <p className="settings-footer">{footer}</p>}
     </aside>
     <div className="settings-detail">
       {current && <header className="settings-detail-header"><button type="button" className="settings-back" onClick={()=>back.current()}><ChevronLeft size={22} aria-hidden="true"/>{t('navigationBack')}</button></header>}
       {pages.flatMap(page=>page.content===undefined?[]:[<section key={page.id} data-settings-page={page.id} hidden={selected!==page.id} aria-label={page.title}>
-        {selected===page.id && <h2 tabIndex={-1}>{page.title}</h2>}{page.content}{links(page.id,pages.filter(child=>child.parent===page.id))}
+        {selected===page.id && <h2 tabIndex={-1}>{page.title}</h2>}{page.content}{links(pages.filter(child=>child.parent===page.id))}
       </section>])}
     </div>
   </div>;

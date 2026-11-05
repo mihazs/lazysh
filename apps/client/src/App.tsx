@@ -1334,6 +1334,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
   const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
+  const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
   const secondaryTools=sessionViews.filter(tool=>!primaryToolIds.includes(tool.id));
@@ -2415,13 +2416,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
           </section>}]:[]),
-            {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),content:<button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t('appRemotePushSettings')}</button>},
-            {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,onSelect:()=>{setPreferences(false);setInbox(true);}},
+            {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
+            {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setInbox(true);}},
             {id:'agents',section:'agents',title:t('appAgents'),disabled:!remoteActive||pendingMuxRequest,value:remoteActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
-            {id:'voice',section:'agents',title:t('appDictate'),disabled:!sessionViews.some(tool=>tool.id==='voice'),value:active?active.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
+            {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
-            {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,onSelect:()=>{setPreferences(false);setSync(true);}},
-            {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,onSelect:()=>{setPreferences(false);setSharing(true);}},
+            {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
+            {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSharing(true);}},
             {id:'about',section:'help',title:t('appAboutLazysh'),onSelect:()=>{setPreferences(false);setAbout(true);}},
           ]}/>
           </div>

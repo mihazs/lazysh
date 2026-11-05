@@ -51,6 +51,13 @@ const translations = {
   settingsGroupToolbarAndShortcuts: ["Barra de ferramentas e atalhos", "Barra de herramientas y atajos"],
   settingsNeedsSession: ["Abra uma sessão primeiro", "Abre una sesión primero"],
   settingsVersionFooter: ["lazysh {{version}}", "lazysh {{version}}"],
+  settingsNativeOnly: ["Somente nos aplicativos para desktop e celular", "Solo en las aplicaciones de escritorio y móvil"],
+  settingsVoiceUnavailable: ["Indisponível nesta sessão", "No disponible en esta sesión"],
+  settingsResultCount: ["{{value}} configurações encontradas", "{{value}} configuraciones encontradas"],
+  settingsResultCount_zero: ["{{value}} configurações encontradas", "{{value}} configuraciones encontradas"],
+  settingsResultCount_one: ["{{value}} configuração encontrada", "{{value}} configuración encontrada"],
+  settingsResultCount_many: ["{{value}} configurações encontradas", "{{value}} configuraciones encontradas"],
+  settingsResultCount_other: ["{{value}} configurações encontradas", "{{value}} configuraciones encontradas"],
 
   terminalEditAnnouncement: ['Edição do teclado ignorada', 'Edición del teclado omitida'],
   terminalEditNotSent: ['Edição do teclado ignorada · Revisar', 'Edición del teclado omitida · Revisar'],

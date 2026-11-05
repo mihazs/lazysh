@@ -34,12 +34,17 @@ it('groups root rows under section headers with value previews, action rows and 
     {id:'voice',section:'help',title:'Voice',disabled:true,value:'Open a session first',onSelect:()=>opened.push('voice')},
     {id:'reset',section:'reset',tone:'danger',title:'Reset',content:<button type="button">Reset everything</button>},
   ]}/></div>);
-  const terminal=screen.getByRole('region',{name:'Terminal'});
+  expect(screen.getAllByRole('navigation').map(nav=>nav.getAttribute('aria-labelledby')&&document.getElementById(nav.getAttribute('aria-labelledby')!)?.textContent)).toEqual(['Terminal','Help']);
+  expect(screen.queryAllByRole('region')).toEqual([]);
+  const terminal=screen.getByRole('navigation',{name:'Terminal'});
   const appearance=within(terminal).getByRole('button',{name:'Appearance'});
   expect(appearance.getAttribute('aria-describedby')&&document.getElementById(appearance.getAttribute('aria-describedby')!)?.textContent).toBe('forest · 14 px');
-  expect(within(screen.getByRole('region',{name:'Help'})).getAllByRole('button').map(button=>button.textContent)).toEqual(['About','VoiceOpen a session first']);
+  expect(within(screen.getByRole('navigation',{name:'Help'})).getAllByRole('button').map(button=>button.textContent)).toEqual(['About','VoiceOpen a session first']);
   fireEvent.click(screen.getByRole('button',{name:'About'}));
-  fireEvent.click(screen.getByRole('button',{name:'Voice'}));
+  const voice=screen.getByRole('button',{name:'Voice'});
+  expect(voice.getAttribute('aria-disabled')).toBe('true');
+  voice.focus();expect(document.activeElement).toBe(voice);
+  fireEvent.click(voice);
   expect(opened).toEqual(['about']);
   expect(screen.queryByRole('heading',{name:'About'})).toBeNull();
   expect(screen.getByText('Restores defaults.')).toBeTruthy();expect(screen.getByText('lazysh 1.0.0')).toBeTruthy();
@@ -74,4 +79,27 @@ it('searches setting names inside hidden pages, opens the match and clears with 
   fireEvent.keyDown(field,{key:'Escape'});
   expect(screen.queryByRole('heading',{name:'Text snippets'})).toBeNull();
   expect(screen.getByRole('heading',{name:'Keyboard'})).toBeTruthy();
+});
+it('reveals each result chosen on the page already open, refocuses it on Back and clears a root search before closing',()=>{
+  render(<div role="dialog" aria-modal="true"><div className="dialog-content"><SettingsNavigation pages={[
+    {id:'appearance',title:'Appearance',content:<><label>Font size<input type="number"/></label><details><summary>Imported fonts</summary><label>Font family<input/></label></details></>},
+  ]}/></div></div>);
+  const field=screen.getByRole('searchbox',{name:'Search settings'});
+  const status=screen.getByRole('status');
+  expect(status.textContent).toBe('');
+  fireEvent.change(field,{target:{value:'font'}});
+  expect(screen.getByRole('status')).toBe(status);expect(status.textContent).toBe('3 settings found');
+  const results=screen.getByRole('navigation',{name:'Search results'});
+  fireEvent.click(within(results).getByRole('button',{name:'Font size'}));
+  expect(document.activeElement).toBe(screen.getByRole('spinbutton',{name:'Font size'}));
+  const family=within(results).getByRole('button',{name:'Font family'});
+  fireEvent.click(family);
+  expect(screen.getByText('Imported fonts',{selector:'summary'}).closest('details')!.open).toBe(true);
+  expect(document.activeElement).toBe(screen.getByRole('textbox',{name:'Font family'}));
+  const leave=new Event('lazysh-workspace-back',{cancelable:true});fireEvent(window,leave);
+  expect(leave.defaultPrevented).toBe(true);expect(document.activeElement).toBe(family);
+  const clear=new Event('lazysh-workspace-back',{cancelable:true});fireEvent(window,clear);
+  expect(clear.defaultPrevented).toBe(true);expect(field).toHaveProperty('value','');expect(status.textContent).toBe('');
+  const close=new Event('lazysh-workspace-back',{cancelable:true});fireEvent(window,close);
+  expect(close.defaultPrevented).toBe(false);
 });

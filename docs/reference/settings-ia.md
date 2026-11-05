@@ -48,7 +48,17 @@ Each disclosure row opens a full sub-page in the navigation stack. Back returns 
 
 - **Root sections**, in order: Terminal (Appearance and fonts, Terminal and accessibility), Input (Keyboard and gestures), Agents and notifications (Notifications, Notification inbox, Agents, Dictate), Security and sync (Security and app lock, Encrypted sync), General (Language and region, Connections on native builds, Shareable uploads), Help (About lazysh), then a separate destructive Reset settings row with a footer. A version line closes the list.
 - **Value previews** sit under row titles: app theme and font size, cursor shape and history length, language, host count, and snippet and chord counts. The value is the row's accessible description, so the row's accessible name stays its title.
-- **Action rows** hand off to existing surfaces (inbox, encrypted sync, shareable uploads, About, and the session's Agents and Dictate tools) instead of copying them. A row that needs an open session is disabled and says so.
+- **Action rows** hand off to existing surfaces (remote push notifications, inbox, encrypted sync, shareable uploads, About, and the session's Agents and Dictate tools) instead of copying them. An unavailable row stays focusable, is marked `aria-disabled`, and shows its reason as the value preview: "Open a session first", "Not available in this session", or "Desktop and mobile apps only" on web builds.
 - **Sub-pages** group their rows under section headers, with footers for help text. Switches stay native checkboxes styled as switches. Keyboard and gestures stays a hub for toolbar keys, touch gestures, snippets and chords, so its existing navigation keeps working.
-- **Search** is a lazysh addition. It matches page titles, value previews and every setting name rendered inside the mounted pages. Choosing a result opens the page, opens any collapsed group that holds the setting, and focuses its control. Escape clears the search before it leaves a page or closes Preferences.
+- **Search** is a lazysh addition. It matches page titles, value previews and every setting name rendered inside the mounted pages. Choosing a result opens the page, opens any collapsed group that holds the setting, and focuses its control. Escape and Android Back clear the search before they leave a page or close Preferences. One live region announces the number of results or the empty state, and leaving a page opened from a result refocuses that result.
 - **Wide screens** keep the grouped list as a persistent index beside the open page. Phones show the list or one page at a time, with Back.
+
+## Not yet matched
+
+These reference patterns are recorded above but are not used yet. Sub-pages still use native selects, checkboxes and text fields under group headers:
+
+- inline switches on the root list;
+- the segmented picker for short enumerations such as cursor shape;
+- the checked picker page for language;
+- the accordion select for notification modes;
+- hint subtitles under each switch.
