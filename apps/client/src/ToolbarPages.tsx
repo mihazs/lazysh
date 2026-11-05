@@ -1,5 +1,5 @@
 import {t} from './i18n/core';
-import {useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type TouchEvent as ReactTouchEvent} from "react";
+import {useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type TouchEvent as ReactTouchEvent} from "react";
 import {nearestPage, pageEdges, touchOverscroll, wheelOverscroll, type PageStep} from "./toolbarPaging";
 
 export type ToolbarPageId = "tools" | "snippets";
@@ -18,8 +18,10 @@ function storePage(id: ToolbarPageId) {
 /**
  * A horizontal carousel of toolbar pages. A slide moves between pages with scroll snapping, and a
  * vertical drag or wheel that continues past a page's last or first row opens the adjacent page.
+ * `repeats` reports how many held keys have started repeating; a drag during which one starts
+ * belongs to that key and never turns the page.
  */
-export default function ToolbarPages({pages}: {pages: readonly ToolbarPage[]}) {
+export default function ToolbarPages({pages, repeats}: {pages: readonly ToolbarPage[]; repeats?: () => number}) {
   const [selected, setSelected] = useState(storedPage);
   const id = useId();
   const found = pages.findIndex(page => page.id === selected);
@@ -28,6 +30,7 @@ export default function ToolbarPages({pages}: {pages: readonly ToolbarPage[]}) {
   indexRef.current = index;
   const track = useRef<HTMLDivElement>(null);
   const touch = useRef<ReturnType<typeof touchOverscroll> | null>(null);
+  const touchRepeats = useRef(0);
   const wheel = useRef(wheelOverscroll());
   // A requested page wins over intermediate scroll positions until the smooth scroll arrives.
   const target = useRef<{index: number; timer: ReturnType<typeof setTimeout>} | null>(null);
@@ -46,17 +49,25 @@ export default function ToolbarPages({pages}: {pages: readonly ToolbarPage[]}) {
     if (smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) element.scrollTo({left: page.offsetLeft, behavior: "smooth"});
     else element.scrollLeft = page.offsetLeft;
   }
+  function select(next: number) {choose(next); show(next, true);}
   function go(step: PageStep) {
     const next = indexRef.current + step;
     if (!step || next < 0 || next >= pages.length) return;
-    choose(next); show(next, true);
+    select(next);
   }
   // Keep the remembered page in view when the toolbar returns from being hidden or the width changes.
+  // Only a width change moves the pages, so a height change (a docked keyboard opening during a
+  // fling) leaves an in-flight slide alone.
   useLayoutEffect(() => {
     const element = track.current;
     if (!element) return;
     show(indexRef.current, false);
-    const resize = new ResizeObserver(() => {if (!touch.current && !target.current) show(indexRef.current, false);});
+    let width = element.clientWidth;
+    const resize = new ResizeObserver(() => {
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      if (!touch.current && !target.current) show(indexRef.current, false);
+    });
     resize.observe(element);
     return () => resize.disconnect();
   }, [pages.length]);
@@ -81,10 +92,11 @@ export default function ToolbarPages({pages}: {pages: readonly ToolbarPage[]}) {
   function touchStart(event: ReactTouchEvent) {
     const point = event.touches[0];
     touch.current = event.touches.length === 1 && point ? touchOverscroll(point.clientX, point.clientY) : null;
+    touchRepeats.current = repeats?.() ?? 0;
   }
   function touchMove(event: ReactTouchEvent) {
     const point = event.touches[0], page = current();
-    if (!touch.current || !point || !page || event.touches.length !== 1) {touch.current = null; return;}
+    if (!touch.current || !point || !page || event.touches.length !== 1 || (repeats?.() ?? 0) !== touchRepeats.current) {touch.current = null; return;}
     go(touch.current(point.clientX, point.clientY, edges(page)));
   }
   function wheelMove(event: WheelEvent) {
@@ -104,18 +116,29 @@ export default function ToolbarPages({pages}: {pages: readonly ToolbarPage[]}) {
     return () => element?.removeEventListener("wheel", listener);
   }, []);
 
+  // The tabs pattern: one tab stop, with the arrow keys, Home and End moving between pages.
+  function tabKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const last = pages.length - 1;
+    const next = {ArrowRight: index < last ? index + 1 : 0, ArrowLeft: index > 0 ? index - 1 : last, Home: 0, End: last}[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    select(next);
+    (event.currentTarget.children[next] as HTMLElement | undefined)?.focus();
+  }
+
   return <>
     <div ref={track} className="terminal-keys-pages" onScroll={scrolled}
       onTouchStart={touchStart} onTouchMove={touchMove} onTouchEnd={ended} onTouchCancel={ended}>
       {pages.map((page, position) => <div key={page.id} id={`${id}-${page.id}`} role="tabpanel" className="terminal-keys-page"
-        data-toolbar-page={page.id} data-current={position === index} aria-label={t(pageLabels[page.id])}>{page.content}</div>)}
+        data-toolbar-page={page.id} data-current={position === index} aria-labelledby={`${id}-tab-${page.id}`}>{page.content}</div>)}
     </div>
-    <div className="terminal-keys-pager" role="tablist" aria-label={t('terminalToolbarPages')}>
-      {pages.map((page, position) => <button key={page.id} type="button" role="tab" aria-selected={position === index}
+    <div className="terminal-keys-pager" role="tablist" aria-label={t('terminalToolbarPages')} onKeyDown={tabKey}>
+      {pages.map((page, position) => <button key={page.id} id={`${id}-tab-${page.id}`} type="button" role="tab" aria-selected={position === index}
+        tabIndex={position === index ? 0 : -1}
         aria-controls={`${id}-${page.id}`} aria-label={t(pageLabels[page.id])} title={t(pageLabels[page.id])}
         // Choosing a page leaves focus, and so the on-screen keyboard, where it was.
         onPointerDown={event => event.preventDefault()}
-        onClick={() => {choose(position); show(position, true);}}><span aria-hidden="true" /></button>)}
+        onClick={() => select(position)}><span aria-hidden="true" /></button>)}
     </div>
   </>;
 }

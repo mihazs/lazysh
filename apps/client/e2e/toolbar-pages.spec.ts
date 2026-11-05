@@ -5,8 +5,8 @@ type Point={x:number;y:number};
 const twoRows=['esc','tab','left','row-break','up','enter'];
 const threeRows=['esc','tab','row-break','up','down','row-break','enter','c'];
 
-/** A local terminal whose toolbar has key rows, one snippet and one literal chord; input bytes are recorded. */
-async function openToolbar(page:Page,testInfo:TestInfo,toolbar:string[]) {
+/** A local terminal whose toolbar has key rows (the default layout when omitted), one snippet and one literal chord; input bytes are recorded. */
+async function openToolbar(page:Page,testInfo:TestInfo,toolbar?:string[]) {
   await installLocalTerminal(page);
   await page.addInitScript(toolbar=>{
     if(sessionStorage.getItem('toolbar-pages-seeded'))return;
@@ -33,10 +33,11 @@ async function expectPage(keys:Locator,name:'Tools'|'Snippets') {
   const panel=keys.getByRole('tabpanel',{name,exact:true}),pages=keys.locator('.terminal-keys-pages');
   await expect.poll(async()=>Math.abs((await panel.boundingBox())!.x-(await pages.boundingBox())!.x)).toBeLessThan(2);
 }
-/** One finger drag through real touch events, so the browser scrolls and snaps as it would on a phone. */
-async function swipe(page:Page,from:Point,to:Point,steps=12) {
+/** One finger drag through real touch events, so the browser scrolls and snaps as it would on a phone; `hold` waits before moving. */
+async function swipe(page:Page,from:Point,to:Point,steps=12,hold=0) {
   const cdp=await page.context().newCDPSession(page);
   await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[from]});
+  if(hold)await page.waitForTimeout(hold);
   for(let step=1;step<=steps;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:from.x+(to.x-from.x)*step/steps,y:from.y+(to.y-from.y)*step/steps}]});
   await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await cdp.detach();
@@ -82,6 +83,57 @@ test('a slide moves between the tools and snippets pages, both pages send their 
   await expectPage(keys,'Tools');
   await keys.getByRole('button',{name:'enter',exact:true}).tap();
   await expect.poll(()=>writes(page)).toEqual(['\r']);
+});
+
+test('on the default single key row a slide scrolls the keys first and opens the snippets page from the row end',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch slide contract.');
+  const keys=await openToolbar(page,testInfo);
+  await expectPage(keys,'Tools');
+  const row=keys.getByRole('tabpanel',{name:'Tools',exact:true}).locator('.terminal-keys-row');
+  await expect(row).toHaveCount(1);
+  const scroll=()=>row.evaluate(node=>({left:Math.round(node.scrollLeft),end:node.scrollLeft+node.clientWidth>=node.scrollWidth-1}));
+  expect(await row.evaluate(node=>node.scrollWidth>node.clientWidth)).toBe(true);
+  /** Waits for the row's momentum to stop, then reports where it rests. */
+  const settled=async()=>{let last=-1;await expect.poll(async()=>{const now=(await scroll()).left,still=now===last;last=now;return still;},{intervals:[150]}).toBe(true);return scroll();};
+  const y=(await center(row)).y;
+  // The first slide scrolls the keys of the wide row, not the pages.
+  await swipe(page,{x:330,y},{x:60,y});
+  const first=await settled();
+  expect(first.left).toBeGreaterThan(0);
+  await expectPage(keys,'Tools');
+  // Further slides keep scrolling the keys until the row shows its last key; none of them turns the page.
+  for(let slide=0;slide<6&&!(await settled()).end;slide++){
+    await swipe(page,{x:330,y},{x:60,y});
+    await expectPage(keys,'Tools');
+  }
+  expect((await settled()).end).toBe(true);
+  // A slide that starts with the row already at its end continues to the snippets page.
+  await swipe(page,{x:330,y},{x:60,y});
+  await expectPage(keys,'Snippets');
+  // No slide pressed the key under the finger.
+  expect(await writes(page)).toEqual([]);
+  await keys.getByRole('button',{name:'Mark',exact:true}).tap();
+  await expect.poll(()=>writes(page)).toEqual(['PAGE_MARK']);
+  const snippets=await center(keys.getByRole('tabpanel',{name:'Snippets',exact:true}));
+  await swipe(page,{x:60,y:snippets.y},{x:330,y:snippets.y});
+  await expectPage(keys,'Tools');
+  // The key row kept its position, so its last keys are still under the finger.
+  await keys.getByRole('button',{name:'c',exact:true}).tap();
+  await expect.poll(()=>writes(page)).toEqual(['PAGE_MARK','c']);
+});
+
+test('a drag that follows a held, repeating key stays on the page',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch hold contract.');
+  await page.setViewportSize({width:390,height:420});
+  const keys=await openToolbar(page,testInfo,threeRows);
+  await expectPage(keys,'Tools');
+  // Holding the up arrow repeats it; dragging on afterwards past the last row does not also open the snippets.
+  const up=await center(keys.getByRole('button',{name:'Arrow up',exact:true}));
+  await swipe(page,up,{x:up.x,y:up.y-200},20,700);
+  await expect.poll(async()=>(await writes(page)).length).toBeGreaterThan(1);
+  expect(new Set(await writes(page))).toEqual(new Set(['\x1b[A']));
+  await page.waitForTimeout(800);
+  await expectPage(keys,'Tools');
 });
 
 test('continuing a vertical swipe past the last row opens the snippets page and past the first row returns',async({page},testInfo)=>{
@@ -150,6 +202,27 @@ test('the wheel continues past the last row to the next page and indicators and 
   await keys.getByRole('button',{name:'Mark',exact:true}).click();
   await expect.poll(()=>writes(page)).toEqual(['PAGE_MARK','\t','PAGE_MARK']);
   await expectPage(keys,'Snippets');
+  // The indicators are one tab stop; the arrow keys, Home and End move between pages.
+  const tab=(name:'Tools'|'Snippets')=>keys.getByRole('tab',{name,exact:true});
+  await tab('Snippets').focus();
+  await expect(tab('Snippets')).toHaveAttribute('tabindex','0');
+  await expect(tab('Tools')).toHaveAttribute('tabindex','-1');
+  // ArrowRight wraps from the last page to the first.
+  await page.keyboard.press('ArrowRight');
+  await expectPage(keys,'Tools');
+  await expect(tab('Tools')).toBeFocused();
+  await page.keyboard.press('End');
+  await expectPage(keys,'Snippets');
+  await expect(tab('Snippets')).toBeFocused();
+  await page.keyboard.press('Home');
+  await expectPage(keys,'Tools');
+  await page.keyboard.press('ArrowLeft');
+  await expectPage(keys,'Snippets');
+  await page.keyboard.press('ArrowLeft');
+  await expectPage(keys,'Tools');
+  await expect(tab('Snippets')).toHaveAttribute('tabindex','-1');
+  await page.keyboard.press('Tab');
+  await expect(tab('Snippets')).not.toBeFocused();
 });
 
 test('without snippets or chords the toolbar stays a single page with no indicators',async({page},testInfo)=>{

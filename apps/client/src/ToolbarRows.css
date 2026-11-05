@@ -54,17 +54,19 @@
   gap: inherit;
 }
 .terminal-keys-snippets > button { flex-shrink: 0; }
+/* Each indicator is a thumb-sized target around a small dot; the negative margins tuck the
+   targets into the row gap and the toolbar's bottom padding, so the toolbar barely grows. */
 .terminal-keys .terminal-keys-pager {
   display: flex;
   justify-content: center;
-  margin-bottom: -4px;
+  margin: -4px 0 -8px;
 }
 .terminal-keys .terminal-keys-pager button,
 .terminal-keys .terminal-keys-pager button:hover {
   display: grid;
   place-items: center;
-  min-width: 32px;
-  min-height: 24px;
+  min-width: 48px;
+  min-height: 36px;
   padding: 0;
   border: 0;
   background: transparent;

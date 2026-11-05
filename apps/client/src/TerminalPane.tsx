@@ -86,6 +86,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
+  // Counts held keys that began repeating, so a drag that follows a hold does not also turn the toolbar page.
+  const repeatStarts = useRef(0);
   const repeatShift = useRef<boolean | undefined>(undefined);
   const repeat = useRef<{readonly shift?:boolean;delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
   const dpad = useRef<{pointers:Map<number,string>;pointerType:string;gesture:DpadGesture|null;blocked:boolean;suppressClick:boolean}>({pointers:new Map(),pointerType:"",gesture:null,blocked:false,suppressClick:false});
@@ -96,7 +98,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   function startRepeat(action:()=>void,delay=400,shift=modifierState.current.shift) {
     stopRepeat();const owner:typeof repeat.current={shift};repeat.current=owner;
     const tick=()=>{if(repeat.current!==owner)return;repeatShift.current=owner.shift;try{action();}finally{repeatShift.current=undefined;}};
-    owner.delay=setTimeout(()=>{if(repeat.current!==owner)return;repeated.current=true;tick();if(repeat.current===owner&&!document.hidden)owner.timer=setInterval(tick,80);},delay);
+    owner.delay=setTimeout(()=>{if(repeat.current!==owner)return;repeated.current=true;repeatStarts.current++;tick();if(repeat.current===owner&&!document.hidden)owner.timer=setInterval(tick,80);},delay);
   }
   // A toolbar key with a long-press action runs it once after a hold instead of repeating.
   const held = useRef<{key: ToolbarKey; fired: boolean; timer?: ReturnType<typeof setTimeout>} | null>(null);
@@ -995,7 +997,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </>}</div>);
     // Saved snippets and chords get their own page, so the configured key rows keep their layout.
     if (!preferences.snippets.length && !preferences.chords.length) return tools;
-    return <ToolbarPages pages={[{id: "tools", content: tools}, {id: "snippets", content: <div className="terminal-keys-snippets">
+    return <ToolbarPages repeats={() => repeatStarts.current} pages={[{id: "tools", content: tools}, {id: "snippets", content: <div className="terminal-keys-snippets">
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
     </div>}]} />;
