@@ -1211,6 +1211,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
+  // The terminal a Herdr switch activated, until another terminal or view takes over.
+  const [quietTerminal, setQuietTerminal] = useState<string|null>(null);
   usePaletteShortcut(() => setPalette(true));
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
@@ -1276,6 +1278,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
+  useEffect(()=>{setQuietTerminal(id=>id!==activeId || view!=='terminal'?null:id);},[activeId,view]);
   // Keep the last opened Chat reader mounted behind other views of its session, so returning
   // from the terminal or a tool keeps its messages, reading position and unsent draft.
   // A reader opened from reported history still retires when its view is left.
@@ -2004,7 +2007,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
         assertCurrent();
       }
-      setActiveId(destination.id);setView('terminal');setSidebar(false);
+      setActiveId(destination.id);setView('terminal');setSidebar(false);setQuietTerminal(destination.id);
     } catch(error) {
       const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error);
       if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
@@ -2344,6 +2347,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={session.id}
                     session={session}
                     active={activeId === session.id && view === "terminal"}
+                    quietActivation={quietTerminal === session.id}
                     reportError={setError}
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}

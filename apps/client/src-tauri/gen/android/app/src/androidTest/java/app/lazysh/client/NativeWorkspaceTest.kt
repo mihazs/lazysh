@@ -2602,9 +2602,12 @@ class NativeWorkspaceTest {
             try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
             finally { bitmap.recycle() }
         }
-        fun select(display: Int, target: JSONObject) {
+        fun choose(display: Int) {
             if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, labels[display])
             else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(${display + 1}) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
+        }
+        fun select(display: Int, target: JSONObject) {
+            choose(display)
             visible(display, target)
             screenshot("display-$display-${target.getString("marker").substringBeforeLast('_')}")
         }
@@ -2618,7 +2621,27 @@ class NativeWorkspaceTest {
             typeInto(scenario, path, herdr.getString("transcript")); closeSoftKeyboard(); click("Open transcript")
             awaitDocument(scenario, "exact owned navigation transcript loaded", "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(herdr.getString("record"))})")
         }
-        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null) {
+        // A Herdr switch is not a typing request: the soft keyboard stays closed until the terminal or keyboard key asks for it.
+        fun keyboardStaysClosed(display: Int, action: String) {
+            val editable = "document.activeElement?.matches('input,textarea,select,[contenteditable]')===true"
+            awaitDocument(scenario, "$action switched display $display", """
+                document.querySelectorAll('.session-tabs [role=tab]')[$display]?.getAttribute('aria-selected')==='true' &&
+                  document.querySelector('.herdr-navigation')?.getAttribute('aria-busy')==='false'
+            """)
+            // Activation focus lands a frame after the switch, so observe a settled window instead of one sample.
+            val settled = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1500)
+            do {
+                var ime: Boolean? = null
+                scenario.onActivity { ime = ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) }
+                assertFalse("$action must keep the soft keyboard closed", ime == true)
+                assertEquals("$action must not focus an editable control", "false", evaluate(scenario, editable))
+                Thread.sleep(100)
+            } while (System.nanoTime() < settled)
+        }
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false) {
+            // From the parent SSH display, the switch activates the first existing Herdr display.
+            val display = if (fromParent) 1 else 2
+            if (fromParent) {choose(0); closeSoftKeyboard()}
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
@@ -2631,7 +2654,8 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
             screenshot(if (mode == "Agents") "agents" else "spaces")
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())
-            visible(2, target)
+            keyboardStaysClosed(display, "$mode $targetLabel")
+            visible(display, target)
             select(1, target) // Stock public focus must move the other real client too.
             select(2, target)
         }
@@ -2653,7 +2677,7 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "stock Herdr truthfully refuses private input preparation", "document.querySelector(\"section[aria-label='Terminal input'] [role=alert]\")?.textContent==='Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.'")
             assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
-            navigate("Workspaces", shell.getString("label"), shell)
+            navigate("Workspaces", shell.getString("label"), shell, fromParent = true)
             navigate("Agents", "codex", agent, agent.getString("label"))
             navigate("Workspaces", shell.getString("paneId"), shell)
             sessionView(scenario, "Transcript")
