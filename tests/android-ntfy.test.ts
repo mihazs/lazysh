@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,challengeTrafficObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
@@ -375,6 +375,13 @@ test('challenge failure state retains only closed phases and a nullable busy fla
   for(const invalid of [sample+sample,sample.replace(' busy=false',''),sample.replace('busy=false','busy=private'),
     sample.replace('busy=false]','busy=false endpoint=private]'),sample.replace('VERIFY','VERIFY registration=PRIVATE'),sample+'x'.repeat(256*1024)])
     expect(challengeStateObservation(invalid)).toBeUndefined();
+});
+
+test('challenge relay snapshot retains only bounded flags after failure',()=>{
+  const sample='Ntfy relay after-failure[subscribeSeen=true subscribeOk=true confirmSeen=false confirmOk=false]';
+  expect(challengeTrafficObservation('private '+sample+' private')).toEqual({subscribeSeen:true,subscribeOk:true,confirmSeen:false,confirmOk:false});
+  for(const bad of [sample+sample,sample.replace('confirmSeen=false','confirmSeen=private'),sample.replace('confirmOk=false','confirmOk=false endpoint=private'),sample+'x'.repeat(256*1024)])expect(challengeTrafficObservation(bad)).toBeUndefined();
+  expect(challengeTrafficObservation('snapshot unavailable')).toBeUndefined();
 });
 
 test('every fixed native selector label retains a finite failure stage without private text',async()=>{
