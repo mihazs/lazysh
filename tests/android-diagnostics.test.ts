@@ -190,7 +190,7 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   expect(build).toBeGreaterThan(android.findIndex(step=>step.name==='Verify native GUI namespace prerequisites'));
   expect(android.findIndex(step=>step.name==='Run native Android instrumentation')).toBeGreaterThan(build);
   expect(producer['timeout-minutes']).toBe(10);
-  expect(workflow.jobs['native-android-runtime']['timeout-minutes']).toBe(30);
+  expect(workflow.jobs['native-android-runtime']['timeout-minutes']).toBe(40);
   expect(producer.run).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 2097152");
   expect(producer.run).toContain('872e4b134e5df29c8933dff12350785054d2fd2839b5ae6b5587b14db1465ddd');
   expect(producer.run).toContain('sha256sum --check --strict');

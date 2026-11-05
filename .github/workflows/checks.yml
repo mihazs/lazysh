@@ -666,7 +666,8 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Every guarded case passing needs more than 30 minutes; a cancelled job retains no verdict.
+    timeout-minutes: 40
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: guarded
