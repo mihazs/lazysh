@@ -42,6 +42,9 @@ import javax.crypto.spec.GCMParameterSpec
 class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
     private var activity: Activity = initialActivity
     companion object {
+        /** androidx.biometric's fixed fragment tag (BiometricPrompt.BIOMETRIC_FRAGMENT_TAG). */
+        private const val BIOMETRIC_FRAGMENT = "androidx.biometric.BiometricFragment"
+        private val promptHandler = android.os.Handler(android.os.Looper.getMainLooper())
         private var current = WeakReference<VaultPlugin>(null)
         // Wry calls this canonical Activity hook before loading the new document.
         @JvmStatic fun onWebViewCreated(activity: Activity, webView: WebView) {
@@ -141,31 +144,48 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
         val started = epochs.lifecycle
         if (!epochs.permits(authEpoch, started) || !available() || cancelPending != null) { cleanup(); invoke.reject("Strong biometrics unavailable, cancelled or another authentication is active"); return }
         var complete = false
-        lateinit var prompt: BiometricPrompt
+        var prompt: BiometricPrompt? = null
         fun reject() { if (!complete) { complete = true; cancelPending = null; pendingAuthEpoch = null; cleanup(); invoke.reject("Credential authentication cancelled or unavailable") } }
-        prompt = BiometricPrompt(activity as FragmentActivity, ContextCompat.getMainExecutor(activity), object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationError(code: Int, message: CharSequence) {
-                android.util.Log.i("LazyshVault", "Credential authentication ended with code $code")
-                reject()
-            }
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                if (complete) return
-                if (!epochs.permits(authEpoch, started)) { reject(); return }
-                complete = true; cancelPending = null; pendingAuthEpoch = null
-                try { action(requireNotNull(result.cryptoObject?.cipher)) }
-                catch (error: Exception) {
-                    // Types only: never the message, which may describe key material.
-                    val code = (error.cause as? android.security.KeyStoreException)?.let { if (Build.VERSION.SDK_INT >= 33) it.numericErrorCode else null }
-                    android.util.Log.w("LazyshVault", "Authenticated credential operation failed: ${error.javaClass.name}/${error.cause?.javaClass?.name} code=$code")
-                    cleanup(); invoke.reject("Cannot use authenticated credentials")
-                }
-            }
-        })
-        cancelPending = { reject(); prompt.cancelAuthentication() }
+        cancelPending = { reject(); prompt?.cancelAuthentication() }
         pendingAuthEpoch = authEpoch
-        val strings = NativeUiLocale.presentationContext(activity)
-        try { prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle(strings.getString(R.string.lazysh_biometric_unlock)).setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText(strings.getString(R.string.lazysh_action_cancel)).build(), BiometricPrompt.CryptoObject(cipher)) }
-        catch (_: Exception) { reject() }
+        val owner = activity as FragmentActivity
+        var waits = 0
+        fun show() {
+            if (complete) return
+            if (!epochs.permits(authEpoch, started)) { reject(); return }
+            // androidx.biometric shares one fragment and view model per Activity. A prompt started
+            // while the previous fragment is still dismissing reuses that fragment, loses its
+            // result, and replays it later to whichever prompt registers next.
+            val manager = owner.supportFragmentManager
+            if (manager.isStateSaved || (manager.findFragmentByTag(BIOMETRIC_FRAGMENT) != null && waits++ < 60)) {
+                promptHandler.postDelayed(::show, 50); return
+            }
+            val created = BiometricPrompt(owner, ContextCompat.getMainExecutor(owner), object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationError(code: Int, message: CharSequence) {
+                    android.util.Log.i("LazyshVault", "Credential authentication ended with code $code")
+                    reject()
+                }
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    if (complete) return
+                    // Only the exact operation this prompt authorized may run.
+                    val unlocked = result.cryptoObject?.cipher
+                    if (unlocked !== cipher || !epochs.permits(authEpoch, started)) { reject(); return }
+                    complete = true; cancelPending = null; pendingAuthEpoch = null
+                    try { action(unlocked) }
+                    catch (error: Exception) {
+                        // Types only: never the message, which may describe key material.
+                        val code = (error.cause as? android.security.KeyStoreException)?.let { if (Build.VERSION.SDK_INT >= 33) it.numericErrorCode else null }
+                        android.util.Log.w("LazyshVault", "Authenticated credential operation failed: ${error.javaClass.name}/${error.cause?.javaClass?.name} code=$code")
+                        cleanup(); invoke.reject("Cannot use authenticated credentials")
+                    }
+                }
+            })
+            prompt = created
+            val strings = NativeUiLocale.presentationContext(owner)
+            try { created.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle(strings.getString(R.string.lazysh_biometric_unlock)).setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText(strings.getString(R.string.lazysh_action_cancel)).build(), BiometricPrompt.CryptoObject(cipher)) }
+            catch (_: Exception) { reject() }
+        }
+        show()
     }
     @Command fun capability(invoke: Invoke) = activity.runOnUiThread {
         val result = JSObject(); result.put("available", available()); result.put("reason", if (available()) "Strong biometrics protect each credential operation" else "Enroll supported strong biometrics to enable this option"); invoke.resolve(result)
