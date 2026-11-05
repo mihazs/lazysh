@@ -192,9 +192,10 @@ test('pull request matrices fail fast while main and release staging keep every 
 
 test('superseded runs cancel only where no publication or caller can be interrupted', async () => {
   const owner = { group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': true };
-  for (const name of ['version.yml', 'conventional-commits.yml', 'fdroid.yml']) expect((await workflow(name)).concurrency).toEqual(owner);
-  // checks cancels only superseded pull request runs; a main run always completes its native verification.
-  expect(checks.concurrency).toEqual({ ...owner, 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" });
+  for (const name of ['conventional-commits.yml', 'fdroid.yml']) expect((await workflow(name)).concurrency).toEqual(owner);
+  // checks and version cancel only superseded pull request runs; a main run always completes, so native
+  // verification finishes and the version PR is regenerated even while main keeps moving.
+  for (const config of [checks, await workflow('version.yml')]) expect(config.concurrency).toEqual({ ...owner, 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" });
   // Reusable workflows inherit the caller's group; their own group could cancel or deadlock the caller.
   for (const name of ['companion-artifacts.yml', 'release-artifacts.yml']) expect((await workflow(name)).concurrency).toBeUndefined();
   // A new main push never aborts an in-flight verified tag publication.
