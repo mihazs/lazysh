@@ -134,6 +134,8 @@ it('preflights metadata after native readiness without holding the workspace cov
   mocks.invoke.mockImplementation((command:string)=>command==='app_lock_status'?Promise.resolve(unlocked()):new Promise<void>(resolve=>{ready=resolve;}));
   render(<AccessShell native>{()=> <button>Owned workspace</button>}</AccessShell>);
   await screen.findByRole('button',{name:'Owned workspace'});
+  // The workspace can render before the native readiness request starts; resolve only that request.
+  await waitFor(()=>expect(ready).toBeTypeOf('function'));
   expect(prepareClipboardPlatform).not.toHaveBeenCalled();
   await act(async()=>ready());
   expect(prepareClipboardPlatform).toHaveBeenCalledOnce();
