@@ -3149,7 +3149,9 @@ class NativeWorkspaceTest {
                     (()=>{const owned=window[$key];
                       if(!owned || owned.token!==$token || owned.document!==document || owned.refresh)return false;
                       const panel=document.querySelector('.chat-panel');
-                      const buttons=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent==='Refresh new messages');
+                      // Refresh is an icon button named by aria-label; match by the same name clickButton uses.
+                      const named=x=>x.hasAttribute('aria-label')?x.getAttribute('aria-label'):x.textContent.trim();
+                      const buttons=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>named(x)==='Refresh new messages');
                       if(buttons.length!==1 || buttons[0].disabled!==false)return false;
                       const button=buttons[0],state={button,panel,started:false,settled:false,observer:null};
                       const observer=new MutationObserver(records=>{
