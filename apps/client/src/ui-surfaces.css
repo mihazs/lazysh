@@ -41,7 +41,8 @@ body { background: var(--theme-bg); }
   font-weight: 600;
 }
 .subtle-button:hover:not(:disabled) { background: var(--theme-hover); }
-.primary-button { border-radius: 999px; border-color: transparent; font-size: 14px; font-weight: 650; padding-inline: 20px; color: var(--theme-on-accent); }
+/* Pill shape only: primary actions keep their measured width so they share rows with adjacent tools. */
+.primary-button { border-radius: 999px; border-color: transparent; color: var(--theme-on-accent); }
 .danger-button { border-color: transparent; border-radius: var(--ui-radius-sm); }
 .icon-button { border-radius: 999px; border: 1px solid transparent; }
 .text-button {
@@ -369,7 +370,7 @@ input[type="search"] {
 .welcome-features { flex-wrap: wrap; justify-content: center; gap: 8px; }
 .welcome-features span { padding: 7px 12px; border-radius: 999px; background: var(--theme-control); color: var(--theme-text); font-size: 12px; }
 .welcome-features svg { color: var(--accent); }
-.welcome-connect { min-height: 52px; padding-inline: 24px; box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 28%, transparent); }
+.welcome-connect { min-height: 52px; padding-inline: 24px; font-size: 14px; font-weight: 650; box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 28%, transparent); }
 @media (max-width: 600px) { .welcome h1 { font-size: 38px; } }
 
 /* ---------- Workspace header and terminal chrome ---------- */
