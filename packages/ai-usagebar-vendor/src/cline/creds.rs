@@ -7,6 +7,8 @@
 //! widget reports "sign-in expired" instead, exactly as it would for any other
 //! credential it does not own.
 
+#[path = "store_schema.rs"]
+mod store_schema;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -51,9 +53,49 @@ struct Candidate {
     expires_ms: Option<i64>,
 }
 
-/// Default search path, resolved against the OS home convention.
+/// Store precedence from Cline CLI 3.0.74's `resolveProviderSettingsPath`.
 pub fn default_paths() -> Result<Vec<PathBuf>> {
-    Ok(vec![home_dir()?.join(AUTH_FILE)])
+    let path = if let Some(path) = cli_path("CLINE_PROVIDER_SETTINGS_PATH")? {
+        path
+    } else if let Some(path) = cli_path("CLINE_DATA_DIR")? {
+        path.join("settings/providers.json")
+    } else if let Some(path) = cli_path("CLINE_DIR")? {
+        path.join("data/settings/providers.json")
+    } else {
+        home_dir()?.join(AUTH_FILE)
+    };
+    #[cfg(windows)]
+    if path != home_dir()?.join(AUTH_FILE) {
+        return Err(AppError::Credentials(
+            "Cline profile environment overrides are unavailable on Windows; configure explicit auth_paths or an API key".into(),
+        ));
+    }
+    if path.as_os_str().len() > 4096 {
+        return Err(AppError::Credentials(
+            "Cline credential store path is invalid".into(),
+        ));
+    }
+    Ok(vec![path])
+}
+fn cli_path(name: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    let invalid = || AppError::Credentials("Cline credential store path is invalid".into());
+    let value = value.to_str().ok_or_else(invalid)?;
+    // ECMAScript trim includes BOM and excludes Unicode White_Space's NEL.
+    let value = trim_cli(value);
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 4096 || value.contains('\0') {
+        return Err(invalid());
+    }
+    Ok(Some(value.into()))
+}
+
+fn trim_cli(value: &str) -> &str {
+    value.trim_matches(|c: char| c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}'))
 }
 
 /// Read whichever credential the CLI wrote into `path`.
@@ -61,9 +103,9 @@ pub fn default_paths() -> Result<Vec<PathBuf>> {
 /// A missing or malformed file yields `None` rather than an error so a second
 /// configured path still gets its turn.
 pub fn read_from(path: &Path) -> Option<Credential> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_store(path)?;
     let now = now_ms();
-    best_candidate(&text, now).map(|found| Credential {
+    selected_candidate(&text).map(|found| Credential {
         token: found.token,
         account_id: found.account_id,
         source: path.display().to_string(),
@@ -71,28 +113,64 @@ pub fn read_from(path: &Path) -> Option<Credential> {
     })
 }
 
-/// The live credential with the most life left in it.
-///
-/// The store keeps one entry per configured provider (`cline`, `cline-pass`,
-/// …) and they are refreshed independently, so the file routinely holds a
-/// lapsed token beside a current one. Picking the furthest-from-expiry entry
-/// is what keeps the widget on the copy the CLI is actually maintaining.
-fn best_candidate(text: &str, now_ms: i64) -> Option<Candidate> {
+/// Follow ordinary symlinks to a regular store; reject devices and bound growth.
+fn read_store(path: &Path) -> Option<String> {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let before = std::fs::metadata(path).ok()?;
+    if !before.is_file() || before.len() > LIMIT {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A regular-file-to-FIFO replacement must not block during open.
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > LIMIT {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(LIMIT + 1).read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= LIMIT).then_some(text)
+}
+
+/// Follow the CLI's selected Cline-family provider, never token-expiry ranking.
+fn selected_candidate(text: &str) -> Option<Candidate> {
     let value: Value = serde_json::from_str(text).ok()?;
     let providers = value.get("providers")?.as_object()?;
-    // A live token always wins; the freshest lapsed one is the fallback, and
-    // carries the account id the cache is keyed on.
-    providers
-        .values()
-        .filter_map(candidate)
-        .max_by_key(|found| {
-            let expires = found.expires_ms.unwrap_or(i64::MAX);
-            (expires > now_ms, expires)
-        })
+    if !store_schema::valid(&value) {
+        return None;
+    }
+    let canonical = providers.get("cline");
+    if value.get("lastUsedProvider").and_then(Value::as_str) == Some("cline-pass") {
+        if let Some(pass) = providers.get("cline-pass") {
+            let settings = cline_settings(pass)?;
+            // Direct auth, including an empty object, overrides inherited auth.
+            if settings.get("auth").is_some() {
+                return candidate(pass);
+            }
+        }
+        return canonical.and_then(candidate);
+    }
+    canonical.and_then(candidate)
+}
+fn cline_settings(provider: &Value) -> Option<&Value> {
+    let settings = provider.get("settings")?;
+    matches!(
+        settings.get("provider")?.as_str(),
+        Some("cline" | "cline-pass")
+    )
+    .then_some(settings)
 }
 
 fn candidate(provider: &Value) -> Option<Candidate> {
-    let auth = provider.get("settings")?.get("auth")?;
+    let settings = cline_settings(provider)?;
+    let auth = settings.get("auth")?;
     let token = auth
         .get("accessToken")
         .and_then(Value::as_str)
@@ -107,7 +185,10 @@ fn candidate(provider: &Value) -> Option<Candidate> {
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(str::to_string),
-        expires_ms: auth.get("expiresAt").and_then(Value::as_i64),
+        expires_ms: auth
+            .get("expiresAt")
+            .and_then(Value::as_f64)
+            .map(|n| n as i64),
     })
 }
 
@@ -118,12 +199,15 @@ pub fn resolve(
     env_var_name: &str,
     inline_key: Option<&str>,
 ) -> Result<Credential> {
+    let env_key = crate::config::optional_api_key(env_var_name, inline_key);
+    if env_key.is_some() {
+        return resolve_from(env_key.as_deref(), &[]);
+    }
     let paths = match configured {
         Some(paths) if !paths.is_empty() => paths.to_vec(),
         _ => default_paths()?,
     };
-    let env_key = crate::config::optional_api_key(env_var_name, inline_key);
-    resolve_from(env_key.as_deref(), &paths)
+    resolve_from(None, &paths)
 }
 
 /// Resolve one credential from the environment, then each path in turn.
@@ -167,40 +251,45 @@ mod tests {
 
     fn entry(name: &str, token: &str, expires: i64) -> String {
         format!(
-            r#""{name}":{{"settings":{{"auth":{{"accessToken":"{token}","accountId":"usr-1","expiresAt":{expires}}}}}}}"#
+            r#""{name}":{{"updatedAt":"2026-11-04T00:00:00.000Z","settings":{{"provider":"{name}","auth":{{"accessToken":"{token}","accountId":"usr-1","expiresAt":{expires}}}}}}}"#
         )
     }
 
+    fn saved_store(token: &str, expires: i64) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let path = directory.path().join("providers.json");
+        std::fs::write(&path, store(&entry("cline", token, expires))).expect("write store");
+        (directory, path)
+    }
+
     #[test]
-    fn picks_the_token_with_the_most_life_left() {
+    fn canonical_entry_is_not_replaced_by_a_newer_legacy_account() {
         let text = store(&format!(
             "{},{}",
-            entry("cline-pass", "stale", NOW_MS + 60_000),
-            entry("cline", "current", NOW_MS + 3_600_000)
+            entry("cline-pass", "different", NOW_MS + 3_600_000),
+            entry("cline", "current", NOW_MS + 60_000)
         ));
 
-        let found = best_candidate(&text, NOW_MS).expect("a live credential");
+        let found = selected_candidate(&text).expect("a live credential");
         assert_eq!(found.token, "current");
         assert_eq!(found.account_id.as_deref(), Some("usr-1"));
     }
 
     #[test]
-    fn a_live_token_outranks_a_lapsed_one_even_when_the_lapsed_one_sorts_later() {
+    fn canonical_entry_is_selected_without_ranking_other_accounts() {
         let text = store(&format!(
             "{},{}",
             entry("cline-pass", "lapsed", NOW_MS - 1),
             entry("cline", "live", NOW_MS + 1_000)
         ));
 
-        let found = best_candidate(&text, NOW_MS).expect("a live credential");
+        let found = selected_candidate(&text).expect("a live credential");
         assert_eq!(found.token, "live");
     }
 
     #[test]
     fn a_lapsed_token_is_returned_flagged_not_withheld() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("providers.json");
-        std::fs::write(&path, store(&entry("cline", "lapsed", 1))).expect("write store");
+        let (_dir, path) = saved_store("lapsed", 1);
 
         let credential = read_from(&path).expect("a lapsed credential is still a credential");
         assert!(credential.expired);
@@ -211,15 +300,17 @@ mod tests {
     fn keeps_the_workos_prefix_the_api_requires() {
         let text = store(&entry("cline", "workos:eyJhbGciOi", NOW_MS + 1000));
         assert_eq!(
-            best_candidate(&text, NOW_MS).expect("credential").token,
+            selected_candidate(&text).expect("credential").token,
             "workos:eyJhbGciOi"
         );
     }
 
     #[test]
     fn an_entry_without_an_expiry_is_still_usable() {
-        let text = store(r#""cline":{"settings":{"auth":{"accessToken":"forever"}}}"#);
-        let found = best_candidate(&text, NOW_MS).expect("credential");
+        let text = store(
+            r#""cline":{"updatedAt":"2026-11-04T00:00:00.000Z","settings":{"provider":"cline","auth":{"accessToken":"forever"}}}"#,
+        );
+        let found = selected_candidate(&text).expect("credential");
         assert_eq!(found.token, "forever");
         assert!(found.account_id.is_none());
     }
@@ -234,7 +325,7 @@ mod tests {
             store(r#""cline":{"settings":{"auth":{"accessToken":"  "}}}"#),
         ] {
             assert!(
-                best_candidate(&text, NOW_MS).is_none(),
+                selected_candidate(&text).is_none(),
                 "unexpectedly accepted {text}"
             );
         }
@@ -257,9 +348,7 @@ mod tests {
 
     #[test]
     fn an_expired_store_resolves_to_a_flagged_credential() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("providers.json");
-        std::fs::write(&path, store(&entry("cline", "lapsed", 1))).expect("write store");
+        let (_dir, path) = saved_store("lapsed", 1);
 
         let credential = resolve_from(None, &[path]).expect("a lapsed credential resolves");
         assert!(credential.expired);

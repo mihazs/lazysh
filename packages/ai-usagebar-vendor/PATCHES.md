@@ -49,3 +49,34 @@ locking, private-cache and refresh behavior remain traceable to upstream.
 No provider endpoint or authentication protocol is replaced by a mock in
 production. Platform limitations of upstream credential stores remain; an
 unavailable credential source yields an error rather than an invented quota.
+
+- `src/cline/creds.rs`: adapt default store selection to Cline CLI 3.0.74,
+  source `071e1b25b48f9ef5dff7fc32085e6a16f02bf02e`,
+  `sdk/packages/shared/src/storage/paths.ts`: provider-settings file override,
+  data-directory override, then profile-directory override and the normal home
+  default. Preserve ECMAScript trimming, configured auth paths and API-key
+  precedence; selected stores never fall through to a different default login.
+  Paths are bounded and invalid encodings/NUL fail without exposing the input.
+  Follow the actual CLI main/manager selected-provider path: saved Cline-family
+  selection, otherwise canonical Cline; direct pass auth overrides inherited auth.
+  Never rank separate accounts by token expiry or fall through invalid selected
+  auth. Other providers cannot supply Cline OAuth credentials.
+  `src/cline/store_schema.rs` independently implements the complete pinned
+  StoredProviderSettingsSchema and imported ProviderSettingsSchema structural
+  admission, including all entries, required metadata and ignored unknown fields.
+  The owned synthetic fixture records source hashes and exact Zod 4.4.3 integrity;
+  all 892 cases agree with the source schemas under both Node and Bun. This is not
+  exhaustive URL/runtime equivalence or authentication proof. No JS product
+  dependency is introduced. Stored manual keys remain unsupported; explicit usage
+  and environment API keys retain precedence. Both adapted/new Rust files remain
+  scanned. Regular-file reads are bounded to 1 MiB; Unix NONBLOCK open prevents a
+  regular-to-FIFO replacement from blocking. Symlinks to regular files work.
+  Factor identical existing test-store constructors for zero duplication.
+  Windows rejects newly introduced nondefault environment selection; existing
+  explicit auth_paths/default behavior remains, including its unqualified
+  synchronous-open replacement risk. No Windows race-safety claim is made.
+  Enable existing serde_json `float_roundtrip` to avoid default decimal double
+  rounding admitting nonintegers as positive integers. The 892-case fixture
+  includes 105 raw JSON numeric stores (not parse/reserialized numbers) and
+  matches original Zod JSON.parse semantics. This Cargo feature unifies across
+  consumers; no dependency/number representation or lock entry is added.

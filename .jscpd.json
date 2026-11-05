@@ -364,7 +364,6 @@
     "packages/ai-usagebar-vendor/src/antigravity/mod.rs",
     "packages/ai-usagebar-vendor/src/antigravity/statusline.rs",
     "packages/ai-usagebar-vendor/src/antigravity/vendor.rs",
-    "packages/ai-usagebar-vendor/src/cline/creds.rs",
     "packages/ai-usagebar-vendor/src/cline/fetch.rs",
     "packages/ai-usagebar-vendor/src/cline/mod.rs",
     "packages/ai-usagebar-vendor/src/cline/types.rs",
