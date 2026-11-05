@@ -197,7 +197,6 @@ const translations = {
   agentsSelectedReport: ["Relato selecionado", "Informe seleccionado"],
   agentsClearSelection: ["Limpar seleção", "Borrar selección"],
   agentsSelectReport: ["Ver relato de {{agent}} em {{project}}", "Ver informe de {{agent}} en {{project}}"],
-  agentsDetails: ["Detalhes reportados", "Detalles reportados"],
   agentsReportProject: ["Projeto", "Proyecto"],
   agentsReportSession: ["ID de sessão reportado", "ID de sesión reportado"],
   agentsReportEvents: ["Eventos reportados", "Eventos reportados"],

@@ -195,7 +195,6 @@ export const english = {
   agentsSelectedReport: "Selected report",
   agentsClearSelection: "Clear selection",
   agentsSelectReport: "View {{agent}} report for {{project}}",
-  agentsDetails: "Reported details",
   agentsReportProject: "Project",
   agentsReportSession: "Reported session ID",
   agentsReportEvents: "Reported events",

@@ -391,6 +391,12 @@ function Dialog({
   );
 }
 
+/** A deterministic avatar tone so saved hosts stay recognisable at a glance. */
+function hostTone(name:string) {
+  let hash=0;for(const char of name)hash=(hash*31+char.codePointAt(0)!)>>>0;
+  return hash%6;
+}
+
 export function validateHost(
   host: Pick<Host, "hostname" | "username" | "port" | "name" | "defaultMultiplexer">,
 ) {
@@ -1149,6 +1155,7 @@ export default function App() {
 
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useUi();
+  const hostListId = useId();
   const invoke = useProtectedInvoke();
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
@@ -1980,17 +1987,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 <button
                   className="host-connect"
                   aria-label={t("appConnectToValue1", {value1: host.name})}
+                  aria-describedby={host.transport==='mosh' || host.transport==='et' ? `${hostListId}-${host.id}-transport` : undefined}
                   onClick={() => chooseHost(host)}
                 >
-                  <span className="host-symbol">
-                    <Server size={17} />
+                  <span className="host-symbol" data-tone={hostTone(host.name)} aria-hidden="true">
+                    {Array.from(host.name.trim())[0]?.toLocaleUpperCase() ?? <Server size={17} />}
                   </span>
                   <span>
                     <strong>{host.name}</strong>
                     <small>
-                      {host.username}@{host.hostname}
+                      {host.username}@{host.hostname}{host.port!==22 ? `:${host.port}` : ''}
                     </small>
                   </span>
+                  {host.transport==='mosh' || host.transport==='et' ? <span className="host-transport" id={`${hostListId}-${host.id}-transport`}>{host.transport==='mosh'?'Mosh':'ET'}</span> : null}
                   {sessions.some(
                     (session) =>
                       session.hostId === host.id && session.connected,

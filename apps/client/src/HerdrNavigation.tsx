@@ -1,4 +1,5 @@
-import {ArrowLeft,RefreshCw,Settings2,Info} from 'lucide-react';
+import {ArrowLeft,ChevronDown,ChevronRight,RefreshCw,Settings2,Info} from 'lucide-react';
+import {StatusRing,agentKind,type StatusTone} from './AgentStatus';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
 import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
@@ -13,6 +14,7 @@ import './HerdrNavigationPresentation.css';
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
+const tones:Record<LiveAgent['agent_status'],StatusTone>={blocked:'attention',working:'working',done:'done',idle:'idle',unknown:'unknown'};
 export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
@@ -60,10 +62,13 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     } catch(error) {if(owns())setActionError(error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error));}
     finally {action.current=false;if(current.current.sessionId===sessionId)setActionBusy(false);}
   }
-  function row(target:HerdrNavigationTarget,label:string,status:LiveAgent['agent_status'],context?:string) {
+  function row(target:HerdrNavigationTarget,label:string,status:LiveAgent['agent_status'],context?:string,kind?:string|null) {
     const selected=target.kind==='workspace'?tree?.workspaces.some(item=>item.workspace_id===target.workspace&&item.focused):target.kind==='tab'?tree?.tabs.some(item=>item.tab_id===target.tab&&item.focused):tree?.panes.some(item=>item.pane_id===target.pane&&item.terminal_id===target.terminal&&item.focused);
+    const agentRow=mode==='agents' && target.kind==='pane';
     return <button className="herdr-navigation-row" data-agent-status={status} data-current={selected||undefined} disabled={working} onClick={()=>void open(target)}>
-      <span><strong>{label}</strong>{context && <small title={context}>{context}</small>}</span><small className={mode==='agents'?'sr-only':undefined}>{t(herdrStatusKeys[status])}</small>
+      {agentRow && <StatusRing tone={tones[status]}/>}
+      <span><strong>{label}</strong>{context && <small title={context}>{context}</small>}{agentRow && <span className="row-tags" aria-hidden="true">{kind && <span className="row-tag" data-agent-kind={agentKind(kind)}>{kind}</span>}<span className="row-tag-status">{t(herdrStatusKeys[status])}</span></span>}</span><small className={mode==='agents'?'sr-only':undefined}>{t(herdrStatusKeys[status])}</small>
+      {agentRow && <ChevronRight className="row-chevron" size={18} aria-hidden="true"/>}
     </button>;
   }
   function panes(tab:HerdrTree['tabs'][number],workspaceLabel:string) {
@@ -125,9 +130,10 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
             })}</ul>}
           </li>;
         })}</ul>}
-        {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div>{statuses.map(status=>{
+        {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div className="herdr-status-groups">{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</section>;
+          const key=JSON.stringify(['status',data.server,status]),folded=collapsed.has(key)&&!term,heading=`${t(herdrStatusKeys[status])} · ${matching.length}`;
+          return matching.length>0 && <section key={status} className="status-group" data-status={status} aria-label={t(herdrStatusKeys[status])}><h4 aria-label={heading}><button type="button" className="status-group-toggle" aria-label={heading} aria-expanded={!folded} onClick={()=>toggle(key)}><span>{t(herdrStatusKeys[status])}</span><span className="status-group-count">{matching.length}</span><ChevronDown size={16} aria-hidden="true"/></button></h4>{!folded && <div className="status-group-rows">{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '),agent.name?agent.agent:null)}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div>}</section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
       </div>

@@ -504,6 +504,27 @@ describe('live Herdr discovery',()=>{
     await act(async()=>poll.resolve(tree));expect(row).toHaveProperty('disabled',true);
     await act(async()=>action.resolve(undefined));expect(close).toHaveBeenCalledOnce();
   }));
+  it('folds a live status group behind its unchanged heading and restores the same row without a read or navigation',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    const navigate=vi.fn(async()=>{});
+    render(<HerdrNavigation sessionId="fold-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={vi.fn()}/>);
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    const row=await browser.findByRole('button',{name:/^builder/});
+    const group=browser.getByRole('region',{name:t('herdrAgentWorking')});
+    const heading=within(group).getByRole('heading',{name:`${t('herdrAgentWorking')} · 1`});
+    const toggle=within(heading).getByRole('button');
+    const reads=vi.mocked(invoke).mock.calls.length;
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(browser.queryByRole('button',{name:/^builder/})).toBeNull();
+    expect(within(group).getByRole('heading',{name:`${t('herdrAgentWorking')} · 1`})).toBe(heading);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(browser.getByRole('button',{name:/^builder/}).textContent).toBe(row.textContent);
+    expect(vi.mocked(invoke).mock.calls).toHaveLength(reads);expect(navigate).not.toHaveBeenCalled();
+  });
   it.each(['hide','mode','unmount'] as const)('revokes a pending navigation action after %s without stealing focus or closing its replacement',async change=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);

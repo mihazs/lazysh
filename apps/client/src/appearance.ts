@@ -10,7 +10,10 @@ export function applyAppTheme(theme: Preferences["appTheme"], imported?: Importe
   for (const property of customProperties) root.style.removeProperty(property);
   if (theme === "custom" && imported) for (const [key,value] of Object.entries(chromeColors(imported))) root.style.setProperty(key,value);
   root.dataset.appTheme = theme;
-  root.style.colorScheme = theme === "custom" && imported ? imported.mode : theme === "paper" ? "light" : "dark";
+  const mode = theme === "custom" && imported ? imported.mode : theme === "paper" ? "light" : "dark";
+  root.style.colorScheme = mode;
+  // Light-tuned status and agent tag colours follow every light theme, imported ones included.
+  root.dataset.themeMode = mode;
   // Commit both foreground and background together before restoring hover transitions.
   void root.offsetWidth;
   delete root.dataset.themeChanging;

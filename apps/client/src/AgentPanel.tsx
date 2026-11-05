@@ -3,7 +3,9 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 
-import { ArrowLeft, Bot, RefreshCw, Settings2 } from 'lucide-react';
+import { ArrowLeft, Bot, ChevronRight, RefreshCw, Search, Settings2 } from 'lucide-react';
+import {StatusRing,agentKind,reportedTones} from './AgentStatus';
+import {formatRelativeTime,pathBasename,useNow} from './relativeTime';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
@@ -101,6 +103,8 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
   const visible=matching.filter(row=>filter==='all' || row.state===filter);
   const selected=selection?.source===sessionId ? visible.find(row=>reportKey(row)===selection.key) : undefined;
   useEffect(()=>{if(selection && !selected)setSelection(null);},[selection,selected]);
+  /** Keeps row recency current between polls while reported activity is on screen. */
+  const now=useNow(30000,panelVisible && activityVisible && visible.length>0);
   const request = useRef(0);
   const snapshotFlight=useRef<number|null>(null);
   const historyRequest=useRef(0);
@@ -193,7 +197,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
   const approvals=<ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />;
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
     {!renderNavigation&&approvals}
-    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button type="button" className="subtle-button" aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={15}/>{t('agentsSetupAction')}</button><button className="subtle-button" disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={15} />{t('agentsRefresh')}</button></div>
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><label className="agent-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('agentsSearch')}</span><input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
       <h3>{t('agentsSetupAction')}</h3>
@@ -205,9 +209,8 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     </section>
     {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <div className="agent-discovery">
-      <label className="agent-search">{t('agentsSearch')}<input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label>
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
-        {(['all',...states] as const).map(state=><button type="button" className="subtle-button" key={state} aria-pressed={filter===state} onClick={()=>setFilter(state)}>{state==='all'?t('agentsAll'):t(names[state])} {ready && !error && <span>{formatNumber(state==='all'?matching.length:matching.filter(row=>row.state===state).length)}</span>}</button>)}
+        {(['all',...states] as const).map(state=><button type="button" className="filter-chip" key={state} aria-pressed={filter===state} onClick={()=>setFilter(state)}>{state==='all'?t('agentsAll'):t(names[state])} {ready && !error && <span>{formatNumber(state==='all'?matching.length:matching.filter(row=>row.state===state).length)}</span>}</button>)}
       </div>
       {ready && !error && <p className="agent-result-count" role="status">{t('agentsResultCount',{shown:formatNumber(visible.length),total:formatNumber(reports.length)})}</p>}
       {(query!=='' || filter!=='all') && <button className="subtle-button" onClick={()=>{setQuery('');setFilter('all');}}>{t('agentsClearFilters')}</button>}
@@ -226,7 +229,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
     {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
-    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><strong><Bot size={16} aria-hidden="true"/> {s.agent}<span className="agent-row-action">{t('agentsDetails')} ›</span></strong><span className="agent-row-summary">{s.summary}</span><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small></button>{s.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
+    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><StatusRing tone={reportedTones[s.state]}/><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small><time dateTime={s.updatedAt} title={t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}>{formatRelativeTime(s.updatedAt,now)}</time></small></span></span><ChevronRight className="row-chevron" size={18} aria-hidden="true"/></button>{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
   </section>;
   return renderNavigation?<>{approvals}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
 }

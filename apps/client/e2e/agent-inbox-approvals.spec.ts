@@ -48,7 +48,7 @@ test('agent inbox groups events by state with reachable row actions and folded s
   await expect(settings).not.toHaveAttribute('open','');
   await expect(inbox.getByRole('checkbox',{name:'Monitor connected hosts',exact:true})).toBeHidden();
   await page.screenshot({path:testInfo.outputPath('agent-inbox.png')});
-  const ended=inbox.locator('article').filter({hasText:'/srv/lazysh'}).filter({has:page.locator('[data-state="done"]')});
+  const ended=inbox.locator('article[data-state="done"]').filter({hasText:'/srv/lazysh'});
   await expect(ended.getByRole('button',{name:'Open connected session',exact:true})).toBeDisabled();
   const done=inbox.getByRole('button',{name:/^Done\s*2$/});
   await done.click();

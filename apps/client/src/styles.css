@@ -1,11 +1,12 @@
 :root {
-  --theme-bg: #0b1728; --theme-panel: #102236; --theme-control: #173047;
-  --theme-hover: #1e3c56; --theme-text: #f8fcff; --theme-muted: #adc4da;
-  --theme-border: #61829f; --theme-accent: #77f3ec; --theme-on-accent: #0b1728;
-  --theme-danger: #ffb2aa; --theme-danger-bg: #442827;
-  --theme-warning: #ead397; --theme-warning-bg: #3a3324;
-  --theme-blue: #59b8fc; --theme-blue-bg: #142d48;
-  --theme-purple: #ad81f9; --theme-purple-bg: #2a2544;
+  /* Default lazysh theme: a true-black canvas with brand-ink elevations and the brand cyan. */
+  --theme-bg: #000000; --theme-panel: #0d1219; --theme-control: #172029;
+  --theme-hover: #202b37; --theme-text: #f5f8fc; --theme-muted: #a1adbb;
+  --theme-border: #5b6879; --theme-accent: #77f3ec; --theme-on-accent: #04141a;
+  --theme-danger: #ffb2aa; --theme-danger-bg: #3d1a17;
+  --theme-warning: #f2cd72; --theme-warning-bg: #33280f;
+  --theme-blue: #6cc2ff; --theme-blue-bg: #0e2438;
+  --theme-purple: #b996ff; --theme-purple-bg: #221a38;
   font-family:
     "DM Sans",
     -apple-system,

@@ -45,7 +45,7 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} reported discovery keeps
     window.agentBoard.setReports([agentBoardRecord,{...agentBoardRecord,sessionId:'other-report',agent:'Codex',state:'working',project:'/api',summary:'Implement parser'},{...agentBoardRecord,sessionId:'finished-report',agent:'Gemini',state:'done',project:'/docs',summary:'Published guide'}]);
   });
   const root=page.locator('.agent-board-fixture');
-  const labels=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return {search:t('agentsSearch'),status:t('agentsFilterStatus'),all:t('agentsAll'),working:t('agentsWorking'),details:t('agentsDetails'),selected:t('agentsSelectedReport'),clear:t('agentsClearFilters')};});
+  const labels=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return {search:t('agentsSearch'),status:t('agentsFilterStatus'),all:t('agentsAll'),working:t('agentsWorking'),selected:t('agentsSelectedReport'),clear:t('agentsClearFilters')};});
   await expect(root.locator('.agent-card')).toHaveCount(3);
   const search=root.getByRole('searchbox');
   await expect(search).toHaveAccessibleName(labels.search);

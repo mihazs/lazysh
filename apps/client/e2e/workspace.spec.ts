@@ -803,6 +803,51 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
+/** Host actions must be on screen, inside their list and own their centre without waiting for motion. */
+function hostActionTargets(page:Page,labels:string[]) {
+  return page.evaluate(labels=>labels.map(label=>{
+    const button=document.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!,box=button.getBoundingClientRect(),list=button.closest('.host-list')!.getBoundingClientRect();
+    const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+    return {label,inList:box.left>=list.left&&box.right<=list.right,inViewport:box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight,size:box.width>=44&&box.height>=44,owned:hit===button||button.contains(hit),disabled:button.disabled};
+  }),labels);
+}
+const touchable=(labels:string[])=>labels.map(label=>({label,inList:true,inViewport:true,size:true,owned:true,disabled:false}));
+
+test('reopened phone hosts expose touchable host actions immediately and a closed drawer takes no hits',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone drawer geometry');
+  await page.setViewportSize({width:412,height:915});
+  await installWorkspaceNavigation(page);await page.goto('/');
+  for(const name of ['Navigation host','Other navigation host']){await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(2);
+  await (await workspaceControl(page,'End Other navigation host connection')).click();
+  await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(1);
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  // Sampled without waiting for motion.
+  const labels=['Edit Navigation host','Edit Other navigation host','Delete Other navigation host'];
+  expect(await hostActionTargets(page,labels)).toEqual(touchable(labels));
+  await expect(page.getByRole('button',{name:'Delete Navigation host',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'Delete Other navigation host',exact:true}).tap();
+  const confirm=page.getByRole('dialog',{name:'Delete host',exact:true});
+  await expect(confirm).toBeVisible();await page.keyboard.press('Escape');await expect(confirm).toHaveCount(0);
+  await page.getByRole('button',{name:'Close hosts',exact:true}).tap();
+  expect(await page.evaluate(()=>[0.25,0.5,0.9].every(fraction=>!document.elementFromPoint(innerWidth/2,innerHeight*fraction)?.closest('.sidebar')))).toBe(true);
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='delete_host'||command==='write_stdin')).toEqual([]);
+});
+
+test('a long saved host keeps its actions touchable after a fresh load at the Android emulator viewport',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Phone drawer geometry');
+  const name='Instrumentation 3f6c2b8e-4d71-4f0a-9a52-7c1e0b9d4e21';
+  await page.setViewportSize({width:411,height:731});
+  await installWorkspaceNavigation(page,false,[name]);await page.goto('/');await page.reload();
+  await expect(page.getByRole('button',{name:`Connect to ${name}`,exact:true})).toBeAttached();
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const labels=[`Edit ${name}`,`Delete ${name}`];
+  expect(await hostActionTargets(page,labels)).toEqual(touchable(labels));
+  await page.getByRole('button',{name:`Delete ${name}`,exact:true}).tap();
+  await expect(page.getByRole('dialog',{name:'Delete host',exact:true})).toBeVisible();
+});
+
 test('Workspace tools is a short default sheet with explicit reachable expansions at 393px',async({page},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Measured mobile sheet');
   await page.setViewportSize({width:393,height:852});
