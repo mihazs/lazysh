@@ -1,6 +1,7 @@
 import {ArrowLeft,RefreshCw,Settings2,Info} from 'lucide-react';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,type AccessLease} from './access';
+import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
 import {t,useUi} from './i18n/core';
@@ -73,6 +74,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       return <li key={pane.pane_id}>{pane.terminal_id?row({kind:'pane',workspace:pane.workspace_id,tab:pane.tab_id,pane:pane.pane_id,terminal:pane.terminal_id},label,pane.agent_status,pane.cwd??undefined):<span>{label} · {t('herdrAgentUnknown')}</span>}</li>;
     });
   }
+  const create={sessionId,server:data?.server??'',lease,tree,reports,disabled:working,onCreated:(workspace:string)=>void open({kind:'workspace',workspace})};
   const failedHere=failure?.host===sessionId || agentFailure?.host===sessionId;
   const needsSetup=!data?.loaded || !data.server || failedHere;
   useEffect(()=>setSetupView(undefined),[sessionId,data?.server,failedHere]);
@@ -111,11 +113,12 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {data.server && <>
         <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
+        {mode==='spaces' && tree && <HerdrWorkspaceCreate {...create}/>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
           const key=JSON.stringify([data.server,workspace.workspace_id]);
-          return <li key={workspace.workspace_id}><div className="herdr-navigation-heading"><button className="subtle-button" aria-expanded={term?true:!collapsed.has(key)} aria-label={t('herdrNavigationCollapse',{name:workspace.label})} onClick={()=>toggle(key)}>{collapsed.has(key)&&!term?'▸':'▾'}</button>{row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status)}</div>
+          return <li key={workspace.workspace_id}><div className="herdr-navigation-heading"><button className="subtle-button" aria-expanded={term?true:!collapsed.has(key)} aria-label={t('herdrNavigationCollapse',{name:workspace.label})} onClick={()=>toggle(key)}>{collapsed.has(key)&&!term?'▸':'▾'}</button>{row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status)}<HerdrWorktreeCreate {...create} tree={tree} workspace={workspace}/></div>
             {(term||!collapsed.has(key)) && <ul>{tabs.map(tab=>{
               const tabKey=JSON.stringify([data.server,tab.tab_id]);
               return <li key={tab.tab_id}><div className="herdr-navigation-heading"><button className="subtle-button" aria-expanded={term?true:!collapsed.has(tabKey)} aria-label={t('herdrNavigationCollapse',{name:tab.label})} onClick={()=>toggle(tabKey)}>{collapsed.has(tabKey)&&!term?'▸':'▾'}</button>{row({kind:'tab',workspace:tab.workspace_id,tab:tab.tab_id},tab.label,tab.agent_status)}</div>{(term||!collapsed.has(tabKey)) && <ul>{panes(tab,workspace.label)}</ul>}</li>;

@@ -1,0 +1,17 @@
+.herdr-create-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-bottom: 8px; }
+.herdr-navigation .herdr-create-worktree { flex: 0 0 44px; min-width: 44px; min-height: 44px; }
+.herdr-create .dialog { max-width: 560px; }
+.herdr-create .form-stack { min-width: 0; }
+.herdr-create code, .herdr-create p { overflow-wrap: anywhere; }
+.herdr-create-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; min-width: 0; }
+.herdr-create-row > label { flex: 1 1 200px; min-width: 0; }
+.herdr-create-row > code { flex: 1; min-width: 0; }
+.herdr-create-row > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.herdr-create-browser { max-height: 220px; overflow: auto; padding: 8px; border: 1px solid var(--theme-border, #3f5032); border-radius: 8px; }
+.herdr-create-browser ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.herdr-create-browser li > button { width: 100%; min-height: 40px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.herdr-create-agent { display: grid; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--theme-border, #3f5032); border-radius: 8px; min-width: 0; }
+.herdr-create-agent legend { padding: 0 4px; font-size: 12px; font-weight: 600; }
+.herdr-create .herdr-create-agent label:has(> input[type="radio"]) { flex-direction: row; align-items: center; gap: 10px; min-height: 44px; }
+.herdr-create-review ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+.herdr-create-output { margin: 6px 0 0; padding: 8px 10px; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; border-radius: 6px; background: var(--theme-background, #0b1208); }
