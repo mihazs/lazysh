@@ -59,7 +59,9 @@ class NativeBiometricVaultTest {
         private const val ENROLLED = 1
         private const val UNENROLLED = 2
         private const val PROMPT_TITLE = "Unlock lazysh credentials"
-        private const val COVER_UNLOCK = "Unlock lazysh"
+        // The cover's platform Button inherits the theme's all-caps button text appearance, and
+        // accessibility exposes the displayed (transformed) text, so match the label case-insensitively.
+        private val COVER_UNLOCK: Pattern = Pattern.compile(Pattern.quote("Unlock lazysh"), Pattern.CASE_INSENSITIVE)
         private const val COVER_FAILURE = "Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry."
         private const val PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nbiometric-export-fixture\n-----END OPENSSH PRIVATE KEY-----"
         private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
@@ -140,6 +142,11 @@ class NativeBiometricVaultTest {
             device.pressHome()
         }
     }
+
+    private fun coverUnlock() = By.text(COVER_UNLOCK).pkg(context.packageName)
+    /** Visible app labels, so a missing cover control reports what the native window shows instead. */
+    private fun appLabels() = runCatching { device.findObjects(By.pkg(context.packageName)).mapNotNull { it.text } }
+        .getOrElse { listOf("unavailable: ${it.javaClass.simpleName}") }
 
     private fun prompt(): UiObject2 =
         requireNotNull(device.wait(Until.findObject(By.text(PROMPT_TITLE)), 20_000)) { "Biometric prompt was not shown" }
@@ -328,7 +335,7 @@ class NativeBiometricVaultTest {
     /** Leaves the shared Activity unlocked and without a resume lock, whatever step failed. */
     private fun disableResumeLock(scenario: ActivityScenario<MainActivity>) {
         if (covered(scenario)) {
-            device.wait(Until.findObject(By.text(COVER_UNLOCK).pkg(context.packageName)), 20_000)?.click()
+            device.wait(Until.findObject(coverUnlock()), 20_000)?.click()
             authenticate()
             until("cleanup unlock") { !covered(scenario) }
         }
@@ -352,8 +359,8 @@ class NativeBiometricVaultTest {
         lockToggle(scenario, true)
         scenario.moveToState(Lifecycle.State.CREATED)
         scenario.moveToState(Lifecycle.State.RESUMED)
-        val unlock = requireNotNull(device.wait(Until.findObject(By.text(COVER_UNLOCK).pkg(context.packageName)), 20_000)) {
-            "Returning to the app must show the native lock"
+        val unlock = requireNotNull(device.wait(Until.findObject(coverUnlock()), 20_000)) {
+            "Returning to the app must show the native lock; visible labels: ${appLabels()}"
         }
         assertTrue("Locked content must stay hidden", covered(scenario))
         unlock.click()
@@ -361,10 +368,10 @@ class NativeBiometricVaultTest {
         assertNotNull("A failed unlock reports and keeps the lock",
             device.wait(Until.findObject(By.text(COVER_FAILURE).pkg(context.packageName)), 20_000))
         assertTrue("Cancelled authentication keeps content hidden", covered(scenario))
-        device.findObject(By.text(COVER_UNLOCK).pkg(context.packageName)).click()
+        device.findObject(coverUnlock()).click()
         authenticate()
         until("enrolled fingerprint unlock") { !covered(scenario) }
-        assertTrue(device.wait(Until.gone(By.text(COVER_UNLOCK).pkg(context.packageName)), 20_000))
+        assertTrue(device.wait(Until.gone(coverUnlock()), 20_000))
     }
 
     @Test fun privateKeyExportNeedsEnrolledFingerprintAndHostDeletionRemovesKeystoreEntry() {
