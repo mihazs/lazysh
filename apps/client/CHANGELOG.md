@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.15.0
+
+### Minor Changes
+
+- af98930: Create Herdr workspaces and Git worktrees from Spaces, optionally starting a detected agent in the new workspace's first pane after the user reviews the exact remote commands.
+- 75166b8: Add opt-in keyboard dismissal when scrolling past the bottom of local terminal history, preserving remote scrolling and requiring positively idle input.
+
+### Patch Changes
+
+- dc18c14: Show focused mobile agent activity details with contextual Back and list-position restoration.
+- e054793: Fix Android biometric-protected credentials failing to save or unlock after a successful fingerprint, and the biometric resume lock stalling on its second prompt.
+- @lazysh/account-usage@1.15.0
+  - @lazysh/common@1.15.0
+  - @lazysh/display-idle@1.15.0
+  - @lazysh/et-transport@1.15.0
+  - @lazysh/mosh-transport@1.15.0
+
 ## 1.14.0
 
 ### Minor Changes
