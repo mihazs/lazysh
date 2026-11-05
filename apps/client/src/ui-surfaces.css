@@ -113,7 +113,9 @@ input[type="search"] {
 .navigation-connections > .search-button:disabled { background: transparent; min-height: 36px; padding-inline: 16px; font-size: 12px; opacity: .7; }
 .navigation-connections > .sidebar-heading { margin: 14px 4px 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
 .navigation-connections > .sidebar-heading .icon-button { width: 36px; height: 36px; color: var(--accent); }
-.host-list { display: grid; gap: 0; padding: 0; border-radius: var(--ui-radius); background: var(--ui-row); overflow: hidden auto; }
+/* One shrinkable track: a long unbreakable host name ellipsises instead of widening the row past its clipped list. */
+.host-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; border-radius: var(--ui-radius); background: var(--ui-row); overflow: hidden auto; }
+.host-item { min-width: 0; }
 .host-list:has(> .sidebar-hint) { background: transparent; }
 .host-item { margin: 0; border-radius: 0; background: transparent; }
 .host-item + .host-item::before { content: ""; position: absolute; top: 0; left: 64px; right: 0; border-top: 1px solid var(--ui-hairline); }
