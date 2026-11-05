@@ -145,7 +145,7 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
         if (!epochs.permits(authEpoch, started) || !available() || cancelPending != null) { cleanup(); invoke.reject("Strong biometrics unavailable, cancelled or another authentication is active"); return }
         var complete = false
         var prompt: BiometricPrompt? = null
-        fun reject() { if (!complete) { complete = true; cancelPending = null; pendingAuthEpoch = null; cleanup(); invoke.reject("Credential authentication cancelled or unavailable") } }
+        fun reject(message: String = "Credential authentication cancelled or unavailable") { if (!complete) { complete = true; cancelPending = null; pendingAuthEpoch = null; cleanup(); invoke.reject(message) } }
         cancelPending = { reject(); prompt?.cancelAuthentication() }
         pendingAuthEpoch = authEpoch
         val owner = activity as FragmentActivity
@@ -157,7 +157,10 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
             // while the previous fragment is still dismissing reuses that fragment, loses its
             // result, and replays it later to whichever prompt registers next.
             val manager = owner.supportFragmentManager
-            if (manager.isStateSaved || (manager.findFragmentByTag(BIOMETRIC_FRAGMENT) != null && waits++ < 60)) {
+            if (manager.isStateSaved) { promptHandler.postDelayed(::show, 50); return }
+            if (manager.findFragmentByTag(BIOMETRIC_FRAGMENT) != null) {
+                // After the bounded wait a new prompt could never deliver its result, so refuse instead.
+                if (waits++ >= 60) { reject("Another credential authentication is still closing; retry"); return }
                 promptHandler.postDelayed(::show, 50); return
             }
             val created = BiometricPrompt(owner, ContextCompat.getMainExecutor(owner), object : BiometricPrompt.AuthenticationCallback() {
