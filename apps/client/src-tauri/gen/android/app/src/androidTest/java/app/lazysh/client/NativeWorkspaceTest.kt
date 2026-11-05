@@ -40,6 +40,7 @@ import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.GeneralClickAction
+import androidx.test.espresso.action.CoordinatesProvider
 import androidx.test.espresso.action.GeneralSwipeAction
 import androidx.test.espresso.action.Swipe
 import androidx.test.espresso.action.Press
@@ -1479,6 +1480,22 @@ class NativeWorkspaceTest {
             document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2)?.closest('button')===button;})()
     """
 
+    /** One real finger swipe across the Workspace tools carousel, towards the next or previous page. */
+    private fun swipeWorkspaceToolPages(scenario: ActivityScenario<MainActivity>, menu: String, forward: Boolean) {
+        val geometry = JSONArray(evaluate(scenario, """
+            (()=>{const r=document.querySelector(${JSONObject.quote("$menu .workspace-tools-track")}).getBoundingClientRect();
+              return [r.left,r.width,r.top+Math.min(r.height/2,60),innerWidth];})()
+        """))
+        val (from, to) = if (forward) 0.85 to 0.15 else 0.15 to 0.85
+        fun point(fraction: Double) = CoordinatesProvider { view ->
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val scale = view.width / geometry.getDouble(3)
+            floatArrayOf((origin[0] + (geometry.getDouble(0) + geometry.getDouble(1) * fraction) * scale).toFloat(),
+                (origin[1] + geometry.getDouble(2) * scale).toFloat())
+        }
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.SLOW, point(from), point(to), Press.FINGER))
+    }
+
     private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         val menu = "[role=dialog][aria-label='Workspace tools']"
@@ -1490,22 +1507,26 @@ class NativeWorkspaceTest {
             trigger.perform(webClick())
         }
         awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
-        for (group in listOf("workspace-more-tools", "workspace-connection-actions", "workspace-application-options")) {
-            val details = "$menu details.$group"
-            val ownsHiddenAction = """
-                (()=>{const owner=document.querySelector(${JSONObject.quote(details)});
-                  const target=Array.from(document.querySelectorAll(${JSONObject.quote(menu + " button")}))
-                    .find(button=>button.textContent.trim()===${JSONObject.quote(text)});
-                  return Boolean(owner&&!owner.open&&target?.closest('details')===owner);})()
-            """
-            if (evaluate(scenario, ownsHiddenAction) == "true") {
-                val selector = "$details > summary"
-                val disclosure = onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector))
-                disclosure.perform(webScrollIntoView())
-                awaitDocument(scenario, "touchable workspace disclosure", workspaceElementVisible(selector, true), deadline = deadline)
-                disclosure.perform(webClick())
-                awaitDocument(scenario, "workspace disclosure expanded", "Boolean(document.querySelector(${JSONObject.quote(details)})?.open)", deadline = deadline)
-            }
+        // Tool groups are carousel pages: turn them with a real finger swipe until the action's page is shown.
+        val pageOffset = """
+            (()=>{const target=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page button")}))
+              .find(button=>button.textContent.trim()===${JSONObject.quote(text)});
+              const page=target?.closest('.workspace-tools-page');
+              if(!page)return 0;
+              const pages=Array.from(page.parentElement.children),shown=pages.findIndex(node=>!node.inert);
+              return pages.indexOf(page)-shown;})()
+        """
+        val settled = """
+            (()=>{const page=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page")})).find(node=>!node.inert);
+              return Boolean(page) && Math.abs(page.getBoundingClientRect().left-page.parentElement.getBoundingClientRect().left)<2;})()
+        """
+        for (attempt in 0 until 4) {
+            awaitDocument(scenario, "workspace tools page settled", settled, deadline = deadline)
+            val offset = evaluate(scenario, pageOffset).toInt()
+            if (offset == 0) break
+            swipeWorkspaceToolPages(scenario, menu, offset > 0)
+            val remaining = if (offset > 0) offset - 1 else offset + 1
+            awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled", deadline = deadline)
         }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))

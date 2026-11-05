@@ -389,18 +389,7 @@ input[type="search"] {
   border: 1px solid transparent; border-radius: var(--ui-radius); background: var(--theme-control); font-size: 12.5px; font-weight: 600; text-align: center;
 }
 .workspace-tools-content .mobile-session-views button svg { color: var(--accent); }
-.workspace-tools-content > .workspace-primary-tools { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.workspace-tools-content > details { border-radius: var(--ui-radius); background: var(--theme-control); overflow: hidden; }
-.workspace-tools-content > details > summary {
-  display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 16px;
-  border: 0; border-radius: 0; background: transparent; list-style: none; font-weight: 600;
-}
-.workspace-tools-content > details > summary::-webkit-details-marker { display: none; }
-.workspace-tools-content > details > summary::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--theme-muted); border-bottom: 2px solid var(--theme-muted); transform: rotate(-45deg); transition: transform 180ms var(--ui-ease); }
-.workspace-tools-content > details[open] > summary { margin: 0; }
-.workspace-tools-content > details[open] > summary::after { transform: rotate(45deg); }
-.workspace-tools-content > details > :not(summary) { padding: 0 8px 8px; }
-.workspace-tools-content .workspace-tools-group { gap: 0; }
+.workspace-tools-content .workspace-tools-group { gap: 0; border-radius: var(--ui-radius); background: var(--theme-control); padding: 4px; }
 .workspace-tools-content .workspace-tools-group > button {
   justify-content: flex-start; min-height: 48px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--ui-radius-sm);
   background: transparent; text-align: left; font-weight: 500;
@@ -511,8 +500,7 @@ input[type="search"] {
   .sidebar, .sidebar .workspace-navigation-modes button, .agent-section-jumps button, .agent-section-jumps button::before, .status-group-toggle svg,
   .herdr-navigation[data-mode=agents] .herdr-agent-row, .agent-panel .agent-card,
   .preferences-content [data-settings-page] > label > input[type="checkbox"],
-  .preferences-content [data-settings-page] > label > input[type="checkbox"]::after,
-  .workspace-tools-content > details > summary::after { transition: none; }
+  .preferences-content [data-settings-page] > label > input[type="checkbox"]::after { transition: none; }
 }
 
 /* ---------- Phone layout ---------- */

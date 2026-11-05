@@ -1,0 +1,28 @@
+/* Workspace tools: one swipeable page per tool group instead of stacked disclosures. */
+.workspace-tools-carousel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.workspace-tools-pager { display: flex; align-items: center; gap: 4px; min-height: 44px; }
+.workspace-tools-page-title { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.workspace-tools-pager > .icon-button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; background: transparent; }
+.workspace-tools-pager > .icon-button:disabled { opacity: .35; }
+.workspace-tools-track {
+  display: flex; align-items: flex-start; min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.workspace-tools-track::-webkit-scrollbar { display: none; }
+.workspace-tools-page { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.workspace-tools-page > .workspace-tools-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.workspace-tools-dots { display: flex; justify-content: center; gap: 0; }
+.workspace-tools-dots > [role=tab] {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; height: 44px; min-height: 44px;
+  padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+}
+.workspace-tools-dots > [role=tab] > span { width: 7px; height: 7px; border-radius: 999px; background: var(--theme-muted); opacity: .45; transition: width 180ms var(--ui-ease, ease), opacity 180ms var(--ui-ease, ease); }
+.workspace-tools-dots > [role=tab][aria-selected=true] > span { width: 18px; background: var(--theme-text); opacity: .9; }
+.workspace-tools-dots > [role=tab]:focus-visible { outline: 2px solid var(--theme-text); outline-offset: -6px; }
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tools-dots > [role=tab] > span { transition: none; }
+}
+@media (forced-colors: active) {
+  .workspace-tools-dots > [role=tab] > span { background: ButtonText; opacity: 1; }
+  .workspace-tools-dots > [role=tab][aria-selected=true] > span { background: Highlight; }
+}

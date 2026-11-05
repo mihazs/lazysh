@@ -11,16 +11,24 @@ export async function workspaceControl(page:Page,name:string) {
     if(await button.isVisible())return button;
     await page.locator('.workspace-tools-trigger:visible').click();
   }
-  for(const group of ['workspace-more-tools','workspace-connection-actions','workspace-application-options']) {
-    const owner=menu.locator(`details.${group}`);
-    if(await owner.count() && await owner.evaluate((node,name)=>!(node as HTMLDetailsElement).open
-      && Array.from(node.querySelectorAll('button')).some(button=>button.textContent?.trim()===name && button.closest('details')===node),name)) {
-      await owner.locator(':scope > summary').click();
-    }
-  }
+  await openToolsPageWith(page,name);
   const revealed=menu.getByRole('button',{name,exact:true}).first();
   await expect(revealed).toBeVisible();
   return revealed;
+}
+
+/** Swipe-free page change: select the Workspace tools page that owns the named action. */
+export async function openToolsPageWith(page:Page,name:string) {
+  const menu=page.getByRole('dialog').filter({has:page.locator('.workspace-tools-content')});
+  const owner=await menu.locator('.workspace-tools-page').evaluateAll((pages,name)=>pages.find(node=>
+    Array.from(node.querySelectorAll('button')).some(button=>button.textContent?.trim()===name||button.getAttribute('aria-label')===name))?.id??'',name);
+  if(!owner)return;
+  const tab=menu.locator(`[role=tab][aria-controls="${owner}"]`);
+  if(await tab.count()&&await tab.getAttribute('aria-selected')!=='true')await tab.click();
+  const shown=menu.locator(`#${owner}`);
+  await expect(shown).not.toHaveAttribute('aria-hidden','true');
+  // Settle the page turn first; scrolling a control into view mid-turn would choose another page.
+  await expect.poll(()=>shown.evaluate(node=>Math.abs(node.getBoundingClientRect().left-node.parentElement!.getBoundingClientRect().left)<2)).toBe(true);
 }
 
 /** Reach the category through the real list/detail navigation, in the current locale. */

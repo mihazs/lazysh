@@ -70,6 +70,6 @@ for(const palette of [null,'#767676','#757575','#ffffff','#000000'])test(`glass 
     }
     await page.emulateMedia({forcedColors:'active'});expect(await dialog.evaluate(e=>getComputedStyle(e).backdropFilter)).toBe('none');expect(await dialog.evaluate(e=>getComputedStyle(e).backgroundColor)).not.toContain('/');await page.emulateMedia({forcedColors:'none'});
     await media.send('Emulation.setEmulatedMedia',{features:[]});if(phone)await dialog.getByRole('button',{name:'Close Workspace tools',exact:true}).click();
-    if(terminal==='midnight'){if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();await page.locator('details.workspace-application-options>summary').click();}await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Appearance');}
+    if(terminal==='midnight'){if(phone){await page.getByRole('button',{name:'Workspace tools',exact:true}).click();}await (await workspaceControl(page,'Preferences')).click();await openPreferenceCategory(page,'Appearance');}
   }
 });
