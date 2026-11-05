@@ -1,14 +1,13 @@
 import {expect,test,type Page} from '@playwright/test';
-import {openLocalizedApp} from './fixtures/localizedApp';
-import type {mountHerdrCreate} from './fixtures/HerdrCreateHarness';
-declare global {interface Window {herdrCreate:ReturnType<typeof mountHerdrCreate>;}}
+import {mountHerdrSpaces as mount} from './fixtures/herdrSpacesPage';
 
-async function mount(page:Page,options:Parameters<typeof mountHerdrCreate>[0]={}) {
-  await openLocalizedApp(page,'en');
-  await page.evaluate(async options=>{const{mountHerdrCreate}=await import('/e2e/fixtures/HerdrCreateHarness.tsx');window.herdrCreate=mountHerdrCreate(options);},options);
-  await expect(page.getByRole('button',{name:'Development',exact:false}).first()).toBeVisible();
-}
 const commands=(page:Page)=>page.evaluate(()=>window.herdrCreate.calls.map(call=>call.command));
+async function openWorktree(page:Page) {
+  const more=page.getByRole('button',{name:'More actions for Development',exact:true});
+  await more.click();await expect(more).toHaveAttribute('aria-expanded','true');
+  await page.getByRole('menu',{name:'More actions for Development'}).getByRole('menuitem',{name:'New worktree from Development'}).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+}
 const call=(page:Page,command:string)=>page.evaluate(command=>window.herdrCreate.calls.filter(call=>call.command===command).map(call=>call.args),command);
 async function fitsWidth(page:Page) {
   const size=await page.getByRole('dialog').evaluate(node=>({width:node.clientWidth,scroll:node.scrollWidth,viewport:window.innerWidth,right:node.getBoundingClientRect().right}));
@@ -55,8 +54,8 @@ test('new workspace validates, shows the exact command and starts no agent unles
 test('worktree dialog requires an explicit agent choice and keeps partial results',async({page})=>{
   await mount(page,{outcome:{worktree:'/srv/app-worktrees/review',workspaceId:'w9',paneId:'w9:p1',failure:{stage:'agent',message:'timeout: timed out waiting for agent startup'}}});
   // Only workspaces with a reported directory offer the action.
-  await expect(page.getByRole('button',{name:'New worktree from Scratch'})).toHaveCount(0);
-  await page.getByRole('button',{name:'New worktree from Development'}).click();
+  await expect(page.getByRole('button',{name:'More actions for Scratch'})).toHaveCount(0);
+  await openWorktree(page);
   const dialog=page.getByRole('dialog',{name:'New worktree from Development'});
   await expect(dialog.getByRole('textbox',{name:'New branch'})).toHaveValue('development');
   await expect(dialog.getByRole('textbox',{name:'Base revision'})).toHaveValue('main');
@@ -114,7 +113,7 @@ test('worktree dialog requires an explicit agent choice and keeps partial result
 
 test('closing the agent question without choosing never launches anything',async({page})=>{
   await mount(page);
-  await page.getByRole('button',{name:'New worktree from Development'}).click();
+  await openWorktree(page);
   const dialog=page.getByRole('dialog',{name:'New worktree from Development'});
   await dialog.getByRole('radio',{name:'Yes, start an agent'}).check();
   await dialog.getByRole('radio',{name:'No, only create it'}).check();

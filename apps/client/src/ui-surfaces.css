@@ -270,23 +270,7 @@ input[type="search"] {
 .sidebar .herdr-navigation:not([data-setup-view]) > header > .icon-button:not(:first-of-type):not(.herdr-navigation-back) { grid-row: 2; grid-column: 4; }
 .sidebar .herdr-navigation:not([data-setup-view]) > div > label:first-child { grid-row: 2; grid-column: 1; align-self: center; margin: 0 4px 0 0; }
 
-/* Herdr spaces: a quiet outline, not a grid of bordered toggles. */
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading > .subtle-button {
-  flex: 0 0 36px; min-width: 36px; padding: 0; border: 1px solid transparent; background: transparent; color: var(--theme-muted); font-size: 12px;
-}
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree > li { margin-bottom: 10px; padding: 4px 6px; border-radius: var(--ui-radius); background: var(--ui-row); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading { border-bottom: 0; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading .herdr-navigation-row { min-height: 48px; font-size: 15px; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul { margin-left: 18px; padding-left: 10px; border-left: 1px solid var(--ui-hairline); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row { border-radius: var(--ui-radius-sm); background: transparent; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row:hover:not(:disabled) { background: var(--ui-row-pressed); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row[data-current=true] { outline: 0; background: transparent; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row[data-current=true] strong { color: var(--accent); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row > small { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-row > small::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--status-idle); }
-.herdr-navigation[data-mode=spaces] [data-agent-status=working] > small::before { background: var(--status-working); }
-.herdr-navigation[data-mode=spaces] [data-agent-status=blocked] > small::before { background: var(--status-attention); }
-.herdr-navigation[data-mode=spaces] [data-agent-status=done] > small::before { background: var(--status-done); }
+/* Herdr spaces tree layout lives in HerdrSpaces.css. */
 .herdr-navigation .herdr-server-setup { padding: 14px; border-radius: var(--ui-radius); background: var(--ui-row); }
 
 /* Workspaces destination: current sessions as one quiet row. */

@@ -20,6 +20,12 @@ export type HerdrTree = {
   panes: {workspace_id:string;tab_id:string;pane_id:string;terminal_id?:string;cwd?:string|null;focused:boolean;agent_status:LiveAgent['agent_status']}[];
   agents?:Omit<LiveAgent,'cwd'>[];
 };
+/** Display form of a host path: the login user's home becomes `~` and another user's home `~name`. */
+export function homeRelativePath(path:string,destination:string) {
+  const user=/^([^@\s/]+)@/.exec(destination)?.[1];
+  const home=/^\/(?:home|Users)\/([^/]+)(?=\/|$)/.exec(path)??/^\/(root)(?=\/|$)/.exec(path);
+  return home?`~${home[1]===user?'':home[1]}${path.slice(home[0].length)}`:path;
+}
 export const herdrStatusKeys={idle:'herdrAgentIdle',working:'herdrAgentWorking',blocked:'herdrAgentBlocked',done:'herdrAgentDone',unknown:'herdrAgentUnknown'} as const;
 const invalid=()=>new LocalUiError('herdrAgentsInvalid');
 function boundedText(value:unknown,limit:number):value is string {
