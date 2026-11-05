@@ -893,6 +893,30 @@ for(const [label,expected] of [['ctrl','\x03'],['Alt','\x1bc']] as const)test(`c
   await cdp.detach();
 });
 
+test('toolbar modifiers keep the same focused, writable keyboard editor',async({page,context})=>{
+  await openShortcutTerminal(page);
+  const input=page.locator('.xterm-helper-textarea'),keys=page.getByLabel('Terminal keys',{exact:true});
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  const cdp=await context.newCDPSession(page);
+  await page.locator('.terminal-canvas').click();await expect(input).toBeFocused();
+  await input.evaluate(area=>{
+    const owned=window as unknown as {editorBoundaries:string[]};owned.editorBoundaries=[];
+    for(const name of ['blur','focus'])area.addEventListener(name,()=>owned.editorBoundaries.push(name));
+    new MutationObserver(records=>{for(const record of records)owned.editorBoundaries.push(`${record.attributeName}:${(area as HTMLTextAreaElement).readOnly}`);}).observe(area,{attributes:true,attributeFilter:['readonly','disabled']});
+  });
+  await cdp.send('Input.insertText',{text:'ls '});
+  await keys.getByRole('button',{name:'Shift',exact:true}).click();
+  await expect(keys.getByRole('button',{name:'Shift',exact:true})).toHaveAttribute('aria-pressed','true');
+  await cdp.send('Input.insertText',{text:'\n'});
+  await keys.getByRole('button',{name:'ctrl',exact:true}).click();
+  await cdp.send('Input.insertText',{text:'c'});
+  await expect.poll(writes).toEqual(['ls ','\x1b[13;2u','\x03']);
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(area=>(area as HTMLTextAreaElement).readOnly)).toBe(false);
+  expect(await page.evaluate(()=>(window as unknown as {editorBoundaries:string[]}).editorBoundaries)).toEqual([]);
+  await cdp.detach();
+});
+
 test('terminal completion hints stay distinct from the normal Compose editor',async({page})=>{
   await openShortcutTerminal(page);
   const input=page.locator('.xterm-helper-textarea');

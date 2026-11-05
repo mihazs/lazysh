@@ -139,6 +139,29 @@ it.each(['unapplied','composing'] as const)('disarms Shift locally while %s IME 
     else expect(owner.textarea.value).toBe('local correction');
   } finally {focused.mockRestore();}
 });
+it('arms toolbar modifiers without restarting the focused keyboard editor',()=>{
+  savePreferences({...defaults,toolbar:['ctrl','shift']});
+  const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+  installCompositionHelper();
+  try {
+    const owner=mountInputOwner();owner.textarea.focus();
+    Object.assign(terminal,{input:(data:string)=>owner.emit(data)});
+    const native=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'readOnly')!;
+    const readOnlyWrites:boolean[]=[],boundaries:string[]=[];
+    Object.defineProperty(owner.textarea,'readOnly',{configurable:true,get(){return native.get!.call(this);},set(value:boolean){readOnlyWrites.push(value);native.set!.call(this,value);}});
+    for(const name of ['blur','focus'])owner.textarea.addEventListener(name,()=>boundaries.push(name));
+    act(()=>{owner.textarea.value='ls ';fireEvent.input(owner.textarea,{data:'ls ',inputType:'insertText'});});
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    expect(screen.getByRole('button',{name:'Shift'}).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
+    expect(document.activeElement).toBe(owner.textarea);
+    expect(boundaries).toEqual([]);
+    expect(readOnlyWrites.every(value=>!value)).toBe(true);
+    expect(owner.textarea.value).toBe('');
+    act(()=>{owner.textarea.value='c';fireEvent.input(owner.textarea,{data:'c',inputType:'insertText'});});
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['ls ','\x03']);
+  } finally {focused.mockRestore();}
+});
 
 function dpadFixture(initial="") {
   vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
