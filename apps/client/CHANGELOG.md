@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.16.0
+
+### Minor Changes
+
+- c671436: Read theme JSON or share codes from the Android clipboard through the native clipboard path, with validation and an explicit preview, and add the Amber Android launcher icon through launcher aliases that keep the running workspace open.
+  
+  Updating an existing Android install changes the launcher component from `.MainActivity` to `.LauncherDefault`, so some launchers may move or drop a home-screen icon pinned under the previous version.
+
+### Patch Changes
+
+- 16c8b45: Return the terminal to the live screen after toolbar keys and chord buttons, as keyboard input does.
+- @lazysh/account-usage@1.16.0
+  - @lazysh/common@1.16.0
+  - @lazysh/display-idle@1.16.0
+  - @lazysh/et-transport@1.16.0
+  - @lazysh/mosh-transport@1.16.0
+
 ## 1.15.0
 
 ### Minor Changes
