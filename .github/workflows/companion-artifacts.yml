@@ -52,7 +52,7 @@ jobs:
         with:
           targets: ${{ matrix.triple }}
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools binutils build-essential libssl-dev pkg-config
+        run: sudo sh .github/scripts/apt-install.sh musl-tools binutils build-essential libssl-dev pkg-config
       - if: runner.os == 'macOS'
         run: brew install openssl@3 pkgconf
       # Candidates may reuse compiled targets: pull requests restore but never save, main saves.

@@ -96,6 +96,8 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium
+      # Playwright runs its own apt-get; bound it and refresh the lists past a stalled mirror first.
+      - run: sudo sh .github/scripts/apt-install.sh
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
@@ -117,7 +119,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
       - name: Install bounded storage observation tool
-        run: sudo apt-get update && sudo apt-get install -y strace
+        run: sudo sh .github/scripts/apt-install.sh strace
       - name: Check companion and service packages
         id: agent-checks
         env:
@@ -385,7 +387,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon gnome-keyring xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - name: Verify native GUI namespace prerequisites
         env:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: private
@@ -742,7 +744,7 @@ jobs:
           targets: x86_64-linux-android
       - &android-owned-host-dependencies
         name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
       - &android-owned-namespace
         name: Verify native GUI namespace prerequisites
         env:
@@ -752,7 +754,7 @@ jobs:
       - *official-mosh-fixture
       - name: Install the distribution tmux and pinned tmux build dependencies
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
-        run: sudo apt-get install -y tmux libevent-dev bison
+        run: sudo sh .github/scripts/apt-install.sh --no-update tmux libevent-dev bison
       - name: Build the pinned official tmux fixture outside the checkout
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux'
         timeout-minutes: 10
@@ -958,7 +960,7 @@ jobs:
       - uses: ./.github/actions/parakeet-onnxruntime
       - uses: dtolnay/rust-toolchain@stable
       - name: Install build, OpenSSH, nss_wrapper, tmux, login shell and official ET build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
+        run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
         # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
