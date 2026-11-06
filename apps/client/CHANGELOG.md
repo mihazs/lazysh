@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.26.1
+
+### Patch Changes
+
+- 395dde1: Keep a wheel or trackpad scroll that lands in the same frame as new terminal output: the terminal now moves to the history the scroll reached instead of staying on the live screen.
+- @lazysh/account-usage@1.26.1
+  - @lazysh/common@1.26.1
+  - @lazysh/display-idle@1.26.1
+  - @lazysh/et-transport@1.26.1
+  - @lazysh/mosh-transport@1.26.1
+
 ## 1.26.0
 
 ### Minor Changes
