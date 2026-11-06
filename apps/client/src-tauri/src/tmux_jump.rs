@@ -16,6 +16,13 @@ pub(crate) mod chat;
 const LIMIT: usize = 1024 * 1024;
 const ROWS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(3);
+/// tmux before 3.8 never releases a control client whose stdout closes while
+/// output is queued (tmux/tmux#5444): the client and its server linger forever.
+/// Retirement therefore ends control mode on a still-read channel first, so
+/// tmux flushes and exits the client, and only then closes the channel.
+const DETACH: Duration = Duration::from_millis(500);
+/// Upper bound for an actor's retirement: the `%exit` wait plus channel close.
+pub(crate) const RETIREMENT: Duration = Duration::from_secs(1);
 fn unavailable() -> SshError {
     SshError::new(
         "tmux_unavailable",
@@ -226,10 +233,50 @@ pub(crate) struct Control {
     identity: Identity,
     generation: String,
     chat: Option<chat::Receipt>,
+    /// A command write may have been interrupted, leaving a partial line.
+    partial: bool,
     #[cfg(test)]
     chat_before_dispatch: Option<chat::Gate>,
 }
 impl Control {
+    async fn write(&mut self, command: &str) -> Result<()> {
+        self.partial = true;
+        self.channel.data(format!("{command}\n").as_bytes()).await?;
+        self.partial = false;
+        Ok(())
+    }
+    /// End control mode before the channel closes. An empty line detaches; EOF
+    /// alone ends control mode without completing an interrupted command line.
+    async fn detach(mut self) {
+        let _ = tokio::time::timeout(DETACH, async {
+            if !self.partial && self.channel.data(&b"\n"[..]).await.is_err() {
+                return;
+            }
+            if self.channel.eof().await.is_err() {
+                return;
+            }
+            loop {
+                while let Some(end) = self.bytes.iter().position(|b| *b == b'\n') {
+                    let line = self.bytes.drain(..=end).collect::<Vec<_>>();
+                    let line = &line[..line.len() - 1];
+                    let line = line.strip_suffix(b"\r").unwrap_or(line);
+                    if line == b"%exit" || line.starts_with(b"%exit ") {
+                        return;
+                    }
+                }
+                if self.bytes.len() > 64 * 1024 {
+                    self.bytes.clear();
+                }
+                match self.channel.wait().await {
+                    Some(ChannelMsg::Data { data }) => self.bytes.extend_from_slice(&data),
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return,
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        let _ = tokio::time::timeout(RETIREMENT - DETACH, self.channel.close()).await;
+    }
     async fn line(&mut self, budget: &mut usize) -> Result<String> {
         loop {
             if let Some(end) = self.bytes.iter().position(|b| *b == b'\n') {
@@ -285,7 +332,7 @@ impl Control {
         }
     }
     async fn command(&mut self, command: &str, budget: &mut usize) -> Result<Vec<String>> {
-        self.channel.data(format!("{command}\n").as_bytes()).await?;
+        self.write(command).await?;
         self.block(budget).await
     }
     async fn current(&mut self, budget: &mut usize) -> Result<Option<Current>> {
@@ -361,7 +408,7 @@ impl Control {
         marker: &str,
         budget: &mut usize,
     ) -> Result<bool> {
-        self.channel.data(format!("{command}\n").as_bytes()).await?;
+        self.write(command).await?;
         for _ in 0..8 {
             let rows = self.block(budget).await?;
             if let Some(completed) = marked_rows(&rows, marker)? {
@@ -536,6 +583,7 @@ pub(crate) async fn prepare_command(
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
         chat: None,
+        partial: false,
         #[cfg(test)]
         chat_before_dispatch: None,
     };
@@ -564,7 +612,12 @@ pub(crate) async fn prepare_command(
         Ok::<_, SshError>(())
     };
     let result = tokio::select! {biased; _=lease.cancelled()=>None, result=tokio::time::timeout_at(deadline,operation)=>result.ok().and_then(std::result::Result::ok)};
-    result.map(|_| control)
+    if result.is_none() {
+        // A rejected binding may already hold an attached control client.
+        tauri::async_runtime::spawn(control.detach());
+        return None;
+    }
+    Some(control)
 }
 
 pub(crate) fn start(control: Control, cancellation: watch::Receiver<bool>) -> Binding {
@@ -658,6 +711,9 @@ fn spawn_actor(
             }
             idle_budget = LIMIT;
         }
+        // Pending callers fail when the receiver drops after detaching.
+        control.detach().await;
+        drop(rx);
     });
 }
 async fn request(
@@ -681,7 +737,7 @@ async fn request(
     binding.call(lease, &mut cancel, target).await
 }
 impl Binding {
-    #[cfg(test)]
+    /// Resolves once the actor has ended control mode and closed its channel.
     pub(crate) async fn retired(&self) {
         self.requests.closed().await;
     }
@@ -788,6 +844,7 @@ pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Id
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
         chat: None,
+        partial: false,
         #[cfg(test)]
         chat_before_dispatch: None,
     }

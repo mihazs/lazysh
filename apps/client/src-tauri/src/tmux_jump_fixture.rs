@@ -2796,6 +2796,15 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     diagnostics
         .remember_clients(1, servers.command(saved_server))
         .await;
+    // Queue nearly the actor's idle budget of control notifications right before
+    // teardown, so the control client still has output pending when it retires.
+    let burst = f.dir.path().join("control-burst.conf");
+    fs::write(
+        &burst,
+        format!("rename-window -t %0 {}\n", "q".repeat(1024)).repeat(800),
+    )
+    .unwrap();
+    servers.direct(saved_server, &["source-file", burst.to_str().unwrap()]);
     second
         .state::<AppState>()
         .cancel_for_renderer_rebind()
@@ -2809,8 +2818,9 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     .unwrap_or_else(|error| panic!("fresh owned transport must retire during teardown: {error:?}; phase={retirement_phase}"));
     eprintln!("fresh SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={task_pending} task_completed=true");
     diagnostics.clients(servers.command(saved_server)).await;
-    // Closing an SSH connection can leave tmux 3.4 a control client that it never
-    // releases (tmux/tmux#5444), and kill-server then waits on it forever.
+    // Closing an SSH connection with output queued for a control client leaves
+    // tmux 3.4 a client it never releases (tmux/tmux#5444). The product ends
+    // control mode first; retirement only keeps a regression from leaking.
     let orphans = diagnostics
         .retire_orphaned_controls(BOUND)
         .await
@@ -2824,6 +2834,10 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}; fresh_peer={}", diagnostics.failure(), diagnostics.fresh_peer()));
     }
     f.stop_listener().await;
+    assert_eq!(
+        orphans, 0,
+        "product SSH retirement must end tmux control mode before closing the transport"
+    );
 }
 
 struct HerdrServers<'a> {

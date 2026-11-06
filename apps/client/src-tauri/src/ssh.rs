@@ -295,6 +295,17 @@ impl AppState {
             session.output_credits.close();
             session.handle.forward_agent.close();
         }
+        // Cancellation makes each tmux actor end control mode before closing its
+        // channel. Disconnecting first would strand the client on tmux < 3.8.
+        let bindings = sessions
+            .iter()
+            .filter_map(|session| session.tmux.lock().ok().and_then(|tmux| tmux.clone()))
+            .collect::<Vec<_>>();
+        let _ = timeout(
+            crate::tmux_jump::RETIREMENT,
+            futures_util::future::join_all(bindings.iter().map(|binding| binding.retired())),
+        )
+        .await;
         let mut seen = std::collections::HashSet::new();
         let mut disconnects = tokio::task::JoinSet::new();
         for session in &sessions {
