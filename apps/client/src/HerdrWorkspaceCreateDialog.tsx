@@ -32,7 +32,7 @@ export function HerdrWorkspaceCreate(props:Shared) {
     {open && <CreateFlow {...props} close={()=>setOpen(false)}/>}
   </>;
 }
-/** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. */
+/** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
 export function HerdrSpaceActions({workspace,open,onOpenChange,...props}:Shared&{tree:HerdrTree;workspace:{workspace_id:string;label:string};open:boolean;onOpenChange:(open:boolean)=>void}) {
   useUi();
   const [creating,setCreating]=useState(false);
@@ -49,7 +49,7 @@ export function HerdrSpaceActions({workspace,open,onOpenChange,...props}:Shared&
   if(!directory)return null;
   const name=t('herdrSpaceActions',{name:workspace.label});
   return <div className="herdr-space-actions" onBlur={event=>{if(open && !event.currentTarget.contains(event.relatedTarget))onOpenChange(false);}}
-    onKeyDown={event=>{if(open && event.key==='Escape'){event.preventDefault();event.stopPropagation();onOpenChange(false);trigger.current?.focus();}}}>
+    onKeyDownCapture={event=>{if(open && event.key==='Escape'){event.preventDefault();event.stopPropagation();onOpenChange(false);trigger.current?.focus();}}}>
     <button ref={trigger} type="button" className="icon-button" title={name} aria-label={name} aria-haspopup="menu" aria-expanded={open} disabled={props.disabled} onClick={()=>onOpenChange(!open)}><Ellipsis size={18} aria-hidden="true"/></button>
     {open && <div ref={menu} className="herdr-space-menu" role="menu" aria-label={name}>
       <button type="button" role="menuitem" disabled={props.disabled} onClick={()=>{trigger.current?.focus();onOpenChange(false);setCreating(true);}}><GitBranchPlus size={17} aria-hidden="true"/>{t('herdrCreateWorktree',{name:workspace.label})}</button>

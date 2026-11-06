@@ -81,6 +81,18 @@ test('Spaces rows use one indentation step, stay on one line and show each statu
   await page.screenshot({path:testInfo.outputPath('herdr-spaces-declutter.png')});
 });
 
+test('search finds a pane by the shortened path its row shows, and the space name keeps its room',async({page},testInfo)=>{
+  const live=await mount(page,testInfo.project.name==='phone');
+  const name=row(page,'harness-improver').locator('strong');
+  expect(await name.evaluate(node=>node.scrollWidth<=node.clientWidth),'space name is not truncated at the narrowest sidebar').toBe(true);
+  await expect(row(page,'harness-improver')).toHaveAccessibleName(/Working/);
+  await live.getByRole('searchbox').fill('~/dev/harness-improver/.worktrees');
+  await expect(row(page,'claude')).toBeVisible();
+  await expect(row(page,'w1:p2')).toHaveCount(0);await expect(row(page,'lazysh')).toHaveCount(0);
+  await live.getByRole('searchbox').fill(worktree);
+  await expect(row(page,'claude')).toBeVisible();
+});
+
 test('collapsed spaces and tabs show counts, single-pane tabs have no disclosure and every row still navigates',async({page},testInfo)=>{
   const live=await mount(page,testInfo.project.name==='phone');
   await expect(live.getByRole('button',{name:'Expand or collapse review',exact:true})).toHaveCount(0);

@@ -52,6 +52,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const referenceCounts=reportedSessionCounts(data?.rows??[]);
   const term=query.trim().toLocaleLowerCase();
   const match=(...values:(string|null|undefined)[])=>values.some(value=>value?.toLocaleLowerCase().includes(term));
+  /** The path a Spaces pane row shows; search matches it as well as the raw cwd. */
+  const shownPath=(cwd?:string|null)=>cwd?homeRelativePath(cwd,hostLabel):undefined;
   const working=actionBusy || (busy && !data?.loaded);
   function toggle(id:string) {setCollapsed(previous=>{const next=new Set(previous);if(!next.delete(id))next.add(id);return next;});}
   async function open(target?:HerdrNavigationTarget) {
@@ -82,8 +84,8 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     return tree?.panes.filter(pane=>pane.tab_id===tab.tab_id && pane.workspace_id===tab.workspace_id).map(pane=>{
       const agent=data?.rows.find(agent=>agent.pane_id===pane.pane_id && agent.terminal_id===pane.terminal_id);
       const label=agent?.name??agent?.agent??pane.pane_id;
-      if(term && !match(label,pane.cwd,pane.pane_id,workspaceLabel,tab.label))return null;
-      return <li key={pane.pane_id}>{pane.terminal_id?row({kind:'pane',workspace:pane.workspace_id,tab:pane.tab_id,pane:pane.pane_id,terminal:pane.terminal_id},label,pane.agent_status,pane.cwd?homeRelativePath(pane.cwd,hostLabel):undefined,null,{inherited:pane.agent_status===tab.agent_status,title:pane.cwd??undefined}):<span className="herdr-pane-unavailable">{label} · {t('herdrAgentUnknown')}</span>}</li>;
+      if(term && !match(label,pane.cwd,shownPath(pane.cwd),pane.pane_id,workspaceLabel,tab.label))return null;
+      return <li key={pane.pane_id}>{pane.terminal_id?row({kind:'pane',workspace:pane.workspace_id,tab:pane.tab_id,pane:pane.pane_id,terminal:pane.terminal_id},label,pane.agent_status,shownPath(pane.cwd),null,{inherited:pane.agent_status===tab.agent_status,title:pane.cwd??undefined}):<span className="herdr-pane-unavailable">{label} · {t('herdrAgentUnknown')}</span>}</li>;
     });
   }
   const create={sessionId,server:data?.server??'',lease,tree,reports,disabled:working,onCreated:(workspace:string)=>void open({kind:'workspace',workspace})};
@@ -128,7 +130,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         {mode==='spaces' && tree && <HerdrWorkspaceCreate {...create}/>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
-          if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
+          if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
           const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || !collapsed.has(key);
           return <li key={workspace.workspace_id} className="herdr-space">
             <div className="herdr-navigation-heading" onContextMenu={event=>{if(!working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
