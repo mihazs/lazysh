@@ -106,6 +106,12 @@ existing generation, disables delivery and cancels old pending work. Bound compa
 configurations must explicitly adopt the new target generation before sending
 new work; the existing source-capability authentication is unchanged.
 
+The `native-linux-runtimes` CI job runs this path against the official Gotify 3.1.1
+Linux release, pinned by its release asset digest. The case starts it on an owned
+loopback TLS listener and checks that an invalid application token is rejected.
+It then reads every finite relay state back from the server's own message API
+(`tests::gotify_server::real_gotify_server_stores_all_finite_relay_states_over_verified_tls`).
+
 Gotify HTTP success means server acceptance, not Android display. The relay keeps
 its existing bounded retries, but Gotify's API does not promise to deduplicate
 `Idempotency-Key`, so a lost response can produce duplicate notifications. Stop,
