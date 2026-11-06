@@ -4759,6 +4759,8 @@ class NativeWorkspaceTest {
         val target = ".settings-navigation button[data-settings-target='$id']"
         repeat(3) {
             if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(active)}))") == "true") return
+            // The grouped list can be taller than the phone; scroll a shown row into view as a reader would.
+            evaluate(scenario, "(document.querySelector(${JSONObject.quote(target)})?.scrollIntoView({block:'center'}), true)")
             if (evaluate(scenario, workspaceElementVisible(target)) == "true") {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, target)).perform(webScrollIntoView()).perform(webClick())
                 awaitDocument(scenario, "selected preferences category", "Boolean(document.querySelector(${JSONObject.quote(active)}))")

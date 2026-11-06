@@ -2,7 +2,7 @@ import './WorkspaceHierarchy.css';
 import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel} from './WorkspaceToolsCarousel';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
-import {t, useUi} from './i18n/core';
+import {formatNumber, t, useUi} from './i18n/core';
 import {appVersion} from './version';
 import {onBackButtonPress} from '@tauri-apps/api/app';
 import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
@@ -346,7 +346,7 @@ function Dialog({
     const focusable = () => focusableWithin(ref.current);
     const controls = focusable();
     (
-      initialFocus?.() ?? controls.find((control) => control.matches("input, textarea")) ??
+      initialFocus?.() ?? controls.find((control) => control.matches('input:not([data-initial-focus="skip"]), textarea')) ??
       controls[0]
     )?.focus();
     const keydown = (event: KeyboardEvent) => {
@@ -1335,6 +1335,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
   const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
+  const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
   const secondaryTools=sessionViews.filter(tool=>!primaryToolIds.includes(tool.id));
@@ -2409,14 +2410,21 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          <PreferencesPanel before={native?[{id:'connections',title:t('preferencesCategoryConnections'),content:<section aria-label={t('defaultMuxLabel')}>
+          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} pages={[
+            ...(native?[{id:'connections',section:'general',title:t('preferencesCategoryConnections'),value:t('syncHostCount',{count:hosts.length,value:formatNumber(hosts.length)}),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
             {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
-          </section>}]:[]} after={[
-            {id:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
-            {id:'notifications',title:t('preferencesCategoryNotifications'),content:<button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t('appRemotePushSettings')}</button>},
+          </section>}]:[]),
+            {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
+            {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setInbox(true);}},
+            {id:'agents',section:'agents',title:t('appAgents'),disabled:!remoteActive||pendingMuxRequest,value:remoteActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
+            {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
+            {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
+            {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
+            {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSharing(true);}},
+            {id:'about',section:'help',title:t('appAboutLazysh'),onSelect:()=>{setPreferences(false);setAbout(true);}},
           ]}/>
           </div>
         </Dialog>

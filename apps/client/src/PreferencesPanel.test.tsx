@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import PreferencesPanel from "./PreferencesPanel";
 import {uiI18n,t} from "./i18n/core";
 import { defaults, getPreferences, savePreferences, parseChord, toolbarRows } from "./preferences";
@@ -117,7 +117,7 @@ describe("terminal settings", () => {
   it("rearranges toolbar rows without dragging through key actions, keyboard shortcuts and announcements", () => {
     savePreferences({...defaults, toolbar: ["esc", "ctrl", "tab"]});
     mountPreferences('Keyboard and gestures', 'Toolbar keys and order');
-    const status = screen.getByRole("status");
+    const status = within(document.querySelector<HTMLElement>("[data-settings-page=\"preferencesToolbarKeysAndOrder\"]")!).getByRole("status");
     fireEvent.change(screen.getByLabelText("Toolbar rows"), {target: {value: "2"}});
     expect(toolbarRows(getPreferences().toolbar)).toEqual([["esc", "ctrl", "tab"], []]);
     const tab = screen.getByRole("button", {name: "tab"});
