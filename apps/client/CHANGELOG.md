@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.24.0
+
+### Minor Changes
+
+- e508487: Add Ctrl/Cmd+Shift+A and Ctrl/Cmd+Shift+W, gesture actions and toolbar keys that open Agents and Workspaces and return to the terminal; plain-terminal two-finger swipes up and down now open them by default.
+- 1eb11f5: Detect lost SSH, Mosh and ET connections, retry automatically with saved credentials and backoff, reattach tmux or Herdr on success, and close the session when the lost-connection banner is dismissed.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.24.0
+  - @lazysh/common@1.24.0
+  - @lazysh/display-idle@1.24.0
+  - @lazysh/et-transport@1.24.0
+  - @lazysh/mosh-transport@1.24.0
+
 ## 1.23.0
 
 ### Minor Changes
