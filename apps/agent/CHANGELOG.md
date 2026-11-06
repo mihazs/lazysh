@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.20.0
+
+### Patch Changes
+
+- 4299001: Fix intermittent Windows release failures in the companion storage contention cases (SQLite code 5 at `ingest_begin`). Each sixteen-writer burst now runs alone instead of beside other companion runs in the same test process, and a Linux check replays the CLI suite beside a simulated slow shared volume. Companion storage, FULL durability and the 3-second wait budget are unchanged.
+- @lazysh/account-usage@1.20.0
+  - @lazysh/common@1.20.0
+  - @lazysh/notification-client@1.20.0
+
 ## 1.19.0
 
 ### Patch Changes
