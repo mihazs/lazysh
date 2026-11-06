@@ -86,7 +86,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
-  // Counts held keys that began repeating, so a drag that follows a hold does not also turn the toolbar page.
+  // Counts held keys that began repeating or ran their long-press action, so a drag that follows a hold does not also turn the toolbar page.
   const repeatStarts = useRef(0);
   const repeatShift = useRef<boolean | undefined>(undefined);
   const repeat = useRef<{readonly shift?:boolean;delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
@@ -114,6 +114,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (held.current?.key === key && held.current.fired) return;
     releaseHold();
     held.current = {key, fired: true};
+    repeatStarts.current++;
     if (activeRef.current && session.connected && mounted.current && access.current() && !document.hidden) runGesture(alternate.action, undefined, alternate.keys);
   }
   function cancelDpad() {

@@ -6,14 +6,14 @@ const twoRows=['esc','tab','left','row-break','up','enter'];
 const threeRows=['esc','tab','row-break','up','down','row-break','enter','c'];
 
 /** A local terminal whose toolbar has key rows (the default layout when omitted), one snippet and one literal chord; input bytes are recorded. */
-async function openToolbar(page:Page,testInfo:TestInfo,toolbar?:string[]) {
+async function openToolbar(page:Page,testInfo:TestInfo,toolbar?:string[],extra:Record<string,unknown>={}) {
   await installLocalTerminal(page);
-  await page.addInitScript(toolbar=>{
+  await page.addInitScript(({toolbar,extra})=>{
     if(sessionStorage.getItem('toolbar-pages-seeded'))return;
     sessionStorage.setItem('toolbar-pages-seeded','1');
     localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar,composerSendEnter:false,
-      snippets:[{label:'Greet',text:'echo snippet'}],chords:[{label:'Mark',keys:'text:PAGE_MARK'}]}));
-  },toolbar);
+      snippets:[{label:'Greet',text:'echo snippet'}],chords:[{label:'Mark',keys:'text:PAGE_MARK'}],...extra}));
+  },{toolbar,extra});
   await page.goto('/');
   await openTerminal(page,testInfo);
   return page.getByLabel('Terminal keys',{exact:true});
@@ -122,16 +122,27 @@ test('on the default single key row a slide scrolls the keys first and opens the
   await expect.poll(()=>writes(page)).toEqual(['PAGE_MARK','c']);
 });
 
-test('a drag that follows a held, repeating key stays on the page',async({page},testInfo)=>{
-  test.skip(testInfo.project.name!=='phone','Touch hold contract.');
+/** Holds the up arrow, then drags on past the last row; the drag belongs to the held key, so the page stays. */
+async function holdUpThenDrag(page:Page,testInfo:TestInfo,extra?:Record<string,unknown>) {
   await page.setViewportSize({width:390,height:420});
-  const keys=await openToolbar(page,testInfo,threeRows);
+  const keys=await openToolbar(page,testInfo,threeRows,extra);
   await expectPage(keys,'Tools');
-  // Holding the up arrow repeats it; dragging on afterwards past the last row does not also open the snippets.
   const up=await center(keys.getByRole('button',{name:'Arrow up',exact:true}));
   await swipe(page,up,{x:up.x,y:up.y-200},20,700);
+  return keys;
+}
+test('a drag that follows a held, repeating key stays on the page',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch hold contract.');
+  const keys=await holdUpThenDrag(page,testInfo);
   await expect.poll(async()=>(await writes(page)).length).toBeGreaterThan(1);
   expect(new Set(await writes(page))).toEqual(new Set(['\x1b[A']));
+  await page.waitForTimeout(800);
+  await expectPage(keys,'Tools');
+});
+test('a drag that follows a held key running its long-press action stays on the page',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch hold contract.');
+  const keys=await holdUpThenDrag(page,testInfo,{toolbarAlternates:{up:{action:'custom',keys:'text:HELD'}}});
+  await expect.poll(()=>writes(page)).toEqual(['HELD']);
   await page.waitForTimeout(800);
   await expectPage(keys,'Tools');
 });
