@@ -1,6 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
-import {historyLines,historyView,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
+import {historyLines,historyView,mountHistory,rowHeight,scrollHistory,settle} from './fixtures/terminalHistory';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 const id=(text:string)=>Number(/HISTORY_(\d{4})/.exec(text)?.[1]);
@@ -40,6 +40,43 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
     expect(Math.abs(id(reading.top)-(start-12))).toBeLessThanOrEqual(2);
     await output(page,historyLines(30,3000));await settle(page);
     expect((await historyView(page)).top).toBe(reading.top);
+  });
+
+  // A phone scrolls by finger, or by wheel from a mouse or trackpad.
+  for(const input of ['wheel','finger'] as const)test(`a ${input} scroll in the same frame as new output reaches history and stays there`,async({page},testInfo)=>{
+    test.skip(input==='finger'&&testInfo.project.name!=='phone','Finger drags need a touch screen.');
+    await mountHistory(page,mosh);
+    await output(page,historyLines(300));await settle(page);
+    const height=await rowHeight(page);
+    // xterm 5.5 follows output by moving the viewport and ignoring the next scroll event; the reader
+    // moves once the redrawn rows land, before that event is dispatched, as a finger or wheel can.
+    const moved=await page.evaluate(({finger,height,rows})=>new Promise<number>(resolve=>{
+      const t=window.ownedHistory.terminal,screen=document.querySelector<HTMLElement>('.terminal-canvas .xterm-screen')!;
+      const observer=new MutationObserver(()=>{
+        observer.disconnect();
+        const box=screen.getBoundingClientRect(),x=box.left+box.width/2,y=box.top+box.height/4;
+        if(finger){
+          const touch=(clientY:number)=>[new Touch({identifier:1,target:screen,clientX:x,clientY})];
+          const send=(type:string,touches:Touch[],changed=touches)=>screen.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches,targetTouches:touches,changedTouches:changed}));
+          send('touchstart',touch(y));send('touchmove',touch(y+rows*height));send('touchend',[],touch(y+rows*height));
+        } else screen.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:x,clientY:y,deltaY:-rows*height,deltaMode:WheelEvent.DOM_DELTA_PIXEL}));
+        resolve(t.buffer.active.baseY);
+      });
+      observer.observe(document.querySelector('.terminal-canvas .xterm-rows')!,{childList:true,subtree:true,characterData:true});
+      void window.ownedHistory.output(['SAME_FRAME']);
+    }),{finger:input==='finger',height,rows:10});
+    await settle(page);
+    const reading=await historyView(page);
+    await testInfo.attach(`same-frame-${input}`,{body:JSON.stringify({moved,reading}),contentType:'application/json'});
+    expect(reading.baseY-reading.viewportY).toBe(10);
+    expect(reading.top).toMatch(/^HISTORY_/);
+    // The rendered rows are the history the buffer reports, not the live screen.
+    expect(reading.rendered).toBe(reading.top);
+    await expect(page.locator('.terminal-canvas .xterm-rows')).not.toContainText('SAME_FRAME');
+    // Further output keeps the reader anchored in history.
+    for(let chunk=0;chunk<3;chunk++){await output(page,historyLines(20,5000+chunk*20));await settle(page);}
+    const after=await historyView(page);
+    expect({viewportY:after.viewportY,top:after.top,rendered:after.rendered}).toEqual({viewportY:reading.viewportY,top:reading.top,rendered:reading.top});
   });
 
   test('resizing while in history keeps the reader on the same line',async({page},testInfo)=>{

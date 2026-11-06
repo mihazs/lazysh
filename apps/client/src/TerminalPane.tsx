@@ -14,7 +14,7 @@ import { api as nativeApi } from "./bridge";
 import { bodyGestureSlots, decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
 import type {UnappliedTerminalEdit} from "./terminalIme";
-import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
+import { keepViewportScrolls, modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fitMoshKeyboard, moshKeyboardPan, type KeyboardHold } from "./moshKeyboard";
 import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
@@ -680,6 +680,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       syncTerminalViewport(terminal);
     };
     element.addEventListener("scroll", clamped, true);
+    const scrolls = keepViewportScrolls(terminal, element);
     // Held soft-keyboard rows keep the canonical Mosh screen taller than the pane.
     let keyboard: KeyboardHold | null = null, desired: {cols: number; rows: number} | undefined, measured: {width: number; height: number} | undefined;
     let visibleHeight = 0;
@@ -742,7 +743,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       if (inputOwner.current === owner) inputOwner.current = null;
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
-      element.removeEventListener("scroll", clamped, true);
+      element.removeEventListener("scroll", clamped, true); scrolls();
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
       resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
       panned?.dispose(); if (screen) screen.style.transform = "";
