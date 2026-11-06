@@ -56,31 +56,25 @@ export function readWorkspace(): SessionIntent[] {
     return [];
   }
 }
-export function saveWorkspace(sessions: (SessionIntent & {attached?: SessionAttachment})[]) {
+type LiveIntent = SessionIntent & {attached?: SessionAttachment};
+function restorableAttachment({attached}: LiveIntent) {
+  return !attached || (attached.restoreName !== null &&
+    (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name)) &&
+    (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer))));
+}
+/** The saved connection intention of one live session; terminal content and credentials stay out. */
+export function sessionIntent({hostId, attached, mosh, et, auto, local}: LiveIntent): SessionIntent {
+  return local ? {local:true} : ({
+    hostId,
+    ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
+    ...(!auto && et ? { et: publicEt(et) } : {}),
+    ...(!auto && mosh ? { mosh: publicMosh(mosh) } : {}),
+    ...(attached && restorableAttachment({attached})
+      ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
+      : {}),
+  });
+}
+export function saveWorkspace(sessions: LiveIntent[]) {
   // Persist only connection intentions; terminal content and credentials never enter browser storage.
-  localStorage.setItem(
-    key,
-    JSON.stringify(
-      sessions.filter(({attached}) => !attached || (attached.restoreName !== null &&
-        (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name)) &&
-        (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer)))))
-        .slice(0, 20).map(({ hostId, attached, mosh, et, auto, local }) => local ? {local:true} : ({
-        hostId,
-        ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
-        ...(!auto && et ? { et: publicEt(et) } : {}),
-        ...(!auto && mosh
-          ? {
-              mosh: {
-                serverPath: mosh.serverPath,
-                portMin: mosh.portMin,
-                portMax: mosh.portMax,
-              },
-            }
-          : {}),
-        ...(attached
-          ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
-          : {}),
-      })),
-    ),
-  );
+  localStorage.setItem(key, JSON.stringify(sessions.filter(restorableAttachment).slice(0, 20).map(sessionIntent)));
 }

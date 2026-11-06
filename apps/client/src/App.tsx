@@ -85,7 +85,9 @@ import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
 import { usePreferences } from "./preferences";
 import CredentialsPanel from "./CredentialsPanel";
-import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
+import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from "./workspace";
+import { ConnectionRecovery, useNetworkOnline, type RecoveryOutcome } from "./connectionRecovery";
+import { ConnectionRecoveryBanner, NetworkOfflineNotice } from "./ConnectionBanner";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 import {appShortcut, navigationShortcut, useCapturedShortcut, type NavigationShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
@@ -169,6 +171,8 @@ async function prepareSession(
     else {
       transportClosed = true;
       session.connected = false;
+      // Only a transport that vanished invites a reconnect; an exit or a local close does not.
+      if (event.lost === true) session.lost = true;
       void session.moshResize?.close().then(() => {
         if (session.moshResize?.failure) failDisplay();
       });
@@ -677,6 +681,7 @@ export function ConnectDialog({
   close,
   launch,
   recovery,
+  reconnect,
 }: {
   host: Host;
   hosts: Host[];
@@ -684,6 +689,8 @@ export function ConnectDialog({
   close: () => void;
   launch?: DesktopHostLaunch;
   recovery?: {sessionId:string;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void};
+  /** The saved intent of a lost tab: its transport and multiplexer attachment come back after sign-in. */
+  reconnect?: SessionIntent;
 }) {
   useUi();
   const [lease] = useState(() => launch?.lease ?? captureAccess());
@@ -710,18 +717,21 @@ export function ConnectDialog({
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
   // Explicit launch receipts keep their original directory/multiplexer semantics.
-  const defaultMultiplexer=launch || recovery ? undefined : host.defaultMultiplexer;
-  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || (defaultMultiplexer && host.transport==='et') ? "ssh" : host.transport ?? "ssh");
+  const defaultMultiplexer=launch || recovery || reconnect ? undefined : host.defaultMultiplexer;
+  const entry:MultiplexerEntry|undefined=reconnect ? reconnect.attached : defaultMultiplexer ? {...defaultMultiplexer,createIfMissing:true} : undefined;
+  const preset=reconnect?.auto ?? {mosh:reconnect?.mosh,et:reconnect?.et};
+  const [transport, setTransport] = useState<TransportMode>(reconnect ? (reconnect.auto ? 'auto' : reconnect.et ? 'et' : reconnect.mosh ? 'mosh' : 'ssh')
+    : recovery || launch?.mux || (defaultMultiplexer && host.transport==='et') ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
   const [capabilityReason, setCapabilityReason] = useState('');
-  const [etServer, setEtServer] = useState(host.et?.serverPath ?? defaultEt.serverPath);
-  const [etPort, setEtPort] = useState(host.et?.port ?? defaultEt.port);
-  const [moshServer, setMoshServer] = useState(host.mosh?.serverPath ?? defaultMosh.serverPath);
-  const [moshPortMin, setMoshPortMin] = useState(host.mosh?.portMin ?? defaultMosh.portMin);
-  const [moshPortMax, setMoshPortMax] = useState(host.mosh?.portMax ?? defaultMosh.portMax);
-  const transportLabel = transport === 'auto' ? t(defaultMultiplexer ? 'defaultMuxAuto' : 'appAutoMoshThenETThenSSH') : transport === 'et' ? 'Eternal Terminal' : transport === 'mosh' ? 'Mosh' : 'SSH';
+  const [etServer, setEtServer] = useState((preset.et ?? host.et)?.serverPath ?? defaultEt.serverPath);
+  const [etPort, setEtPort] = useState((preset.et ?? host.et)?.port ?? defaultEt.port);
+  const [moshServer, setMoshServer] = useState((preset.mosh ?? host.mosh)?.serverPath ?? defaultMosh.serverPath);
+  const [moshPortMin, setMoshPortMin] = useState((preset.mosh ?? host.mosh)?.portMin ?? defaultMosh.portMin);
+  const [moshPortMax, setMoshPortMax] = useState((preset.mosh ?? host.mosh)?.portMax ?? defaultMosh.portMax);
+  const transportLabel = transport === 'auto' ? t(entry ? 'defaultMuxAuto' : 'appAutoMoshThenETThenSSH') : transport === 'et' ? 'Eternal Terminal' : transport === 'mosh' ? 'Mosh' : 'SSH';
   const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
@@ -839,7 +849,7 @@ export function ConnectDialog({
         et: {serverPath: etServer, port: etPort},
       }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, lease, () => alive.current && lease.current(),
       (id) => connectingSessions.current.add(id),
-      (id) => connectingSessions.current.delete(id),defaultMultiplexer?{...defaultMultiplexer,createIfMissing:true}:undefined);
+      (id) => connectingSessions.current.delete(id),entry);
       session = selected.session;
       if (!alive.current || !lease.current()) {
         await connectingSessions.current.close(session.id);
@@ -939,7 +949,7 @@ export function ConnectDialog({
                 setTransport(event.target.value as TransportMode)
               }
             >
-              <option value="auto">{t(defaultMultiplexer?'defaultMuxAuto':'appAutoMoshThenETThenSSH')}</option>
+              <option value="auto">{t(entry?'defaultMuxAuto':'appAutoMoshThenETThenSSH')}</option>
               <option value="ssh">SSH</option>
               <option value="mosh" disabled={!moshAvailable}>
                 Mosh{!moshAvailable ? t("appUnavailableForThisConnection") : ""}
@@ -1328,6 +1338,68 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const host=hosts.find(host=>host.id===source.hostId);
     if(source.mosh && host && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
   }
+  // A returning or switched network may leave plain SSH routes dead without an EOF; ask them to answer now.
+  const online = useNetworkOnline(()=>{
+    const ids=sessionsRef.current.filter(session=>session.connected && !session.local && !session.disposed && !session.mosh && !session.et).map(session=>session.id);
+    if(ids.length)void api.probeConnections(ids).catch(()=>{});
+  });
+  const [,setRecoveryRevision] = useState(0);
+  const recoveryAttempt = useRef<(id:string)=>Promise<RecoveryOutcome>>(async()=>({retry:false}));
+  const [recovery] = useState(()=>new ConnectionRecovery({
+    attempt:id=>recoveryAttempt.current(id),
+    changed:()=>setRecoveryRevision(value=>value+1),
+    online:()=>navigator.onLine!==false,
+  }));
+  const [signInRecovery,setSignInRecovery]=useState<{sessionId:string;host:Host;intent:SessionIntent}|null>(null);
+  useEffect(()=>()=>recovery.dispose(),[recovery]);
+  useEffect(()=>recovery.networkChanged(online),[online,recovery]);
+  // Saved credentials reconnect silently; a host that needs a prompt waits for Retry now.
+  const silentReconnect=(host:Host)=>!!host.credentialsStored && !host.biometricUnlock;
+  useEffect(()=>{
+    for(const session of sessions) {
+      if(session.connected || !session.lost || session.local || session.disposed || recovery.has(session.id) || closingSessions.current.has(session.id))continue;
+      const host=hosts.find(item=>item.id===session.hostId);
+      if(!host)continue;
+      recovery.start(session.id,silentReconnect(host),host.credentialsStored?'recoveryConfirmToReconnect':'recoverySignInToReconnect');
+    }
+  },[sessions,hosts,recovery]);
+  /** Puts a fresh connection in the lost tab's place, keeping its position, focus and navigation; false once that tab is gone. */
+  function replaceLostSession(lost: LiveSession, fresh: LiveSession) {
+    if(!mounted.current || closingSessions.current.has(lost.id) || !sessionsRef.current.includes(lost))return false;
+    const next=sessionsRef.current.map(session=>session===lost?fresh:session);
+    sessionsRef.current=next;setSessions(next);
+    adoptRetained(fresh);
+    setNavigation(previous=>previous[lost.id]?{...previous,[fresh.id]:previous[lost.id]}:previous);
+    if(currentView.current.activeId===lost.id)setActiveId(fresh.id);
+    recovery.cancel(lost.id);
+    disposeTerminal(lost);
+    persistWorkspace(next);
+    return true;
+  }
+  recoveryAttempt.current=async id=>{
+    const lost=sessionsRef.current.find(session=>session.id===id);
+    const host=hosts.find(item=>item.id===lost?.hostId);
+    if(!lost || !host || !mounted.current || !lease.current())return {retry:false,hint:'appConnectionClosed'};
+    const intent=sessionIntent(lost);
+    // Restore does not reattach Zellij either; the host shell comes back and Sessions reopens it.
+    if(intent.attached?.kind==='zellij')delete intent.attached;
+    if(!host.credentialsStored){setSignInRecovery({sessionId:id,host,intent});return {retry:false,hint:'recoverySignInToReconnect'};}
+    const owned=new PendingSessions();
+    const fresh=await openSavedIntent(intent,host,owned);
+    if(!replaceLostSession(lost,fresh)) {
+      await owned.closeAll().catch(()=>{});disposeTerminal(fresh);
+      return {retry:false,hint:'appConnectionClosed'};
+    }
+    owned.clear();
+    return 'reconnected';
+  };
+  /** A sign-in from the lost banner replaces that tab; if it was closed meanwhile the session opens as a new tab. */
+  function signedInAfterLoss(id: string, fresh: LiveSession) {
+    setSignInRecovery(null);
+    const lost=sessionsRef.current.find(session=>session.id===id);
+    if(lost && replaceLostSession(lost,fresh))void loadHosts();
+    else sessionConnected(fresh);
+  }
   const active = sessions.find((session) => session.id === activeId);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
   const navigationState=useRef(navigation);navigationState.current=navigation;
@@ -1559,6 +1631,47 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       setError(t("appWorkspaceRestorationCouldNotBeSavedOnThisDevice"));
     }
   }
+  /** Opens one saved remote intent with saved credentials, reattaching tmux or Herdr the way restore does.
+   * `owned` tracks every native session it opens; a failure closes and forgets them before rethrowing. */
+  async function openSavedIntent(intent: SessionIntent, host: Host, owned: PendingSessions): Promise<LiveSession> {
+    let shell: Prepared | undefined;
+    let child: Prepared | undefined;
+    try {
+      shell = await prepareSession(host.id, host.name, `${host.username}@${host.hostname}`, lease);
+      const connected = await api.connect(host.id, {}, shell.onEvent, {useSavedCredentials: true});
+      shell.establish(connected.sessionId);
+      owned.add(connected.sessionId);
+      if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
+      if (intent.auto || intent.et || intent.mosh) {
+        const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
+        child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
+          intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
+          id=>owned.add(id),id=>owned.delete(id),intent.attached);
+        return child.session;
+      }
+      if (!intent.attached) return shell.session;
+      child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
+      const attached = intent.attached.kind === "tmux"
+        ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
+        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent);
+      child.establish(attached.sessionId);
+      owned.add(attached.sessionId);
+      if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
+      child.session.attached = intent.attached;
+      await owned.close(shell.session.id);
+      owned.delete(shell.session.id);
+      disposeTerminal(shell.session);
+      return child.session;
+    } catch (error) {
+      for (const pending of [child, shell])
+        if (pending) {
+          if (pending.session.id) await owned.close(pending.session.id).catch(() => {});
+          owned.delete(pending.session.id);
+          disposeTerminal(pending.session);
+        }
+      throw error;
+    }
+  }
   async function restoreWorkspace() {
     if (restoringRef.current) return;
     restoringRef.current = true;
@@ -1589,65 +1702,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         remaining.push(intent);
         continue;
       }
-      let shell: Awaited<ReturnType<typeof prepareSession>> | undefined;
-      let child: Awaited<ReturnType<typeof prepareSession>> | undefined;
       try {
-        shell = await prepareSession(
-          host.id,
-          host.name,
-          `${host.username}@${host.hostname}`,
-          lease,
-        );
-        const connected = await api.connect(host.id, {}, shell.onEvent, {
-          useSavedCredentials: true,
-        });
-        shell.establish(connected.sessionId);
-        restoringSessions.current.add(connected.sessionId);
-        if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
-        if (intent.auto || intent.et || intent.mosh) {
-          const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
-          child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
-            intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
-            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id),intent.attached);
-          restored.push(child.session);
-        } else if (intent.attached) {
-          child = await prepareSession(
-            host.id,
-            `${host.name} / ${intent.attached.name}`,
-            shell.session.destination,
-            lease,
-          );
-          const attached =
-            intent.attached.kind === "tmux"
-              ? await api.attachTmux(
-                  shell.session.id,
-                  intent.attached.name,
-                  child.onEvent,
-                  intent.attached.tmuxServer,
-                )
-              : await api.attachMultiplexer(
-                  shell.session.id,
-                  intent.attached.kind,
-                  intent.attached.name,
-                  child.onEvent,
-                );
-          child.establish(attached.sessionId);
-          restoringSessions.current.add(attached.sessionId);
-          if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
-          child.session.attached = intent.attached;
-          await restoringSessions.current.close(shell.session.id);
-          restoringSessions.current.delete(shell.session.id);
-          disposeTerminal(shell.session);
-          restored.push(child.session);
-        } else restored.push(shell.session);
+        restored.push(await openSavedIntent(intent, host, restoringSessions.current));
       } catch (error) {
-        for (const pending of [child, shell])
-          if (pending) {
-            if (pending.session.id)
-              await restoringSessions.current.close(pending.session.id).catch(() => {});
-            restoringSessions.current.delete(pending.session.id);
-            disposeTerminal(pending.session);
-          }
         remaining.push(intent);
         failures.push(`${host.name}: ${errorMessage(error)}`);
       }
@@ -1816,6 +1873,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(context.sessionId===session.id)context.generation++;
     try {
       await api.disconnect(session.id);
+      recovery.cancel(session.id);
       session.connected=false;
       disposeTerminal(session);
       setAppleUsage(previous=>{const next={...previous};delete next[session.id];return next;});
@@ -1835,6 +1893,20 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       closingSessions.current.delete(session.id);
       if(mounted.current)setClosingIds([...closingSessions.current]);
     }
+  }
+  function connectionNotice(session: LiveSession) {
+    const state=recovery.state(session.id);
+    if(state) {
+      const host=hosts.find(item=>item.id===session.hostId);
+      return <ConnectionRecoveryBanner state={state} name={session.name} closing={closingIds.includes(session.id)}
+        retryLabel={host && !host.credentialsStored ? t('recoverySignIn') : undefined}
+        onRetry={()=>recovery.retryNow(session.id)} onClose={()=>void closeSession(session)}/>;
+    }
+    if(!online && session.connected && !session.local) {
+      const host=hosts.find(item=>item.id===session.hostId);
+      return <NetworkOfflineNotice recovery={session.mosh ? 'mosh' : host && silentReconnect(host) ? 'automatic' : 'manual'}/>;
+    }
+    return undefined;
   }
   function closePalette() { setPalette(false); setSearch(""); }
   function chooseHost(host: Host) {
@@ -2276,6 +2348,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
+                    notice={connectionNotice(session)}
                   />
                 ))}
                 {active.connected && view === "usage" && (
@@ -2387,6 +2460,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         />
       )}
       {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,purpose:fileRecovery.purpose,current:fileRecovery.current,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
+      {signInRecovery && <ConnectDialog key={`reconnect-${signInRecovery.sessionId}`} host={signInRecovery.host} hosts={hosts} reconnect={signInRecovery.intent}
+        connected={fresh=>signedInAfterLoss(signInRecovery.sessionId,fresh)} close={()=>setSignInRecovery(null)}/>}
       {connectingHost && (
         <ConnectDialog
           key={connectingHost.id}

@@ -2,7 +2,7 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -49,13 +49,15 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget, onBackChange }: {
+export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget, onBackChange, notice }: {
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
   /** Opens the attachment tool; `composer` asks for the upload to return as a draft token. */
   onOpenAttachments?: (target?: 'composer') => void;
   controlsTarget?: HTMLElement | null;
+  /** Connection state that replaces the generic ended notice, such as reconnect progress. */
+  notice?: ReactNode;
   onBackChange?: (sessionId:string, close:(()=>boolean)|null)=>void;
 }) {
   useUi();
@@ -1031,7 +1033,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   </div>;
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
-    {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
+    {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
     {unappliedEdit && <details ref={editReview} className="terminal-edit-review">
       <summary>{t('terminalEditNotSent')}</summary>

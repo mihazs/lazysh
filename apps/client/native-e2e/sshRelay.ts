@@ -6,7 +6,11 @@ import {descendants,sameIdentity,type OwnedPid} from '../../../tests/support/own
 export class OwnedSshRelay {
   private readonly pairs=new Map<Socket,Socket>();
   private accepted=0;
+  private blocked=false;
+  /** Connections refused while blocked, so a caller can observe retries without a route. */
+  refused=0;
   private readonly server=createServer(peer=>{
+    if(this.blocked){this.refused++;peer.destroy();return;}
     if(++this.accepted>16){peer.destroy();return;}
     const upstream=connect({host:'127.0.0.1',port:this.target});
     this.pairs.set(peer,upstream);
@@ -50,6 +54,13 @@ export class OwnedSshRelay {
       || this.pairs.size!==1 || this.pairs.get(peer)!==upstream || peer.destroyed || upstream.destroyed)throw new Error('Owned SSH server stream retired');
     peer.destroy();upstream.destroy();this.pairs.delete(peer);
   }
+  /** Cut every relayed stream without an SSH disconnect and refuse new ones, like a lost route. */
+  block() {
+    this.blocked=true;
+    for(const [peer,upstream] of this.pairs){peer.destroy();upstream.destroy();}
+    this.pairs.clear();
+  }
+  unblock() {this.blocked=false;}
   async stop() {
     for(const [peer,upstream] of this.pairs){peer.destroy();upstream.destroy();}
     this.pairs.clear();

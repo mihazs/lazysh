@@ -121,6 +121,7 @@
     "allow-ack-output",
     "allow-resize",
     "allow-disconnect",
+    "allow-probe-connections",
     "allow-list-directory",
     "allow-read-file",
     "allow-upload-reserve",

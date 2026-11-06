@@ -775,6 +775,26 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** Reconnect pacing reads the WebView's network signal; it must follow Android connectivity both ways. */
+    @Test fun webViewNetworkSignalFollowsAndroidConnectivity() {
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "network signal workspace")
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val signals = "(window.__lazyshNetworkSignals||[])"
+        assertEquals("true", evaluate(scenario, """(()=>{window.__lazyshNetworkSignals=[];
+            for(const name of ['online','offline'])window.addEventListener(name,()=>window.__lazyshNetworkSignals.push(name));
+            return navigator.onLine})()"""))
+        fun within(seconds: Long) = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        try {
+            device.executeShellCommand("cmd connectivity airplane-mode enable")
+            awaitDocument(scenario, "WebView offline signal", "navigator.onLine===false && $signals.includes('offline')", within(60))
+        } finally {
+            // Later cases need the emulator network; restore it even when the offline signal never came.
+            device.executeShellCommand("cmd connectivity airplane-mode disable")
+        }
+        awaitDocument(scenario, "WebView online signal", "navigator.onLine===true && $signals.includes('online')", within(90))
+    }
+
     @Test fun documentEvaluationCanWaitForAWebViewInsertedAfterTheNativeRoot() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val pageReady = CountDownLatch(1)

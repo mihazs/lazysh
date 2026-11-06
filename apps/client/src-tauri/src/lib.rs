@@ -264,6 +264,7 @@ pub fn run() {
                 ssh::ack_output,
                 ssh::resize,
                 ssh::disconnect,
+                ssh::probe_connections,
                 ssh::list_directory,
                 ssh::read_file,
                 attachment_upload::upload_reserve,
