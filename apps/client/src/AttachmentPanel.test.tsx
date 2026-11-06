@@ -45,6 +45,21 @@ it('saves to a private host /tmp file by default and shows the path the host cho
   expect(api.uploadFile).toHaveBeenCalledExactlyOnceWith('ssh-one', 'report.txt', [104, 101, 108, 108, 111], attachmentReceipt, true);
   expect(screen.getByLabelText('Host path')).toHaveProperty('value', "'/tmp/lazysh-0123456789ab-report.txt'");
 });
+it('labels a default /tmp upload in the terminal draft with the picked file name, and a typed path with its own name', async () => {
+  const attach = vi.fn();
+  vi.mocked(api.uploadFile).mockResolvedValueOnce({path:'/tmp/lazysh-0123456789ab-report.txt'}).mockResolvedValueOnce({path:'/work/notes.txt'});
+  render(<AttachmentPanel sessionId="ssh-one" attachTarget="composer" onAttach={attach} />);
+  fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [file()] } });
+  await screen.findByText(/report.txt · 5 bytes/);
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add to the terminal draft' }));
+  expect(attach).toHaveBeenLastCalledWith('/tmp/lazysh-0123456789ab-report.txt', {name:'report.txt',kind:'file',preview:undefined});
+  fireEvent.change(screen.getByLabelText('Destination path'), { target: { value: '/work/notes.txt' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  await waitFor(() => expect(api.uploadFile).toHaveBeenCalledTimes(2));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add to the terminal draft' }));
+  expect(attach).toHaveBeenLastCalledWith('/work/notes.txt', {name:'notes.txt',kind:'file',preview:undefined});
+});
 it('cancels before upload, rejects invalid destination, and reports native no-overwrite errors', async () => {
   vi.mocked(api.uploadFile).mockRejectedValue({ message: 'Remote file already exists' });
   render(<AttachmentPanel sessionId="ssh-one" />);
