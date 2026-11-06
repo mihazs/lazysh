@@ -887,6 +887,19 @@ fn publisher_files(
     client::write_private(&ca, tls.pem.as_bytes()).unwrap();
     (capfile, ca)
 }
+/// Serves `router` over owned TLS and captures a publisher for source `id` of `service`'s account.
+async fn served_publisher(
+    service: &Service,
+    directory: &std::path::Path,
+    router: Router,
+    id: Uuid,
+) -> (support::Server, PathBuf, PathBuf, client::CapturedPublisher) {
+    let tls = support::Server::new(router).await;
+    let account = service.db(|s| s.status()).await.unwrap().account_id;
+    let (capfile, ca) = publisher_files(directory, &tls, account, id);
+    let captured = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    (tls, capfile, ca, captured)
+}
 async fn bound_status_of(service: &Service) -> BoundStatus {
     let (code, value) = call(
         service,
@@ -1017,10 +1030,8 @@ async fn captured_publisher_uses_one_private_capability_and_exact_ca_snapshot_be
             }
         },
     ));
-    let tls = support::Server::new(router).await;
-    let account = service.db(|s| s.status()).await.unwrap().account_id;
-    let (capfile, ca) = publisher_files(directory.path(), &tls, account, id);
-    let captured = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    let (tls, capfile, ca, captured) =
+        served_publisher(&service, directory.path(), router, id).await;
     let binding = captured.binding().clone();
     assert_eq!(binding.fingerprint().len(), 64);
     let status = captured.bound_status().await.unwrap();

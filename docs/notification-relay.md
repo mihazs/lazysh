@@ -192,7 +192,9 @@ retried, so a broken downstream service cannot start a retry storm. Other non-20
 answers, including 401 from your proxy and 404 for an unknown key, are `rejected`
 without a retry. HTTP 408, 429, 5xx, timeouts and connection failures use the relay's
 three-attempt retry and then `failed_unknown`. Like every admitted request, `partial`
-and `rejected` keep `mayHaveReachedDestination` true.
+and `rejected` keep `mayHaveReachedDestination` true. The host companion's bound
+publisher accepts `partial` and `rejected` receipts, so a `relay run` that republishes
+an event after a lost acknowledgement records the original receipt instead of retrying.
 
 Destination identity is `apprise`, the endpoint, the token digest and the sorted tag
 set. Changing the format, URL, token or tags needs `configure-destination` with the
@@ -337,7 +339,7 @@ The command emits a bounded final JSON report only after owned networking/runtim
 
 Webhook destinations receive only `schemaVersion:1`, `receiptId`, `eventId`, finite `kind` and their admin-provisioned public `alias`. Gotify destinations receive the fixed `title`, public-alias/state `message` and finite `priority` described above. Apprise destinations receive the fixed `title`, `body`, `type`, `format` and optional `tag` described above, and their 424, 4xx and retryable answers end as described in that section. All formats send the receipt ID as the stable HTTP `Idempotency-Key` across attempts and restarts; that header alone does not deduplicate effects. For webhook and Gotify, only HTTP 2xx marks `accepted`; for Apprise only HTTP 200 does. Either way this is the destination's successful HTTP response, **not** proof that a device displayed it or a human saw it. Exactly-once webhook effects require receiver-side idempotency; Gotify provides no verified guarantee here, so retries may produce duplicate notifications.
 
-One worker admits one POST at a time. Admission is durably recorded before networking. A request timeout, crash, shutdown or revocation after admission can leave an unknown remote outcome; `mayHaveReachedDestination` remains conservatively true. Disconnecting a request cannot retract a remote effect. The worker performs at most three admitted attempts, with a two-second retry delay and a ten-second per-request budget (three-second connection budget). Queued work expires after 24 hours using the service host's clock. `failed_unknown`, `expired_unknown` and `cancelled_unknown` do not assert non-delivery.
+One worker admits one POST at a time. Admission is durably recorded before networking. A request timeout, crash, shutdown or revocation after admission can leave an unknown remote outcome; `mayHaveReachedDestination` remains conservatively true. Disconnecting a request cannot retract a remote effect. The worker performs at most three admitted attempts, with a two-second retry delay and a ten-second per-request budget (three-second connection budget). Queued work expires after 24 hours using the service host's clock. `failed_unknown`, `expired_unknown` and `cancelled_unknown` do not assert non-delivery, and neither do the Apprise-only `partial` and `rejected` states.
 
 Disable/revoke cancels queued work and aborts an affected admitted request; already-admitted effects may still finish remotely. Disable and each explicit enable advance the persisted generation. Re-enabling never freshens old receipts, even after restart. New events are rejected while disabled. On restart, interrupted requests may retry only with their original target identity/generation and the same key. Supplying a different destination format, URL/key or admin identity fails closed.
 

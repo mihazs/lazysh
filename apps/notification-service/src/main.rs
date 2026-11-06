@@ -573,8 +573,14 @@ mod tests {
         };
         assert!(load(Some(&token), false, &["phone"]).is_ok());
         assert!(load(None, true, &[]).is_ok());
-        assert!(load(None, false, &[]).is_err());
-        assert!(load(Some(&token), true, &[]).is_err());
+        assert_eq!(
+            load(None, false, &[]).err().unwrap(),
+            "Apprise without a proxy token requires --destination-unauthenticated"
+        );
+        assert_eq!(
+            load(Some(&token), true, &[]).err().unwrap(),
+            "Choose a proxy token file or --destination-unauthenticated"
+        );
         assert!(load(Some(&linked), false, &[]).is_err());
         assert!(load(Some(&token), false, &["bad tag"]).is_err());
         std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -582,11 +588,17 @@ mod tests {
         for format in [DestinationFormat::Webhook, DestinationFormat::Gotify] {
             let mut flagged = args(directory.path(), &admin, &url, None, format);
             flagged.destination_unauthenticated = true;
-            assert!(config(flagged).is_err());
+            let only_apprise = "Unauthenticated and tag options apply only to Apprise";
+            assert_eq!(config(flagged).err().unwrap(), only_apprise);
             let mut tagged = args(directory.path(), &admin, &url, None, format);
             tagged.apprise_tags = vec!["phone".into()];
-            assert!(config(tagged).is_err());
-            assert!(config(args(directory.path(), &admin, &url, None, format)).is_err());
+            assert_eq!(config(tagged).err().unwrap(), only_apprise);
+            assert_eq!(
+                config(args(directory.path(), &admin, &url, None, format))
+                    .err()
+                    .unwrap(),
+                "Require --destination-token-file"
+            );
         }
     }
 }

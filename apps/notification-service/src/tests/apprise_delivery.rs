@@ -89,10 +89,18 @@ async fn stub_relay(
     token: Option<&str>,
     tags: &[&str],
 ) -> (tempfile::TempDir, Service, Uuid) {
+    stub_relay_for(stub, token, tags, "public-terminal").await
+}
+async fn stub_relay_for(
+    stub: &Stub,
+    token: Option<&str>,
+    tags: &[&str],
+    alias: &str,
+) -> (tempfile::TempDir, Service, Uuid) {
     let directory = tempfile::tempdir().unwrap();
     let config = apprise(directory.path(), &stub.endpoint(), token, tags).unwrap();
     let service = Service::open_with(config, stub.client.clone(), false).unwrap();
-    let id = source(&service, SOURCE, "public-terminal").await;
+    let id = source(&service, SOURCE, alias).await;
     enable(&service).await;
     (directory, service, id)
 }
@@ -384,5 +392,40 @@ async fn apprise_partial_permanent_and_retryable_answers_end_in_bounded_finite_r
     for seen in stub.seen.lock().unwrap().iter() {
         assert!(!seen.headers.contains_key("Authorization"));
         assert!(seen.body.get("tag").is_none());
+    }
+}
+
+#[tokio::test]
+async fn bound_publisher_replay_returns_partial_and_rejected_apprise_receipts() {
+    for (code, state) in [(424, "partial"), (404, "rejected")] {
+        let stub = Stub::new().await;
+        // The captured capability names the source alias "public".
+        let (directory, service, id) = stub_relay_for(&stub, None, &[], "public").await;
+        let (_tls, _, _, captured) =
+            served_publisher(&service, directory.path(), service.router(), id).await;
+        let binding = captured.binding().clone();
+        let generation = captured.bound_status().await.unwrap().generation;
+        let published = event();
+        let replayed = Event {
+            event_id: published.event_id,
+            kind: published.kind,
+        };
+        let original = captured
+            .publish_bound(published, &binding, generation)
+            .await
+            .unwrap();
+        stub.answer(&original.receipt, &[code]);
+        let (done, task) = start(service.clone()).await;
+        settle(&service, id, &[(&original.receipt, state)]).await;
+        stop(done, task).await;
+        // A lost ACK makes the companion publish the same event again.
+        let replay = captured
+            .publish_bound(replayed, &binding, generation)
+            .await
+            .unwrap();
+        assert_eq!(replay.receipt.receipt_id, original.receipt.receipt_id);
+        assert_eq!(replay.receipt.state, state);
+        assert_eq!(replay.generation, generation);
+        assert_eq!(stub.attempts(&original.receipt), 1);
     }
 }

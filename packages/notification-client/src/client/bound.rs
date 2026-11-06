@@ -180,6 +180,8 @@ impl CapturedPublisher {
                     | "expired"
                     | "expired_unknown"
                     | "failed_unknown"
+                    | "partial"
+                    | "rejected"
             )
         {
             return Err(BoundError::InvalidResponse);
