@@ -81,7 +81,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const inputLane = useRef<"keyboard" | "literal" | null>(null);
   const literalPaste = useRef(false);
   const literalCapture = useRef<string[] | null>(null);
-  const imeInput = useRef<{readonly idle:boolean;reset(): void; flush(): void; settle(): void; resume(): void; dismiss(): void} | null>(null);
+  const imeInput = useRef<{readonly idle:boolean;reset(): void; flush(): void; settle(): void; resume(): void; dismiss(): void; composing(): boolean | undefined} | null>(null);
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
@@ -198,6 +198,14 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const [toolbarOverride, setToolbarOverride] = useState<boolean | null>(null);
   const [desktopPointer, setDesktopPointer] = useState(false);
   const imeComposing = useRef(false);
+  // A toolbar key or a revoked editor ends the composition by clearing the
+  // editor, and the browser then sends no compositionend: trust the IME owner.
+  // Read the flag only through composingIme(); a direct read of
+  // imeComposing.current can see that stale composition.
+  const composingIme = () => {
+    if (imeComposing.current && imeInput.current?.composing() === false) imeComposing.current = false;
+    return imeComposing.current;
+  };
   const pointers = useRef(new Map<number, {x: number; y: number}>());
   const press = useRef<{id: number; x: number; y: number; when: number; moved: boolean} | null>(null);
   const taps = useRef<{count: number; when: number; x: number; y: number; timer?: ReturnType<typeof setTimeout>} | null>(null);
@@ -332,7 +340,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       const terminal=session.terminal,area=terminal.textarea,buffer=terminal.buffer.active,view=pasteView.current;
       return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.terminal===terminal
         &&view.id===session.id&&view.terminal===terminal&&view.connected&&activeRef.current&&mounted.current&&access.current()
-        &&!document.hidden&&document.hasFocus()&&!imeComposing.current&&imeInput.current?.idle===true&&!terminal.hasSelection()
+        &&!document.hidden&&document.hasFocus()&&!composingIme()&&imeInput.current?.idle===true&&!terminal.hasSelection()
         &&area===document.activeElement&&!area?.readOnly&&area?.value===''
         &&terminal.modes.mouseTrackingMode==='none'&&buffer.type==='normal'&&Number.isInteger(buffer.baseY)&&buffer.baseY>=0&&buffer.viewportY===buffer.baseY
         &&!document.querySelector('[role="dialog"][aria-modal="true"]');
@@ -356,7 +364,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     // The platform's long-press menu would otherwise compete with terminal selection.
     const menu = (event: Event) => {if (hold) event.preventDefault();};
     const selectHeld = () => {
-      const cell = hold?.ready && !scroll?.active && !imeComposing.current && activeRef.current ? terminalCellAt(session.terminal, hold.x, hold.y) : undefined;
+      const cell = hold?.ready && !scroll?.active && !composingIme() && activeRef.current ? terminalCellAt(session.terminal, hold.x, hold.y) : undefined;
       if (!cell) return false;
       touched = nextTouchSelection(touched && session.terminal.hasSelection() ? touched : null, terminalWordAt(session.terminal, cell));
       selectTerminalRange(session.terminal, touched.range);
@@ -437,14 +445,16 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             return;
           }
         }
-        if (imeComposing.current) {cancel(); return;}
+        // A composition rules out swipe gestures, not scrolling: a drag whose first
+        // samples are short or slanted still scrolls once it moves vertically.
+        if (composingIme()) return;
         if (session.terminal.hasSelection()) return;
         const start = press.current;
         if (!start) return;
         const dx = event.touches[0].clientX - start.x, dy = event.touches[0].clientY - start.y;
         const action = preferences.bodyGestures[dx < 0 ? "swipeLeft" : "swipeRight"];
         if (action === "none" || Math.abs(dx) < 16 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      } else {cancel(); if (imeComposing.current || session.terminal.hasSelection() || event.touches.length !== 2 || !customTouch) return;}
+      } else {cancel(); if (composingIme() || session.terminal.hasSelection() || event.touches.length !== 2 || !customTouch) return;}
       event.stopPropagation();
       if (event.cancelable) event.preventDefault();
     };
@@ -798,7 +808,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
   function navigationReady() {
-    return mounted.current && access.current() && activeRef.current && session.connected && !imeComposing.current && !session.terminal.hasSelection();
+    return mounted.current && access.current() && activeRef.current && session.connected && !composingIme() && !session.terminal.hasSelection();
   }
   function navigateZellij(name: string, type: MultiplexerAction) {
     imeInput.current?.flush();
@@ -853,13 +863,13 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     const slot = count >= 3 ? "tripleTap" : count === 2 ? "doubleTap" : "tap";
     const perform = () => {
       taps.current = null;
-      if (activeRef.current && !imeComposing.current && !session.terminal.hasSelection()) runGesture(preferences.bodyGestures[slot], slot);
+      if (activeRef.current && !composingIme() && !session.terminal.hasSelection()) runGesture(preferences.bodyGestures[slot], slot);
     };
     if (count >= 3 || (count === 2 && preferences.bodyGestures.tripleTap === "none") || (count === 1 && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none")) perform();
     else taps.current = {count, x, y, when: Date.now(), timer: setTimeout(perform, 350)};
   }
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!customTouch || event.pointerType !== "touch" || imeComposing.current || session.terminal.hasSelection()) return;
+    if (!customTouch || event.pointerType !== "touch" || composingIme() || session.terminal.hasSelection()) return;
     pointers.current.set(event.pointerId, {x: event.clientX, y: event.clientY});
     if (pointers.current.size === 1) {
       if (taps.current?.timer) clearTimeout(taps.current.timer);
@@ -876,7 +886,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     pointers.current.set(event.pointerId, {x: event.clientX, y: event.clientY});
     if (press.current && Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 10) {press.current.moved = true; cancelTaps();}
     if (!gesture.current || pointers.current.size !== 2) return;
-    if (imeComposing.current || session.terminal.hasSelection()) {gesture.current = null; return;}
+    if (composingIme() || session.terminal.hasSelection()) {gesture.current = null; return;}
     gesture.current.moved.add(event.pointerId);
     // Wait for both touches so a parallel swipe cannot look like a one-sided pinch.
     if (gesture.current.moved.size < 2) return;
@@ -906,7 +916,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   function pointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const start = gesture.current;
     const single = press.current;
-    if (single?.id === event.pointerId && pointers.current.size === 1 && !imeComposing.current && !session.terminal.hasSelection()) {
+    if (single?.id === event.pointerId && pointers.current.size === 1 && !composingIme() && !session.terminal.hasSelection()) {
       const dx = event.clientX - single.x, dy = event.clientY - single.y;
       if (Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
         const slot = dx < 0 ? "swipeLeft" : "swipeRight";
@@ -914,7 +924,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       } else if (!single.moved && Math.hypot(dx, dy) <= 10 && Date.now() - single.when <= 500) tap(event.clientX, event.clientY);
       else cancelTaps();
     }
-    if (start && pointers.current.size === 2 && !start.zoomed && !imeComposing.current && !session.terminal.hasSelection()) {
+    if (start && pointers.current.size === 2 && !start.zoomed && !composingIme() && !session.terminal.hasSelection()) {
       pointers.current.set(event.pointerId, {x: event.clientX, y: event.clientY});
       const [a, b] = [...pointers.current.values()];
       const dx = (a.x + b.x) / 2 - start.x, dy = (a.y + b.y) / 2 - start.y;
