@@ -179,12 +179,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const composingRef = useRef(composing);
   composingRef.current = composing;
   const [draft, setDraft] = useState("");
+  // Uploads stay known for the life of the draft, so undo or an IME correction
+  // that restores a deleted token restores its attachment; only tokens still in
+  // the draft show as chips and expand on send.
   const [draftAttachments, setDraftAttachments] = useState<readonly ComposerAttachment[]>([]);
-  // Deleting a token from the draft releases its attachment.
+  const draftAttachmentsRef = useRef(draftAttachments);
+  draftAttachmentsRef.current = draftAttachments;
   const liveAttachments = useMemo(() => liveComposerAttachments(draft, draftAttachments), [draft, draftAttachments]);
   const liveAttachmentsRef = useRef(liveAttachments);
   liveAttachmentsRef.current = liveAttachments;
-  useEffect(() => {if (liveAttachments.length !== draftAttachments.length) setDraftAttachments(liveAttachments);}, [liveAttachments, draftAttachments]);
   // Expanded input tools share the keyboard-sized workspace.
   useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
   // Selection handles appear after a touch long-press; actions also after a mouse selection.
@@ -339,13 +342,13 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     return () => window.removeEventListener("lazysh-prompt-draft", stage);
   }, [session.id, reportError]);
   useEffect(() => onComposerAttachment(session.id, staged => {
-    const current = liveAttachmentsRef.current;
-    const attachment: ComposerAttachment = {...staged, number: nextComposerAttachmentNumber(current)};
+    const known = draftAttachmentsRef.current;
+    const attachment: ComposerAttachment = {...staged, number: nextComposerAttachmentNumber(draftRef.current, known)};
     const editor = composerInput.current;
-    const inserted = insertComposerToken(draftRef.current, editor ? editor.selectionStart : draftRef.current.length, attachment, current);
+    const inserted = insertComposerToken(draftRef.current, editor ? editor.selectionStart : draftRef.current.length, attachment, liveAttachmentsRef.current);
     if (inserted.value.length > 65536) {reportError(new LocalUiError('terminalDraftLimit')); return;}
-    draftRef.current = inserted.value;
-    setDraft(inserted.value); setDraftAttachments([...current, attachment]); setComposing(true);
+    draftRef.current = inserted.value; draftAttachmentsRef.current = [...known, attachment];
+    setDraft(inserted.value); setDraftAttachments(draftAttachmentsRef.current); setComposing(true);
   }), [session.id, reportError]);
 
   useEffect(() => {
@@ -1016,7 +1019,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     // Saved snippets and chords get their own page, so the configured key rows keep their layout.
     if (!preferences.snippets.length && !preferences.chords.length) return tools;
     return <ToolbarPages repeats={() => repeatStarts.current} pages={[{id: "tools", content: tools}, {id: "snippets", content: <div className="terminal-keys-snippets">
-      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
+      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setDraftAttachments([]); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
     </div>}]} />;
   }

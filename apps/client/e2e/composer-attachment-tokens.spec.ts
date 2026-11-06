@@ -1,21 +1,24 @@
 import {expect,test,type Page} from '@playwright/test';
 import {connectAttachmentTerminal} from './fixtures/attachmentTerminal';
 
-test.beforeEach(async({page})=>{
-  await connectAttachmentTerminal(page,{nonce:'c'.repeat(64),ready:'\x1b[?2004lcomposer-ready'});
+async function connect(page:Page,uploadedPath?:string) {
+  await connectAttachmentTerminal(page,{nonce:'c'.repeat(64),uploadedPath,ready:'\x1b[?2004lcomposer-ready'});
   await expect(page.locator('.xterm-screen')).toContainText('composer-ready');
-});
+}
 const steps=()=>window.attachmentTerminal.writes.map(write=>write.steps??[write.data]);
 
 const editor=(page:Page)=>page.getByRole('textbox',{name:'Compose text',exact:true});
 
-async function attachFromComposer(page:Page,file:{name:string;mimeType:string;buffer:Buffer}) {
+async function uploadFromComposer(page:Page,file:{name:string;mimeType:string;buffer:Buffer}) {
   await page.locator('.terminal-composer-sheet').getByRole('button',{name:'Attach',exact:true}).click();
   await page.getByLabel('Choose attachment',{exact:true}).setInputFiles(file);
   await page.getByRole('button',{name:'Upload attachment',exact:true}).click();
   // A composer-originated upload offers the draft, not a direct terminal paste.
   await expect(page.getByRole('button',{name:'Paste uploaded path',exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'Add to the terminal draft',exact:true}).click();
+}
+async function attachFromComposer(page:Page,file:{name:string;mimeType:string;buffer:Buffer}) {
+  await uploadFromComposer(page,file);
   await expect(editor(page)).toBeVisible();
 }
 // One decodable pixel, so the chip preview shows the uploaded image itself.
@@ -23,9 +26,11 @@ const pixel='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwA
 const png=(name:string)=>({name,mimeType:'image/png',buffer:Buffer.from(pixel,'base64')});
 
 test('attached images become numbered inline chips that delete atomically and expand to the uploaded paths on send',async({page},testInfo)=>{
+  await connect(page);
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await editor(page).fill('compare');
   await attachFromComposer(page,png('before.png'));
+  await expect(page.getByRole('status').filter({hasText:'Image #1 added to the draft'})).toHaveCount(1);
   await attachFromComposer(page,png('after.png'));
   await attachFromComposer(page,{name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('notes')});
   await expect(editor(page)).toHaveValue('compare [Image #1] [Image #2] [File #3] ');
@@ -43,7 +48,9 @@ test('attached images become numbered inline chips that delete atomically and ex
   await chips.getByRole('button',{name:'Image #2: after.png. Show preview',exact:true}).click();
   const preview=page.getByRole('figure',{name:'Preview of Image #2',exact:true});
   await expect(preview).toContainText("'/tmp/lazysh/after.png'");
-  await expect(preview.getByRole('img',{name:'Preview of Image #2',exact:true})).toHaveJSProperty('naturalWidth',1);
+  // The figure carries the label, so the image itself is not announced a second time.
+  await expect(preview.locator('img')).toHaveJSProperty('naturalWidth',1);
+  await expect(preview.getByRole('img')).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath('composer-attachment-tokens.png'),animations:'disabled'});
   // Backspace right after a token removes the whole token and its attachment.
   await editor(page).evaluate((element:HTMLTextAreaElement)=>{const end=element.value.indexOf('[File #3]')+'[File #3]'.length;element.focus();element.setSelectionRange(end,end);});
@@ -62,10 +69,41 @@ test('attached images become numbered inline chips that delete atomically and ex
 });
 
 test('the chip remove control releases its attachment',async({page})=>{
+  await connect(page);
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await attachFromComposer(page,png('shot.png'));
   await page.getByRole('button',{name:'Remove Image #1',exact:true}).click();
   await expect(editor(page)).toHaveValue('');
   await expect(page.getByRole('list',{name:'Draft attachments',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Send',exact:true})).toBeDisabled();
+});
+
+test('token text the user typed is never captured, and retyped token text restores its attachment',async({page})=>{
+  await connect(page);
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await editor(page).fill('[Image #1] is my label');
+  await attachFromComposer(page,png('shot.png'));
+  await expect(editor(page)).toHaveValue('[Image #1] is my label [Image #2] ');
+  await expect(page.locator('.terminal-composer-mirror mark')).toHaveText(['[Image #2]']);
+  // Deleting the token releases it; typing its text again within the draft brings it back.
+  await editor(page).press('Backspace');
+  await editor(page).press('Backspace');
+  await expect(editor(page)).toHaveValue('[Image #1] is my label ');
+  await expect(page.getByRole('list',{name:'Draft attachments',exact:true})).toHaveCount(0);
+  await editor(page).pressSequentially('[Image #2]');
+  await expect(page.getByRole('button',{name:'Image #2: shot.png. Show preview',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect.poll(()=>page.evaluate(steps)).toEqual([["[Image #1] is my label '/tmp/lazysh/shot.png'",'\r']]);
+});
+
+test('a forged upload path is refused before it reaches the draft',async({page})=>{
+  await connect(page,'/host/unsafe\x9b201~path');
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await editor(page).fill('keep');
+  await uploadFromComposer(page,png('forged.png'));
+  await expect(page.getByRole('alert')).toHaveText('The upload did not return a valid single-line absolute path for terminal paste.');
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(editor(page)).toHaveValue('keep');
+  await expect(page.getByRole('list',{name:'Draft attachments',exact:true})).toHaveCount(0);
+  expect(await page.evaluate(steps)).toEqual([]);
 });

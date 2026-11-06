@@ -1,4 +1,4 @@
-import {shellPath} from './attachment';
+import {attachmentPathText} from './attachmentPaste';
 
 /** One uploaded file referenced by an inline `[Image #n]` or `[File #n]` draft token. */
 export type ComposerAttachment = {readonly number:number;readonly kind:'image'|'file';readonly path:string;readonly name:string;readonly preview?:Blob};
@@ -24,9 +24,15 @@ export function liveComposerAttachments(value:string,attachments:readonly Compos
   return attachments.filter(attachment=>value.includes(composerTokenText(attachment)));
 }
 
-/** Numbering restarts with each draft and never reuses a number still shown in it. */
-export function nextComposerAttachmentNumber(attachments:readonly ComposerAttachment[]) {
-  return attachments.reduce((highest,attachment)=>Math.max(highest,attachment.number),0)+1;
+/**
+ * Numbering restarts with each draft and never reuses a number within it. A
+ * number whose token text the draft already holds literally (for example text
+ * copied from an agent CLI) is skipped, so a new token never captures it.
+ */
+export function nextComposerAttachmentNumber(value:string,attachments:readonly ComposerAttachment[]) {
+  let number=attachments.reduce((highest,attachment)=>Math.max(highest,attachment.number),0)+1;
+  while((['image','file'] as const).some(kind=>value.includes(composerTokenText({kind,number}))))number++;
+  return number;
 }
 
 const inside=(span:ComposerTokenSpan,position:number)=>span.start<position&&position<span.end;
@@ -82,11 +88,11 @@ export function removeComposerToken(value:string,attachment:ComposerAttachment) 
   return value.split(text).reduce((result,part,index)=>index===0?part:result+(part.startsWith(' ')&&(result===''||/\s$/.test(result))?part.slice(1):part),'');
 }
 
-/** On send, each token becomes the shell-quoted path the upload returned. */
+/** On send, each token becomes the shell-quoted path the upload returned, validated like a direct paste. */
 export function expandComposerDraft(value:string,attachments:readonly ComposerAttachment[]) {
   let result='',offset=0;
   for(const span of composerTokenSpans(value,attachments)){
-    result+=value.slice(offset,span.start)+shellPath(span.attachment.path);
+    result+=value.slice(offset,span.start)+attachmentPathText(span.attachment.path);
     offset=span.end;
   }
   return result+value.slice(offset);
@@ -95,8 +101,12 @@ export function expandComposerDraft(value:string,attachments:readonly ComposerAt
 export type StagedComposerAttachment = Omit<ComposerAttachment,'number'>;
 const STAGE_EVENT='lazysh-composer-attachment';
 
-/** Hand an uploaded file to the terminal composer that requested it. */
+/**
+ * Hand an uploaded file to the terminal composer that requested it. A path the
+ * terminal could not receive literally is refused before any token exists.
+ */
 export function stageComposerAttachment(sessionId:string,attachment:StagedComposerAttachment) {
+  attachmentPathText(attachment.path);
   window.dispatchEvent(new CustomEvent(STAGE_EVENT,{detail:{sessionId,attachment}}));
 }
 

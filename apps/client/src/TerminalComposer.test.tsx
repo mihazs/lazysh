@@ -73,3 +73,27 @@ it('shows attachment tokens as labelled chips that delete atomically with their 
   expect(screen.queryByRole('list',{name:'Draft attachments'})).toBeNull();
   expect(screen.queryByRole('figure')).toBeNull();
 });
+it('removes a whole token when a committed IME composition deleted part of it',()=>{
+  const attachments=[{number:1,kind:'image' as const,path:'/tmp/one.png',name:'one.png'}];
+  function Harness() {
+    const [value,setValue]=useState('look [Image #1] ');
+    return <TerminalComposer value={value} onChange={setValue} onSubmit={()=>{}} onClose={()=>{}} sendEnter disabled={false} attachments={attachments.filter(()=>value.includes('[Image #1]'))}/>;
+  }
+  render(<Harness/>);
+  const editor=screen.getByRole('textbox',{name:'Compose text'}) as HTMLTextAreaElement;
+  // A composition that only adds text next to a token leaves the token and its chip.
+  fireEvent.compositionStart(editor);
+  fireEvent.change(editor,{target:{value:'look [Image #1] ok'}});
+  fireEvent.compositionEnd(editor);
+  expect(editor.value).toBe('look [Image #1] ok');
+  expect(screen.getByRole('button',{name:'Remove Image #1'})).toBeTruthy();
+  fireEvent.change(editor,{target:{value:'look [Image #1] '}});
+  // Gboard reopens composition on the word before the caret, and Backspace removes the bracket mid-composition.
+  fireEvent.compositionStart(editor);
+  fireEvent.change(editor,{target:{value:'look [Image #1 '}});
+  expect(editor.value).toBe('look [Image #1 ');
+  fireEvent.compositionEnd(editor);
+  expect(editor.value).toBe('look  ');
+  expect(editor.selectionStart).toBe(5);
+  expect(screen.queryByRole('list',{name:'Draft attachments'})).toBeNull();
+});

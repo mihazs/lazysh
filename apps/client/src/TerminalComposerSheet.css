@@ -68,6 +68,10 @@
 @media (max-height: 480px) {
   .terminal-composer-sheet .terminal-composer-preview > img { max-height: 64px; }
 }
+/* Phone widths wrap chips instead of clipping them in a row with no visible scroll cue. */
+@media (max-width: 600px) {
+  .terminal-stage > .terminal-composer-sheet > .terminal-composer-attachments { flex-wrap: wrap; max-height: 80px; overflow: hidden auto; }
+}
 .terminal-stage > .terminal-composer-sheet > .terminal-draft-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 0; }
 .terminal-composer-sheet .terminal-composer-secondary, .terminal-composer-sheet .terminal-composer-primary { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .terminal-composer-sheet .terminal-composer-primary { gap: 12px; margin-inline-start: auto; }

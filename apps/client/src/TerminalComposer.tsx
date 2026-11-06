@@ -40,6 +40,8 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
   const editor=useRef<HTMLTextAreaElement|null>(null);
   const mirror=useRef<HTMLDivElement>(null);
   const composing=useRef(false);
+  // The draft and its tokens before an IME composition, checked once it commits.
+  const composition=useRef<{value:string;attachments:readonly ComposerAttachment[]}|null>(null);
   const caret=useRef<number|null>(null);
   const lastCaret=useRef<number|undefined>(undefined);
   const [previewNumber,setPreviewNumber]=useState<number|null>(null);
@@ -109,6 +111,19 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
     if(corrected.caret!==undefined)caret.current=corrected.caret;
     onChange(corrected.value);
   };
+  // IMEs (Android keyboards often recompose the word before the caret on
+  // Backspace) edit freely while composing; a committed composition that
+  // touched part of a token then removes the whole token.
+  const compositionStart=()=>{composing.current=true;composition.current={value,attachments};};
+  const compositionEnd=(committed:string)=>{
+    composing.current=false;
+    const before=composition.current;composition.current=null;
+    if(!before)return;
+    const corrected=atomicComposerEdit(before.value,committed,before.attachments);
+    if(corrected.caret===undefined)return;
+    caret.current=corrected.caret;
+    onChange(corrected.value);
+  };
   const select=()=>{
     const element=editor.current;
     if(!element||composing.current||!spans.length){lastCaret.current=element?.selectionEnd;return;}
@@ -151,7 +166,8 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
       })}
     </ul>}
     {previewed&&<figure id={previewId} className="terminal-composer-preview" aria-label={t('terminalComposerPreview',{label:spokenLabel(previewed)})}>
-      {previewUrl&&<img src={previewUrl} alt={t('terminalComposerPreview',{label:spokenLabel(previewed)})}/>}
+      {/* The figure already carries the label; an empty alt keeps it from being read twice. */}
+      {previewUrl&&<img src={previewUrl} alt=""/>}
       <figcaption><span>{previewed.name}</span><code>{shellPath(previewed.path)}</code></figcaption>
     </figure>}
     <div className="terminal-draft-editor">
@@ -161,7 +177,7 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
       <textarea id={editorId} ref={setEditor} rows={6} maxLength={65536} value={value} aria-describedby={hintId}
         onChange={event=>edit(event.target.value)} onSelect={select} onClick={pointerSelect}
         onScroll={event=>{if(mirror.current)mirror.current.scrollTop=event.currentTarget.scrollTop;}}
-        onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}}/>
+        onCompositionStart={compositionStart} onCompositionEnd={event=>compositionEnd(event.currentTarget.value)}/>
     </div>
     <span className="sr-only" role="status">{announcement}</span>
     <div className="terminal-compose-actions terminal-draft-actions">
