@@ -2379,6 +2379,41 @@ async fn disconnect_inner(state: &AppState, session_id: String) -> Result<()> {
     Ok(())
 }
 
+/// How long an SSH connection may take to answer once the network has returned or switched.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+/// The renderer sends this when the operating system reports that the network returned or
+/// changed, so a terminal on a route that died silently ends now instead of after the keepalives.
+#[tauri::command]
+pub async fn probe_connections(state: State<'_, AppState>, session_ids: Vec<String>) -> Result<()> {
+    probe_connections_inner(&state, &session_ids, PROBE_TIMEOUT).await;
+    Ok(())
+}
+/// Pings each distinct SSH connection behind `session_ids` once. A connection that stays
+/// silent past `deadline` is disconnected, which closes its terminals as lost.
+pub(crate) async fn probe_connections_inner(
+    state: &AppState,
+    session_ids: &[String],
+    deadline: Duration,
+) {
+    let mut handles: Vec<Arc<SshHandle>> = Vec::new();
+    for id in session_ids.iter().take(64) {
+        if let Ok(session) = state.session(id).await {
+            if !handles
+                .iter()
+                .any(|handle| Arc::ptr_eq(handle, &session.handle))
+            {
+                handles.push(session.handle.clone());
+            }
+        }
+    }
+    futures_util::future::join_all(handles.into_iter().map(|handle| async move {
+        if !handle.is_closed() && timeout(deadline, handle.send_ping()).await.is_err() {
+            close_failed_connect(&handle).await;
+        }
+    }))
+    .await;
+}
+
 fn check_path(path: &str) -> Result<()> {
     if path.is_empty() || path.len() > 4096 || path.contains('\0') {
         return Err(SshError::new("invalid_path", "Enter a valid remote path"));

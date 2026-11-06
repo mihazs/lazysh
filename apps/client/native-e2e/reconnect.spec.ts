@@ -23,7 +23,8 @@ it('detects a lost SSH route, retries while it is down and reattaches the same t
 
     gui.stage='owned SSH route cut';
     relay.block();
-    const banner=await browser.$(`[role="status"][aria-label=${JSON.stringify(`Connection lost for Owned SSH GUI host / ${name}`)}]`);
+    // The banner is a region named by its hidden heading; only its phase line is a live region.
+    const banner=await browser.$(`//section[h2[normalize-space()=${JSON.stringify(`Connection lost for Owned SSH GUI host / ${name}`)}]]`);
     await banner.waitForDisplayed({timeout:60_000,timeoutMsg:'Lost-connection banner was not shown'});
     expect(await banner.getText()).toContain('Connection lost.');
     // The tmux client went with the route; the pane itself keeps running on the host.

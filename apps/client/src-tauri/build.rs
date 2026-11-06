@@ -149,6 +149,7 @@ fn main() {
         "ack_output",
         "resize",
         "disconnect",
+        "probe_connections",
         "list_directory",
         "read_file",
         "upload_reserve",

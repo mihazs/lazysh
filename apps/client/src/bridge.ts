@@ -138,6 +138,8 @@ export const api = {
   resize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>(sessionId.startsWith('local:') ? 'local_resize' : "resize", { sessionId, cols, rows }),
   disconnect: (sessionId: string) => invoke<void>(sessionId.startsWith('local:') ? 'local_disconnect' : "disconnect", { sessionId }),
+  /** Asks each SSH connection behind these sessions to answer at once; a silent route closes as lost. */
+  probeConnections: (sessionIds: string[]) => invoke<void>('probe_connections', { sessionIds }),
   listDirectory: (sessionId: string, path: string) =>
     remoteInvoke<FileEntry[]>("list_directory", { sessionId, path }),
   readFile: (sessionId: string, path: string) =>

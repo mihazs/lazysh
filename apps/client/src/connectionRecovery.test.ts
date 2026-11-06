@@ -77,6 +77,14 @@ describe('ConnectionRecovery', () => {
     expect(attempt).not.toHaveBeenCalled();
   });
 
+  it('shows the message of a native failure, which is a plain object rather than an Error', async () => {
+    const subject = recovery();
+    attempt.mockRejectedValueOnce({kind: 'authentication_failed', message: 'Authentication rejected by the server'});
+    subject.start('a', true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(subject.state('a')).toEqual({phase: 'stopped', attempt: 1, message: 'Authentication rejected by the server', exhausted: false});
+  });
+
   it('stops on a final failure and only an explicit retry tries again', async () => {
     const subject = recovery();
     outcomes = [{retry: false, message: 'Authentication rejected by the server'}];
@@ -106,13 +114,33 @@ describe('ConnectionRecovery', () => {
 
   it('never prompts on its own for a session that needs the person, and Retry now runs immediately', async () => {
     const subject = recovery();
-    subject.start('a', false, 'Unlock to reconnect');
+    subject.start('a', false, 'recoveryConfirmToReconnect');
+    expect(subject.state('a')).toEqual({phase: 'stopped', attempt: 0, message: '', hint: 'recoveryConfirmToReconnect', exhausted: false});
     await vi.advanceTimersByTimeAsync(RECOVERY_MAX_DELAY * 2);
     expect(attempt).not.toHaveBeenCalled();
     subject.retryNow('a');
     expect(subject.state('a')).toEqual({phase: 'connecting', attempt: 1});
     await vi.advanceTimersByTimeAsync(0);
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed Retry now on a session that needs the person stops again instead of retrying unattended', async () => {
+    const subject = recovery();
+    subject.start('a', false, 'recoveryConfirmToReconnect');
+    subject.retryNow('a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(subject.state('a')).toEqual({phase: 'stopped', attempt: 1, message: 'Connection refused', exhausted: false});
+    // Neither the backoff window nor the network returning may prompt again.
+    await vi.advanceTimersByTimeAsync(RECOVERY_MAX_DELAY * 2);
+    subject.networkChanged(false);
+    subject.networkChanged(true);
+    await vi.advanceTimersByTimeAsync(RECOVERY_MAX_DELAY * 2);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    subject.retryNow('a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(subject.state('a')).toMatchObject({phase: 'stopped', attempt: 2});
   });
 
   it('cancelling discards the pending timer and a late result of the attempt in flight', async () => {

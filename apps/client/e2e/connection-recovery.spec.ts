@@ -2,7 +2,7 @@ import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
 type Call = {command:string;args:Record<string,unknown>};
-type Fixture = {calls: Call[]; refuse: number; channels: Record<string,{onmessage:(event:unknown)=>void}>};
+type Fixture = {calls: Call[]; refuse: number; hold?: Promise<void>; release?: () => void; channels: Record<string,{onmessage:(event:unknown)=>void}>};
 declare global { interface Window { recovery: Fixture } }
 
 const key='lazysh.workspace.v1';
@@ -21,13 +21,15 @@ async function open(page:Page, previous:unknown[], host:Record<string,unknown>={
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
       if(command==='apple_status_capability')return {available:false,reason:'Recovery fixture'};
       window.recovery.calls.push({command,args});
+      if(command==='connect' && window.recovery.hold)await window.recovery.hold;
       if(command==='connect' && window.recovery.refuse>0) {window.recovery.refuse--;throw {kind:'ssh_error',message:'Connection refused'};}
       if(remote.includes(command)) {
         const sessionId=`native-${++sessions}`;
         window.recovery.channels[sessionId]=args.events as Fixture['channels'][string];
         return {sessionId};
       }
-      if(['resize','ack_output','disconnect','write_stdin'].includes(command))return;
+      if(['resize','ack_output','disconnect','write_stdin','probe_connections','cancel_credential_auth'].includes(command))return;
+      if(command==='has_credentials')return false;
       throw new Error(`Recovery fixture does not provide ${command}`);
     };
   },{key,previous,remote,host});
@@ -44,7 +46,11 @@ const network=(page:Page,online:boolean)=>page.evaluate(online=>{
 },online);
 // Phones show one terminal at a time behind a session switcher instead of tabs.
 const terminal=(page:Page,name:string)=>page.locator(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for ${name}`)}]`);
-const banner=(page:Page)=>page.getByRole('status',{name:'Connection lost for Agent box / agents',exact:true});
+const lostBanner=(page:Page,name:string)=>page.getByRole('region',{name:`Connection lost for ${name}`,exact:true});
+const banner=(page:Page)=>lostBanner(page,'Agent box / agents');
+// Holds every connect open until the returned function runs.
+const holdConnects=(page:Page)=>page.evaluate(()=>{window.recovery.hold=new Promise(resolve=>{window.recovery.release=()=>{window.recovery.hold=undefined;resolve();};});});
+const releaseConnects=(page:Page)=>page.evaluate(()=>window.recovery.release?.());
 
 test('a lost tmux session retries with backoff and reattaches the same tmux session',async({page})=>{
   await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents',tmuxServer:'work'}}]);
@@ -111,20 +117,96 @@ test('a remote exit ends the session without a reconnect banner',async({page})=>
   await expect(terminal(page,'Agent box')).toBeVisible();
   await close(page,'native-1',{message:'Session closed'});
   await expect(page.getByText('Session ended · Session closed. Close this tab or connect again from Hosts.')).toBeVisible();
-  await expect(page.getByRole('status',{name:'Connection lost for Agent box',exact:true})).toHaveCount(0);
+  await expect(lostBanner(page,'Agent box')).toHaveCount(0);
   await page.waitForTimeout(1500);
   expect(await calls(page,'connect')).toHaveLength(1);
 });
 
-test('a host without saved credentials waits for sign-in instead of retrying silently',async({page})=>{
-  await open(page,[{hostId:'box'}],{credentialsStored:false});
+test('a host without saved credentials waits for sign-in, then signing in reattaches the lost tab in place',async({page})=>{
+  await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents',tmuxServer:'work'}}],{credentialsStored:false});
   // Restoration itself used saved credentials; the fixture accepts them so a tab exists to lose.
-  await expect(terminal(page,'Agent box')).toBeVisible();
-  await close(page,'native-1',{message:'Connection reset by peer',lost:true});
-  const lost=page.getByRole('status',{name:'Connection lost for Agent box',exact:true});
-  await expect(lost).toContainText('Credentials are not saved for this host. Sign in to reconnect.');
+  await expect(terminal(page,'Agent box / agents')).toBeVisible();
+  await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);
+  await close(page,'native-2',{message:'Connection reset by peer',lost:true});
+  await expect(banner(page)).toContainText('Credentials are not saved for this host. Sign in to reconnect.');
   await page.waitForTimeout(1500);
   expect(await calls(page,'connect')).toHaveLength(1);
-  await lost.getByRole('button',{name:'Sign in',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Connect to Agent box',exact:true})).toBeVisible();
+  await banner(page).getByRole('button',{name:'Sign in',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Connect to Agent box',exact:true});
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Password',{exact:true}).fill('typed-after-loss');
+  await dialog.getByRole('button',{name:'Connect',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(banner(page)).toHaveCount(0);
+  // The lost tab is replaced, not joined by a second plain shell.
+  await expect(page.locator('.terminal-canvas')).toHaveCount(1);
+  await expect(terminal(page,'Agent box / agents')).toBeVisible();
+  const attaches=await calls(page,'attach_tmux');
+  expect(attaches).toHaveLength(2);
+  expect({sessionId:attaches[1].args.sessionId,name:attaches[1].args.name,tmuxServer:attaches[1].args.tmuxServer}).toEqual({sessionId:'native-3',name:'agents',tmuxServer:'work'});
+  expect(await page.evaluate(key=>JSON.parse(localStorage.getItem(key) ?? 'null'),key)).toEqual([{hostId:'box',attached:{kind:'tmux',name:'agents',tmuxServer:'work'}}]);
+});
+
+test('a host with biometric unlock tries once per Retry now and never retries unattended',async({page})=>{
+  await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents'}}],{credentialsStored:true,biometricUnlock:true});
+  await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);
+  await page.evaluate(()=>{window.recovery.refuse=100;});
+  await close(page,'native-2',{message:'Connection reset by peer',lost:true});
+  await expect(banner(page)).toContainText('Saved credentials need your confirmation. Retry to unlock and reconnect.');
+  await page.waitForTimeout(1500);
+  expect(await calls(page,'connect')).toHaveLength(1);
+  // Each connect on a device is a biometric prompt: one tap, one attempt.
+  await banner(page).getByRole('button',{name:'Retry now',exact:true}).click();
+  await expect(banner(page)).toContainText('Could not reconnect: Connection refused');
+  expect(await calls(page,'connect')).toHaveLength(2);
+  // Neither the backoff window nor the network returning may prompt again.
+  await page.waitForTimeout(3500);
+  await network(page,false);
+  await network(page,true);
+  await page.waitForTimeout(1000);
+  expect(await calls(page,'connect')).toHaveLength(2);
+  await expect(banner(page).getByRole('button',{name:'Retry now',exact:true})).toBeEnabled();
+});
+
+test('an attempt in flight shows its progress and disables Retry now until it settles',async({page})=>{
+  await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents'}}]);
+  await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);
+  await holdConnects(page);
+  await close(page,'native-2',{message:'Connection reset by peer',lost:true});
+  await expect(banner(page)).toContainText('Reconnecting… attempt 1 of 10',{timeout:5000});
+  await expect(banner(page).getByRole('button',{name:'Retry now',exact:true})).toBeDisabled();
+  // Screen readers hear the phase, not each second of the countdown.
+  await expect(banner(page).getByRole('status')).toHaveText('Connection lost. Reconnecting.');
+  await releaseConnects(page);
+  await expect(banner(page)).toHaveCount(0);
+  await expect(terminal(page,'Agent box / agents')).toBeVisible();
+});
+
+test('the network returning asks live SSH sessions to prove their route',async({page})=>{
+  await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents'}}]);
+  await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);
+  await network(page,false);
+  await network(page,true);
+  await expect.poll(async()=>(await calls(page,'probe_connections')).map(call=>call.args.sessionIds)).toEqual([['native-2']]);
+  // A silent route answers by closing as lost, which starts the usual recovery.
+  await close(page,'native-2',{message:'Connection to the server was lost',lost:true});
+  await expect(banner(page)).toBeVisible();
+  await expect(banner(page)).toHaveCount(0,{timeout:5000});
+  expect(await calls(page,'connect')).toHaveLength(2);
+});
+
+test('retrying stops after the attempt cap until the person asks again',async({page})=>{
+  await page.clock.install();
+  await open(page,[{hostId:'box',attached:{kind:'tmux',name:'agents'}}]);
+  await expect.poll(async()=>(await calls(page,'attach_tmux')).length).toBe(1);
+  await page.evaluate(()=>{window.recovery.refuse=100;});
+  await close(page,'native-2',{message:'Connection reset by peer',lost:true});
+  await expect(banner(page)).toBeVisible();
+  // The backoff reaches its 30 s cap by the sixth attempt; each step advances at least one pending retry.
+  for(let step=0;step<40 && (await calls(page,'connect')).length<11;step++)await page.clock.runFor(16_000);
+  await expect(banner(page)).toContainText('Could not reconnect: Connection refused');
+  expect(await calls(page,'connect')).toHaveLength(11);
+  await page.clock.runFor(120_000);
+  expect(await calls(page,'connect')).toHaveLength(11);
+  await expect(banner(page).getByRole('button',{name:'Retry now',exact:true})).toBeEnabled();
 });

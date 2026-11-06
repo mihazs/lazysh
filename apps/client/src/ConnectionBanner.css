@@ -36,8 +36,13 @@
   flex: none;
 }
 .connection-banner-actions .subtle-button {
-  min-height: 36px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 6px 12px;
+}
+/* Touch screens get the 48 dp target Android recommends. */
+@media (pointer: coarse), (max-width: 600px) {
+  .connection-banner-actions .subtle-button { min-height: 48px; min-width: 48px; }
 }
 .connection-banner-spin {
   animation: connection-banner-spin 1s linear infinite;

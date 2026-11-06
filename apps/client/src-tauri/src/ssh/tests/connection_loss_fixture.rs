@@ -39,39 +39,93 @@ async fn type_into(state: &AppState, id: &str, text: &str) {
         .unwrap();
 }
 
-/// A loopback relay whose single accepted stream can be cut like a lost route.
-async fn cuttable_relay(target: u16) -> (u16, tokio::sync::oneshot::Sender<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (cut, cutting) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        let (mut client, _) = listener.accept().await.unwrap();
-        let mut server = tokio::net::TcpStream::connect(("127.0.0.1", target))
-            .await
-            .unwrap();
-        tokio::select! {
-            _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
-            _ = cutting => {}
+/// How a relayed route fails: `Cut` drops both sockets without an SSH disconnect; `Stall`
+/// stops forwarding but keeps them open, like a route that vanished during a Wi-Fi to
+/// cellular switch: no EOF, no reset, no reply.
+enum RouteFailure {
+    Cut,
+    Stall,
+}
+
+/// A password terminal relayed through loopback, whose route fails on demand.
+struct RelayedTerminal {
+    _directory: tempfile::TempDir,
+    _server: TestServer,
+    task: tokio::task::JoinHandle<()>,
+    state: AppState,
+    id: String,
+    rx: Events,
+    fail: Option<tokio::sync::oneshot::Sender<RouteFailure>>,
+}
+impl RelayedTerminal {
+    async fn start() -> Self {
+        let (mut host, _server, task) = server(false).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = host.port;
+        host.port = listener.local_addr().unwrap().port();
+        let (fail, failing) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut server = tokio::net::TcpStream::connect(("127.0.0.1", target))
+                .await
+                .unwrap();
+            let failure = tokio::select! {
+                _ = tokio::io::copy_bidirectional(&mut client, &mut server) => return,
+                failure = failing => failure,
+            };
+            if let Ok(RouteFailure::Stall) = failure {
+                std::future::pending::<()>().await;
+            }
+            let _ = client.shutdown().await;
+        });
+        let (_directory, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let (events, rx) = json_events();
+        let id = password_terminal(&state, &host, events).await.session_id;
+        Self {
+            _directory,
+            _server,
+            task,
+            state,
+            id,
+            rx,
+            fail: Some(fail),
         }
-        // Dropping both halves without an SSH disconnect is what a dead route looks like.
-        let _ = client.shutdown().await;
-    });
-    (port, cut)
+    }
+    fn fail(&mut self, failure: RouteFailure) {
+        let _ = self.fail.take().unwrap().send(failure);
+    }
+    async fn closed(&mut self) -> serde_json::Value {
+        let closed = closed_event(&self.state, &self.id, &mut self.rx).await;
+        self.task.abort();
+        closed
+    }
 }
 
 #[tokio::test]
 async fn dropped_transport_closes_the_terminal_as_lost() {
-    let (mut host, _server, task) = server(false).await;
-    let (port, cut) = cuttable_relay(host.port).await;
-    host.port = port;
-    let (_directory, state) = fixture_state();
-    state.config().unwrap().hosts.push(host.clone());
-    let (events, mut rx) = json_events();
-    let connected = password_terminal(&state, &host, events).await;
-    cut.send(()).unwrap();
-    let closed = closed_event(&state, &connected.session_id, &mut rx).await;
+    let mut terminal = RelayedTerminal::start().await;
+    terminal.fail(RouteFailure::Cut);
+    let closed = terminal.closed().await;
     assert_eq!(closed["lost"], true, "{closed}");
-    task.abort();
+}
+
+#[tokio::test]
+async fn network_change_probe_closes_a_silent_route_as_lost() {
+    let mut terminal = RelayedTerminal::start().await;
+    let ids = vec![terminal.id.clone()];
+    // A route that still answers survives the probe.
+    probe_connections_inner(&terminal.state, &ids, Duration::from_secs(5)).await;
+    assert!(terminal.state.session(&terminal.id).await.is_ok());
+
+    terminal.fail(RouteFailure::Stall);
+    let started = tokio::time::Instant::now();
+    probe_connections_inner(&terminal.state, &ids, Duration::from_millis(500)).await;
+    let closed = terminal.closed().await;
+    assert_eq!(closed["lost"], true, "{closed}");
+    // Well before three 15 s keepalives could have given up on the silent route.
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
 }
 
 #[tokio::test]

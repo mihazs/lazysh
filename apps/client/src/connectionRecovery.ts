@@ -1,4 +1,5 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
+import type {UiKey} from './i18n/core';
 
 /** What a lost session's banner shows. `attempt` counts attempts already made, except
  * while `connecting`, where it is the attempt in flight; `waiting` counts down to `retryAt`. */
@@ -6,9 +7,11 @@ export type RecoveryState =
   | {phase: 'waiting'; attempt: number; retryAt: number}
   | {phase: 'connecting'; attempt: number}
   | {phase: 'offline'; attempt: number}
-  | {phase: 'stopped'; attempt: number; message: string; exhausted: boolean};
+  | {phase: 'stopped'; attempt: number; message: string; hint?: RecoveryHint; exhausted: boolean};
 
-export type RecoveryOutcome = 'reconnected' | {retry: boolean; message: string};
+/** Why a session waits for the person, kept as a key so the banner follows a later language change. */
+export type RecoveryHint = Extract<UiKey, 'recoveryConfirmToReconnect' | 'recoverySignInToReconnect' | 'appConnectionClosed'>;
+export type RecoveryOutcome = 'reconnected' | {retry: boolean; message?: string; hint?: RecoveryHint};
 
 export const RECOVERY_BASE_DELAY = 1000;
 export const RECOVERY_MAX_DELAY = 30_000;
@@ -26,9 +29,13 @@ const finalKinds = new Set([
   'identity_invalid', 'identity_passphrase_required', 'identity_unsupported', 'forwarding_requires_key',
   'credentials_unavailable', 'vault_locked', 'storage', 'host_not_found', 'cancelled',
 ]);
+function field(error: unknown, name: 'kind' | 'message') {
+  const value = error && typeof error === 'object' && name in error ? (error as Record<string, unknown>)[name] : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
 export function retriableFailure(error: unknown) {
-  const kind = error && typeof error === 'object' && 'kind' in error ? (error as {kind: unknown}).kind : undefined;
-  return typeof kind !== 'string' || !finalKinds.has(kind);
+  const kind = field(error, 'kind');
+  return kind === undefined || !finalKinds.has(kind);
 }
 
 type Options = {
@@ -44,21 +51,25 @@ type Options = {
  * attempts slow to the cap instead of stopping, because an OS signal can be wrong
  * (a VPN-only or loopback route); the network's return retries at once. A final
  * failure or the attempt cap stops retrying until the person or the network asks again.
+ * A manual session (one whose credentials need a prompt) only ever tries on Retry now:
+ * a failure stops again and the network's return leaves it alone.
  */
 export class ConnectionRecovery {
   private readonly states = new Map<string, RecoveryState>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly generation = new Map<string, number>();
+  private readonly manual = new Set<string>();
   constructor(private readonly options: Options) {}
 
   state(id: string) { return this.states.get(id); }
   has(id: string) { return this.states.has(id); }
 
-  /** Begins recovering `id`; `automatic` false waits for an explicit retry. */
-  start(id: string, automatic: boolean, message = '') {
+  /** Begins recovering `id`; `automatic` false waits for an explicit retry every time. */
+  start(id: string, automatic: boolean, hint?: RecoveryHint) {
     if (this.states.has(id)) return;
-    if (!automatic) this.set(id, {phase: 'stopped', attempt: 0, message, exhausted: false});
-    else this.schedule(id, 1);
+    if (automatic) { this.schedule(id, 1); return; }
+    this.manual.add(id);
+    this.set(id, {phase: 'stopped', attempt: 0, message: '', ...(hint ? {hint} : {}), exhausted: false});
   }
   retryNow(id: string) {
     const current = this.states.get(id);
@@ -68,11 +79,13 @@ export class ConnectionRecovery {
   cancel(id: string) {
     this.clearTimer(id);
     this.generation.set(id, (this.generation.get(id) ?? 0) + 1);
+    this.manual.delete(id);
     if (this.states.delete(id)) this.options.changed();
   }
   dispose() { for (const id of [...this.states.keys()]) this.cancel(id); }
   networkChanged(online: boolean) {
     for (const [id, current] of this.states) {
+      if (this.manual.has(id)) continue;
       if (online && (current.phase === 'offline' || current.phase === 'waiting' || (current.phase === 'stopped' && current.exhausted))) {
         this.clearTimer(id);
         void this.run(id, current.attempt + 1);
@@ -97,11 +110,13 @@ export class ConnectionRecovery {
     this.set(id, {phase: 'connecting', attempt});
     let outcome: RecoveryOutcome;
     try { outcome = await this.options.attempt(id); }
-    catch (error) { outcome = {retry: retriableFailure(error), message: error instanceof Error ? error.message : String(error)}; }
+    // Native failures arrive as plain {kind, message} objects, not Error instances.
+    catch (error) { outcome = {retry: retriableFailure(error), message: field(error, 'message') ?? String(error)}; }
     if (this.generation.get(id) !== generation || !this.states.has(id)) return;
     if (outcome === 'reconnected') { this.cancel(id); return; }
-    if (!outcome.retry || attempt >= RECOVERY_MAX_ATTEMPTS) this.set(id, {phase: 'stopped', attempt, message: outcome.message, exhausted: outcome.retry});
-    else this.schedule(id, attempt + 1);
+    const manual = this.manual.has(id);
+    if (outcome.retry && !manual && attempt < RECOVERY_MAX_ATTEMPTS) { this.schedule(id, attempt + 1); return; }
+    this.set(id, {phase: 'stopped', attempt, message: outcome.message ?? '', ...(outcome.hint ? {hint: outcome.hint} : {}), exhausted: outcome.retry && !manual});
   }
   private set(id: string, state: RecoveryState) { this.states.set(id, state); this.options.changed(); }
   private clearTimer(id: string) {
@@ -110,13 +125,31 @@ export class ConnectionRecovery {
   }
 }
 
-/** The operating system's network signal, as the WebView reports it. */
-export function useNetworkOnline() {
+/** The operating system's network signal, as the WebView reports it. `changed` runs, at most
+ * once per burst of events, when the network returns or switches (Wi-Fi to cellular, a new address). */
+export function useNetworkOnline(changed?: () => void) {
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
+  const latest = useRef(changed);
+  latest.current = changed;
   useEffect(() => {
+    let pending: ReturnType<typeof setTimeout> | undefined;
     const update = () => setOnline(navigator.onLine !== false);
-    window.addEventListener('online', update); window.addEventListener('offline', update);
-    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update); };
+    const settle = () => {
+      update();
+      if (navigator.onLine === false) return;
+      clearTimeout(pending);
+      pending = setTimeout(() => latest.current?.(), NETWORK_SETTLE_DELAY);
+    };
+    const connection = (navigator as Navigator & {connection?: EventTarget}).connection;
+    window.addEventListener('online', settle); window.addEventListener('offline', update);
+    connection?.addEventListener?.('change', settle);
+    return () => {
+      clearTimeout(pending);
+      window.removeEventListener('online', settle); window.removeEventListener('offline', update);
+      connection?.removeEventListener?.('change', settle);
+    };
   }, []);
   return online;
 }
+/** A network switch fires `online` and `change` together; one probe answers both. */
+const NETWORK_SETTLE_DELAY = 300;
