@@ -174,6 +174,8 @@ fn notifications_distinguish_attention_from_information() {
 #[test]
 fn snapshot_caps_rows_and_uses_private_local_storage() {
     let dir = tempfile::tempdir().unwrap();
+    // 120 in-process durable commits share the volume like companion runs.
+    let writes = contention::shared_run();
     let mut store = Store::open(dir.path()).unwrap();
     for i in 0..120 {
         let normalized =
@@ -183,6 +185,7 @@ fn snapshot_caps_rows_and_uses_private_local_storage() {
         store.ingest(&normalized, chrono::Utc::now()).unwrap();
     }
     drop(store);
+    drop(writes);
     assert_eq!(
         snapshot(dir.path(), "100")["sessions"]
             .as_array()
@@ -785,6 +788,8 @@ fn simultaneous_initialization_and_ingest_preserve_every_event() {
 #[cfg(feature = "storage-observation")]
 #[test]
 fn bootstrap_observation_tracks_real_store_per_thread() {
+    // Two concurrent initializations share one three-second bootstrap budget.
+    let _burst = contention::exclusive_burst();
     let enabled = std::env::var_os("LAZYSH_BOOTSTRAP_OBSERVATION").as_deref()
         == Some(std::ffi::OsStr::new("1"));
     let dir = tempfile::tempdir().unwrap();
@@ -968,11 +973,13 @@ fn near_deadline_contention_counts_every_success_and_fails_explicitly() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "runs this whole test binary again beside a simulated slow durable volume"]
+#[ignore = "runs two copies of this whole test binary beside a simulated slow durable volume"]
 fn contention_cases_keep_their_budget_beside_slow_shared_flushes() {
-    // Every other case runs in parallel, as in a hosted owner run, while each
-    // durable flush takes 50 ms and queues behind every other flush. Bursts of
-    // sixteen writers fit their unchanged budget only when they run alone.
+    // Two copies of this binary run at once, as parallel checkouts' suites do,
+    // each with every other case in parallel as in a hosted owner run. Every
+    // durable flush takes 50 ms and queues behind every other flush from both
+    // processes. Bursts of sixteen writers fit their unchanged budget only
+    // when they run alone on the volume, so the gate must span processes.
     let directory = tempfile::tempdir().unwrap();
     let library = directory.path().join("slow_flush.so");
     let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
@@ -987,24 +994,35 @@ fn contention_cases_keep_their_budget_beside_slow_shared_flushes() {
         .status()
         .expect("build the slow flush simulation");
     assert!(built.success());
-    let output = Command::new(std::env::current_exe().unwrap())
-        .arg("--test-threads=4")
-        .env("LD_PRELOAD", &library)
-        .env("LAZYSH_TEST_SLOW_FLUSH_MS", "50")
-        .env(
-            "LAZYSH_TEST_SLOW_FLUSH_LOCK",
-            directory.path().join("volume.lock"),
-        )
-        .env_remove("LAZYSH_STORAGE_DIAGNOSTICS")
-        .env_remove("LAZYSH_TEST_STORAGE_TRACE_DIR")
-        .output()
-        .unwrap();
-    let report = String::from_utf8_lossy(&output.stdout);
-    let summary = report
-        .lines()
-        .filter(|line| line.ends_with("FAILED") || line.starts_with("test result:"))
-        .collect::<Vec<_>>();
-    assert!(output.status.success(), "{summary:#?}");
+    let copy = || {
+        Command::new(std::env::current_exe().unwrap())
+            .arg("--test-threads=4")
+            .env("LD_PRELOAD", &library)
+            .env("LAZYSH_TEST_SLOW_FLUSH_MS", "50")
+            .env(
+                "LAZYSH_TEST_SLOW_FLUSH_LOCK",
+                directory.path().join("volume.lock"),
+            )
+            // Both copies share one private temporary directory, and with it
+            // the gate, apart from other suites on this machine.
+            .env("TMPDIR", directory.path())
+            .env_remove("LAZYSH_STORAGE_DIAGNOSTICS")
+            .env_remove("LAZYSH_TEST_STORAGE_TRACE_DIR")
+            .output()
+            .unwrap()
+    };
+    let outputs = std::thread::scope(|scope| {
+        let copies = [scope.spawn(copy), scope.spawn(copy)];
+        copies.map(|copy| copy.join().unwrap())
+    });
+    for output in outputs {
+        let report = String::from_utf8_lossy(&output.stdout);
+        let summary = report
+            .lines()
+            .filter(|line| line.ends_with("FAILED") || line.starts_with("test result:"))
+            .collect::<Vec<_>>();
+        assert!(output.status.success(), "{summary:#?}");
+    }
 }
 
 #[test]
