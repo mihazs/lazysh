@@ -71,4 +71,3 @@ it('requires an explicit protected prepared Secret Service image without executi
     await expect(executable(image,'disposable Secret Service','other-daemon')).rejects.toThrow('Untrusted');
   }finally{await rm(directory,{recursive:true,force:true});}
 });
-

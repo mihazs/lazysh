@@ -37,4 +37,3 @@ export function namespaceArguments(program:string,args:string[],directory:string
     '--dir','/tmp/.X11-unix','--bind',directory,directory,'--ro-bind',socket,socket,
     ...files.flatMap(file=>['--dir',path.dirname(file),'--ro-bind',file,file]),'--chdir',directory,'--',program,...args];
 }
-
