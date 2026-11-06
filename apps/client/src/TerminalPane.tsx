@@ -50,9 +50,11 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget, onBackChange, notice }: {
+export default function TerminalPane({ session, active, quietActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice }: {
   session: LiveSession;
   active: boolean;
+  /** Activated by a navigation switch rather than a typing request: touch input keeps the soft keyboard closed. */
+  quietActivation?: boolean;
   reportError: (message: UiErrorCause) => void;
   /** Opens the attachment tool; `composer` asks for the upload to return as a draft token. */
   onOpenAttachments?: (target?: 'composer') => void;
@@ -71,6 +73,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const activeRef = useRef(active);
   const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
+  // Released once focus enters this terminal, so later focus restores behave as before.
+  const quiet = useRef(quietActivation);
+  useEffect(() => {quiet.current = quietActivation;}, [quietActivation]);
   const zellijBusy = useRef(false);
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
@@ -731,7 +736,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     resize.observe(element);
     if (screen) resize.observe(screen);
     fitTerminal();
-    focusTerminal();
+    focusActivatedTerminal();
     return () => {
       owner.disposed = true;
       if (inputOwner.current === owner) inputOwner.current = null;
@@ -754,8 +759,13 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   // Covered output keeps its size and session but leaves focus and the accessibility tree.
   useEffect(() => {container.current?.toggleAttribute('inert', composing);}, [composing]);
   useEffect(() => {
-    if (active) requestAnimationFrame(() => { fit.current?.(); if (composing) focusTerminal(composerInput.current); else focusTerminal(); });
+    if (active) requestAnimationFrame(() => { fit.current?.(); if (composing) focusTerminal(composerInput.current); else focusActivatedTerminal(); });
   }, [active, session, composing]);
+
+  // A soft keyboard opens for focused terminal input; tapping the terminal or the keyboard key still requests it.
+  function focusActivatedTerminal() {
+    if (!quiet.current || !window.matchMedia?.('(pointer: coarse)').matches) focusTerminal();
+  }
 
   function focusTerminal(target?: HTMLElement | null) {
     if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
@@ -1051,7 +1061,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
   </div>;
-  return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
+  return <div className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {quiet.current = false;}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
