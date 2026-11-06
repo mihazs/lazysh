@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.18.1
+
+### Patch Changes
+
+- 4fa31f0: Keep the phone Preferences heading and its Close button on screen after adding toolbar keys from Available keys.
+- @lazysh/account-usage@1.18.1
+  - @lazysh/common@1.18.1
+  - @lazysh/display-idle@1.18.1
+  - @lazysh/et-transport@1.18.1
+  - @lazysh/mosh-transport@1.18.1
+
 ## 1.18.0
 
 ### Minor Changes
