@@ -716,6 +716,9 @@ it('manually reconnects attachment uploads in the same live Mosh terminal and ne
     await writeFile(source,image,{mode:0o600,flag:'wx'});
     await (await panel.$('input[aria-label="Choose attachment"]')).setValue(source);
     const destination=await (await panel.$('label*=Destination path')).$('input');
+    // The default is a private /tmp file; this recovery case pins an explicit host-directory path.
+    await destination.waitForDisplayed({timeout:5000});expect(await destination.getValue()).toBe('');
+    await destination.setValue(`./${name}`);
     await browser.waitUntil(async()=>(await destination.getValue())===`./${name}`,{timeout:5000});
     await (await panel.$('button=Upload attachment')).click();
     const alert=await panel.$('[role="alert"]');await alert.waitForDisplayed({timeout:5000});

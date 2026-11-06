@@ -33,6 +33,33 @@ it('stages a private file, uploads only on explicit action, and exposes a quoted
   expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh-one', text: 'My own prompt' });
   window.removeEventListener('lazysh-prompt-draft', staged);
 });
+it('saves to a private host /tmp file by default and shows the path the host chose', async () => {
+  vi.mocked(api.uploadFile).mockResolvedValue({path:'/tmp/lazysh-0123456789ab-report.txt'});
+  render(<AttachmentPanel sessionId="ssh-one" />);
+  fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [file()] } });
+  const destination = await screen.findByLabelText('Destination path');
+  expect(destination).toHaveProperty('value', '');
+  expect(document.getElementById(destination.getAttribute('aria-describedby')!)?.textContent).toBe('Leave empty to save a private copy under /tmp with a unique name. Enter a path to save it there instead.');
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  await screen.findByLabelText('Host path');
+  expect(api.uploadFile).toHaveBeenCalledExactlyOnceWith('ssh-one', 'report.txt', [104, 101, 108, 108, 111], attachmentReceipt, true);
+  expect(screen.getByLabelText('Host path')).toHaveProperty('value', "'/tmp/lazysh-0123456789ab-report.txt'");
+});
+it('labels a default /tmp upload in the terminal draft with the picked file name, and a typed path with its own name', async () => {
+  const attach = vi.fn();
+  vi.mocked(api.uploadFile).mockResolvedValueOnce({path:'/tmp/lazysh-0123456789ab-report.txt'}).mockResolvedValueOnce({path:'/work/notes.txt'});
+  render(<AttachmentPanel sessionId="ssh-one" attachTarget="composer" onAttach={attach} />);
+  fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [file()] } });
+  await screen.findByText(/report.txt · 5 bytes/);
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add to the terminal draft' }));
+  expect(attach).toHaveBeenLastCalledWith('/tmp/lazysh-0123456789ab-report.txt', {name:'report.txt',kind:'file',preview:undefined});
+  fireEvent.change(screen.getByLabelText('Destination path'), { target: { value: '/work/notes.txt' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
+  await waitFor(() => expect(api.uploadFile).toHaveBeenCalledTimes(2));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add to the terminal draft' }));
+  expect(attach).toHaveBeenLastCalledWith('/work/notes.txt', {name:'notes.txt',kind:'file',preview:undefined});
+});
 it('cancels before upload, rejects invalid destination, and reports native no-overwrite errors', async () => {
   vi.mocked(api.uploadFile).mockRejectedValue({ message: 'Remote file already exists' });
   render(<AttachmentPanel sessionId="ssh-one" />);
@@ -59,7 +86,7 @@ it('handles clipboard permission denial without automatic uploads', async () => 
   expect(api.uploadFile).not.toHaveBeenCalled();
 });
 
-async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>void) {
+async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>void,destination?:string) {
   const bytes = attachmentPngHeader();
   const image = new File([bytes], 'shot.png', { type: 'image/png' });
   Object.defineProperty(image, 'arrayBuffer', { value: async () => bytes.buffer });
@@ -74,7 +101,9 @@ async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>voi
   vi.mocked(api.uploadFile).mockResolvedValue({path:"/work/a'b.txt"});
   render(<AttachmentPanel sessionId="ssh-one" onRestoreFileTransfer={onRestoreFileTransfer} />);
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [image] } });
-  fireEvent.click(await screen.findByLabelText('Crop or annotate PNG/JPEG'));
+  const editing=await screen.findByLabelText('Crop or annotate PNG/JPEG');
+  if(destination)fireEvent.change(screen.getByLabelText('Destination path'),{target:{value:destination}});
+  fireEvent.click(editing);
   await waitFor(() => expect(context.drawImage).toHaveBeenCalled());
   return context;
 }
@@ -87,7 +116,16 @@ it('flattens an explicit crop to PNG before the bounded upload', async () => {
   await screen.findByLabelText('Host path');
   expect(context.translate).toHaveBeenCalledWith(-10, -0);
   expect(HTMLCanvasElement.prototype.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
-  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', './shot-edited.png', [1, 2, 3],attachmentReceipt);
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', 'shot-edited.png', [1, 2, 3],attachmentReceipt,true);
+});
+
+it('turning on editing keeps a destination the user already typed',async()=>{
+  vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>callback({size:3,arrayBuffer:async()=>new Uint8Array([1,2,3]).buffer} as Blob));
+  await openEditableImage(undefined,'/srv/keep.png');
+  expect(screen.getByLabelText('Destination path')).toHaveProperty('value','/srv/keep.png');
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  await screen.findByLabelText('Host path');
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one','/srv/keep.png',[1,2,3],attachmentReceipt);
 });
 
 it('cancelling held PNG encoding never reserves or uploads its late final bytes',async()=>{

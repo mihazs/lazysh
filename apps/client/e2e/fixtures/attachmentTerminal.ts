@@ -25,7 +25,7 @@ export async function connectAttachmentTerminal(page:Page,{nonce,uploadedPath,re
       if(command==='write_stdin'){window.attachmentTerminal.writes.push({sessionId:args.sessionId,data:args.data,steps:args.steps,headers:options?.headers});return;}
       if(['resize','ack_output','disconnect','cancel_credential_auth'].includes(command))return;
       if(command==='upload_reserve')return {uploadId:receipt};
-      if(command==='upload_file'){window.attachmentTerminal.uploads.push(args.path);return {path:uploadedPath??`/tmp/lazysh/${String(args.path).split('/').pop()}`};}
+      if(command==='upload_file'){window.attachmentTerminal.uploads.push({path:args.path,temporary:args.temporary===true});return {path:uploadedPath??`/tmp/lazysh/${String(args.path).split('/').pop()}`};}
       if(command==='upload_cancel')return {outcome:'unknown_or_settled'};
       if(command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected attachment terminal fixture command: ${command}`);

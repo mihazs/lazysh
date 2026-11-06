@@ -5,7 +5,8 @@ import {ATTACHMENT_LIMIT,checkDestination} from './attachment';
 import {LocalUiError} from './i18n/localError';
 
 type Api=Pick<typeof nativeApi,'reserveUpload'|'cancelUpload'|'uploadFile'>;
-type Prepared={path:string;bytes:Uint8Array};
+/** `temporary` uploads name a file only; the host chooses its private /tmp path. */
+type Prepared={path:string;bytes:Uint8Array;temporary?:boolean};
 type Operation={abandoned:boolean;receipt?:string;cancel?:Promise<void>;settled?:boolean};
 /** One caller-owned upload. A late reserve acknowledgement can only be cancelled. */
 export function useHostUpload(api:Api,sessionId:string,onError:(error:unknown)=>void){
@@ -46,7 +47,8 @@ export function useHostUpload(api:Api,sessionId:string,onError:(error:unknown)=>
       const reserved=await api.reserveUpload(sessionId,prepared.bytes.length);
       job.receipt=reserved.uploadId;
       if(!current()){await sendCancel(job);return;}
-      const uploaded=await api.uploadFile(sessionId,prepared.path,Array.from(prepared.bytes),job.receipt);
+      const data=Array.from(prepared.bytes);
+      const uploaded=await (prepared.temporary?api.uploadFile(sessionId,prepared.path,data,job.receipt,true):api.uploadFile(sessionId,prepared.path,data,job.receipt));
       job.settled=true;
       if(current())complete(uploaded.path,job.receipt);
     }catch(error){if(current())onError(error);}

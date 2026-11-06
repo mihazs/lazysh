@@ -2944,7 +2944,9 @@ class NativeWorkspaceTest {
                 awaitDocument(scenario, "native $extension clipboard staged without upload", """
                     (()=>{const panel=document.querySelector('.attachment-panel');
                       const destination=Array.from(panel.querySelectorAll('label')).find(x=>x.firstChild?.textContent==='Destination path')?.querySelector('input');
-                      return Boolean(destination?.value.endsWith('.$extension')) &&
+                      // The default destination is empty: the host saves a private /tmp copy.
+                      return destination?.value==='' &&
+                        Boolean(panel.querySelector('.attachment-selected > summary')?.textContent.includes('.$extension ·')) &&
                         panel.querySelectorAll('input[type=checkbox]').length===1 &&
                         !panel.querySelector('input[readonly]') &&
                         !Array.from(panel.querySelectorAll('[role=status]')).some(x=>x.textContent==='Uploaded to this host. Copy its path or edit the prompt below.');})()

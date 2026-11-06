@@ -1689,6 +1689,8 @@ const translations = {
   attachmentPaste: ["Colar imagem da área de transferência", "Pegar imagen del portapapeles"],
   attachmentMetadata: ["{{name}} · {{bytes}} bytes", "{{name}} · {{bytes}} bytes"],
   attachmentDestination: ["Caminho de destino", "Ruta de destino"],
+  attachmentTemporaryPlaceholder: ["Arquivo privado em /tmp", "Archivo privado en /tmp"],
+  attachmentTemporaryHint: ["Deixe vazio para salvar uma cópia privada em /tmp com um nome único. Informe um caminho para salvar nele.", "Déjalo vacío para guardar una copia privada en /tmp con un nombre único. Escribe una ruta para guardarla allí."],
   attachmentEditing: ["Recortar ou anotar PNG/JPEG", "Recortar o anotar PNG/JPEG"],
   attachmentDrawingHint: ["Desenhe na imagem. A borda ciano mostra o recorte e não é incluída no envio. As coordenadas usam os pixels originais; as edições são enviadas como PNG.", "Dibuja sobre la imagen. El borde cian muestra el recorte y no se incluye en el envío. Las coordenadas usan los píxeles originales; las ediciones se envían como PNG."],
   attachmentCropX: ["Recorte x", "Recorte x"],

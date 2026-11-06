@@ -61,7 +61,8 @@ test('attached images become numbered inline chips that delete atomically and ex
   expect(await page.evaluate(steps)).toEqual([]);
   await page.getByRole('button',{name:'Send',exact:true}).click();
   await expect.poll(()=>page.evaluate(steps)).toEqual([["compare '/tmp/lazysh/before.png' '/tmp/lazysh/after.png'  ",'\r']]);
-  expect(await page.evaluate(()=>window.attachmentTerminal.uploads)).toEqual(['./before.png','./after.png','./notes.txt']);
+  // Each upload asked the host for its default private /tmp copy, sending only the file name.
+  expect(await page.evaluate(()=>window.attachmentTerminal.uploads)).toEqual(['before.png','after.png','notes.txt'].map(path=>({path,temporary:true})));
   // The next draft numbers its attachments from one again.
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   await attachFromComposer(page,png('again.png'));

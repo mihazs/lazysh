@@ -7,12 +7,14 @@ editing checks declared dimensions before browser decoding (8 megapixels, at mos
 8192 pixels per side). Permission and decoder failures remain visible. Actual
 camera/photo/clipboard permissions and memory use still need device acceptance.
 
-Choose a destination and upload over the existing verified SSH connection. Remote
-Files uses the same native transfer ownership. Both paths exclusively create a
-new file; existing files are never truncated or replaced. A successful attachment
-offers a shell-quoted path and an editable prompt. Copy and Stage are explicit;
-upload completion never sends a prompt or terminal input. Optional expiring public
-URLs use the independent, opt-in [sharing service](sharing.md).
+Leave the destination empty to save under `/tmp`, or type a path, then upload over
+the existing verified SSH connection (see [Remote destination
+paths](#remote-destination-paths)). Remote Files uses the same native transfer
+ownership. Both paths exclusively create a new file; existing files are never
+truncated or replaced. A successful attachment offers a shell-quoted path and an
+editable prompt. Copy and Stage are explicit; upload completion never sends a
+prompt or terminal input. Optional expiring public URLs use the independent,
+opt-in [sharing service](sharing.md).
 
 Mosh terminal traffic and SSH file transfer use separate connections. If the
 SSH connection closes while the Mosh terminal survives, the upload reports that
@@ -104,6 +106,20 @@ certify physical-device network/lifecycle behavior.
 
 ## Remote destination paths
 
+The destination field starts empty, and an empty destination is the default. The
+host then saves the upload in `/tmp` as `/tmp/lazysh-<random>-<name>`: a 48-bit
+random prefix from a fresh UUID, then the selected file name (crop/annotation
+uploads use `<name>-edited.png`), bounded to 255 bytes with its extension kept.
+The file name must not contain folders. The file is created exclusively with mode
+`0600`. Before any byte is written, the open file is checked to be owner-only; a
+server that ignored the requested mode is asked again through SETSTAT. If the file
+still grants group or other access, the upload fails with `upload_not_private` and
+the empty file is removed. The error says a file may remain only when that removal
+also fails. Hosts without a `/tmp` directory, such as Win32-OpenSSH, save the same
+unique name in the SFTP login directory instead, which is already private to the
+account. The returned `/tmp` path is what Copy, Stage, Chat and terminal paste
+receive. A typed path keeps the explicit behaviour below.
+
 Host-local uploads resolve the existing parent through SFTP REALPATH before
 exclusive file creation, then return the exact bounded absolute SFTP name used
 for OPEN. Attachments copies/stages that returned name; Files refreshes its
@@ -121,7 +137,8 @@ input containing backslashes, the server first resolves the whole input, avoidin
 a guess between a Unix literal filename and a Windows separator. Servers that
 cannot canonicalize such a missing final name fail before creating a file.
 Malformed, relative, control-containing or over-4096-byte destinations likewise
-fail before OPEN. No overwrite fallback, pathname removal or retry is added.
+fail before OPEN. No overwrite fallback or retry is added, and the only pathname
+removal is the empty private `/tmp` file described above.
 
 The owned Linux OpenSSH fixture verifies a distinct SFTP initial directory and
 agent CWD, including quotes, Unicode and a literal Unix backslash. Native fake

@@ -530,7 +530,14 @@ pub async fn upload_file(
     upload_id: String,
     path: String,
     data: Vec<u8>,
+    temporary: Option<bool>,
 ) -> AccessResult<Uploaded> {
+    // A temporary upload names only the file; the host picks a private unique path.
+    let destination = if temporary.unwrap_or(false) {
+        ssh::Destination::Temporary(path)
+    } else {
+        ssh::Destination::Path(path)
+    };
     lease
         .run(async {
             let work = state
@@ -538,7 +545,7 @@ pub async fn upload_file(
                 .claim(&upload_id, &session_id, &lease, data.len())?;
             let session = state.session(&session_id).await?;
             work.run_published(
-                ssh::transfer_file(&session, &work.job.access, path, data, &work),
+                ssh::transfer_file(&session, &work.job.access, destination, data, &work),
                 |uploaded| {
                     session
                         .clipboard

@@ -7,12 +7,13 @@ import { useMountedAccess, useProtectedApi, useProtectedCallback } from './acces
 import type {AttachmentPathPaste} from './attachmentPaste';
 import {useHostUpload} from './useHostUpload';
 import {useHostClipboard} from './useHostClipboard';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { api as nativeApi } from './bridge';
 import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageSize, shellPath, validateCrop, type Crop, type ImageSize, type Point } from './attachment';
 
 type Selected = { file: File; bytes: Uint8Array; size: ImageSize | null };
 type Stroke = { points: Point[]; color: string; width: number };
+const editedName = (name: string) => `${name.replace(/\.[^/.]+$/, '')}-edited.png`;
 
 /** What was uploaded, for callers that reference the file instead of only its path. */
 export type UploadedAttachment = {name:string;kind:'image'|'file';preview?:Blob};
@@ -30,7 +31,9 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
   const pasting=useRef<{target:{path:string};claimed:boolean}|null>(null);
   const [pasteBusy,setPasteBusy]=useState(false);
   const [selected, setSelected] = useState<Selected | null>(null);
+  // Empty means the default: a private, uniquely named file under the host's /tmp.
   const [destination, setDestination] = useState('');
+  const destinationHint = useId();
   const [crop, setCrop] = useState<Crop>({ x: 0, y: 0, width: 1, height: 1 });
   const [editing, setEditing] = useState(false);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -86,7 +89,7 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
       try { size = imageSize(bytes); }
       catch (e) { setNotice(e instanceof Error ? captureUiError(e) : new LocalUiError('attachmentEditingUnavailable')); }
       if (size && file.type && file.type !== size.mime && file.type !== 'application/octet-stream') throw new LocalUiError('attachmentTypeMismatch');
-      setSelected({ file, bytes, size }); setDestination(`./${file.name}`);
+      setSelected({ file, bytes, size }); setDestination('');
       if (size) setCrop({ x: 0, y: 0, width: size.width, height: size.height });
     } catch (e) { if (current === generation.current) setError(e instanceof Error ? captureUiError(e) : String(e)); }
   }
@@ -152,7 +155,8 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
     setError(''); setNotice('');
     let sent:UploadedAttachment|null=null;
     await uploadJob.start(async()=>{
-      checkDestination(destination);
+      const temporary = !destination.trim();
+      if (!temporary) checkDestination(destination);
       let bytes = selected.bytes;
       if (editing && selected.size) {
         const rect = validateCrop(crop, selected.size);
@@ -169,11 +173,13 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
       }
       const image=bytes!==selected.bytes||!!selected.size||selected.file.type.startsWith('image/');
       const mime=bytes!==selected.bytes?'image/png':selected.size?.mime??selected.file.type;
-      sent={name:'',kind:image?'image':'file',preview:image?new Blob([new Uint8Array(bytes)],{type:mime}):undefined};
-      return {path:destination,bytes};
+      const name = editing && selected.size ? editedName(selected.file.name) : selected.file.name;
+      // A private /tmp copy gets a random prefix; label it with the file name the user picked.
+      sent={name:temporary?name:'',kind:image?'image':'file',preview:image?new Blob([new Uint8Array(bytes)],{type:mime}):undefined};
+      return temporary ? {path:name,bytes,temporary} : {path:destination,bytes};
     },(path,uploadId)=>{
       completed.current=Object.freeze({path});
-      if(sent)uploadedFile.current={...sent,name:path.slice(path.lastIndexOf('/')+1)||path};
+      if(sent)uploadedFile.current={...sent,name:sent.name||path.slice(path.lastIndexOf('/')+1)||path};
       setAttachable(true);hostClipboard.completed(uploadId);
       setRecoveryNeeded(false);setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
@@ -198,9 +204,9 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
     {recoveryNeeded && onRestoreFileTransfer && <button type="button" disabled={busy} onClick={guard(()=>onRestoreFileTransfer(()=>{if(currentPasteOwner()){setError('');setRecoveryNeeded(false);setNotice({key:'attachmentRestored'});}}))}>{t('attachmentRestore')}</button>}
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}{notice && <p role="status">{typeof notice==='object'&&!(notice instanceof LocalUiError)?t(notice.key):uiErrorText(notice)}</p>}
     {selected && <details className="attachment-selected" open={!uploaded||!attachable}><summary>{t('attachmentMetadata',{name:selected.file.name,bytes:formatNumber(selected.file.size)})}</summary><div className="form-stack">
-      <label>{t('attachmentDestination')}<input value={destination} disabled={busy} onChange={event => {clearCompletion();setDestination(event.target.value);}} /></label>
+      <label>{t('attachmentDestination')}<input value={destination} placeholder={t('attachmentTemporaryPlaceholder')} aria-describedby={destinationHint} disabled={busy} onChange={event => {clearCompletion();setDestination(event.target.value);}} /></label><small id={destinationHint}>{t('attachmentTemporaryHint')}</small>
       <details className="attachment-options" hidden={!selected.size}><summary>{t('attachmentOptions')}</summary>
-      {selected.size && <label><input type="checkbox" checked={editing} disabled={busy} onChange={event => { clearCompletion();setEditing(event.target.checked); setDestination(event.target.checked ? `./${selected.file.name.replace(/\.[^/.]+$/, '')}-edited.png` : `./${selected.file.name}`); }} />{t('attachmentEditing')}</label>}
+      {selected.size && <label><input type="checkbox" checked={editing} disabled={busy} onChange={event => { clearCompletion();setEditing(event.target.checked); }} />{t('attachmentEditing')}</label>}
       {editing && selected.size && <div className="attachment-editor"><p>{t('attachmentDrawingHint')}</p>
         <div className="button-row">{(['x', 'y', 'width', 'height'] as const).map(field => <label key={field}>{t(({x:'attachmentCropX',y:'attachmentCropY',width:'attachmentCropWidth',height:'attachmentCropHeight'} as const)[field])}<input type="number" min={field === 'width' || field === 'height' ? 1 : 0} max={field === 'x' || field === 'width' ? selected.size!.width : selected.size!.height} disabled={busy} value={crop[field]} onChange={event => {clearCompletion();setCrop({ ...crop, [field]: Number(event.target.value) });}} /></label>)}<label>{t('attachmentColor')}<input type="color" disabled={busy} value={color} onChange={event => {clearCompletion();setColor(event.target.value);}} /></label><button type="button" disabled={busy || !strokes.length} onClick={() => {clearCompletion();setStrokes(values => values.slice(0, -1));}}>{t('attachmentUndo')}</button></div>
         <canvas ref={canvas} width={selected.size.width} height={selected.size.height} aria-label={t('attachmentCanvas')} style={{ width: '100%', height: 'auto', maxWidth: '800px', touchAction: 'none', display: 'block' }}
@@ -208,7 +214,7 @@ export default function AttachmentPanel({ sessionId, onAttach, attachTarget='cha
           onPointerMove={event => { if (!stroke.current || !selected.size || stroke.current.points.length >= 1000) return; stroke.current.points.push(imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size)); redraw(stroke.current); }}
           onPointerUp={() => { if (stroke.current) { const completed = stroke.current; stroke.current = null; setStrokes(values => [...values, completed]); } }} onPointerCancel={() => { stroke.current = null; redraw(); }} />
       </div>}
-      </details><div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{uploadJob.busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling||pasteBusy} onClick={() => { generation.current++; clearCompletion();if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
+      </details><div className="button-row"><button type="button" className="primary-button" disabled={busy} onClick={() => void upload()}>{uploadJob.busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling||pasteBusy} onClick={() => { generation.current++; clearCompletion();if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
     </div></details>}
 
   </section>;

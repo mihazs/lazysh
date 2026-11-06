@@ -21,6 +21,9 @@ struct Peer {
     unsupported_realpath: bool,
     root_sensitive: bool,
     resolve_blocked: bool,
+    // A shared /tmp whose new files stay group/other readable despite fsetstat.
+    exposed_temporary: bool,
+    removable: bool,
     paths: Arc<Mutex<Vec<String>>>,
     resolutions: Arc<Mutex<Vec<String>>>,
 }
@@ -147,9 +150,45 @@ impl russh_sftp::server::Handler for Peer {
     async fn close(&mut self, id: u32, _handle: String) -> std::result::Result<Status, StatusCode> {
         Ok(ok(id))
     }
-    async fn remove(&mut self, _id: u32, _name: String) -> std::result::Result<Status, StatusCode> {
+    async fn remove(&mut self, id: u32, _name: String) -> std::result::Result<Status, StatusCode> {
         self.removals.fetch_add(1, Ordering::SeqCst);
+        if self.removable {
+            return Ok(ok(id));
+        }
         Err(StatusCode::PermissionDenied)
+    }
+    async fn stat(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> std::result::Result<russh_sftp::protocol::Attrs, StatusCode> {
+        if !self.exposed_temporary || path != "/tmp" {
+            return Err(StatusCode::NoSuchFile);
+        }
+        let attrs = FileAttributes {
+            permissions: Some(0o41777),
+            ..FileAttributes::empty()
+        };
+        Ok(russh_sftp::protocol::Attrs { id, attrs })
+    }
+    async fn fstat(
+        &mut self,
+        id: u32,
+        _handle: String,
+    ) -> std::result::Result<russh_sftp::protocol::Attrs, StatusCode> {
+        let attrs = FileAttributes {
+            permissions: Some(0o100644),
+            ..FileAttributes::empty()
+        };
+        Ok(russh_sftp::protocol::Attrs { id, attrs })
+    }
+    async fn fsetstat(
+        &mut self,
+        id: u32,
+        _handle: String,
+        _attrs: FileAttributes,
+    ) -> std::result::Result<Status, StatusCode> {
+        Ok(ok(id))
     }
 }
 
@@ -193,7 +232,7 @@ async fn cancellation_of_real_stalled_resolution_and_write_closes_the_owned_stre
         let sending = tokio::spawn(async move {
             work.run(ssh::transfer_sftp(
                 client,
-                "new attachment.txt".into(),
+                ssh::Destination::Path("new attachment.txt".into()),
                 vec![7; 65536],
             ))
             .await
@@ -315,7 +354,12 @@ async fn cancellation_retires_blocked_init_or_write_without_peer_drain() {
         let sending = tokio::spawn(async move {
             work.run(async {
                 let client = russh_sftp::client::SftpSession::new(stream).await?;
-                ssh::transfer_sftp(client, "new attachment.txt".into(), vec![7; 65536]).await
+                ssh::transfer_sftp(
+                    client,
+                    ssh::Destination::Path("new attachment.txt".into()),
+                    vec![7; 65536],
+                )
+                .await
             })
             .await
         });
@@ -446,7 +490,7 @@ async fn check_canonical(peer: Peer, input: &str, expected: Option<&str>) {
     let (client, server) = tokio::io::duplex(262144);
     let task = tokio::spawn(russh_sftp::server::run(server, peer));
     let client = russh_sftp::client::SftpSession::new(client).await.unwrap();
-    let result = ssh::transfer_sftp(client, input.into(), vec![]).await;
+    let result = ssh::transfer_sftp(client, ssh::Destination::Path(input.into()), vec![]).await;
     match expected {
         Some(path) => {
             assert_eq!(result.unwrap().path, path);
@@ -485,5 +529,42 @@ async fn canonical_root_requests_do_not_become_drive_relative_or_single_slash() 
             *resolutions.lock().unwrap(),
             vec![&input[..input.rfind('/').unwrap() + 1]]
         );
+    }
+}
+
+#[tokio::test]
+async fn temporary_upload_that_cannot_be_made_private_writes_nothing_and_removes_its_file() {
+    for removable in [true, false] {
+        let peer = Peer {
+            exposed_temporary: true,
+            removable,
+            canonical: Some("/tmp".into()),
+            ..Peer::default()
+        };
+        let (paths, writes, removals) = (
+            peer.paths.clone(),
+            peer.writes.clone(),
+            peer.removals.clone(),
+        );
+        let (client, server) = tokio::io::duplex(262144);
+        let task = tokio::spawn(russh_sftp::server::run(server, peer));
+        let client = russh_sftp::client::SftpSession::new(client).await.unwrap();
+        let error = ssh::transfer_sftp(
+            client,
+            ssh::Destination::Temporary("shot.png".into()),
+            vec![7; 16],
+        )
+        .await
+        .expect_err("an exposed temporary file must be refused");
+        assert_eq!(error.kind(), "upload_not_private");
+        let created = paths.lock().unwrap().clone();
+        assert!(created.len() == 1 && created[0].starts_with("/tmp/lazysh-"));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert_eq!(removals.load(Ordering::SeqCst), 1);
+        assert_eq!(error.message().contains("may remain"), !removable);
+        timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
