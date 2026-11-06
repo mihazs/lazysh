@@ -42,6 +42,43 @@ export function syncTerminalViewport(terminal: Terminal) {
   if (typeof viewport?._refresh === 'function') viewport._refresh(true);
 }
 
+/** xterm 5.5 viewport seam. To follow output, xterm moves the DOM viewport
+ * itself and ignores the next scroll event. A wheel or touch scroll that lands
+ * before that event is dispatched merges into it and is dropped: the viewport
+ * reports history while the rendered rows stay live. Once xterm has handled the
+ * scroll event, a user scroll still out of step moves the buffer to the row the
+ * viewport shows, with xterm's own row height and rounding.
+ */
+export function keepViewportScrolls(terminal: Terminal, element: HTMLElement) {
+  const viewport = terminal.element?.querySelector<HTMLElement>('.xterm-viewport');
+  if (!viewport) return () => {};
+  const core = (terminal as unknown as {_core?: {viewport?: {_currentRowHeight?: unknown}}})._core;
+  let before: number | undefined, moved = false;
+  const gesture = () => {before = viewport.scrollTop;};
+  // xterm's wheel and touch handlers move the viewport synchronously; their scroll
+  // event follows in the next frame, before that frame's animation callbacks.
+  const settled = () => {
+    if (before !== undefined && viewport.scrollTop !== before && !moved) {moved = true; requestAnimationFrame(() => {moved = false;});}
+    before = undefined;
+  };
+  const scrolled = () => {
+    if (!moved) return;
+    moved = false;
+    const height = core?.viewport?._currentRowHeight;
+    if (typeof height !== 'number' || !Number.isFinite(height) || height <= 0 || !viewport.offsetParent) return;
+    const line = Math.round(viewport.scrollTop / height);
+    if (line !== terminal.buffer.active.viewportY) terminal.scrollToLine(line);
+  };
+  const gestures = ['wheel', 'touchmove'];
+  gestures.forEach(name => {element.addEventListener(name, gesture, true); element.addEventListener(name, settled);});
+  // Registered after xterm's own listener, so it sees the scroll xterm settled.
+  viewport.addEventListener('scroll', scrolled);
+  return () => {
+    gestures.forEach(name => {element.removeEventListener(name, gesture, true); element.removeEventListener(name, settled);});
+    viewport.removeEventListener('scroll', scrolled);
+  };
+}
+
 /** xterm 5.5 fires this private event synchronously before user-originated onData.
  * This marker is read-only; the IME adapter below is separately version-pinned.
  */
