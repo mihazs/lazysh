@@ -1042,6 +1042,65 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The inbox test action posts through the packaged notification plugin; Android's own
+    // notification records and the SystemUI shade, not the DOM, prove the delivery.
+    @Test fun inboxTestNotificationReachesTheShadeAndPauseDisablesIt() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+        val device = UiDevice.getInstance(instrumentation)
+        val scenario = NativeActivityFixture.scenario
+        val title = "lazysh notifications"
+        val body = "Local notifications are enabled on this device."
+        val inbox = "[role='dialog'][aria-label='Notification inbox']"
+        val stored = "JSON.parse(localStorage.getItem('lazysh.inbox.v1')??'{}').notifications===true"
+        fun posted() = manager.activeNotifications.filter {
+            it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() == title
+        }
+        fun testButton(enabled: Boolean) = "Array.from(document.querySelectorAll(${JSONObject.quote("$inbox button")}))" +
+            ".some(x=>x.textContent==='Test notification' && x.disabled===${!enabled})"
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+        posted().forEach { manager.cancel(it.tag, it.id) }
+        awaitUnlockedWorkspace(scenario, "notification inbox workspace")
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        preferencesCategory(scenario, "inbox", inbox)
+        try {
+            if (evaluate(scenario, stored) == "true") webButton("Pause system notifications")
+            awaitDocument(scenario, "test action waits for enabled notifications", testButton(false))
+            webButton("Enable system notifications")
+            awaitDocument(scenario, "granted notification permission enables the inbox",
+                visibleStatus("System notifications enabled for new attention events while connected.") + " && " + stored)
+            webButton("Test notification")
+            awaitDocument(scenario, "test notification submitted",
+                visibleStatus("Test notification submitted. Delivery depends on your system notification settings."))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (posted().isEmpty() && System.nanoTime() < deadline) Thread.sleep(100)
+            val record = posted().singleOrNull()
+            assertNotNull("The test action must post exactly one Android notification", record)
+            assertEquals("Test notification body", body,
+                record!!.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+            try {
+                assertTrue("Notification shade must open", device.openNotification())
+                assertNotNull("Test notification title must be visible in the shade", device.wait(Until.findObject(By.text(title)), 5000))
+                assertNotNull("Test notification body must be visible in the shade", device.findObject(By.text(body)))
+            } finally {
+                manager.cancel(record.tag, record.id)
+                device.pressBack()
+            }
+            assertTrue("Cancelled test notification must leave the shade", device.wait(Until.gone(By.text(title)), 5000))
+            val focus = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!NativeActivityFixture.readiness(scenario).ready && System.nanoTime() < focus) Thread.sleep(50)
+            webButton("Pause system notifications")
+            awaitDocument(scenario, "pause disables system notifications and the test action",
+                testButton(false) + " && !($stored) && Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Enable system notifications')")
+            assertTrue("Paused inbox must not post another notification", posted().isEmpty())
+        } finally {
+            posted().forEach { manager.cancel(it.tag, it.id) }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Notification inbox']")).perform(webClick())
+        }
+    }
+
     // Launcher entries are aliases of LauncherActivity, so switching never removes the workspace task.
     @Test fun appIconAliasSwitchKeepsTheRunningWorkspaceActivity() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -4837,8 +4896,9 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
-    private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String) {
-        val active = ".settings-navigation [data-settings-page='$id']:not([hidden])"
+    // `opened` is the selector a row that opens its own dialog, instead of a page, leaves shown.
+    private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String, opened: String? = null) {
+        val active = opened ?: ".settings-navigation [data-settings-page='$id']:not([hidden])"
         val target = ".settings-navigation button[data-settings-target='$id']"
         repeat(3) {
             if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(active)}))") == "true") return
