@@ -1,5 +1,13 @@
 # @lazysh/agent
 
+## 1.19.0
+
+### Patch Changes
+
+- @lazysh/account-usage@1.19.0
+  - @lazysh/common@1.19.0
+  - @lazysh/notification-client@1.19.0
+
 ## 1.18.2
 
 ### Patch Changes
