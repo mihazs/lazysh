@@ -116,9 +116,8 @@ export default function TerminalSelectionTools({terminal, handles, onCopy, onDon
   return <>
     {handles && handle('start')}
     {handles && handle('end')}
-    <div ref={bar} role="toolbar" aria-label={t('terminalSelectionTools')} onPointerDown={event => event.preventDefault()}
-      style={{position: 'fixed', left: 0, top: 0, zIndex: 1001, display: 'flex', gap: 4, padding: 4, borderRadius: 8,
-        background: 'var(--theme-surface, #1d2129)', border: '1px solid var(--theme-border, #293323)', boxShadow: '0 2px 8px rgb(0 0 0 / .35)'}}>
+    <div ref={bar} className="terminal-selection-tools" role="toolbar" aria-label={t('terminalSelectionTools')} onPointerDown={event => event.preventDefault()}
+      style={{position: 'fixed', left: 0, top: 0, zIndex: 1001, display: 'flex', gap: 4, padding: 4, borderRadius: 8}}>
       <button type="button" onClick={() => copyAndClose(terminal.getSelection())}>{t('terminalCopy')}</button>
       <button type="button" onClick={() => terminal.selectAll()}>{t('terminalSelectAll')}</button>
       <button type="button" onClick={() => {terminal.select(0, terminal.buffer.active.viewportY, terminal.rows * terminal.cols); copyAndClose(terminal.getSelection());}}>{t('terminalCopyScreen')}</button>

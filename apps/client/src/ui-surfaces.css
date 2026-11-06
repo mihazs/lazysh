@@ -571,11 +571,10 @@ input[type="search"] {
  * contrast or forced colours. Cards stay solid for reading and keep only the soft top highlight. */
 .host-list, .settings-navigation .settings-category-list,
 .preferences-content [data-settings-page] > :is(details, fieldset, ul) { box-shadow: var(--ui-glass-highlight); }
+.terminal-selection-tools { border: 1px solid var(--ui-control-border); background: var(--theme-panel); box-shadow: var(--ui-glass-highlight), var(--ui-glass-shadow); }
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background: color-mix(in srgb, black 90%, transparent)) {
-  :root .terminal-keys {
-    background: var(--ui-glass-surface); -webkit-backdrop-filter: var(--ui-glass-blur); backdrop-filter: var(--ui-glass-blur);
-    box-shadow: var(--ui-glass-highlight);
-  }
+  :root :is(.terminal-keys, .terminal-selection-tools) { background: var(--ui-glass-surface); -webkit-backdrop-filter: var(--ui-glass-blur); backdrop-filter: var(--ui-glass-blur); }
+  :root .terminal-keys { box-shadow: var(--ui-glass-highlight); }
   @media (min-width: 601px) {
     :root .dialog-backdrop > .dialog { background: var(--ui-glass-surface); -webkit-backdrop-filter: var(--ui-glass-blur); backdrop-filter: var(--ui-glass-blur); }
     /* The sticky detail header frosts what scrolls beneath it without painting a second band of glass. */
@@ -585,6 +584,7 @@ input[type="search"] {
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   :root .terminal-keys { background: var(--theme-bg); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  :root .terminal-selection-tools { background: var(--theme-panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :root .dialog-backdrop > .dialog { background: var(--theme-panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :root .dialog:has(.settings-navigation), :root .dialog:has(.settings-navigation) .settings-detail-header { background: var(--theme-bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }

@@ -1716,6 +1716,11 @@ button svg {
   overflow-wrap: anywhere;
 }
 .session-choice[aria-current="true"] { background: var(--ui-fill-selected); }
+/* Borderless lists still mark the current item with a 3:1 accent bar, not only a tinted fill. */
+.session-choice[aria-current="true"], .workspace-live-sessions button[aria-current="location"] { box-shadow: inset 3px 0 0 var(--accent); }
+@media (forced-colors: active) {
+  .session-choice[aria-current="true"], .workspace-live-sessions button[aria-current="location"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .session-switcher[data-layout="list"] .session-choice-destination::before { content: " · "; }
 .session-switcher[data-layout="cards"] .session-choice { padding: 16px; }
 .session-switcher[data-layout="cards"] .session-choice-name { display: block; font-weight: 600; }

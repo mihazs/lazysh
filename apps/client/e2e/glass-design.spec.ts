@@ -11,11 +11,13 @@ const host={id:'design-host',name:'Build box',host:'build.example',port:22,usern
 async function openApp(page:Page,appTheme:AppTheme) {
   await installNativeBridge(page,undefined,{nativeEvents:true});
   await page.addInitScript(({appTheme,host})=>{
+    let terminals=0;
     if(!sessionStorage.getItem('design-seeded')){sessionStorage.setItem('design-seeded','1');localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,appTheme}));}
     const replies:Record<string,unknown>={list_hosts:[host],app_icon_status:{available:false,current:'unknown',reason:'Design fixture.'},
-      local_capability:{available:true,reason:'Design fixture; no shell runs.'},local_connect:{sessionId:'local:design'},theme_link_status:false,
+      local_capability:{available:true,reason:'Design fixture; no shell runs.'},theme_link_status:false,
       local_write:undefined,local_resize:undefined,local_ack:undefined,local_disconnect:undefined};
     window.nativeFixtureInvoke=async command=>{
+      if(command==='local_connect')return {sessionId:`local:design-${++terminals}`};
       if(command in replies)return replies[command];
       throw new Error(`Unexpected design fixture command: ${command}`);
     };
@@ -25,7 +27,13 @@ async function openApp(page:Page,appTheme:AppTheme) {
 async function openLocalTerminal(page:Page,phone:boolean) {
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect(page.locator('.xterm-screen')).toBeVisible();
+  await expect(page.locator('.xterm-screen:visible').first()).toBeVisible();
+}
+/** WCAG contrast between two opaque sRGB colours given as 0-255 channels. */
+function contrast(a:number[],b:number[]) {
+  const lum=(channels:number[])=>channels.slice(0,3).map(v=>{const n=v/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+  const [x,y]=[lum(a),lum(b)];
+  return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);
 }
 const audit=(page:Page)=>page.evaluate(designAudit);
 const expectSubtle=async(page:Page,where:string)=>expect(await audit(page),where).toEqual({borderedControls:[],cyan:[]});
@@ -61,13 +69,11 @@ for(const appTheme of ['forest','midnight','paper'] as const)test(`${appTheme} c
   const ring=await add.evaluate(node=>{
     const style=getComputedStyle(node);
     const context=document.createElement('canvas').getContext('2d')!;
-    const rgb=(color:string)=>{context.fillStyle=color;context.fillRect(0,0,1,1);return Array.from(context.getImageData(0,0,1,1).data).slice(0,3);};
-    const lum=(channels:number[])=>channels.map(v=>{const n=v/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+    const rgb=(color:string)=>{context.fillStyle=color;context.fillRect(0,0,1,1);return Array.from(context.getImageData(0,0,1,1).data);};
     let surface=node.parentElement!;while(getComputedStyle(surface).backgroundColor==='rgba(0, 0, 0, 0)'&&surface.parentElement)surface=surface.parentElement;
-    const [a,b]=[lum(rgb(style.outlineColor)),lum(rgb(getComputedStyle(surface).backgroundColor))];
-    return {visible:node.matches(':focus-visible'),style:style.outlineStyle,width:parseFloat(style.outlineWidth),ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
+    return {visible:node.matches(':focus-visible'),style:style.outlineStyle,width:parseFloat(style.outlineWidth),outline:rgb(style.outlineColor),surface:rgb(getComputedStyle(surface).backgroundColor)};
   });
-  expect(ring.visible).toBe(true);expect(ring.style).toBe('solid');expect(ring.width).toBeGreaterThanOrEqual(2);expect(ring.ratio).toBeGreaterThanOrEqual(3);
+  expect(ring.visible).toBe(true);expect(ring.style).toBe('solid');expect(ring.width).toBeGreaterThanOrEqual(2);expect(contrast(ring.outline,ring.surface)).toBeGreaterThanOrEqual(3);
   await add.click();
   const editor=page.getByRole('dialog',{name:'Add a host',exact:true});
   await editor.locator('details:not([open]) > summary').evaluateAll(nodes=>nodes.forEach(node=>(node as HTMLElement).click()));
@@ -95,7 +101,7 @@ for(const appTheme of ['forest','midnight','paper'] as const)test(`${appTheme} c
   await page.screenshot({path:testInfo.outputPath(`${appTheme}-preferences.png`)});
 });
 
-for(const appTheme of ['forest','paper'] as const)test(`${appTheme} glass chrome keeps AA text and turns solid for reduced transparency and more contrast`,async({page},testInfo)=>{
+for(const appTheme of ['forest','midnight','paper'] as const)test(`${appTheme} glass chrome keeps AA text and turns solid for reduced transparency and more contrast`,async({page},testInfo)=>{
   const phone=testInfo.project.name==='phone';
   await openApp(page,appTheme);
   await openLocalTerminal(page,phone);
@@ -123,4 +129,43 @@ for(const appTheme of ['forest','paper'] as const)test(`${appTheme} glass chrome
   }
   await media.send('Emulation.setEmulatedMedia',{features:[]});
   await expectSubtle(page,'restored');
+});
+
+/** The current item's own cue: an opaque fill plus an inset bar that must reach 3:1 against both fills. */
+function currentCue(current:Locator) {
+  return current.evaluate(node=>{
+    const context=document.createElement('canvas').getContext('2d')!;
+    const rgb=(color:string)=>{context.clearRect(0,0,1,1);context.fillStyle=color;context.fillRect(0,0,1,1);return Array.from(context.getImageData(0,0,1,1).data);};
+    const other=Array.from(node.parentElement!.children).find(sibling=>sibling!==node&&sibling.tagName==='BUTTON')!;
+    const style=getComputedStyle(node),bar=style.boxShadow.match(/^(.+\))\s+([\d.]+)px 0px 0px 0px inset$/);
+    return {bar:bar?rgb(bar[1]):[],width:bar?Number(bar[2]):0,current:rgb(style.backgroundColor),other:rgb(getComputedStyle(other).backgroundColor),otherShadow:getComputedStyle(other).boxShadow};
+  });
+}
+async function expectCurrentCue(current:Locator,where:string) {
+  await current.page().mouse.move(0,0);
+  const cue=await currentCue(current);
+  expect({width:cue.width>=2,opaque:cue.current[3]===255&&cue.other[3]===255,otherShadow:cue.otherShadow},where).toEqual({width:true,opaque:true,otherShadow:'none'});
+  expect(contrast(cue.bar,cue.current),`${where} bar on the current fill`).toBeGreaterThanOrEqual(3);
+  expect(contrast(cue.bar,cue.other),`${where} bar beside the other fill`).toBeGreaterThanOrEqual(3);
+}
+
+for(const appTheme of ['forest','midnight','paper'] as const)test(`${appTheme} current session keeps a 3:1 cue without an outline`,async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';
+  await openApp(page,appTheme);
+  await openLocalTerminal(page,phone);
+  await openLocalTerminal(page,phone);
+  await expect(page.locator('.session-tabs [role="tab"]')).toHaveCount(2);
+  await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();
+  const switcher=page.getByRole('dialog',{name:'Switch terminal session',exact:true});
+  await expect(switcher.locator('.session-choice')).toHaveCount(2);
+  await expectCurrentCue(switcher.locator('.session-choice[aria-current="true"]'),'session switcher');
+  await page.keyboard.press('Escape');
+  await expect(switcher).toHaveCount(0);
+  if(phone)return;
+  await page.locator('[data-workspace-mode="workspaces"]').click();
+  const summary=page.locator('.workspace-session-summary');
+  if(await summary.isVisible())await summary.click();
+  const live=page.getByRole('group',{name:'Live app sessions',exact:true});
+  await expect(live.getByRole('button')).toHaveCount(2);
+  await expectCurrentCue(live.locator('button[aria-current="location"]'),'live sessions');
 });

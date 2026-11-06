@@ -72,7 +72,7 @@ The same focus issue affects Preferences: opening it should not jump to Font siz
 
 ### 5. Apply restrained branded glass
 
-Keep the actual Lazysh logo, navy background, cyan primary accent and existing theme tokens. The current stylesheet already contains a **16px blur** treatment; additional blur alone cannot correct the hierarchy shown above.
+Keep the actual Lazysh logo, navy background and existing theme tokens. The primary accent is now a restrained periwinkle instead of cyan ([#1054](https://github.com/mihazs/lazysh/issues/1054)). The current stylesheet already contains a **16px blur** treatment; additional blur alone cannot correct the hierarchy shown above.
 
 Use frosted glass for the compact header and temporary action surfaces, with a visible edge and restrained elevation. Keep terminal output, agent messages and forms on readable surfaces. Retain solid fallbacks for reduced transparency, forced colors and unsupported rendering. Avoid stacking several blurred containers around the same content.
 
