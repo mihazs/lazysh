@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.25.1
+
+### Patch Changes
+
+- bcec7e8: Keep the Android soft keyboard closed after tapping a Herdr workspace, tab or pane switch, also on wide layouts such as a phone in landscape or a tablet; tapping the terminal or the keyboard toolbar key still opens it.
+- @lazysh/account-usage@1.25.1
+  - @lazysh/common@1.25.1
+  - @lazysh/display-idle@1.25.1
+  - @lazysh/et-transport@1.25.1
+  - @lazysh/mosh-transport@1.25.1
+
 ## 1.25.0
 
 ### Minor Changes
