@@ -1,5 +1,5 @@
 import {LocalUiError} from './i18n/localError';
-import {isUiLanguage, type UiLanguage} from './i18n/core';
+import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
@@ -10,9 +10,13 @@ export const themes = {
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
 } satisfies Record<string, ITheme>;
-export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
+export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
-export function toolbarKeyLabel(key: ToolbarKey): string { return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key; }
+export function toolbarKeyLabel(key: ToolbarKey): string {
+  return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key === "agents" ? t("appAgents") : key === "workspaces" ? t("navigationWorkspaces") : key;
+}
+/** Toolbar keys that open a navigation view instead of typing. */
+export const toolbarNavigationActions = {agents: "openAgents", workspaces: "openWorkspaces"} as const satisfies Partial<Record<ToolbarKey, GestureAction>>;
 const legacyToolbar = ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"];
 /** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
 export const toolbarRowBreak = "row-break";
@@ -46,7 +50,7 @@ function parseToolbar(value: unknown): ToolbarEntry[] {
     return true;
   });
 }
-export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
+export const gestureActions = ["none", "auto", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "openAgents", "openWorkspaces", "nextTab", "previousTab", "nextPane", "previousPane", "zoomPane", "fontSize", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 /** Actions that need a slot-specific meaning: level-aware defaults and pinch text sizing. */
 const slotOnlyActions: readonly GestureAction[] = ["auto", "fontSize"];
 /** Actions any discrete gesture, D-pad corner or toolbar long-press can run. */
@@ -62,7 +66,7 @@ export type GestureSlot = typeof gestureSlots[number];
 export type ToolbarAlternate = {action: GestureAction; keys?: string};
 /** Modifier keys keep their tap and lock cycle; every other key can carry a long-press action. */
 export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr"; }
-export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
+export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;

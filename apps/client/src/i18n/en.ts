@@ -1091,6 +1091,8 @@ export const english = {
   "gestureInterruptCtrlC": "Interrupt (Ctrl+C)",
   "gestureNextLazyshSession": "Next lazysh session",
   "gesturePreviousLazyshSession": "Previous lazysh session",
+  "gestureOpenAgents": "Open or close Agents",
+  "gestureOpenWorkspaces": "Open or close Workspaces",
   "gestureNextZellijTab": "Next Zellij tab",
   "gesturePreviousZellijTab": "Previous Zellij tab",
   "gestureNextZellijPane": "Next Zellij pane",

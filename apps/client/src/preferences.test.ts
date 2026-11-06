@@ -107,6 +107,16 @@ describe("keyboard chords", () => {
     // Without long-press actions the snapshot carries no new field, so older sync peers still accept it.
     expect(Object.hasOwn(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarAlternates: {ctrl: {action: "paste"}}}))), "toolbarAlternates")).toBe(false);
   });
+  it("keeps Agents and Workspaces as toolbar keys and as actions for every discrete slot", () => {
+    const stored = JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbar: ["esc", "agents", "workspaces"],
+      bodyGestures: {...defaults.bodyGestures, doubleTap: "openAgents", pullShallow: "openWorkspaces"}, gestures: {...defaults.gestures, up: "openWorkspaces"},
+      dpadCorners: {left: "openAgents", right: "backspace"}, toolbarAlternates: {esc: {action: "openWorkspaces"}}})));
+    expect(stored).toMatchObject({toolbar: ["esc", "agents", "workspaces"], bodyGestures: {doubleTap: "openAgents", pullShallow: "openWorkspaces"},
+      gestures: {up: "openWorkspaces"}, dpadCorners: {left: "openAgents"}, toolbarAlternates: {esc: {action: "openWorkspaces"}}});
+    // Neither key is a default toolbar key, so existing toolbars keep their layout.
+    expect(defaults.toolbar).not.toContain("agents");
+    expect(defaults.toolbar).not.toContain("workspaces");
+  });
 });
 
 describe("OSC52 clipboard requests", () => {

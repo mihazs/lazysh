@@ -2841,6 +2841,33 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
 
+    // The toolbar editor's Agents and Workspaces keys open each view for the real
+    // connection, and the destination heading's back control returns to the terminal.
+    private fun verifyNavigationToolbarKeys(scenario: ActivityScenario<MainActivity>) {
+        val owned = JSONObject.quote("__lazyshNavigationToolbar_" + UUID.randomUUID().toString().replace("-", ""))
+        val key = JSONObject.quote("lazysh.preferences.v1")
+        fun replaceToolbar(script: String) = assertEquals("Owned toolbar preferences must apply", "true", evaluate(scenario,
+            "(()=>{const key=$key;$script;window.dispatchEvent(new StorageEvent('storage',{key}));return true;})()"))
+        replaceToolbar("""window[$owned]=localStorage.getItem(key);const stored=JSON.parse(window[$owned]??'null')??{};
+            localStorage.setItem(key,JSON.stringify({...stored,version:1,toolbar:['esc','agents','workspaces']}))""")
+        val heading = ".workspace-destination-heading"
+        try {
+            for (label in listOf("Agents", "Workspaces")) {
+                awaitDocument(scenario, "touchable $label toolbar key", workspaceButtonVisible(".terminal-keys", label))
+                onWebView().withElement(findElement(Locator.XPATH,
+                    "//div[contains(@class,'terminal-keys')]//button[normalize-space(.)='$label']")).perform(webClick())
+                awaitDocument(scenario, "$label opened from its toolbar key", workspaceElementVisible(heading) +
+                    " && document.querySelector('$heading h2')?.textContent===${JSONObject.quote(label)}")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$heading button[aria-label='Return to terminal']")).perform(webClick())
+                awaitDocument(scenario, "$label returned to the terminal", "!" + workspaceElementVisible(heading) + " && " +
+                    workspaceElementVisible(".terminal-canvas .xterm-screen"))
+            }
+        } finally {
+            replaceToolbar("const original=window[$owned];delete window[$owned];if(original===null)localStorage.removeItem(key);else localStorage.setItem(key,original)")
+        }
+        println("lazysh navigation: Agents and Workspaces toolbar keys opened and returned through the real UI")
+    }
+
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
     private fun verifyOwnedClipboardImages(scenario: ActivityScenario<MainActivity>, label: String) {
@@ -3890,6 +3917,7 @@ class NativeWorkspaceTest {
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf($prompt)>x.textContent.lastIndexOf($literal))")
                 verifyToolbarPages(scenario, fixture.getString("prompt"), nonce)
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
+                if (!requireHerdr) verifyNavigationToolbarKeys(scenario)
                 if (!requireSharedHerdr) verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
                 if (requireSharedHerdr) verifySharedHerdrNavigation(scenario, fixture.getJSONObject("herdr"), name, label)
                 else if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)

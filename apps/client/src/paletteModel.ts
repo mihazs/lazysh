@@ -1,10 +1,13 @@
 /** Pure command palette model: matching, ranking and keyboard selection. */
+import type {ChordHint} from './keyboard';
 export type PaletteGroup = 'host' | 'session' | 'tool' | 'action';
 export type PaletteCommand = Readonly<{
   id: string;
   group: PaletteGroup;
   label: string;
   detail?: string;
+  /** The hardware chord that runs this command outside the palette. */
+  shortcut?: ChordHint;
   keywords?: readonly string[];
   current?: boolean;
   disabled?: boolean;
