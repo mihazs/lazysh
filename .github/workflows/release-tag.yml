@@ -73,8 +73,10 @@ jobs:
             --volume "$RUNNER_TEMP/fdroid-release:/workspace:rw" \
             registry.gitlab.com/fdroid/fdroidserver@sha256:1ea8bef1820bff06c2974e31b4fc4c79c364cd24231b86e71fa4b926797e0dac sleep infinity
           provisioning=$(bun .changeset/release-tag.ts provision)
+          # Bound every container apt run, including the reviewed recipe's, against stalled mirrors.
+          docker exec --interactive --user root "$BUILD_CONTAINER" sh -s -- --no-update < .github/scripts/apt-install.sh
           docker exec --user root "$BUILD_CONTAINER" bash -euo pipefail -c "$provisioning"
-          docker exec --user root "$BUILD_CONTAINER" apt-get install -y python3-venv
+          docker exec --interactive --user root "$BUILD_CONTAINER" sh -s -- --no-update python3-venv < .github/scripts/apt-install.sh
           docker exec --user root "$BUILD_CONTAINER" chown -R vagrant:vagrant /workspace
           docker exec "$BUILD_CONTAINER" bash -euo pipefail -c '
             python3 -m venv /home/vagrant/fdroid-tools
