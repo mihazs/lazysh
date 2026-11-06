@@ -414,6 +414,78 @@ mod linux {
         }
         Peer { ancestry, stdio }
     }
+    /// Compares executables without returning their paths.
+    fn owned_executable(identity: ClientIdentity) -> Result<Vec<u8>, &'static str> {
+        let same =
+            || relation(read(identity.pid)).is_some_and(|(start, _)| start == identity.start);
+        if identity.pid <= 1 || !same() {
+            return Err("ExecutableUnavailable");
+        }
+        let path = std::ffi::CString::new(format!("/proc/{}/exe", identity.pid)).unwrap();
+        let mut bytes = [0u8; 4097];
+        let length =
+            unsafe { libc::readlink(path.as_ptr(), bytes.as_mut_ptr().cast(), bytes.len()) };
+        if length <= 0 || length as usize == bytes.len() || !same() {
+            return Err("ExecutableUnavailable");
+        }
+        Ok(bytes[..length as usize].to_vec())
+    }
+    /// A pidfd pins one process, so a signal can never reach a reused PID.
+    struct Pidfd(std::os::fd::OwnedFd);
+    impl Pidfd {
+        /// `None` means the listed client already exited.
+        fn open(identity: ClientIdentity) -> Result<Option<Self>, &'static str> {
+            use std::os::fd::FromRawFd;
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, identity.pid, 0) };
+            if fd < 0 {
+                return match io::Error::last_os_error().raw_os_error() {
+                    Some(libc::ESRCH) => Ok(None),
+                    _ => Err("PidfdUnavailable"),
+                };
+            }
+            let fd = Self(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) });
+            // Matching the listed start time after opening binds the pidfd to it.
+            match read(identity.pid) {
+                Sample::Observed { start, state, .. }
+                    if start == identity.start && !matches!(state, 'Z' | 'X' | 'x') =>
+                {
+                    Ok(Some(fd))
+                }
+                Sample::Observed { .. } | Sample::Missing | Sample::Unowned => Ok(None),
+                Sample::Invalid | Sample::Unavailable(_) => Err("ClientIdentityUnavailable"),
+            }
+        }
+        fn exited(&self, timeout_ms: i32) -> Result<bool, &'static str> {
+            use std::os::fd::AsRawFd;
+            let mut poll = libc::pollfd {
+                fd: self.0.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            match unsafe { libc::poll(&mut poll, 1, timeout_ms) } {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err("PidfdUnavailable"),
+            }
+        }
+        fn kill(&self) -> Result<(), &'static str> {
+            use std::os::fd::AsRawFd;
+            let sent = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    self.0.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if sent == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err("SignalFailed")
+            }
+        }
+    }
     fn fresh_client(clients: &Clients, lifetimes: &Lifetimes) -> Option<ClientIdentity> {
         let identity = lifetimes.0[1]?;
         let mut selected = clients
@@ -1014,6 +1086,71 @@ mod linux {
                 .unwrap_or_else(Peer::unavailable);
             format!("{peer:?}")
         }
+        /// tmux before 3.8 never tells an exiting control client to exit while
+        /// bytes for its vanished stdout reader remain queued (tmux/tmux#5444);
+        /// `kill-server` and server-side `detach-client` both wait on that gate, so
+        /// the server never exits. After every product SSH transport has retired,
+        /// kill only such orphans: control clients last listed by the
+        /// identity-checked server, still running its executable, that no longer
+        /// descend from the owned sshd. A client still under a live SSH session
+        /// fails closed instead.
+        pub(super) async fn retire_orphaned_controls(
+            &self,
+            within: std::time::Duration,
+        ) -> Result<usize, &'static str> {
+            let server = match self.0.first() {
+                Some(&(pid, Sample::Observed { start, .. }, _)) => ClientIdentity { pid, start },
+                _ => return Err("ServerIdentityUnavailable"),
+            };
+            let anchor = self.3.ok_or("SshAnchorUnavailable")?;
+            let rows = match &self.1 {
+                Some(Clients(Ok(rows))) => rows,
+                Some(Clients(Err(kind))) => return Err(kind),
+                None => return Err("NotObserved"),
+            };
+            let executable = owned_executable(server)?;
+            let deadline = tokio::time::Instant::now() + within;
+            let mut retired = 0;
+            for row in rows.iter().filter(|row| row.control) {
+                let identity = match row.original {
+                    Sample::Observed { start, state, .. } if !matches!(state, 'Z' | 'X' | 'x') => {
+                        ClientIdentity {
+                            pid: row.pid,
+                            start,
+                        }
+                    }
+                    // A healthy client can finish exiting (and its PID be reused) between
+                    // listing and sampling.
+                    Sample::Observed { .. } | Sample::Missing | Sample::Unowned => continue,
+                    _ => return Err("ClientIdentityUnavailable"),
+                };
+                let Some(client) = Pidfd::open(identity)? else {
+                    continue;
+                };
+                while !client.exited(0)? {
+                    // Unavailable retries; an orphan never reaches the shallow sshd tree.
+                    let ancestry = peer_probe(identity, anchor, read, read_fd).ancestry;
+                    if matches!(ancestry, Ancestry::Reparented | Ancestry::Bounded) {
+                        if owned_executable(identity)? != executable {
+                            return Err("ForeignExecutable");
+                        }
+                        client.kill()?;
+                        let remaining =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if !client.exited(remaining.as_millis().clamp(1, 1000) as i32)? {
+                            return Err("OrphanSurvivedKill");
+                        }
+                        retired += 1;
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err("LiveSshPeer");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+            Ok(retired)
+        }
         pub(super) fn before_stop(&mut self) {
             self.4 = self.waits();
             for (pid, _, before) in &mut self.0 {
@@ -1310,6 +1447,75 @@ mod linux {
     }
 
     #[tokio::test]
+    async fn orphan_retirement_kills_only_detached_same_executable_controls() {
+        fn spawn(args: &[&str]) -> Observer {
+            let child = std::process::Command::new(args[0])
+                .args(&args[1..])
+                .spawn()
+                .unwrap();
+            Observer(Some(child))
+        }
+        fn pid(process: &Observer) -> i32 {
+            process.0.as_ref().unwrap().id() as i32
+        }
+        fn running(process: &mut Observer) -> bool {
+            process.0.as_mut().unwrap().try_wait().unwrap().is_none()
+        }
+        fn killed(process: &mut Observer) -> bool {
+            let status = process.0.take().unwrap().wait().unwrap();
+            std::os::unix::process::ExitStatusExt::signal(&status) == Some(libc::SIGKILL)
+        }
+        async fn observe(server: i32, clients: &[(i32, bool)], anchor: i32) -> Processes {
+            let mut rows = format!("{server}\n");
+            for (client, control) in clients {
+                rows.push_str(&format!("{client}:{}:0:0\n", u8::from(*control)));
+            }
+            let mut command = std::process::Command::new("/bin/sh");
+            command
+                .args(["-c", "printf '%s' \"$1\"", "owned-observer"])
+                .arg(rows);
+            let mut observations = Processes::capture(&[server]);
+            observations.remember_ssh_anchor(anchor);
+            observations.clients(command).await;
+            observations
+        }
+        let within = std::time::Duration::from_millis(200);
+        let server = spawn(&["/bin/sleep", "30"]);
+        let outside_ssh = spawn(&["/bin/sleep", "30"]);
+        let mut display = spawn(&["/bin/sleep", "30"]);
+        let mut orphan = spawn(&["/bin/sleep", "30"]);
+        let mut other = spawn(&["/bin/sh", "-c", "sleep 30; :"]);
+        // These children descend from this process, the stand-in for a live sshd.
+        let live = observe(
+            pid(&server),
+            &[(pid(&orphan), true)],
+            std::process::id() as i32,
+        )
+        .await;
+        assert_eq!(
+            live.retire_orphaned_controls(within).await,
+            Err("LiveSshPeer")
+        );
+        let foreign = observe(pid(&server), &[(pid(&other), true)], pid(&outside_ssh)).await;
+        assert_eq!(
+            foreign.retire_orphaned_controls(within).await,
+            Err("ForeignExecutable")
+        );
+        assert!(running(&mut orphan) && running(&mut other));
+        let detached = observe(
+            pid(&server),
+            &[(pid(&display), false), (pid(&orphan), true)],
+            pid(&outside_ssh),
+        )
+        .await;
+        assert_eq!(detached.retire_orphaned_controls(within).await, Ok(1));
+        assert!(killed(&mut orphan));
+        assert!(running(&mut display));
+        // A listed client that already exited is never signalled again.
+        assert_eq!(detached.retire_orphaned_controls(within).await, Ok(0));
+        assert!(running(&mut display) && running(&mut other));
+    }
+    #[tokio::test]
     async fn observer_deadline_overflow_and_error_reap_owned_children_without_raw_output() {
         for (program, expected) in [
             ("exec sleep 10", "Deadline"),
@@ -1469,6 +1675,18 @@ impl Processes {
     pub(super) fn before_stop(&mut self) {
         #[cfg(target_os = "linux")]
         self.inner.before_stop();
+    }
+    pub(super) async fn retire_orphaned_controls(
+        &self,
+        within: std::time::Duration,
+    ) -> Result<usize, &'static str> {
+        #[cfg(target_os = "linux")]
+        return self.inner.retire_orphaned_controls(within).await;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = within;
+            Ok(0)
+        }
     }
     #[cfg(target_os = "linux")]
     pub(super) fn same_state(&self, index: usize) -> Option<char> {
