@@ -235,6 +235,9 @@ async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:
   };
   if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));
   await connectPasswordHost(page);
+  // A new connection focuses its terminal once the lazy pane is revealed, which the paused clock can defer past the switch tap.
+  await expect.poll(async()=>{await page.clock.runFor(100);return page.locator('.terminal-canvas:visible').count();}).toBe(1);
+  await expect.poll(focused).toBe('Terminal input');
   await page.evaluate(delay=>{(window as unknown as {workspaceNavigationState:{herdrDelay:number}}).workspaceNavigationState.herdrDelay=delay;},replyDelay);
   await openSpaces();
   // A pane switch adopts a new Herdr display; a tab switch reuses it.
