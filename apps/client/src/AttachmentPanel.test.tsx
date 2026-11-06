@@ -71,7 +71,7 @@ it('handles clipboard permission denial without automatic uploads', async () => 
   expect(api.uploadFile).not.toHaveBeenCalled();
 });
 
-async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>void) {
+async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>void,destination?:string) {
   const bytes = attachmentPngHeader();
   const image = new File([bytes], 'shot.png', { type: 'image/png' });
   Object.defineProperty(image, 'arrayBuffer', { value: async () => bytes.buffer });
@@ -86,7 +86,9 @@ async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>voi
   vi.mocked(api.uploadFile).mockResolvedValue({path:"/work/a'b.txt"});
   render(<AttachmentPanel sessionId="ssh-one" onRestoreFileTransfer={onRestoreFileTransfer} />);
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [image] } });
-  fireEvent.click(await screen.findByLabelText('Crop or annotate PNG/JPEG'));
+  const editing=await screen.findByLabelText('Crop or annotate PNG/JPEG');
+  if(destination)fireEvent.change(screen.getByLabelText('Destination path'),{target:{value:destination}});
+  fireEvent.click(editing);
   await waitFor(() => expect(context.drawImage).toHaveBeenCalled());
   return context;
 }
@@ -100,6 +102,15 @@ it('flattens an explicit crop to PNG before the bounded upload', async () => {
   expect(context.translate).toHaveBeenCalledWith(-10, -0);
   expect(HTMLCanvasElement.prototype.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
   expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', 'shot-edited.png', [1, 2, 3],attachmentReceipt,true);
+});
+
+it('turning on editing keeps a destination the user already typed',async()=>{
+  vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>callback({size:3,arrayBuffer:async()=>new Uint8Array([1,2,3]).buffer} as Blob));
+  await openEditableImage(undefined,'/srv/keep.png');
+  expect(screen.getByLabelText('Destination path')).toHaveProperty('value','/srv/keep.png');
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  await screen.findByLabelText('Host path');
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one','/srv/keep.png',[1,2,3],attachmentReceipt);
 });
 
 it('cancelling held PNG encoding never reserves or uploads its late final bytes',async()=>{

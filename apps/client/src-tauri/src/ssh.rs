@@ -2718,9 +2718,14 @@ pub(crate) async fn transfer_sftp(
     if private {
         if let Err(error) = keep_private(&file).await {
             let _ = file.shutdown().await;
+            // Nothing was written yet: remove the empty file this upload created exclusively.
+            let removed = sftp.0.as_ref().unwrap().remove_file(path.clone()).await;
             return Err(SshError::new(
                 "upload_not_private",
-                format!("{}. An empty new file may remain at {path}.", error.message),
+                match removed {
+                    Ok(()) => error.message,
+                    Err(_) => format!("{}. An empty new file may remain at {path}.", error.message),
+                },
             ));
         }
     }
