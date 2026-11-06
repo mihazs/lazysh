@@ -190,6 +190,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
         }
     }
+    if (providers.gradleProperty("lazyshSshParityAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-parity-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-parity-ui"
+        }
+    }
     if (providers.gradleProperty("lazyshRecordedConversationAcceptance").orNull == "true") {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/recorded-conversation-ui"

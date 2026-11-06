@@ -3294,15 +3294,7 @@ class NativeWorkspaceTest {
             while (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED && System.nanoTime() < deadline) Thread.sleep(50)
             assertEquals("Notification tap must resume the workspace Activity", androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
         }
-        fun send(command: String) {
-            if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
-            pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
-            closeSoftKeyboard()
-            // Send pastes the draft and submits it with its own Enter.
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Send']")).perform(webClick())
-            closeSoftKeyboard()
-        }
+        fun send(command: String) = sendOwnedCommand(scenario, command, label)
         fun proof(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun record(part: String) = "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/background-$part.tmp; " +
             "mv $directory/background-$part.tmp $directory/background-$part; " +
@@ -3430,22 +3422,178 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false) {
-        require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
-        require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
-        require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
-        require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
-        require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
-        require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
-        require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
-        val useMosh = requireMoshBackground || requireHerdrMosh || requireAttachments
-        require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
+    /** Chooses one option through Chromium's native select popup, as a finger tap would. */
+    private fun selectNativeOption(scenario: ActivityScenario<MainActivity>, nonce: String, selector: String, value: String, recordedSourceIndex: Int? = null) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        closeSoftKeyboard()
+        assertEquals("Owned select control must be unique", "1", evaluate(scenario,
+            "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
+        // Espresso's scroll atom leaves any partly visible control in place, so a select clipped
+        // by the top of its scroll panel keeps its center under the navigation above it.
+        // Reveal the whole control in its own scrollport before the unchanged hit-test guard.
+        assertEquals("Owned select control must be revealed", "true", evaluate(scenario, """(() => {
+          document.querySelector(${JSONObject.quote(selector)}).scrollIntoView({block:'nearest',inline:'nearest'});
+          return true;
+        })()"""))
+        // A DOM click atom does not activate Chromium's native select popup.
+        // Read only this control's viewport geometry, then inject one native tap.
+        val geometry = JSONArray(evaluate(scenario, """(() => {
+          const target=document.querySelector(${JSONObject.quote(selector)});
+          const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
+          const hit=document.elementFromPoint(x,y), tag=hit?.tagName;
+          const name=typeof tag==='string'?tag.toUpperCase():'';
+          const allowed=new Set(['SELECT','OPTION','DIV','BUTTON','INPUT','TEXTAREA','LABEL','SPAN','HEADER','NAV','SECTION','P','FORM','HTML','BODY','SVG','PATH']);
+          return [x,y,innerWidth,innerHeight,r.width,r.height,hit===target,hit?(allowed.has(name)?name:'OTHER'):'NONE'];
+        })()"""))
+        val values = (0..5).map { geometry.getDouble(it) }
+        try {
+            assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
+                values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
+                values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+        } catch (failure: Throwable) {
+            runCatching {
+                val cached = JSONObject().put("finite", values.all { it.isFinite() })
+                    .put("positiveViewport", values[2] > 0 && values[3] > 0)
+                    .put("nonzeroControl", values[4] > 0 && values[5] > 0)
+                    .put("centerInside", values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3])
+                    .put("hitOwned", geometry.getBoolean(6))
+                    .put("recordedSourceIndex", recordedSourceIndex?.takeIf { it in 0..2 } ?: "unavailable")
+                if (recordedSourceIndex != null && recordedSourceIndex in 0..2) {
+                    cached.put("hitTag", geometry.getString(7))
+                        .put("bounds", JSONArray(values.map { it.toInt().coerceIn(-8192, 8192) }))
+                }
+                failure.addSuppressed(AssertionError("Owned select cached geometry: $cached"))
+            }
+            throw failure
+        }
+        val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
+            .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
+        val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
+        val tapToken = JSONObject.quote(java.util.UUID.randomUUID().toString())
+        val nativeTap = AtomicReference(JSONObject())
+        var tapFailure: Throwable? = null
+        try {
+            assertEquals("Only a fresh case-owned passive tap observer may be installed", "true", evaluate(scenario, """
+                (()=>{
+                  if(Object.prototype.hasOwnProperty.call(window,$tapKey)) return false;
+                  $tapScript
+                  const tracker=ownedNativeTapObservation(document.querySelector(${JSONObject.quote(selector)}));
+                  try {Object.defineProperty(window,$tapKey,{value:{token:$tapToken,tracker},configurable:true});}
+                  catch(_){tracker.close();return false;}
+                  return true;
+                })()
+            """))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
+                nativeTap.set(JSONObject().put("origin", JSONArray(origin.map { it.coerceIn(-65535, 65535) }))
+                    .put("width", view.width.coerceIn(0, 65535)).put("height", view.height.coerceIn(0, 65535))
+                    .put("density", view.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                    .put("layoutRequested", view.isLayoutRequested).put("windowFocused", view.hasWindowFocus())
+                    .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                    .put("imeVisible", ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL))
+                val scale = view.width.toDouble() / values[2]
+                val x = values[0] * scale
+                val y = values[1] * scale
+                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
+                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+            }, Press.FINGER))
+            val transportLabel = if (value == "mosh") {
+                val labels = JSONArray(evaluate(scenario,
+                    "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
+                moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
+            } else if (value == "herdr") "Herdr" else if (value == "ssh") "SSH" else {
+                val labels = JSONArray(evaluate(scenario, "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value='$value']")})).map(x=>x.label)"))
+                require(labels.length() == 1 && labels.getString(0).length in 1..128)
+                labels.getString(0)
+            }
+            val option = onView(withText(transportLabel)).inRoot(isDialog())
+            option.check(matches(isDisplayed()))
+            println("lazysh SSH UI: native transport chooser ready")
+            option.perform(click())
+            assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(value)}"))
+            println("lazysh SSH UI: native transport selected")
+        } catch (failure: Throwable) {
+            tapFailure = failure
+            val observation = runCatching {
+                val events = JSONObject(evaluate(scenario,
+                    "(()=>{const owned=window[$tapKey];return owned?.token===$tapToken?owned.tracker.read():null;})()", 1000))
+                JSONObject().put("geometry", geometry).put("native", nativeTap.get()).put("events", events)
+                    .toString().also { require(it.length <= 4096) { "Native tap observation bound" } }
+            }.getOrDefault("unavailable")
+            failure.addSuppressed(AssertionError("Owned native transport tap: $observation"))
+            throw failure
+        } finally {
+            val removed = runCatching { evaluate(scenario, """
+                (()=>{const owned=window[$tapKey];if(!owned)return true;if(owned.token!==$tapToken)return false;
+                  owned.tracker.close();delete window[$tapKey];return !Object.prototype.hasOwnProperty.call(window,$tapKey);})()
+            """, 1000) == "true" }.getOrDefault(false)
+            if (!removed) {
+                val cleanupFailure = AssertionError("Owned native tap observer cleanup unavailable")
+                if (tapFailure != null) tapFailure!!.addSuppressed(cleanupFailure) else throw cleanupFailure
+            }
+        }
+    }
+    private fun grantOwnedNotifications() {
+        // lazysh asks for POST_NOTIFICATIONS on a first connection; granting it first keeps any
+        // system prompt off the WebView.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+            assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
+                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
+        }
+    }
+
+    /** Cancels an open connection or trust dialog; an already-visible error does not abort the wait. */
+    private fun dismissOwnedAuthentication(scenario: ActivityScenario<MainActivity>) {
+        val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
+        if (evaluate(scenario, present(authentication)) != "true") return
+        clickOwnedButton("Cancel")
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            assertTrue("Owned SSH authentication dialog did not dismiss", System.nanoTime() < deadline)
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+            if (evaluate(scenario, "!" + present(authentication), remaining) == "true") break
+            Thread.sleep(50)
+        }
+    }
+
+    /** Opens the hosts drawer only when it is closed, so a second host action never meets an inert workspace. */
+    private fun revealOwnedHosts(scenario: ActivityScenario<MainActivity>) {
+        val add = "button[aria-label='Add host']"
+        if (evaluate(scenario, workspaceElementVisible(add, true)) == "true") return
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+        awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true))
+    }
+
+    private fun deleteOwnedHost(scenario: ActivityScenario<MainActivity>, name: String) {
+        revealOwnedHosts(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
+        awaitDocument(scenario, "owned SSH host deleted", "!" + present("button[aria-label='Connect to $name']"))
+    }
+
+    /** Reviews the exact first-use fingerprint for `endpoint` and trusts it; no terminal may exist before. */
+    private fun trustOwnedHostKey(scenario: ActivityScenario<MainActivity>, fingerprint: String, endpoint: String) {
+        awaitDocument(scenario, "explicit SSH fingerprint review for $endpoint",
+            "document.querySelector('.fingerprint code')?.textContent===${JSONObject.quote(fingerprint)}")
+        assertEquals("Owned trust dialog must name its endpoint", "true", evaluate(scenario,
+            "Boolean(document.querySelector('[role=dialog]')?.textContent.includes(${JSONObject.quote(endpoint)}))"))
+        assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
+        clickOwnedButton("Trust key and connect")
+    }
+
+    /** The host-written fixture of an owned SSH case, read once from its private device path. */
+    private fun ownedSshFixture(): JSONObject {
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
         require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
             "An owned SSH fixture path is required"
         }
-        val bytes = instrumentation.uiAutomation.executeShellCommand("cat $path").use { descriptor ->
+        val bytes = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path").use { descriptor ->
             android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
                 val buffer = ByteArray(16 * 1024 + 1)
                 var count = 0
@@ -3458,8 +3606,60 @@ class NativeWorkspaceTest {
                 buffer.copyOf(count)
             }
         }
-        val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
+        return try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
+    }
+
+    private fun clickOwnedButton(text: String) {
+        onWebView().withElement(findElement(Locator.XPATH,
+            "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
+    }
+
+    private fun terminalScreenContains(text: String) =
+        "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
+
+    /** Adds a host through the real editor; `configure` sets anything beyond the address before Save. */
+    private fun addOwnedHost(scenario: ActivityScenario<MainActivity>, name: String, hostname: String, username: String, port: Int,
+        configure: () -> Unit = {}) {
+        awaitDocument(scenario, "SSH workspace ready", present("button[aria-label='Add host']"))
+        revealOwnedHosts(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Add host']")).perform(webClick())
+        typeInto(scenario, "input[placeholder='Home workstation']", name)
+        typeInto(scenario, "input[placeholder='workstation.local']", hostname)
+        typeInto(scenario, "input[placeholder='Your SSH username']", username)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".port-field input")).perform(webClick())
+        onView(isAssignableFrom(WebView::class.java)).perform(
+            pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
+            pressKey(KeyEvent.KEYCODE_DEL))
+        typeInto(scenario, ".port-field input", port.toString())
+        configure()
+        clickOwnedButton("Save host")
+        awaitDocument(scenario, "SSH fixture host saved", present("button[aria-label='Connect to $name']"))
+    }
+
+    /** Composes one shell line and submits it with the composer's own Send. */
+    private fun sendOwnedCommand(scenario: ActivityScenario<MainActivity>, command: String, label: String) {
+        if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
+        pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
+        closeSoftKeyboard()
+        // Send pastes the draft and submits it with its own Enter.
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Send']")).perform(webClick())
+        closeSoftKeyboard()
+    }
+
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false) {
+        require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
+        require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
+        require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
+        require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
+        require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
+        require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
+        require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
+        val useMosh = requireMoshBackground || requireHerdrMosh || requireAttachments
+        require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val fixture = ownedSshFixture()
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
         require(requireRecorded == fixture.has("recorded")) { "Recorded fixture mode mismatch" }
@@ -3485,131 +3685,14 @@ class NativeWorkspaceTest {
         // grants it first, so no system prompt covers the WebView. The Mosh background case
         // proves the granted-permission notification record.
         val context = instrumentation.targetContext
-        if (Build.VERSION.SDK_INT >= 33) {
-            if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-                instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
-            assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
-                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
-        }
+        grantOwnedNotifications()
         val scenario = NativeActivityFixture.scenario
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
-        fun clickButton(text: String) {
-            onWebView().withElement(findElement(Locator.XPATH,
-                "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
-        }
-        fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun selectOwnedOption(selector: String, value: String, recordedSourceIndex: Int? = null) {
-            closeSoftKeyboard()
-            assertEquals("Owned select control must be unique", "1", evaluate(scenario,
-                "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
-            // Espresso's scroll atom leaves any partly visible control in place, so a select clipped
-            // by the top of its scroll panel keeps its center under the navigation above it.
-            // Reveal the whole control in its own scrollport before the unchanged hit-test guard.
-            assertEquals("Owned select control must be revealed", "true", evaluate(scenario, """(() => {
-              document.querySelector(${JSONObject.quote(selector)}).scrollIntoView({block:'nearest',inline:'nearest'});
-              return true;
-            })()"""))
-            // A DOM click atom does not activate Chromium's native select popup.
-            // Read only this control's viewport geometry, then inject one native tap.
-            val geometry = JSONArray(evaluate(scenario, """(() => {
-              const target=document.querySelector(${JSONObject.quote(selector)});
-              const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
-              const hit=document.elementFromPoint(x,y), tag=hit?.tagName;
-              const name=typeof tag==='string'?tag.toUpperCase():'';
-              const allowed=new Set(['SELECT','OPTION','DIV','BUTTON','INPUT','TEXTAREA','LABEL','SPAN','HEADER','NAV','SECTION','P','FORM','HTML','BODY','SVG','PATH']);
-              return [x,y,innerWidth,innerHeight,r.width,r.height,hit===target,hit?(allowed.has(name)?name:'OTHER'):'NONE'];
-            })()"""))
-            val values = (0..5).map { geometry.getDouble(it) }
-            try {
-                assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
-                    values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
-                    values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
-            } catch (failure: Throwable) {
-                runCatching {
-                    val cached = JSONObject().put("finite", values.all { it.isFinite() })
-                        .put("positiveViewport", values[2] > 0 && values[3] > 0)
-                        .put("nonzeroControl", values[4] > 0 && values[5] > 0)
-                        .put("centerInside", values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3])
-                        .put("hitOwned", geometry.getBoolean(6))
-                        .put("recordedSourceIndex", recordedSourceIndex?.takeIf { it in 0..2 } ?: "unavailable")
-                    if (recordedSourceIndex != null && recordedSourceIndex in 0..2) {
-                        cached.put("hitTag", geometry.getString(7))
-                            .put("bounds", JSONArray(values.map { it.toInt().coerceIn(-8192, 8192) }))
-                    }
-                    failure.addSuppressed(AssertionError("Owned select cached geometry: $cached"))
-                }
-                throw failure
-            }
-            val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
-                .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
-            val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
-            val tapToken = JSONObject.quote(java.util.UUID.randomUUID().toString())
-            val nativeTap = AtomicReference(JSONObject())
-            var tapFailure: Throwable? = null
-            try {
-                assertEquals("Only a fresh case-owned passive tap observer may be installed", "true", evaluate(scenario, """
-                    (()=>{
-                      if(Object.prototype.hasOwnProperty.call(window,$tapKey)) return false;
-                      $tapScript
-                      const tracker=ownedNativeTapObservation(document.querySelector(${JSONObject.quote(selector)}));
-                      try {Object.defineProperty(window,$tapKey,{value:{token:$tapToken,tracker},configurable:true});}
-                      catch(_){tracker.close();return false;}
-                      return true;
-                    })()
-                """))
-                onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                    val origin = IntArray(2)
-                    view.getLocationOnScreen(origin)
-                    nativeTap.set(JSONObject().put("origin", JSONArray(origin.map { it.coerceIn(-65535, 65535) }))
-                        .put("width", view.width.coerceIn(0, 65535)).put("height", view.height.coerceIn(0, 65535))
-                        .put("density", view.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
-                        .put("layoutRequested", view.isLayoutRequested).put("windowFocused", view.hasWindowFocus())
-                        .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
-                        .put("imeVisible", ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL))
-                    val scale = view.width.toDouble() / values[2]
-                    val x = values[0] * scale
-                    val y = values[1] * scale
-                    assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
-                    floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
-                }, Press.FINGER))
-                val transportLabel = if (value == "mosh") {
-                    val labels = JSONArray(evaluate(scenario,
-                        "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
-                    moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
-                } else if (value == "herdr") "Herdr" else if (value in setOf("codex", "opencode", "conversation")) {
-                    val labels = JSONArray(evaluate(scenario, "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value='$value']")})).map(x=>x.label)"))
-                    require(labels.length() == 1 && labels.getString(0).length in 1..128)
-                    labels.getString(0)
-                } else "SSH"
-                val option = onView(withText(transportLabel)).inRoot(isDialog())
-                option.check(matches(isDisplayed()))
-                println("lazysh SSH UI: native transport chooser ready")
-                option.perform(click())
-                assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                    "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(value)}"))
-                println("lazysh SSH UI: native transport selected")
-            } catch (failure: Throwable) {
-                tapFailure = failure
-                val observation = runCatching {
-                    val events = JSONObject(evaluate(scenario,
-                        "(()=>{const owned=window[$tapKey];return owned?.token===$tapToken?owned.tracker.read():null;})()", 1000))
-                    JSONObject().put("geometry", geometry).put("native", nativeTap.get()).put("events", events)
-                        .toString().also { require(it.length <= 4096) { "Native tap observation bound" } }
-                }.getOrDefault("unavailable")
-                failure.addSuppressed(AssertionError("Owned native transport tap: $observation"))
-                throw failure
-            } finally {
-                val removed = runCatching { evaluate(scenario, """
-                    (()=>{const owned=window[$tapKey];if(!owned)return true;if(owned.token!==$tapToken)return false;
-                      owned.tracker.close();delete window[$tapKey];return !Object.prototype.hasOwnProperty.call(window,$tapKey);})()
-                """, 1000) == "true" }.getOrDefault(false)
-                if (!removed) {
-                    val cleanupFailure = AssertionError("Owned native tap observer cleanup unavailable")
-                    if (tapFailure != null) tapFailure!!.addSuppressed(cleanupFailure) else throw cleanupFailure
-                }
-            }
-        }
+        fun clickButton(text: String) = clickOwnedButton(text)
+        fun screenContains(text: String) = terminalScreenContains(text)
+        fun selectOwnedOption(selector: String, value: String, recordedSourceIndex: Int? = null) =
+            selectNativeOption(scenario, nonce, selector, value, recordedSourceIndex)
         fun selectTransport() = selectOwnedOption("[role=dialog] select:has(option[value='ssh'])", if (useMosh) "mosh" else "ssh")
         fun terminalProof(after: Boolean) {
             val part = if (after) "after" else "before"
@@ -3857,25 +3940,14 @@ class NativeWorkspaceTest {
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
         try {
-            awaitDocument(scenario, "SSH workspace ready", present("button[aria-label='Add host']"))
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Add host']")).perform(webClick())
-            typeInto(scenario, "input[placeholder='Home workstation']", name)
-            typeInto(scenario, "input[placeholder='workstation.local']", if (useMosh) "10.0.2.2" else "127.0.0.1")
-            typeInto(scenario, "input[placeholder='Your SSH username']", fixture.getString("username"))
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".port-field input")).perform(webClick())
-            onView(isAssignableFrom(WebView::class.java)).perform(
-                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
-                pressKey(KeyEvent.KEYCODE_DEL))
-            typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
-            if (requireHerdrMosh) {
-                selectOwnedOption("[role=dialog] select:has(option[value='herdr'])", "herdr")
-                typeInto(scenario, "[role=dialog] input[maxlength='200']", fixture.getJSONObject("herdr").getString("name"))
+            addOwnedHost(scenario, name, if (useMosh) "10.0.2.2" else "127.0.0.1", fixture.getString("username"), fixture.getInt("port")) {
+                if (requireHerdrMosh) {
+                    selectOwnedOption("[role=dialog] select:has(option[value='herdr'])", "herdr")
+                    typeInto(scenario, "[role=dialog] input[maxlength='200']", fixture.getJSONObject("herdr").getString("name"))
+                }
+                selectTransport()
             }
-            selectTransport()
-            clickButton("Save host")
             val connect = "button[aria-label='Connect to $name']"
-            awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".connection-options > summary"))
@@ -3896,11 +3968,7 @@ class NativeWorkspaceTest {
                 "Array.from(document.querySelectorAll('[role=dialog] input[type=checkbox]')).every(x=>!x.checked)"))
             closeSoftKeyboard()
             clickButton("Connect")
-            awaitDocument(scenario, "explicit SSH fingerprint review", present(".fingerprint code"))
-            assertEquals("Exact ephemeral server fingerprint must be reviewed", "true", evaluate(scenario,
-                "document.querySelector('.fingerprint code')?.textContent===${JSONObject.quote(fixture.getString("fingerprint"))}"))
-            assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
-            clickButton("Trust key and connect")
+            trustOwnedHostKey(scenario, fixture.getString("fingerprint"), (if (useMosh) "10.0.2.2:" else "127.0.0.1:") + fixture.getInt("port"))
             if (requireMoshBackground) {
                 verifyMoshBackground(scenario, fixture, name, label)
             } else if (!requireHerdrMosh && !requireAttachments) {
@@ -4074,10 +4142,7 @@ class NativeWorkspaceTest {
             }
             endOwnedConnection(scenario, connectedName, requireHerdrMosh)
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
-            awaitDocument(scenario, "owned SSH host deleted", "!" + present(connect))
+            deleteOwnedHost(scenario, name)
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -4097,18 +4162,7 @@ class NativeWorkspaceTest {
                 }
             }
             cleanupUi {
-                val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
-                if (evaluate(scenario, present(authentication)) == "true") {
-                    clickButton("Cancel")
-                    // An already-visible original error must not abort this cleanup wait.
-                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-                    while (true) {
-                        assertTrue("Owned SSH authentication dialog did not dismiss", System.nanoTime() < deadline)
-                        val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
-                        if (evaluate(scenario, "!" + present(authentication), remaining) == "true") break
-                        Thread.sleep(50)
-                    }
-                }
+                dismissOwnedAuthentication(scenario)
                 val menu = "[role=dialog][aria-label='Workspace tools']"
                 if (evaluate(scenario, workspaceElementVisible(menu)) == "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
@@ -4124,12 +4178,7 @@ class NativeWorkspaceTest {
             }
             cleanupStage = SshUiCleanupStage.HOST_DELETE
             cleanupUi {
-                val delete = "button[aria-label='Delete $name']"
-                if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
-                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
-                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, delete)).perform(webClick())
-                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
-                }
+                if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") deleteOwnedHost(scenario, name)
             }
             try {
                 instrumentation.runOnMainSync {
@@ -4140,6 +4189,257 @@ class NativeWorkspaceTest {
                 }
             } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH clipboard cleanup failed") }
             cleanupFailure?.let { throw it }
+        }
+    }
+
+    // Owned SSH parity (#985). tests/support/androidSshParity.ts starts each sshd on the host,
+    // reverses its ports and answers this case's bounded control requests; the host never
+    // drives the UI. All five cases run in one Gradle invocation with distinct host names.
+    private class OwnedParity(val fixture: JSONObject) {
+        val nonce: String = fixture.getString("nonce").also { require(Regex("[a-f0-9]{32}").matches(it)) { "Invalid owned parity nonce" } }
+        val label = "lazysh-ui-ssh-$nonce"
+        val username: String = fixture.getString("username")
+        fun port(server: String) = fixture.getJSONObject(server).getInt("port").also { require(it in 1..65535) }
+        fun fingerprint(server: String): String = fixture.getJSONObject(server).getString("fingerprint")
+        fun prompt(server: String): String = fixture.getJSONObject(server).getString("prompt")
+        /** One request and one closed JSON reply over the reversed loopback control port. */
+        fun control(action: String, vararg fields: Pair<String, Any>): JSONObject {
+            val request = JSONObject().put("nonce", nonce).put("action", action)
+            for ((key, value) in fields) request.put(key, value)
+            java.net.Socket().use { socket ->
+                socket.connect(java.net.InetSocketAddress("127.0.0.1", fixture.getInt("controlPort")), 5_000)
+                socket.soTimeout = 30_000
+                socket.getOutputStream().apply { write((request.toString() + "\n").toByteArray(Charsets.UTF_8)); flush() }
+                val line = socket.getInputStream().bufferedReader(Charsets.UTF_8).readLine()
+                assertTrue("Owned parity control $action closed without a reply", line != null && line.length <= 8192)
+                val reply = JSONObject(line!!)
+                assertTrue("Owned parity control refused $action: ${reply.optString("error")}", reply.optBoolean("ok"))
+                return reply
+            }
+        }
+        fun mark(vararg servers: String) { for (server in servers) control("mark", "server" to server) }
+        fun observe(server: String) = control("observe", "server" to server)
+    }
+
+    private val parityPassword = "[role=dialog] form.form-stack > label > input[type=password]"
+    private val parityKey = "[role=dialog] form.form-stack > label > textarea"
+
+    /** Runs one parity case, then dismisses its dialogs, ends its sessions and deletes its hosts. */
+    private fun ownedParityCase(hosts: List<String>, body: (ActivityScenario<MainActivity>, OwnedParity) -> Unit) {
+        val parity = OwnedParity(ownedSshFixture())
+        grantOwnedNotifications()
+        val scenario = NativeActivityFixture.scenario
+        var primary: Throwable? = null
+        android.util.Log.i("LazyshOwnedCase", "start:${parity.nonce}:pid:${android.os.Process.myPid()}")
+        try { body(scenario, parity) }
+        catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            android.util.Log.i("LazyshOwnedCase", "end:${parity.nonce}:pid:${android.os.Process.myPid()}")
+            val cleanup = runCatching {
+                dismissOwnedAuthentication(scenario)
+                for (name in hosts) if (evaluate(scenario, present("button[aria-label='Disconnect $name']")) == "true") endOwnedConnection(scenario, name)
+                for (name in hosts) if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") deleteOwnedHost(scenario, name)
+            }.exceptionOrNull()
+            if (cleanup != null) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }
+        }
+    }
+
+    private fun openOwnedConnect(scenario: ActivityScenario<MainActivity>, name: String) {
+        revealOwnedHosts(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Connect to $name']")).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "owned connection dialog for $name", present("[role=dialog] form .destination"))
+    }
+
+    /** Submits the connection form; a new attempt clears the previous refusal before anything else waits. */
+    private fun submitOwnedConnect(scenario: ActivityScenario<MainActivity>) {
+        closeSoftKeyboard()
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role=dialog] form.form-stack button[type=submit]")).perform(webClick())
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (evaluate(scenario, present("[role=dialog] [role=alert]")) == "true") {
+            assertTrue("Owned connection attempt did not clear its previous refusal", System.nanoTime() < deadline)
+            Thread.sleep(50)
+        }
+    }
+
+    private fun chooseOwnedPrivateKey(scenario: ActivityScenario<MainActivity>, privateKey: String, label: String) {
+        clickOwnedButton("Private key")
+        pasteOwnedText(scenario, parityKey, privateKey, label)
+    }
+
+    /** Waits for this refusal in the open dialog with no terminal; unlike awaitDocument, an alert is the goal. */
+    private fun awaitOwnedRefusal(scenario: ActivityScenario<MainActivity>, stage: String, text: String) {
+        val expected = """(()=>{const alert=document.querySelector('[role=dialog] [role=alert]');
+            return Boolean(alert?.textContent.includes(${JSONObject.quote(text)})) && !document.querySelector('.terminal-canvas .xterm-screen') &&
+              !document.querySelector('[role=dialog] .fingerprint code');})()"""
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(45)
+        while (evaluate(scenario, expected) != "true") {
+            assertTrue("Owned refusal not shown at $stage: ${evaluate(scenario,
+                "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,200) || ''")}", System.nanoTime() < deadline)
+            Thread.sleep(200)
+        }
+    }
+
+    /** Waits for the server's own prompt, then proves a fresh command ran in that shell. */
+    private fun proveOwnedShell(scenario: ActivityScenario<MainActivity>, parity: OwnedParity, prompt: String, tag: String) {
+        awaitDocument(scenario, "authenticated owned $tag prompt", terminalScreenContains(prompt))
+        val command = "printf 'PARITY_%s_%s\\n' '$tag' '${parity.nonce}'"
+        val proof = "PARITY_${tag}_${parity.nonce}"
+        require(!command.contains(proof)) { "Owned shell proof must not appear in its input" }
+        sendOwnedCommand(scenario, command, parity.label)
+        awaitDocument(scenario, "owned $tag shell proof", terminalScreenContains(proof))
+    }
+
+    private fun parityCount(facts: JSONObject, key: String) = facts.getInt(key)
+    private fun parityList(facts: JSONObject, key: String) = facts.getJSONArray(key).let { list -> (0 until list.length()).map { list.get(it).toString() } }
+
+    @Test fun ownedSshPasswordLoginThroughRealUi() {
+        val name = "Parity password"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            parity.mark("primary")
+            openOwnedConnect(scenario, name)
+            val wrong = parity.fixture.getString("password").reversed()
+            typeInto(scenario, parityPassword, wrong)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            awaitOwnedRefusal(scenario, "wrong password", "Authentication rejected by the server")
+            var facts = parity.observe("primary")
+            assertEquals("A wrong password must reach sshd once and be rejected: $facts", 1, parityCount(facts, "failedPassword"))
+            assertEquals("No password may be accepted yet: $facts", 0, parityCount(facts, "acceptedPassword"))
+            replaceNativeText(scenario, parityPassword, parity.fixture.getString("password"))
+            submitOwnedConnect(scenario)
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "PASSWORD")
+            facts = parity.observe("primary")
+            assertEquals("The real password must be accepted exactly once: $facts", 1, parityCount(facts, "acceptedPassword"))
+            assertEquals("Password login must not offer a key: $facts", emptyList<String>(), parityList(facts, "acceptedPublickey"))
+            println("lazysh parity: password login rejected the wrong password and accepted the real one against owned OpenSSH")
+        }
+    }
+
+    @Test fun ownedSshEncryptedKeyLoginThroughRealUi() {
+        val name = "Parity encrypted key"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, parity.port("primary"))
+            parity.mark("primary")
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("encryptedKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            awaitOwnedRefusal(scenario, "missing passphrase", "This private key is encrypted. Enter its passphrase.")
+            typeInto(scenario, parityPassword, parity.fixture.getString("passphrase").reversed())
+            submitOwnedConnect(scenario)
+            awaitOwnedRefusal(scenario, "wrong passphrase", "Cannot unlock this private key. Check its format and passphrase.")
+            var facts = parity.observe("primary")
+            assertEquals("An undecryptable key must never start authentication: $facts", 0, parityCount(facts, "userauthRequests"))
+            replaceNativeText(scenario, parityPassword, parity.fixture.getString("passphrase"))
+            submitOwnedConnect(scenario)
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "ENCRYPTED")
+            facts = parity.observe("primary")
+            assertEquals("The decrypted identity must be the authorized key: $facts", listOf(parity.fixture.getString("userFingerprint")),
+                parityList(facts, "acceptedPublickey"))
+            println("lazysh parity: encrypted key refused without and with a wrong passphrase, then logged in with the real one")
+        }
+    }
+
+    @Test fun ownedSshRotatedHostKeyRefusedThroughRealUi() {
+        val name = "Parity pinned host"
+        ownedParityCase(listOf(name)) { scenario, parity ->
+            val port = parity.fixture.getJSONObject("rotation").getInt("port")
+            addOwnedHost(scenario, name, "127.0.0.1", parity.username, port)
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:$port")
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "PINNED")
+            endOwnedConnection(scenario, name)
+            // The host repoints this device port at a second sshd with another host key.
+            parity.control("rotate")
+            openOwnedConnect(scenario, name)
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            awaitOwnedRefusal(scenario, "rotated host key", "The host key changed. Connection blocked.")
+            val facts = parity.observe("rotated")
+            assertTrue("The rotated server must have been reached: $facts", parityCount(facts, "connections") >= 1)
+            assertEquals("No credential may be offered to a changed host key: $facts", 0, parityCount(facts, "userauthRequests"))
+            println("lazysh parity: a rotated host key was refused with no trust shortcut and no authentication request")
+        }
+    }
+
+    @Test fun ownedSshBastionRouteThroughRealUi() {
+        val bastion = "Parity bastion"
+        val target = "Parity routed target"
+        ownedParityCase(listOf(target, bastion)) { scenario, parity ->
+            addOwnedHost(scenario, bastion, "127.0.0.1", parity.username, parity.port("bastion"))
+            addOwnedHost(scenario, target, "127.0.0.1", parity.username, parity.port("primary")) {
+                val id = JSONObject.quote(bastion + " (")
+                val value = evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] option')).filter(x=>x.label.startsWith($id)).map(x=>x.value)")
+                val ids = JSONArray(value)
+                require(ids.length() == 1) { "Owned bastion option must be unique" }
+                selectNativeOption(scenario, parity.nonce, "[role=dialog] select:has(option[value='${ids.getString(0)}'])", ids.getString(0))
+            }
+            parity.mark("primary", "bastion")
+            openOwnedConnect(scenario, target)
+            assertEquals("A bastion route must offer only SSH", "true", evaluate(scenario, """
+                (()=>{const options=document.querySelectorAll('[role=dialog] .connection-options select option');
+                  const value=x=>Array.from(options).find(o=>o.value===x);
+                  return value('mosh')?.disabled===true && value('et')?.disabled===true && value('ssh')?.disabled===false &&
+                    Boolean(document.querySelector('[role=dialog] fieldset legend')?.textContent.includes(${JSONObject.quote(bastion)}));})()
+            """))
+            typeInto(scenario, "[role=dialog] fieldset input[type=password]", parity.fixture.getString("password"))
+            chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+            submitOwnedConnect(scenario)
+            trustOwnedHostKey(scenario, parity.fingerprint("bastion"), "127.0.0.1:${parity.port("bastion")}")
+            trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+            proveOwnedShell(scenario, parity, parity.prompt("primary"), "ROUTED")
+            // Each attempt after the bastion's trust signs in to it again; the target's own trust adds one.
+            val jump = parity.observe("bastion")
+            assertTrue("The bastion must accept its own password: $jump", parityCount(jump, "acceptedPassword") >= 1)
+            assertEquals("The bastion must not receive the target key: $jump", emptyList<String>(), parityList(jump, "acceptedPublickey"))
+            val forwarded = parityList(jump, "directTcpipTargets")
+            assertTrue("The bastion must forward only to the target: $jump", forwarded.isNotEmpty() && forwarded.all { it == parity.port("primary").toString() })
+            val routed = parity.observe("primary")
+            assertEquals("The target must accept only its own key: $routed", listOf(parity.fixture.getString("userFingerprint")), parityList(routed, "acceptedPublickey"))
+            assertEquals("The target must not receive the bastion password: $routed", 0, parityCount(routed, "acceptedPassword") + parityCount(routed, "failedPassword"))
+            println("lazysh parity: one-hop bastion route reached the target shell with separate credentials and SSH only")
+        }
+    }
+
+    @Test fun ownedSshAgentForwardingThroughRealUi() {
+        val plain = "Parity plain agent"
+        val forwarding = "Parity forwarded agent"
+        ownedParityCase(listOf(plain, forwarding)) { scenario, parity ->
+            addOwnedHost(scenario, plain, "127.0.0.1", parity.username, parity.port("primary"))
+            addOwnedHost(scenario, forwarding, "127.0.0.1", parity.username, parity.port("primary")) {
+                val checkbox = onWebView().withElement(findElement(Locator.XPATH,
+                    "//*[@role='dialog']//label[contains(normalize-space(.),'Forward this connection')]/input[@type='checkbox']"))
+                checkbox.perform(webScrollIntoView()).perform(webClick())
+                assertEquals("Agent forwarding must be opted in for this host only", "true", evaluate(scenario,
+                    "Array.from(document.querySelectorAll('[role=dialog] label')).find(x=>x.textContent.includes('Forward this connection'))?.querySelector('input')?.checked===true"))
+            }
+            val selected = parity.fixture.getString("userFingerprint")
+            val dollar = "$"
+            fun probe(tag: String) = "printf 'AGENT_%s_%s_%s_%s\\n' \"${dollar}{SSH_AUTH_SOCK:+set}\" \"${dollar}(ssh-add -l 2>/dev/null | grep -c SHA256:)\" " +
+                "\"${dollar}(ssh-add -l 2>/dev/null | grep -cF '$selected')\" '$tag${parity.nonce}'"
+            for ((name, expected) in listOf(plain to "AGENT__0_0_", forwarding to "AGENT_set_1_1_")) {
+                openOwnedConnect(scenario, name)
+                if (name == forwarding) {
+                    typeInto(scenario, parityPassword, parity.fixture.getString("password"))
+                    submitOwnedConnect(scenario)
+                    trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+                    awaitOwnedRefusal(scenario, "forwarding without a key", "Agent forwarding requires the private key selected for this connection")
+                }
+                chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
+                submitOwnedConnect(scenario)
+                if (name == plain) trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
+                awaitDocument(scenario, "authenticated $name prompt", terminalScreenContains(parity.prompt("primary")))
+                val tag = if (name == plain) "P" else "F"
+                val command = probe(tag)
+                require(!command.contains(expected + tag)) { "Owned agent proof must not appear in its input" }
+                sendOwnedCommand(scenario, command, parity.label)
+                awaitDocument(scenario, "$name agent identities", terminalScreenContains(expected + tag + parity.nonce))
+                endOwnedConnection(scenario, name)
+            }
+            println("lazysh parity: only the opted-in host saw a forwarded agent, listing exactly the selected identity")
         }
     }
 
