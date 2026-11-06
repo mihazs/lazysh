@@ -3618,14 +3618,14 @@ class NativeWorkspaceTest {
         }
         val bytes = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path").use { descriptor ->
             android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                val buffer = ByteArray(16 * 1024 + 1)
+                val buffer = ByteArray(32 * 1024 + 1)
                 var count = 0
                 while (count < buffer.size) {
                     val read = stream.read(buffer, count, buffer.size - count)
                     if (read < 0) break
                     count += read
                 }
-                require(count <= 16 * 1024) { "Owned SSH fixture exceeds bound" }
+                require(count <= 32 * 1024) { "Owned SSH fixture exceeds bound" }
                 buffer.copyOf(count)
             }
         }
@@ -3769,6 +3769,16 @@ class NativeWorkspaceTest {
                   return cards.length===expected.length && cards.every((card,i)=>card.querySelectorAll('p').length===1 &&
                     card.querySelector('h4')?.textContent===expected[i].role && card.querySelector('p')?.textContent===expected[i].text);})()
             """
+            // Every check names a selector inside the Chat panel and the exact whitespace-collapsed
+            // text of each match, in order; an empty list requires that nothing matches.
+            fun cardTexts(checks: JSONArray, observe: Boolean): String = """
+                (()=>{const panel=document.querySelector('.chat-panel'),checks=$checks,text=e=>e.textContent.replace(/\s+/g,' ').trim(),
+                  actual=checks.map(c=>panel?Array.from(panel.querySelectorAll(c.selector),text):null);
+                  return ${if (observe) "JSON.stringify(actual.map(v=>v&&v.slice(0,8).map(x=>x.slice(0,160))))"
+                    else "actual.every((v,i)=>JSON.stringify(v)===JSON.stringify(checks[i].texts))"};})()
+            """
+            val cards = recorded.getJSONArray("cards")
+            require(cards.length() == 8)
             var primary: Throwable? = null
             try {
                 terminalProof(false)
@@ -3845,8 +3855,29 @@ class NativeWorkspaceTest {
                 // Clear it so the fresh proof below types into an empty draft.
                 clickButton("Clear draft")
                 awaitDocument(scenario, "cleared staged draft", "document.querySelector('.terminal-compose textarea')?.value===''")
+                // Plans, questions, turn state, Markdown and thinking from the companion's real pages.
+                sessionView(scenario, "Transcript")
+                for (index in 0 until cards.length()) {
+                    val card = cards.getJSONObject(index)
+                    val agent = card.getString("agent")
+                    require(agent in setOf("claude", "codex", "opencode") && card.getString("view") in setOf("conversation", "records"))
+                    require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/recorded-conversations/cards/[a-z0-9-]+[.](jsonl|db)").matches(card.getString("path")))
+                    selectOwnedOption(".chat-panel select:has(option[value='codex'])", agent)
+                    selectOwnedOption(".chat-panel select:has(option[value='conversation'])", card.getString("view"))
+                    replaceNativeText(scenario, path, card.getString("path"))
+                    if (agent == "opencode") replaceNativeText(scenario, ".chat-panel input[required]:not([placeholder])", card.getString("sessionId"))
+                    closeSoftKeyboard();clickButton("Open transcript")
+                    val checks = card.getJSONArray("checks")
+                    try {awaitDocument(scenario, "recorded cards: ${card.getString("label")}", cardTexts(checks, false))}
+                    catch (failure: Throwable) {
+                        runCatching {failure.addSuppressed(AssertionError("Recorded card texts: " + evaluate(scenario, cardTexts(checks, true))))}
+                        throw failure
+                    }
+                    owner()
+                }
+                sessionView(scenario, "Terminal")
                 terminalProof(true);owner()
-                println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage and fresh original SSH proof completed")
+                println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage, ${cards.length()} recorded card pages and fresh original SSH proof completed")
             } catch (failure: Throwable) {primary = failure;throw failure}
             finally {
                 try {assertEquals("Remove only the owned recorded observation", "true", evaluate(scenario,
