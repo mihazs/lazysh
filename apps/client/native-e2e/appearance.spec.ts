@@ -64,12 +64,12 @@ async function returnToOriginalTerminal(state:Awaited<ReturnType<typeof enterApp
 
 it('changes native appearance through public settings and restores keyboard context without replacing its terminal',async()=>{
   const gui=fixture.gui=await NativeGui.start();
-  const state=await enterAppearance(gui),{browser,page}=state;
+  const state=await enterAppearance(gui),{browser,dialog,page}=state;
   const theme=await page.$('//label[normalize-space(text())="App theme"]/select');
   expect(await page.$('legend=App icon').isExisting()).toBe(false);
   expect(await page.$('button=Refresh app icon').isDisplayed()).toBe(true);
   await captureAppearance(gui,'brand');
-  const samples:Record<string,{foreground:string;background:string;scheme:string;opaque:boolean}>={};
+  const samples:Record<string,{foreground:string;background:string;scheme:string;glass:boolean;alpha:number;opacity:string;blurred:boolean}>={};
   for(const value of ['paper','midnight']) {
     gui.stage=`appearance ${value} rendered`;
     await theme.selectByAttribute('value',value);
@@ -78,12 +78,21 @@ it('changes native appearance through public settings and restores keyboard cont
       const style=getComputedStyle(document.querySelector('[role="dialog"][aria-label="Preferences"]')!);
       const canvas=document.createElement('canvas').getContext('2d')!;
       canvas.fillStyle=style.backgroundColor;canvas.fillRect(0,0,1,1);
-      return {foreground:style.color,background:style.backgroundColor,scheme:document.documentElement.style.colorScheme,opaque:canvas.getImageData(0,0,1,1).data[3]===255&&style.opacity==='1'};
+      // Desktop dialogs are glass only where the renderer can blur and mix colours and the user has not opted out.
+      const glass=(CSS.supports('backdrop-filter','blur(1px)')||CSS.supports('-webkit-backdrop-filter','blur(1px)'))
+        &&CSS.supports('background','color-mix(in srgb, black 90%, transparent)')&&matchMedia('(min-width: 601px)').matches
+        &&!matchMedia('(prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active)').matches;
+      const filter=style.backdropFilter||style.getPropertyValue('-webkit-backdrop-filter');
+      return {foreground:style.color,background:style.backgroundColor,scheme:document.documentElement.style.colorScheme,glass,alpha:canvas.getImageData(0,0,1,1).data[3],opacity:style.opacity,blurred:filter.includes('blur(')};
     });
-    expect(samples[value].scheme).toBe(value==='paper'?'light':'dark');
-    expect(samples[value].opaque).toBe(true);
+    const material=samples[value];
+    expect(material.scheme).toBe(value==='paper'?'light':'dark');
+    expect(material.opacity).toBe('1');
+    // Glass is translucent and blurred; every fallback mode paints the dialog opaque without blur.
+    expect({alpha:material.glass?material.alpha<255&&material.alpha>0:material.alpha===255,blurred:material.blurred},`${value} dialog material`).toEqual({alpha:true,blurred:material.glass});
     await captureAppearance(gui,value as 'paper'|'midnight');
-    const contrasts=await browser.execute(controlContrast,page);
+    // Isolated at the dialog, so text must hold over the worst underlay, black or white, that the glass can float above.
+    const contrasts=await browser.execute(controlContrast,dialog,{isolate:true});
     expect(contrasts.length).toBeGreaterThan(5);
     for(const sample of contrasts)expect(sample.ratio,`${value} ${sample.tag} ${sample.text}`).toBeGreaterThanOrEqual(4.5);
     // Record actual native media/support state; this does not emulate or qualify fallback modes.

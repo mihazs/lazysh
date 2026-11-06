@@ -3,7 +3,7 @@
 .agent-panel .agent-search input { width: 100%; min-width: 0; font-size: 16px; }
 .agent-panel .agent-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 4px; margin-top: 12px; }
 .agent-panel .agent-filters button { min-width: 0; min-height: 44px; padding: 6px 4px; white-space: normal; overflow-wrap: anywhere; }
-.agent-panel .agent-filters button[aria-pressed="true"],
+.agent-panel .agent-filters button[aria-pressed="true"] { background: var(--ui-fill-selected); }
 .agent-panel .agent-card[data-selected="true"] { border-color: var(--accent); }
 .agent-panel .agent-filters span { font-variant-numeric: tabular-nums; }
 .agent-panel .agent-result-count, .agent-panel .agent-report-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -43,7 +43,7 @@
 /* Reported activity retains its source labels without another heavy control row. */
 .agent-panel .agent-filters { gap: 2px; border-bottom: 1px solid color-mix(in srgb, var(--theme-border) 45%, transparent); padding-bottom: 8px; }
 .agent-panel .agent-filters button { border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--muted); }
-.agent-panel .agent-filters button[aria-pressed=true] { border-color: var(--theme-border); background: var(--theme-control); color: var(--theme-text); }
+.agent-panel .agent-filters button[aria-pressed=true] { border-color: var(--ui-control-border); background: var(--ui-fill-selected); color: var(--theme-text); }
 .agent-panel .agent-card { border-radius: 14px; background: var(--theme-panel); }
 .agent-panel .agent-report-row .agent-row-summary { margin-block: 7px; font-size: 14px; }
 

@@ -1,8 +1,10 @@
 :root {
-  /* Default lazysh theme: a true-black canvas with brand-ink elevations and the brand cyan. */
+  /* Default lazysh theme: a true-black canvas with brand-ink elevations and a restrained periwinkle accent. */
   --theme-bg: #000000; --theme-panel: #0d1219; --theme-control: #172029;
   --theme-hover: #202b37; --theme-text: #f5f8fc; --theme-muted: #a1adbb;
-  --theme-border: #5b6879; --theme-accent: #77f3ec; --theme-on-accent: #04141a;
+  --theme-border: #5b6879; --theme-accent: #b4bdf8; --theme-on-accent: #0b0f24;
+  /* The least panel opacity at which every theme ink keeps 4.5:1 over any underlay, black or white. */
+  --theme-glass-opacity-floor: 83%;
   --theme-danger: #ffb2aa; --theme-danger-bg: #3d1a17;
   --theme-warning: #f2cd72; --theme-warning-bg: #33280f;
   --theme-blue: #6cc2ff; --theme-blue-bg: #0e2438;
@@ -19,11 +21,34 @@
   font-weight: 400;
   font-size: 14px;
   --surface: var(--theme-panel, #171b17);
-  --border: var(--theme-border, #2a3029);
   --muted: var(--theme-muted, #8b9588);
   --accent: var(--theme-accent, #c4eb89);
   --danger: var(--theme-danger, #f2a29b);
+  /*
+   * Design tokens. Every theme (bundled or imported) supplies only --theme-*;
+   * these derive the subtle, borderless surface system from it.
+   * Controls are tonal fills with a transparent border (visible in forced colours
+   * and under prefers-contrast: more) and a clear :focus-visible ring.
+   */
+  --ui-fill: var(--theme-control);
+  --ui-fill-hover: var(--theme-hover);
+  --ui-fill-selected: color-mix(in srgb, var(--accent) 18%, var(--theme-control));
+  --ui-control-border: transparent;
+  --ui-border: color-mix(in srgb, var(--theme-text) 10%, transparent);
+  --ui-focus-ring: var(--accent);
+  /* Glass: translucent chrome over blurred content, never below the theme's contrast floor. */
+  --ui-glass-surface: color-mix(in srgb, var(--theme-panel) max(86%, var(--theme-glass-opacity-floor, 0%)), transparent);
+  --ui-glass-frost: blur(20px);
+  --ui-glass-blur: var(--ui-glass-frost) saturate(140%);
+  --ui-glass-highlight: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 9%, transparent);
+  --ui-glass-shadow: 0 12px 32px rgb(0 0 0 / 22%);
+  --border: var(--ui-border);
   color-scheme: dark;
+}
+@media (prefers-contrast: more) {
+  :root { --ui-control-border: var(--theme-border); --ui-border: var(--theme-border); }
+  /* Increased contrast restores every control edge, whatever transparent edge a component chose. */
+  :is(button, input, select, textarea):not(:disabled) { border-color: var(--theme-border) !important; }
 }
 * {
   box-sizing: border-box;
@@ -52,8 +77,8 @@ button {
 input[type="file"]::file-selector-button {
   font: inherit;
   color: var(--theme-text);
-  background: var(--theme-control);
-  border: 1px solid var(--theme-border);
+  background: var(--ui-fill);
+  border: 1px solid var(--ui-control-border);
   border-radius: 6px;
   min-height: 44px;
   padding: 8px 12px;
@@ -74,8 +99,8 @@ select:focus-visible,
 textarea:focus-visible,
 pre:focus-visible,
 .workspace-navigation-scroll > [tabindex="-1"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 2px;
 }
 button {
   transition:
@@ -93,8 +118,8 @@ input,
 select,
 textarea {
   width: 100%;
-  background: var(--theme-bg, #111510);
-  border: 1px solid var(--theme-border, #343d31);
+  background: var(--ui-fill);
+  border: 1px solid var(--ui-control-border);
   border-radius: 7px;
   padding: 11px 12px;
   color: var(--theme-text, #e4e9df);
@@ -109,7 +134,7 @@ input[type="radio"] {
   accent-color: var(--accent);
 }
 button:hover:not(:disabled) {
-  background: var(--theme-hover);
+  background: var(--ui-fill-hover);
 }
 input::placeholder,
 textarea::placeholder {
@@ -209,8 +234,8 @@ button svg {
   display: flex;
   align-items: center;
   gap: 9px;
-  border: 1px solid var(--theme-border, #32392e);
-  background: var(--theme-panel, #1c211b);
+  border: 1px solid var(--ui-control-border);
+  background: var(--ui-fill);
   border-radius: 7px;
   padding: 10px;
   color: var(--theme-muted, #a5aea0);
@@ -338,7 +363,7 @@ button svg {
 }
 .add-host-button {
   background: transparent;
-  border: 1px dashed var(--theme-border, #36412f);
+  border: 1px solid var(--ui-control-border);
   color: var(--theme-text, #a6b49a);
   border-radius: 7px;
   display: flex;
@@ -351,8 +376,7 @@ button svg {
   width: 100%;
 }
 .add-host-button:hover {
-  background: var(--theme-control, #252e20);
-  border-color: var(--theme-border, #677b54);
+  background: var(--ui-fill);
 }
 .sidebar-bottom {
   margin-top: auto;
@@ -510,22 +534,22 @@ button svg {
 .primary-button {
   background: var(--theme-accent, #c4eb89);
   color: var(--theme-text, #203116);
-  border: 1px solid var(--theme-accent, #c4eb89);
+  border: 1px solid var(--ui-control-border);
 }
 .primary-button:hover:not(:disabled) {
   background: var(--theme-accent, #d4f4a8);
 }
 .subtle-button {
-  background: var(--theme-control, #252e21);
-  border: 1px solid var(--theme-border, #3a4632);
+  background: var(--ui-fill);
+  border: 1px solid var(--ui-control-border);
   color: var(--theme-text, #c5d1bb);
 }
 .subtle-button:hover:not(:disabled) {
-  background: var(--theme-hover, #323f2b);
+  background: var(--ui-fill-hover);
 }
 .danger-button {
   background: var(--theme-danger-bg, #693b33);
-  border: 1px solid var(--theme-border, #8a5249);
+  border: 1px solid var(--ui-control-border);
   color: var(--theme-danger, #ffd3c7);
 }
 .danger-button:hover {
@@ -710,8 +734,8 @@ button svg {
 }
 .terminal-keys button,
 .terminal-keys button:hover {
-  background: var(--theme-control, #202a1a);
-  border: 1px solid var(--theme-border, #303e27);
+  background: var(--ui-fill);
+  border: 1px solid var(--ui-control-border);
   color: var(--theme-text, #b2c3a4);
   border-radius: 5px;
   padding: 7px 10px;
@@ -1530,14 +1554,14 @@ button svg {
 .about-panel { overflow-wrap: anywhere; }
 .about-panel pre { overflow-x: auto; }
 .preferences-panel label { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
-.preferences-panel input:not([type="checkbox"]), .preferences-panel select, .preferences-panel textarea, .terminal-search input, .terminal-compose textarea { background: var(--theme-panel, #151c12); color: var(--theme-text, #e0e8da); border: 1px solid var(--theme-border, #46573c); padding: 9px; border-radius: 5px; max-width: 100%; }
+.preferences-panel input:not([type="checkbox"]), .preferences-panel select, .preferences-panel textarea, .terminal-search input, .terminal-compose textarea { background: var(--ui-fill); color: var(--theme-text, #e0e8da); border: 1px solid var(--ui-control-border); padding: 9px; border-radius: 5px; max-width: 100%; }
 .preferences-panel textarea { width: 100%; min-height: 90px; }
 .preferences-panel p { color: var(--theme-text, #adb9a4); line-height: 1.5; }
 .preferences-panel details { margin: 20px 0; }
 .preferences-panel summary { cursor: pointer; padding: 8px 0; }
 .preferences-panel li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .preferences-panel li > span { min-width: 80px; }
-.preferences-panel button, .terminal-edit-review button, .terminal-consent button, .terminal-search button, .terminal-compose button { padding: 9px 12px; background: var(--theme-control, #26331e); border: 1px solid var(--theme-border, #46573c); color: var(--theme-text, #e0e8da); border-radius: 5px; margin: 3px; }
+.preferences-panel button, .terminal-edit-review button, .terminal-consent button, .terminal-search button, .terminal-compose button { padding: 9px 12px; background: var(--ui-fill); border: 1px solid var(--ui-control-border); color: var(--theme-text, #e0e8da); border-radius: 5px; margin: 3px; }
 .preferences-panel button:disabled, .terminal-edit-review button:disabled, .terminal-compose button:disabled { opacity: .5; }
 .terminal-consent { background: var(--theme-control, #27331f); padding: 12px; max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
 .terminal-consent pre { white-space: pre-wrap; max-height: 100px; overflow: auto; }
@@ -1637,6 +1661,7 @@ button svg {
   --theme-warning: #ead397; --theme-warning-bg: #3a3324;
   --theme-blue: #b3cfff; --theme-blue-bg: #203451;
   --theme-purple: #ddc4ef; --theme-purple-bg: #352945;
+  --theme-glass-opacity-floor: 85%;
 }
 :root[data-app-theme="paper"] {
   --theme-bg: #fafbf7; --theme-panel: #f0f3eb; --theme-control: #e5ebdf;
@@ -1646,6 +1671,7 @@ button svg {
   --theme-warning: #805500; --theme-warning-bg: #f4ebd8;
   --theme-blue: #254c80; --theme-blue-bg: #e2eaf5;
   --theme-purple: #6a387f; --theme-purple-bg: #eee3f3;
+  --theme-glass-opacity-floor: 90%;
 }
 :root[data-app-theme] .primary-button { color: var(--theme-on-accent, #203116); }
 .font-sample { padding: 16px; border: 1px solid var(--border); overflow-wrap: anywhere; }
@@ -1662,7 +1688,7 @@ button svg {
   .header-right .connection-label { display: none; }
 }
 .terminal-dpad { display: grid; grid-template-columns: repeat(3, 44px); gap: 5px; align-self: flex-end; padding: 8px 12px; }
-.terminal-dpad button { min-height: 44px; min-width: 44px; border-radius: 6px; background: var(--theme-control, #26331e); color: var(--theme-text, #e0e8da); border: 1px solid var(--border); }
+.terminal-dpad button { min-height: 44px; min-width: 44px; border-radius: 6px; background: var(--ui-fill); color: var(--theme-text, #e0e8da); border: 1px solid var(--ui-control-border); }
 .share-thumbnail { margin: 12px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .share-thumbnail img { max-width: 100%; height: auto; max-height: 256px; object-fit: contain; border: 1px solid var(--border); }
 .share-thumbnail figcaption { color: var(--muted); font-size: 12px; }
@@ -1684,12 +1710,17 @@ button svg {
   min-width: 0;
   min-height: 44px;
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid var(--ui-control-border);
+  background: var(--ui-fill);
   text-align: left;
   overflow-wrap: anywhere;
 }
-.session-choice[aria-current="true"] { border-color: var(--accent); }
+.session-choice[aria-current="true"] { background: var(--ui-fill-selected); }
+/* Borderless lists still mark the current item with a 3:1 accent bar, not only a tinted fill. */
+.session-choice[aria-current="true"], .workspace-live-sessions button[aria-current="location"] { box-shadow: inset 3px 0 0 var(--accent); }
+@media (forced-colors: active) {
+  .session-choice[aria-current="true"], .workspace-live-sessions button[aria-current="location"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .session-switcher[data-layout="list"] .session-choice-destination::before { content: " · "; }
 .session-switcher[data-layout="cards"] .session-choice { padding: 16px; }
 .session-switcher[data-layout="cards"] .session-choice-name { display: block; font-weight: 600; }
@@ -1730,7 +1761,7 @@ button svg {
     background: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-control));
   }
 }
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .sidebar, .sidebar > .brand, .workspace-header, [data-mobile-presentation="sheet"] > .dialog { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1745,7 +1776,7 @@ button svg {
 .sidebar:not([data-navigation="connections"]) .sidebar-bottom > div { display: none; }
 .workspace-navigation-modes { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 8px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--theme-control); }
 .workspace-navigation-modes button { flex: 1 1 auto; min-height: 44px; min-width: 44px; padding: 5px 3px; border-color: transparent; background: transparent; font-size: 11px; white-space: normal; overflow-wrap: normal; word-break: normal; hyphens: none; }
-.workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { border-color: var(--accent); }
+.workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { background: var(--ui-fill-selected); }
 .navigation-connections { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .navigation-connections[hidden], .workspace-navigation-scroll[hidden], .workspace-navigation-agents[hidden] { display: none; }
 .workspace-navigation-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
@@ -1861,7 +1892,7 @@ button svg {
 .dialog:has(> .workspace-tools-content) { display: flex; flex-direction: column; overflow: hidden; }
 .dialog:has(> .workspace-tools-content) > .dialog-heading { flex-shrink: 0; }
 .workspace-tools-content { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: 10px; padding: 12px; }
-.workspace-tools-content > details > summary { min-height: 44px; padding: 10px 12px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-control); cursor: pointer; list-style-position: inside; }
+.workspace-tools-content > details > summary { min-height: 44px; padding: 10px 12px; border: 1px solid var(--ui-control-border); border-radius: 10px; background: var(--ui-fill); cursor: pointer; list-style-position: inside; }
 .workspace-tools-content > details[open] > summary { margin-bottom: 8px; }
 .workspace-tools-group { display: grid; gap: 8px; }
 .workspace-tools-group > button, .workspace-tools-end { min-height: 44px; }
@@ -1877,7 +1908,7 @@ button svg {
 .agent-section-jumps button { min-width: 0; min-height: 44px; }
 
 /* Distinguish the navigation/control layer while reading surfaces stay solid. */
-.workspace-navigation-modes { border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 12%, transparent); }
+.workspace-navigation-modes { border-color: var(--ui-border); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 12%, transparent); }
 @supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
   [data-mobile-presentation="sheet"] > .dialog:has(> .workspace-tools-content) {
     background: color-mix(in srgb, var(--theme-panel) max(78%, var(--theme-glass-opacity-floor, 0%)), transparent);
@@ -1892,7 +1923,7 @@ button svg {
 .herdr-navigation > header, .settings-detail-header { border-radius: 10px; }
 .settings-detail-header { margin-bottom: 8px; }
 .workspace-navigation-modes button, .herdr-report-reference summary { transition: background-color 120ms ease, border-color 120ms ease; }
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .sidebar > .brand, .workspace-navigation-modes, .settings-detail-header, [data-mobile-presentation="sheet"] > .dialog:has(> .workspace-tools-content) { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1910,7 +1941,7 @@ button svg {
   .sidebar:not([data-navigation=connections]) > .workspace-navigation-modes { order: 9; margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--theme-border); }
 }
 .workspace-navigation-modes button { display: flex; align-items: center; justify-content: center; gap: 8px; }
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .workspace-navigation-modes, .herdr-navigation[data-mode=agents] .herdr-agent-row { background: var(--theme-panel); backdrop-filter: none; box-shadow: none; }
 }
 @media (min-width: 601px) {
@@ -1919,14 +1950,14 @@ button svg {
 @supports (backdrop-filter: blur(1px)) {
   .sidebar > .workspace-navigation-modes { background: color-mix(in srgb, var(--theme-panel) max(86%, var(--theme-glass-opacity-floor, 0%)), transparent); backdrop-filter: blur(18px) saturate(125%); }
 }
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .sidebar > .workspace-navigation-modes { background: var(--theme-panel); backdrop-filter: none; }
 }
 @media (min-width: 601px) {
   .sidebar[data-navigation=connections] > .brand { margin-bottom: 12px; }
   .sidebar[data-navigation=connections] > .workspace-navigation-modes { margin: 8px 0 14px; gap: 2px; }
   .sidebar .workspace-navigation-modes button { min-height: 44px; padding-block: 7px; }
-  .workspace-navigation-modes button[aria-current=page] { box-shadow: none; border-color: color-mix(in srgb, var(--accent) 65%, transparent); }
+  .workspace-navigation-modes button[aria-current=page] { box-shadow: none; border-color: var(--ui-control-border); background: var(--ui-fill-selected); }
 }
 @media (min-width: 601px) {
   .sidebar > .workspace-navigation-modes { flex-shrink: 0; flex-wrap: nowrap; }

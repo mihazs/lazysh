@@ -1,5 +1,6 @@
 import {expect,test,type CDPSession,type Page} from '@playwright/test';
 import {historyLines,historyView,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
+import {controlContrast} from './fixtures/controlContrast';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 const readClipboard=(page:Page)=>page.evaluate(()=>navigator.clipboard.readText());
@@ -44,6 +45,12 @@ async function dragHandle(page:Page,input:CDPSession,which:'start'|'end',to:{x:n
   for(let step=1;step<=4;step++)await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:from.x+(to.x-from.x)*step/4,y:from.y+(to.y-from.y)*step/4}]});
   await expect.poll(until,{timeout:15000}).toBe(true);
   await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+}
+/** A Shift-held mouse drag, which forces a local selection even while the remote app reports the mouse. */
+async function shiftDrag(page:Page,from:{x:number;y:number},to:{x:number;y:number},steps:number) {
+  await page.keyboard.down('Shift');
+  await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps});await page.mouse.up();
+  await page.keyboard.up('Shift');
 }
 async function copyMatches(page:Page) {
   const expected=await selected(page);
@@ -118,21 +125,37 @@ test('alternate screen mouse reporting keeps Shift-drag selection, Select all an
   await page.evaluate(()=>window.ownedHistory.raw('\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[H'+Array.from({length:8},(_,i)=>`ALT_ROW_${i} text`).join('\r\n')));
   await settle(page);
   const from=await cell(page,1,0),to=await cell(page,3,4);
-  await page.keyboard.down('Shift');
-  await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:4});await page.mouse.up();
-  await page.keyboard.up('Shift');
+  await shiftDrag(page,from,to,4);
   await expect(actions(page)).toBeVisible();
   // The remote app received no mouse reports for the forced local selection.
   expect(await page.evaluate(()=>window.ownedHistory.writes.filter(data=>data.startsWith('\x1b[<')))).toEqual([]);
   await copyMatches(page);
   expect(await readClipboard(page)).toBe('ALT_ROW_1 text\nALT_ROW_2 text\nALT_');
-  await page.keyboard.down('Shift');
-  await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:2});await page.mouse.up();
-  await page.keyboard.up('Shift');
+  await shiftDrag(page,from,to,2);
   await actions(page).getByRole('button',{name:'Select all',exact:true}).click();
   expect((await selected(page)).text).toBe(await page.evaluate(()=>{const b=window.ownedHistory.terminal.buffer.active;return Array.from({length:b.length},(_,y)=>b.getLine(y)!.translateToString(true)).join('\n');}));
   const screen=await page.evaluate(()=>{const t=window.ownedHistory.terminal,b=t.buffer.active;return Array.from({length:t.rows},(_,row)=>b.getLine(b.viewportY+row)!.translateToString(true)).join('\n');});
   await actions(page).getByRole('button',{name:'Copy screen',exact:true}).click();
   await expect.poll(()=>readClipboard(page)).toBe(screen);
   await expect(actions(page)).toHaveCount(0);
+});
+
+test('selection actions float on the light theme glass without a painted edge',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='desktop','Mouse selection.');
+  await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,appTheme:'paper'})));
+  await open(page,false);
+  const word=await cell(page,3,2);await page.mouse.dblclick(word.x,word.y);
+  await expect(actions(page)).toBeVisible();
+  const material=await actions(page).evaluate(node=>{
+    const style=getComputedStyle(node),context=document.createElement('canvas').getContext('2d')!;
+    context.fillStyle=style.backgroundColor;context.fillRect(0,0,1,1);
+    return {fill:Array.from(context.getImageData(0,0,1,1).data),border:style.borderTopColor,blurred:style.backdropFilter.includes('blur(')};
+  });
+  // Paper's light panel, slightly translucent over a blur, instead of a fixed dark chip with a hard outline.
+  expect(material.fill.slice(0,3).every(channel=>channel>=200),`fill ${material.fill}`).toBe(true);
+  expect(material.fill[3]).toBeLessThan(255);
+  expect({border:material.border,blurred:material.blurred}).toEqual({border:'rgba(0, 0, 0, 0)',blurred:true});
+  const text=await actions(page).evaluate(controlContrast,{isolate:true});
+  expect(text.length).toBe(3);
+  expect(text.filter(sample=>sample.ratio<4.5)).toEqual([]);
 });

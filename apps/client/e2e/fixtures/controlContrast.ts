@@ -1,4 +1,9 @@
-export function controlContrast(element: Element) {
+/**
+ * Rendered text contrast for the controls and copy inside `element`.
+ * With `isolate`, compositing stops at `element` and the worst of an opaque black and
+ * white underlay is reported, which bounds whatever a translucent glass surface floats over.
+ */
+export function controlContrast(element: Element, options: {isolate?: boolean} = {}) {
   const context = document.createElement('canvas').getContext('2d')!;
   function rgba(color: string) {
     context.clearRect(0, 0, 1, 1);
@@ -21,10 +26,13 @@ export function controlContrast(element: Element) {
       const style=getComputedStyle(node),paint=rgba(style.backgroundColor),opacity=Number(style.opacity);
       background=over(background,paint);foreground=over(foreground,paint);
       background[3]*=opacity;foreground[3]*=opacity;
+      if (options.isolate && node === element) break;
     }
-    const canvas=[1,1,1,1];
-    const bg = luminance(over(background,canvas).slice(0,3));
-    const fg = luminance(over(foreground,canvas).slice(0,3));
-    return {text: child.textContent?.slice(0, 80), tag: child.tagName, ratio: (Math.max(bg, fg) + .05) / (Math.min(bg, fg) + .05)};
+    const ratio = Math.min(...(options.isolate ? [[0,0,0,1],[1,1,1,1]] : [[1,1,1,1]]).map(canvas => {
+      const bg = luminance(over(background,canvas).slice(0,3));
+      const fg = luminance(over(foreground,canvas).slice(0,3));
+      return (Math.max(bg, fg) + .05) / (Math.min(bg, fg) + .05);
+    }));
+    return {text: child.textContent?.slice(0, 80), tag: child.tagName, ratio};
   });
 }
