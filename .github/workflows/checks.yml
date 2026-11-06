@@ -1023,6 +1023,13 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --list --ignored | grep -c ': test$' | grep -Fx 6
           bun run test:openssh-connections
+      # Owned loopback sshd stopped and restarted under a live session with a tmux pane.
+      - name: Exercise lost-connection detection, refused retries and tmux reattach over real OpenSSH
+        if: ${{ !cancelled() }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_loss_fixture::openssh_ -- --list --ignored | grep -c ': test$' | grep -Fx 1
+          bun run --cwd apps/client test:connection-loss
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
         run: bun run test:multiplexers

@@ -952,8 +952,16 @@ pub(crate) enum Input {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SshEvent {
-    Data { data: Vec<u8> },
-    Closed { message: String },
+    Data {
+        data: Vec<u8>,
+    },
+    /// `lost` marks a transport that dropped without the remote ending the session,
+    /// so the renderer may reconnect; a remote exit or local close leaves it false.
+    Closed {
+        message: String,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        lost: bool,
+    },
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -999,6 +1007,11 @@ pub(crate) async fn verified_connection(state: &AppState, host: &Host) -> Result
     Ok(handle)
 }
 
+/// A silent transport is declared lost after this many unanswered keepalives, so a
+/// dead route surfaces within about a minute instead of waiting for TCP to give up.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_MAX: usize = 3;
+
 pub(crate) async fn verified_connection_on_stream<R>(
     state: &AppState,
     host: &Host,
@@ -1017,8 +1030,8 @@ where
         forward_agent: forward_agent.clone(),
     };
     let config = Arc::new(client::Config {
-        keepalive_interval: Some(Duration::from_secs(20)),
-        keepalive_max: 3,
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        keepalive_max: KEEPALIVE_MAX,
         ..Default::default()
     });
     let result = timeout(OP_TIMEOUT, client::connect_stream(config, stream, verifier)).await;
@@ -1840,6 +1853,7 @@ pub(crate) async fn close_output(
     )>,
     events: &Channel<SshEvent>,
     message: String,
+    lost: bool,
 ) {
     let mut retired = owner.map(|(_, _, gone)| gone.subscribe());
     loop {
@@ -1857,6 +1871,7 @@ pub(crate) async fn close_output(
             }
             events.send(SshEvent::Closed {
                 message: message.clone(),
+                lost,
             })
         };
         let sent = match owner {
@@ -1873,6 +1888,7 @@ pub(crate) async fn close_output(
                         }
                         events.send(SshEvent::Closed {
                             message: "Session cancelled before adoption".into(),
+                            lost: false,
                         })
                     })
                 } else {
@@ -1928,12 +1944,13 @@ async fn spawn_terminal(
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let completion = SessionCompletion::new(session.finished.clone());
+        let mut ending = TerminalEnding::default();
         let result:Result<()> = async {
             send_output(&session, &events, &initial).await?;
             let mut pending:Option<(crate::terminal_input::InputSequence,AccessLease)>=None;
             loop {
                 tokio::select! {
-                    _=cancellation.changed()=>break,
+                    _=cancellation.changed()=>{ending.local=true;break},
                     _=async { match &pending {Some((_,lease))=>lease.cancelled().await,None=>std::future::pending().await} }=>{pending=None;},
                     _=async { match &pending {Some((data,_))=>tokio::time::sleep_until(data.ready_at()).await,None=>std::future::pending().await} }=>{
                         if let Some((data,lease))=&mut pending {
@@ -1946,18 +1963,21 @@ async fn spawn_terminal(
                     },
                     message=channel.wait()=> match message {
                         Some(ChannelMsg::Data{data})|Some(ChannelMsg::ExtendedData{data,..}) => send_output(&session,&events,&data).await?,
-                        None|Some(ChannelMsg::Close)|Some(ChannelMsg::Eof)=>break,
+                        Some(ChannelMsg::ExitStatus{..})|Some(ChannelMsg::ExitSignal{..})=>ending.exited=true,
+                        None=>{ending.dropped=true;break},
+                        Some(ChannelMsg::Close)|Some(ChannelMsg::Eof)=>break,
                         _=>{}
                     },
                     input=rx.recv(), if pending.is_none()=>match input {
                         Some(Input::Data(data, lease))=>{if !data.is_empty() && lease.check().is_ok() {pending=Some((data,lease));}},
                         Some(Input::Resize(cols,rows, lease))=>{ if lease.check().is_ok() { tokio::select! { biased; _ = lease.cancelled() => {}, result = terminal_io(&session,channel.window_change(cols,rows,0,0)) => {result?;} } } },
-                        None=>break
+                        None=>{ending.local=true;break}
                     }
                 }
             }
             Ok(())
         }.await;
+        let lost = ending.lost(session.handle.is_closed());
         let _ = session.cancel.send(true);
         let _ = timeout(Duration::from_secs(2), channel.close()).await;
         retire_session(&sessions, &retiring, &task_id, &session).await;
@@ -1971,11 +1991,26 @@ async fn spawn_terminal(
                 .err()
                 .map(|error| error.message)
                 .unwrap_or_else(|| "Session closed".into()),
+            lost,
         )
         .await;
         retiring.lock().await.remove(&task_id);
     });
     Ok(Connected { session_id: id })
+}
+
+/// How one SSH terminal channel ended. Only a transport that went away while the
+/// remote never reported an exit, and the user never closed the tab, counts as lost.
+#[derive(Default)]
+struct TerminalEnding {
+    local: bool,
+    exited: bool,
+    dropped: bool,
+}
+impl TerminalEnding {
+    fn lost(&self, transport_closed: bool) -> bool {
+        !self.local && !self.exited && (self.dropped || transport_closed)
+    }
 }
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -2129,13 +2164,15 @@ where
         let completion = SessionCompletion::new(active.finished.clone());
         let mut cancelled = active.cancel.subscribe();
         let delivery = async {
+            let mut local = false;
             let result: Result<()> = async {
                 loop {
                     if *cancelled.borrow() {
+                        local = true;
                         break;
                     }
                     tokio::select! {
-                        _ = cancelled.changed() => break,
+                        _ = cancelled.changed() => {local = true; break},
                         item = output_rx.recv() => match item {
                             Some(bytes) => send_output(&active, &events, &bytes).await?,
                             None => break,
@@ -2148,7 +2185,7 @@ where
             let _ = active.cancel.send(true);
             active.output_credits.close();
             drop(output_rx);
-            result
+            (result, local)
         };
         let native = async move {
             // The native transport may finish while final output waits for the UI.
@@ -2164,7 +2201,13 @@ where
                 })
                 .and_then(|result| result)
         };
-        let (delivery, native) = tokio::join!(delivery, native);
+        let ((delivery, local), native) = tokio::join!(delivery, native);
+        // Mosh and ET recover from network changes themselves; a worker that still
+        // failed without a local close lost its transport.
+        let lost = !local
+            && native
+                .as_ref()
+                .is_err_and(|error| error.kind() != "cancelled");
         retire_session(&sessions, &retiring, &task_id, &active).await;
         completion.finish();
         close_output(
@@ -2176,6 +2219,7 @@ where
                 .err()
                 .map(|error| error.message)
                 .unwrap_or_else(|| "Session closed".into()),
+            lost,
         )
         .await;
         retiring.lock().await.remove(&task_id);
@@ -3336,6 +3380,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "companion_fixture.rs"]
     mod companion_fixture;
+    #[cfg(target_os = "linux")]
+    #[path = "connection_loss_fixture.rs"]
+    mod connection_loss_fixture;
     #[cfg(target_os = "linux")]
     #[path = "connection_parity_fixture.rs"]
     mod connection_parity_fixture;
@@ -7581,6 +7628,7 @@ mod tests {
             Some((&creation, &adopted, &renderer_gone)),
             &events,
             "OLD_PRIVATE_STDERR".into(),
+            true,
         )
         .await;
         let body = events_rx.recv().await.unwrap();
@@ -7588,6 +7636,8 @@ mod tests {
         let closed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(closed["type"], "closed");
         assert_eq!(closed["message"], "Session cancelled before adoption");
+        // A renderer that never adopted the tab must not start reconnecting it.
+        assert!(closed.get("lost").is_none(), "{closed}");
     }
     #[tokio::test]
     async fn renderer_rebind_without_biometric_policy_retires_all_old_transports_and_allows_fresh_session(

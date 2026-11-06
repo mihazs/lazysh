@@ -80,6 +80,70 @@ impl OwnedSshd {
     pub(super) fn log(&self) -> String {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
+    /// Stops sshd like a vanished server: every connection process it started dies
+    /// without a disconnect message, and the listener stops accepting.
+    #[cfg(target_os = "linux")]
+    pub(super) fn kill_tree(self) {
+        let root = self._process.0.id();
+        let mut owned = vec![root];
+        let mut index = 0;
+        while index < owned.len() {
+            let parent = owned[index];
+            owned.extend(linux_children(parent));
+            index += 1;
+        }
+        for pid in owned.iter().skip(1).rev() {
+            // SAFETY: each pid was a live descendant of the owned listener just above.
+            unsafe { libc::kill(*pid as i32, libc::SIGKILL) };
+        }
+        drop(self);
+    }
+}
+
+/// Direct children from procfs; a process that already exited is simply absent.
+#[cfg(target_os = "linux")]
+fn linux_children(parent: u32) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    // The command name may contain spaces; the parent follows its closing paren.
+                    let rest = &stat[stat.rfind(')')? + 2..];
+                    rest.split(' ').nth(1)?.parse::<u32>().ok()
+                })
+                == Some(parent)
+        })
+        .collect()
+}
+
+/// Collects a terminal's output until `expected` appears, acknowledging every chunk;
+/// a Closed event or a 15-second deadline fails with the output seen so far.
+pub(super) async fn terminal_output_until(
+    state: &AppState,
+    id: &str,
+    rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    expected: &str,
+) -> String {
+    let session = state.session(id).await.unwrap();
+    let mut output = Vec::new();
+    timeout(Duration::from_secs(15), async {
+        while !String::from_utf8_lossy(&output).contains(expected) {
+            let event = rx.recv().await.unwrap();
+            assert_ne!(event["type"], "closed", "{event}");
+            if let Some(data) = event["data"].as_array() {
+                output.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
+                acknowledge(&session, data.len() as u32).unwrap();
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{expected} missing: {}", String::from_utf8_lossy(&output)));
+    String::from_utf8_lossy(&output).into_owned()
 }
 
 /// Runs one command in a product-opened PTY channel, which carries the agent request

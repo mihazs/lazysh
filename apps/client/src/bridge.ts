@@ -35,7 +35,7 @@ export type Host = {
 };
 export type SshEvent =
   | { type: "data"; data: number[] }
-  | { type: "closed"; message?: string };
+  | { type: "closed"; message?: string; lost?: boolean };
 export type SshError = { kind: string; message: string; fingerprint?: string; hostId?: string };
 export type FileEntry = { name: string; isDir: boolean; size: number };
 export type MuxSession = {

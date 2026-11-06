@@ -902,6 +902,7 @@ mod desktop {
                 Some((&session.creation, &session.adopted, &session.renderer_gone)),
                 &events,
                 result.err().unwrap_or_else(|| "Local shell exited".into()),
+                false,
             )
             .await;
             sessions

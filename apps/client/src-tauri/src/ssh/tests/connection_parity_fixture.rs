@@ -4,7 +4,7 @@
 //! absent. Every sshd is owned, unprivileged and bound to loopback. nss_wrapper gives
 //! it a private account (password hash, HOME and /bin/sh), and its PATH holds only the
 //! listed tools, so nothing reads the developer's account, ~/.ssh, agent or known_hosts.
-use super::owned_sshd::{free_port, terminal_command, OwnedSshd};
+use super::owned_sshd::{free_port, terminal_command, terminal_output_until, OwnedSshd};
 use super::*;
 use std::path::Path;
 use tauri::Manager;
@@ -272,21 +272,8 @@ async fn shell_marker(app: &App, id: &str, rx: &mut Events, label: &str, remote:
     .unwrap()
     .into_inner()
     .unwrap();
-    let session = app.state::<AppState>().session(id).await.unwrap();
     let expected = format!("PARITY_{label}_{remote}");
-    let mut output = Vec::new();
-    timeout(Duration::from_secs(10), async {
-        while !String::from_utf8_lossy(&output).contains(&expected) {
-            let event = rx.recv().await.unwrap();
-            assert_ne!(event["type"], "closed", "{event}");
-            if let Some(data) = event["data"].as_array() {
-                output.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
-                acknowledge(&session, data.len() as u32).unwrap();
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("{expected} missing: {}", String::from_utf8_lossy(&output)));
+    terminal_output_until(&app.state(), id, rx, &expected).await;
 }
 
 async fn mosh_error(app: &App, id: &str) -> SshError {

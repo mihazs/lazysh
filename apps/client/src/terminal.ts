@@ -27,6 +27,8 @@ export type LiveSession = {
   auto?: import('./bridge').AutoOptions;
   transportNotice?: string;
   message?: string;
+  /** The transport dropped without the remote ending the session; reconnecting may resume it. */
+  lost?: true;
   attached?: import('./workspace').SessionAttachment;
 };
 

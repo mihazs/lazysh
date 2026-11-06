@@ -1,25 +1,21 @@
 import {expect,it} from 'vitest';
 import {NativeGui} from './fixture';
 import {SshFixture} from '../../../tests/support/sshFixture';
-import {openOwnedRememberedSsh,ownedSshGui,typeText} from './sshUi';
+import {openOwnedRememberedSsh,ownedSshGui} from './sshUi';
+import {paneIdentity,probePane,tmuxClients} from './tmuxPane';
 
 const fixture=ownedSshGui();
-// The typed echo keeps `%s`; only the pane's own printf resolves the pane ID and shell PID.
-const probe=(tag:string)=>`printf 'PANE<%s:%s:${tag}>\\n' "$TMUX_PANE" "$$"\n`;
-const paneIdentity=(text:string,tag:string)=>text.match(new RegExp(`PANE<(%[0-9]+):([1-9][0-9]*):${tag}>`))?.slice(1,3).join(':');
 
 it('restores the same durable tmux pane after the app is killed, only after explicit restore',async()=>{
   fixture.captureSafe=false;
   const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,tmux:true});
   const gui=fixture.gui=await NativeGui.startWithDisposableVault();
   const name=`restore-${ssh.nonce.slice(0,12)}`;
-  const clients=async()=>(await ssh.tmux(['list-clients','-F','#{client_tty}'])).split('\n').filter(Boolean).length;
+  const clients=()=>tmuxClients(ssh);
   const {browser,terminal}=await openOwnedRememberedSsh(gui,ssh,{kind:'tmux',name});
   await gui.assertDisposableCredential('saved');
   gui.stage='owned tmux pane identity before kill';
-  await terminal.click();await typeText(browser,probe('BEFORE'));
-  let before:string|undefined;
-  await browser.waitUntil(async()=>!!(before=paneIdentity(await terminal.getText(),'BEFORE')),{timeout:20_000,timeoutMsg:'Owned tmux pane identity was not observed'});
+  const before=await probePane(browser,terminal,'BEFORE','Owned tmux pane identity was not observed');
   expect(await clients()).toBe(1);
   gui.stage='owned workspace descriptor on disk';
   // Kill only after WebKit has written the descriptor; page memory alone would not survive.
@@ -49,10 +45,7 @@ it('restores the same durable tmux pane after the app is killed, only after expl
   await restored.waitForDisplayed({timeout:20_000});
   // tmux redraws the surviving pane, including the output written before the kill.
   await relaunched.waitUntil(async()=>paneIdentity(await restored.getText(),'BEFORE')===before,{timeout:20_000,timeoutMsg:'Restored display did not show the original pane output'});
-  await restored.click();await typeText(relaunched,probe('AFTER'));
-  let after:string|undefined;
-  await relaunched.waitUntil(async()=>!!(after=paneIdentity(await restored.getText(),'AFTER')),{timeout:20_000,timeoutMsg:'Restored pane identity was not observed'});
-  expect(after).toBe(before);
+  expect(await probePane(relaunched,restored,'AFTER','Restored pane identity was not observed')).toBe(before);
   expect(await clients()).toBe(1);
   await gui.assertDisposableCredential('unchanged');
   expect(await gui.appOwner()).toEqual(owner);
