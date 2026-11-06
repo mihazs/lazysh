@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.22.0
+
+### Minor Changes
+
+- 201c558: Show Workspace tools as swipeable, labelled carousel pages that size to the page in view and remember the last page across reconnects and restarts.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.22.0
+  - @lazysh/common@1.22.0
+  - @lazysh/display-idle@1.22.0
+  - @lazysh/et-transport@1.22.0
+  - @lazysh/mosh-transport@1.22.0
+
 ## 1.21.0
 
 ### Minor Changes

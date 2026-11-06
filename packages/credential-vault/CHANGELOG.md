@@ -1,5 +1,9 @@
 # @lazysh/credential-vault
 
+## 1.22.0
+
+No changes in this release.
+
 ## 1.21.0
 
 No changes in this release.
