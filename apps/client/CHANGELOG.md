@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.21.0
+
+### Minor Changes
+
+- ae09622: Redesign the app chrome as subtle borderless controls with glass surfaces and a restrained accent that replaces the default cyan.
+- b79a85b: Show images and files attached from the terminal composer as numbered inline `[Image #n]` and `[File #n]` chips that delete atomically and expand to the uploaded paths on send.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.21.0
+  - @lazysh/common@1.21.0
+  - @lazysh/display-idle@1.21.0
+  - @lazysh/et-transport@1.21.0
+  - @lazysh/mosh-transport@1.21.0
+
 ## 1.20.0
 
 ### Minor Changes
