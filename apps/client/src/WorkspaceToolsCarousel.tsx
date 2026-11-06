@@ -53,7 +53,11 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
   const drag = useRef<{x: number; y: number} | null>(null);
   const suppressClick = useRef(false);
   const aligned = useRef(false);
-  /** A page turn started by a control, which slow frames must not mistake for a swipe. */
+  /**
+   * A page turn started by a control, which slow frames and a late `scrollend` from an
+   * earlier turn must not mistake for a swipe. Only arriving, its deadline or the user
+   * taking over the scroll ends it.
+   */
   const turning = useRef<{index: number; until: number} | null>(null);
 
   function select(next: number, focus = false) {
@@ -101,22 +105,24 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
     const node = track.current;
     if (!node) return;
     let timer = 0;
-    const settle = (ended: boolean) => {
+    const settle = () => {
       window.clearTimeout(timer);
       if (!node.clientWidth) return;
       const index = Math.round(node.scrollLeft / node.clientWidth);
       const turn = turning.current;
       if (turn) {
         const arrived = index === turn.index && Math.abs(node.scrollLeft - index * node.clientWidth) < 1;
-        if (!arrived && !ended && performance.now() < turn.until) return;
+        if (!arrived && performance.now() < turn.until) return;
         turning.current = null;
       }
       if (index !== currentRef.current) select(index);
     };
-    const scroll = () => { fit(); window.clearTimeout(timer); timer = window.setTimeout(() => settle(false), SETTLE_MS); };
-    const ended = () => settle(true);
+    const scroll = () => { fit(); window.clearTimeout(timer); timer = window.setTimeout(settle, SETTLE_MS); };
+    // A wheel or trackpad gesture takes the scroll over from a control's turn.
+    const wheel = () => { turning.current = null; };
     node.addEventListener('scroll', scroll, {passive: true});
-    node.addEventListener('scrollend', ended);
+    node.addEventListener('scrollend', settle);
+    node.addEventListener('wheel', wheel, {passive: true});
     // Only a width change moves the snap points; the track's own height comes from fit().
     let width = node.clientWidth, frame = 0;
     const observe = (callback: () => void) => typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(callback);
@@ -128,7 +134,8 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
     return () => {
       window.clearTimeout(timer);
       node.removeEventListener('scroll', scroll);
-      node.removeEventListener('scrollend', ended);
+      node.removeEventListener('scrollend', settle);
+      node.removeEventListener('wheel', wheel);
       window.cancelAnimationFrame(frame);
       resize?.disconnect();
       content?.disconnect();
@@ -143,6 +150,8 @@ export function WorkspaceToolsCarousel({pages, initialPage, onPageChange}: {
   }
 
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
+    // A finger or pen on the track takes the scroll over from a control's turn.
+    if (event.pointerType !== 'mouse') turning.current = null;
     drag.current = event.pointerType === 'mouse' && event.button === 0 ? {x: event.clientX, y: event.clientY} : null;
   }
 
