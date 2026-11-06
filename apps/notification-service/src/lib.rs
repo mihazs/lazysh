@@ -2,6 +2,7 @@ pub use lazysh_notification_client::{
     client, client_with_root, digest, http_client, https, secret, valid_token, BoundEvent,
     BoundReceipt, BoundStatus, Event, Kind, Receipt, Source, Status,
 };
+mod apprise;
 pub mod push;
 mod push_enrollment;
 mod push_event;
@@ -32,6 +33,7 @@ pub enum DestinationFormat {
     #[default]
     Webhook,
     Gotify,
+    Apprise,
 }
 
 pub struct Config {
@@ -44,7 +46,9 @@ enum Destination {
     Http {
         format: DestinationFormat,
         endpoint: reqwest::Url,
+        /// Empty only for an explicitly unauthenticated Apprise destination.
         bearer: Zeroizing<String>,
+        tags: Vec<String>,
     },
     WebPush(Arc<push::PushConfig>),
 }
@@ -72,20 +76,17 @@ impl Config {
     ) -> Result<Self, String> {
         let token_valid = match format {
             DestinationFormat::Webhook => valid_token(bearer),
-            DestinationFormat::Gotify => {
-                !bearer.is_empty()
-                    && bearer.len() <= 512
-                    && bearer.bytes().all(|byte| byte.is_ascii_graphic())
+            DestinationFormat::Gotify => opaque_token(bearer),
+            DestinationFormat::Apprise => {
+                return Self::apprise(directory, admin, endpoint, Some(bearer), &[])
             }
         };
         if !valid_token(admin) || !token_valid || admin == bearer {
             return Err(match format {
-                DestinationFormat::Webhook => {
-                    "Require distinct 256-bit hexadecimal admin and destination capabilities"
-                }
                 DestinationFormat::Gotify => {
                     "Require a valid admin capability and a distinct Gotify application token"
                 }
+                _ => "Require distinct 256-bit hexadecimal admin and destination capabilities",
             }
             .into());
         }
@@ -93,29 +94,82 @@ impl Config {
         if matches!(format, DestinationFormat::Gotify) && !endpoint.path().ends_with("/message") {
             return Err("Require the HTTPS Gotify message endpoint".into());
         }
-        let identity = format!(
-            "{}\0{}",
+        // Preserve existing webhook identities; Gotify is a different destination
+        // even when its endpoint and application token happen to be identical.
+        let label = match format {
+            DestinationFormat::Gotify => "gotify\0",
+            _ => "",
+        };
+        Ok(Self::http(
+            directory,
+            admin,
+            format,
+            endpoint,
+            bearer,
+            label,
+            vec![],
+        ))
+    }
+    /// Apprise API stateful key; `bearer` is an optional reverse-proxy token because
+    /// Apprise API accepts unauthenticated requests by default.
+    pub fn apprise(
+        directory: PathBuf,
+        admin: &str,
+        endpoint: &str,
+        bearer: Option<&str>,
+        tags: &[String],
+    ) -> Result<Self, String> {
+        if !valid_token(admin)
+            || bearer.is_some_and(|bearer| !opaque_token(bearer) || bearer == admin)
+        {
+            return Err(
+                "Require a valid admin capability and a distinct Apprise proxy token".into(),
+            );
+        }
+        let endpoint = https(endpoint)?;
+        apprise::endpoint(&endpoint)?;
+        let tags = apprise::tags(tags)?;
+        Ok(Self::http(
+            directory,
+            admin,
+            DestinationFormat::Apprise,
+            endpoint,
+            bearer.unwrap_or_default(),
+            "apprise\0",
+            tags,
+        ))
+    }
+    fn http(
+        directory: PathBuf,
+        admin: &str,
+        format: DestinationFormat,
+        endpoint: reqwest::Url,
+        bearer: &str,
+        label: &str,
+        tags: Vec<String>,
+    ) -> Self {
+        let mut identity = format!(
+            "{label}{}\0{}",
             endpoint,
             digest(bearer)
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>()
         );
-        Ok(Self {
+        if !tags.is_empty() {
+            identity = format!("{identity}\0{}", tags.join(","));
+        }
+        Self {
             directory,
             admin_hash: digest(admin),
-            // Preserve existing webhook identities; Gotify is a different destination
-            // even when its endpoint and application token happen to be identical.
-            target_hash: digest(&match format {
-                DestinationFormat::Webhook => identity,
-                DestinationFormat::Gotify => format!("gotify\0{identity}"),
-            }),
+            target_hash: digest(&identity),
             destination: Destination::Http {
                 format,
                 endpoint,
                 bearer: Zeroizing::new(bearer.into()),
+                tags,
             },
-        })
+        }
     }
     pub fn web_push(
         directory: PathBuf,
@@ -140,8 +194,12 @@ impl Config {
     }
     fn reserved(&self, hash: &[u8]) -> bool {
         hash == self.admin_hash
-            || matches!(&self.destination, Destination::Http { bearer, .. } if hash == digest(bearer))
+            || matches!(&self.destination, Destination::Http { bearer, .. } if !bearer.is_empty() && hash == digest(bearer))
     }
+}
+/// Gotify application tokens and Apprise proxy tokens are opaque printable ASCII.
+fn opaque_token(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 #[derive(Debug)]
 pub struct ApiError(StatusCode, &'static str);
@@ -276,6 +334,7 @@ impl Service {
                     format,
                     endpoint,
                     bearer,
+                    tags,
                 } => {
                     let request = self
                         .0
@@ -293,6 +352,18 @@ impl Service {
                                 "message":format!("{}: {}",job.receipt.alias,job.receipt.kind),
                                 "priority":if job.receipt.kind=="needs_attention" {5} else {2},
                             })),
+                        DestinationFormat::Apprise => {
+                            let request = request.json(&apprise::body(
+                                &job.receipt.kind,
+                                &job.receipt.alias,
+                                tags,
+                            ));
+                            if bearer.is_empty() {
+                                request
+                            } else {
+                                request.bearer_auth(bearer.as_str())
+                            }
+                        }
                     }
                 }
                 Destination::WebPush(config) => config
@@ -304,14 +375,24 @@ impl Service {
             }
             .send();
             tokio::pin!(request);
-            let accepted = loop {
+            let classified = matches!(
+                &self.0.config.destination,
+                Destination::Http {
+                    format: DestinationFormat::Apprise,
+                    ..
+                }
+            );
+            let outcome = loop {
                 tokio::select! {biased;
                  _=stop.changed()=>{return Ok(())},
-                 _=changes.changed()=>{let id=job.receipt.receipt_id.clone();if !self.db(move|s|Ok(s.connection.query_row("SELECT state='sending' FROM events WHERE receipt=?1",[id],|r|r.get::<_,bool>(0))?)).await? {break false;}},
-                 result=&mut request=>break result.is_ok_and(|r|r.status().is_success()),
+                 _=changes.changed()=>{let id=job.receipt.receipt_id.clone();if !self.db(move|s|Ok(s.connection.query_row("SELECT state='sending' FROM events WHERE receipt=?1",[id],|r|r.get::<_,bool>(0))?)).await? {break store::Delivery::Retry;}},
+                 result=&mut request=>break match result {
+                     Ok(response) if classified => apprise::classify(response.status()),
+                     result => result.is_ok_and(|r|r.status().is_success()).into(),
+                 },
                 }
             };
-            self.db(move |s| s.finish(&job, accepted)).await?;
+            self.db(move |s| s.finish(&job, outcome)).await?;
         }
     }
 }

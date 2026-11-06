@@ -256,3 +256,19 @@ it.each(['fcm','unifiedpush','apns'])('keeps %s privacy before consent, then ava
   expect(retained.textContent).toBe(original);
   expect(vi.mocked(invoke).mock.calls.map(call=>call[0])).toEqual(['push_registration_status','push_registration_status']);
 });
+
+it('names Apprise among the relay destinations and opens the relay guide through the native browser', async () => {
+  const guide = 'https://github.com/mihazs/lazysh/blob/main/docs/notification-relay.md#deliver-through-apprise';
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === 'open_web_url') throw new Error('No browser is installed.');
+    return off;
+  });
+  render(<PushSettingsPanel />);
+  await screen.findByText('Registration off');
+  fireEvent.click(screen.getByText('Setup and privacy details'));
+  expect(screen.getByText(/a Gotify app, or an Apprise API server/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Open the relay setup guide' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_web_url', { url: guide }, { headers: { 'X-Lazysh-Access': expect.any(String) } }));
+  expect((await screen.findByRole('alert')).textContent).toContain('No browser is installed.');
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command !== 'push_registration_status' && command !== 'open_web_url')).toEqual([]);
+});

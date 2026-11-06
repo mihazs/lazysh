@@ -1,7 +1,7 @@
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {mountPush} from './fixtures/PushHarness';
-declare global {interface Window {pushUi:ReturnType<typeof mountPush>;}}
+declare global {interface Window {pushUi:ReturnType<typeof mountPush>;guideOpened:string[][];}}
 for(const provider of ['fcm','apns'] as const)test(`${provider} keeps consent, pending registration and revocation recovery stable across languages`,async({page})=>{
   await openLocalizedApp(page,'en');await page.evaluate(async provider=>{const {mountPush}=await import('/e2e/fixtures/PushHarness.tsx');window.pushUi=mountPush(provider);},provider);
   const root=page.locator('.push-fixture');const consent=root.getByRole('checkbox');await expect(consent).toBeEnabled();await consent.focus();const original=await consent.elementHandle();
@@ -62,5 +62,27 @@ test('unconfigured Google build can choose Firebase-free push without registrati
     expect(await page.evaluate(()=>window.pushUi.calls)).toEqual(['push_registration_status','push_registration_provider','push_registration_status']);
   }
   expect(await root.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await page.evaluate(()=>window.pushUi.dispose());
+});
+
+test('setup help names Apprise among the relay destinations and opens the relay guide in every language',async({page})=>{
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async()=>{
+    window.guideOpened=[];window.open=(url,target,features)=>{window.guideOpened.push([String(url),target??'',features??'']);return null;};
+    const {mountPush}=await import('/e2e/fixtures/PushHarness.tsx');window.pushUi=mountPush('fcm');
+  });
+  const help=page.locator('.push-fixture details.push-help');
+  for(const language of ['pt-BR','es','en']){
+    const copy=await page.evaluate(async language=>{const {uiI18n,t}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(language);return {help:t('pushSetupHelp'),destinations:t('pushRelayDestinations'),guide:t('pushRelayGuide')};},language);
+    if(!await help.evaluate(details=>(details as HTMLDetailsElement).open))await help.getByText(copy.help,{exact:true}).click();
+    expect(copy.destinations).toContain('Apprise');
+    await expect(help.getByText(copy.destinations,{exact:true})).toBeVisible();
+    await expect(help.getByRole('button',{name:copy.guide,exact:true})).toBeVisible();
+  }
+  await help.getByRole('button',{name:'Open the relay setup guide',exact:true}).click();
+  expect(await page.evaluate(()=>window.guideOpened)).toEqual([['https://github.com/mihazs/lazysh/blob/main/docs/notification-relay.md#deliver-through-apprise','_blank','noopener,noreferrer']]);
+  await expect(help.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(()=>window.pushUi.calls)).toEqual(['push_registration_status']);
+  expect(await help.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.evaluate(()=>window.pushUi.dispose());
 });

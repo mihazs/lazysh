@@ -1,6 +1,6 @@
 # Self-hosted webhook relay
 
-`lazysh-notifications` is an optional Rust service for one account and one fixed HTTPS destination: an authenticated webhook by default, or an explicitly selected Gotify application. It is **disabled by default**. This foundation does not register mobile devices, send APNs/FCM messages, install agent hooks, or make suspended native apps reachable. Existing local notifications and native registration remain separate.
+`lazysh-notifications` is an optional Rust service for one account and one fixed HTTPS destination: an authenticated webhook by default, an explicitly selected Gotify application, or an [Apprise API](#deliver-through-apprise) stateful key that fans out to Telegram, Discord, Slack, Matrix, email, Pushover, ntfy and the other services Apprise supports. It is **disabled by default**. This foundation does not register mobile devices, send APNs/FCM messages, install agent hooks, or make suspended native apps reachable. Existing local notifications and native registration remain separate.
 
 The separate [encrypted Web Push server mode](web-push-server.md) supports explicit Google/FOSS Android UnifiedPush enrollment and separately consented bound-event display. The webhook mode below remains unchanged; see [Android setup](push-registration.md#firebase-free-android-setup) for the distributor and relay steps.
 
@@ -113,6 +113,99 @@ revocation or reconfiguration cannot recall an already accepted message. Actual
 Gotify server/client, Android background and physical-device delivery acceptance
 remain separate checks.
 
+## Deliver through Apprise
+
+Apprise delivery uses your own [Apprise API server](https://github.com/caronc/apprise-api)
+(`caronc/apprise-api`, published on Docker Hub as `caronc/apprise`), not the Python
+library, so the relay needs no Python runtime. The Apprise server stores the downstream
+service URLs and their secrets under a **stateful configuration key**; the relay only
+knows the one `/notify/<KEY>` endpoint and never sees a Telegram, Discord, Slack or
+email credential.
+
+Run the Apprise API server on a private network and save a configuration under a key
+(1–128 letters, digits, `_` or `-`), following its
+[stateful configuration documentation](https://github.com/caronc/apprise-api#persistent-stateful-storage-solution).
+Tags written as `tag=URL` in that configuration let the relay select a subset:
+
+```sh
+docker run --detach --name apprise --publish 127.0.0.1:8000:8000 \
+  --volume /private/apprise-config:/config caronc/apprise:2.0.2
+curl --fail -H 'Content-Type: application/json' http://127.0.0.1:8000/add/lazysh-alerts \
+  --data '{"format":"text","config":"phone=tgram://BOT_TOKEN/CHAT_ID\nteam=slack://TOKEN_A/TOKEN_B/TOKEN_C"}'
+```
+
+Apprise API accepts **unauthenticated** requests by default, and the relay does not use
+its optional Basic Auth. Put it behind your own HTTPS reverse proxy that checks a
+Bearer token, and do not expose port 8000. For example, with nginx:
+
+```nginx
+location /apprise/notify/ {
+    if ($http_authorization != "Bearer REPLACE_WITH_PROXY_TOKEN") { return 401; }
+    proxy_set_header Authorization "";
+    proxy_pass http://127.0.0.1:8000/notify/;
+}
+```
+
+Store the exact HTTPS endpoint, such as `https://alerts.example/apprise/notify/lazysh-alerts`,
+in an owner-only URL file, and the proxy token in another owner-only file. The URL rules
+are the relay's usual ones (HTTPS only; no userinfo, query, fragment, controls or
+backslashes), and the path must end in `/notify/<KEY>` with no trailing slash. The token
+must be nonempty, at most 512 printable ASCII bytes without spaces, and different from the
+admin capability. Both files get the private-file and no-symlink checks used for Gotify.
+TLS verification stays mandatory; redirects and environment HTTP proxies stay disabled.
+
+```sh
+lazysh-notifications serve --data-dir /private/relay-state \
+  --admin-file /private/relay-config/admin \
+  --destination-format apprise \
+  --destination-file /private/relay-config/apprise-url \
+  --destination-token-file /private/relay-config/apprise-proxy-token \
+  --apprise-tag phone
+```
+
+The token is sent as `Authorization: Bearer` for your proxy to check. Without a token
+file, `serve` and `configure-destination` refuse to start unless you pass
+`--destination-unauthenticated`, which acknowledges that anyone who can reach the
+endpoint can send through your key. `--apprise-tag TAG` (1–64 letters, digits, `_` or
+`-`) is repeatable up to eight times; the relay sends the sorted set comma-joined, which
+Apprise treats as "any of these tags". Without a tag, Apprise applies its default
+selection for the key.
+
+The destination starts disabled; provision a source and run `destination --enable` as
+above. Each event is a JSON `POST` with only these fields:
+
+| State | `title` | `body` | `type` |
+| --- | --- | --- | --- |
+| `working` | `lazysh · <alias>` | `An agent is working.` | `info` |
+| `needs-attention` | `lazysh · <alias>` | `An agent needs your attention.` | `warning` |
+| `done` | `lazysh · <alias>` | `An agent finished.` | `success` |
+
+`format` is always `text`, and `tag` is present only when you configured tags. The
+fixed English sentences carry no prompt, project path, command, transcript, SSH
+credential or source capability. The stable receipt ID is still sent as
+`Idempotency-Key`; Apprise ignores it, so the relay's receipts and the bounded retry
+rules below are what prevent repeated delivery.
+
+Receipts finish in a closed set of states. HTTP 200 is `accepted`. HTTP 424, which
+Apprise returns when one or more downstream services failed, is `partial` and is not
+retried, so a broken downstream service cannot start a retry storm. Other non-200
+answers, including 401 from your proxy and 404 for an unknown key, are `rejected`
+without a retry. HTTP 408, 429, 5xx, timeouts and connection failures use the relay's
+three-attempt retry and then `failed_unknown`. Like every admitted request, `partial`
+and `rejected` keep `mayHaveReachedDestination` true. The host companion's bound
+publisher accepts `partial` and `rejected` receipts, so a `relay run` that republishes
+an event after a lost acknowledgement records the original receipt instead of retrying.
+
+Destination identity is `apprise`, the endpoint, the token digest and the sorted tag
+set. Changing the format, URL, token or tags needs `configure-destination` with the
+same arguments as `serve`, which starts a new target generation, disables delivery and
+cancels old pending work, exactly as for Gotify. Webhook and Gotify identities are
+unchanged.
+
+**Stateless mode is not supported.** Apprise's stateless `/notify` route takes the
+downstream service URLs in each request, which would put every downstream secret into
+lazysh's files. Use a stateful key instead.
+
 ## Emit terminal, tmux, Herdr and agent events
 
 The existing `lazysh-notifications publish` command is the authenticated emitter;
@@ -190,8 +283,8 @@ consent flow, then configure the companion publisher below. For example, use
 `hooks status --agent codex --profile-root /home/user/.codex`, and install using
 that status's exact `installPlan`. Configuring the relay does not install hooks.
 The foreground `relay run` process is also a separate explicit opt-in. The same
-source paths work with the encrypted ntfy destination or the external Gotify
-client; neither destination selection installs these callbacks automatically.
+source paths work with the encrypted ntfy destination, the external Gotify
+client or an Apprise key; no destination selection installs these callbacks automatically.
 
 ## Opt in the host companion
 
@@ -244,9 +337,9 @@ The command emits a bounded final JSON report only after owned networking/runtim
 
 ## Delivery and revocation boundary
 
-Webhook destinations receive only `schemaVersion:1`, `receiptId`, `eventId`, finite `kind` and their admin-provisioned public `alias`. Gotify destinations receive the fixed `title`, public-alias/state `message` and finite `priority` described above. Both formats send the receipt ID as the stable HTTP `Idempotency-Key` across attempts and restarts; that header alone does not deduplicate effects. Only HTTP 2xx marks `accepted`, recording the destination's successful HTTP response, **not** proof that a device displayed it or a human saw it. Exactly-once webhook effects require receiver-side idempotency; Gotify provides no verified guarantee here, so retries may produce duplicate notifications.
+Webhook destinations receive only `schemaVersion:1`, `receiptId`, `eventId`, finite `kind` and their admin-provisioned public `alias`. Gotify destinations receive the fixed `title`, public-alias/state `message` and finite `priority` described above. Apprise destinations receive the fixed `title`, `body`, `type`, `format` and optional `tag` described above, and their 424, 4xx and retryable answers end as described in that section. All formats send the receipt ID as the stable HTTP `Idempotency-Key` across attempts and restarts; that header alone does not deduplicate effects. For webhook and Gotify, only HTTP 2xx marks `accepted`; for Apprise only HTTP 200 does. Either way this is the destination's successful HTTP response, **not** proof that a device displayed it or a human saw it. Exactly-once webhook effects require receiver-side idempotency; Gotify provides no verified guarantee here, so retries may produce duplicate notifications.
 
-One worker admits one POST at a time. Admission is durably recorded before networking. A request timeout, crash, shutdown or revocation after admission can leave an unknown remote outcome; `mayHaveReachedDestination` remains conservatively true. Disconnecting a request cannot retract a remote effect. The worker performs at most three admitted attempts, with a two-second retry delay and a ten-second per-request budget (three-second connection budget). Queued work expires after 24 hours using the service host's clock. `failed_unknown`, `expired_unknown` and `cancelled_unknown` do not assert non-delivery.
+One worker admits one POST at a time. Admission is durably recorded before networking. A request timeout, crash, shutdown or revocation after admission can leave an unknown remote outcome; `mayHaveReachedDestination` remains conservatively true. Disconnecting a request cannot retract a remote effect. The worker performs at most three admitted attempts, with a two-second retry delay and a ten-second per-request budget (three-second connection budget). Queued work expires after 24 hours using the service host's clock. `failed_unknown`, `expired_unknown` and `cancelled_unknown` do not assert non-delivery, and neither do the Apprise-only `partial` and `rejected` states.
 
 Disable/revoke cancels queued work and aborts an affected admitted request; already-admitted effects may still finish remotely. Disable and each explicit enable advance the persisted generation. Re-enabling never freshens old receipts, even after restart. New events are rejected while disabled. On restart, interrupted requests may retry only with their original target identity/generation and the same key. Supplying a different destination format, URL/key or admin identity fails closed.
 
@@ -256,4 +349,4 @@ There are at most 128 retained source identities, 1,000 pending events and 10,00
 
 ## Verification and limits
 
-Standard Cargo fixtures own their temporary storage, loopback listeners and TLS receiver certificate. They exercise real HTTP ingest-to-TLS-delivery-to-receipt, auth, source isolation, dedup conflicts, private no-overwrite files/CLI output, actual child-process source creation with a committed lost TLS response and same-envelope resume, explicit-CA/wrong-host/no-CA handling, restart/idempotency, target binding, held POST/revoke, redirect rejection, timeout, shutdown, one-worker and capacity bounds. No external notification provider, user credentials, model, device or deployment is contacted. Companion fixtures additionally execute the real CLI through owned TLS relay and destination servers, lost-ACK process recovery, exclusive drain/disable races, original-generation rejection, exact capability binding, downgrade rejection and dispatch deadlines. Native app push/account binding and physical background delivery remain future #14 acceptance, not a capability advertised by this service.
+Standard Cargo fixtures own their temporary storage, loopback listeners and TLS receiver certificate. They exercise real HTTP ingest-to-TLS-delivery-to-receipt, auth, source isolation, dedup conflicts, private no-overwrite files/CLI output, actual child-process source creation with a committed lost TLS response and same-envelope resume, explicit-CA/wrong-host/no-CA handling, restart/idempotency, target binding, held POST/revoke, redirect rejection, timeout, shutdown, one-worker and capacity bounds. No external notification provider, user credentials, model, device or deployment is contacted. An in-process Apprise API stub checks the method, path, Bearer and `Idempotency-Key` headers, JSON body, type mapping and tags, plus 200, 424, 4xx, 408, 429 and 5xx handling and retries through the real worker. The `native-linux-runtimes` CI job also starts the official `caronc/apprise` 2.0.2 image, pinned by digest, behind an owned TLS proxy that checks the Bearer token. Its stateful key's only targets are loopback `json://` receivers, and the test asserts the tagged receiver got each mapped title, message and type, that a failing downstream service ends `partial`, and that a wrong proxy token ends `rejected`. Companion fixtures additionally execute the real CLI through owned TLS relay and destination servers, lost-ACK process recovery, exclusive drain/disable races, original-generation rejection, exact capability binding, downgrade rejection and dispatch deadlines. Native app push/account binding and physical background delivery remain future #14 acceptance, not a capability advertised by this service.

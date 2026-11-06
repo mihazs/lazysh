@@ -1,7 +1,10 @@
 import './PushSettingsPanel.css';
 import {RefreshCw} from 'lucide-react';
 import {t,useUi} from './i18n/core';
-import { useProtectedInvoke } from './access';
+import { useProtectedApi, useProtectedInvoke } from './access';
+import { api as nativeApi } from './bridge';
+import { errorMessage } from './SessionTools';
+import { openWebPage } from './webPage';
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 
@@ -18,9 +21,14 @@ type RegistrationStatus = {
   reason: string;
 };
 
+/** The relay guide's Apprise section, which also links the webhook and Gotify setup. */
+const relayGuide = 'https://github.com/mihazs/lazysh/blob/main/docs/notification-relay.md#deliver-through-apprise';
+
 export default function PushSettingsPanel() {
   useUi();
   const invoke = useProtectedInvoke();
+  const api = useProtectedApi(nativeApi);
+  const [guideError, setGuideError] = useState('');
   const [status, setStatus] = useState<RegistrationStatus>();
   const [pending, setPending] = useState(false);
   const [activeCommand, setActiveCommand] = useState('');
@@ -91,7 +99,7 @@ export default function PushSettingsPanel() {
       </button></details>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}
-    <details className="push-help"><summary>{t('pushSetupHelp')}</summary>{status?.enabled && privacy}{status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}{unified && <><p>{t('pushUnifiedSetup')}</p><p>{t('pushUnifiedHint')}</p></>}</details>
+    <details className="push-help"><summary>{t('pushSetupHelp')}</summary>{status?.enabled && privacy}{status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}{unified && <><p>{t('pushUnifiedSetup')}</p><p>{t('pushUnifiedHint')}</p></>}<p>{t('pushRelayDestinations')}</p><button type="button" className="text-button" onClick={() => { setGuideError(''); void openWebPage(page => api.openWebUrl(page), relayGuide).catch(e => setGuideError(errorMessage(e))); }}>{t('pushRelayGuide')}</button>{guideError && <p role="alert">{guideError}</p>}</details>
     {error && <p role="alert">{t(error)}</p>}
   </section>;
 }
