@@ -1,5 +1,7 @@
 #[path = "support/binary.rs"]
 mod binary;
+#[path = "support/contention.rs"]
+mod contention;
 #[cfg(unix)]
 #[path = "support/permissions.rs"]
 mod permissions;
@@ -18,6 +20,7 @@ use std::{
 mod storage_trace;
 
 fn run(directory: &Path, args: &[&str], payload: &[u8]) -> Output {
+    let _run = contention::shared_run();
     run_traced(directory, args, payload, None, false)
 }
 fn run_traced(
@@ -658,6 +661,7 @@ fn config_is_print_only_and_contains_supported_hooks() {
 
 #[test]
 fn concurrent_hooks_preserve_every_event() {
+    let burst = contention::exclusive_burst();
     let trace = storage_trace::StorageTrace::from_env();
     let dir = tempfile::tempdir().unwrap();
     let epoch = std::time::Instant::now();
@@ -682,6 +686,7 @@ fn concurrent_hooks_preserve_every_event() {
             .collect::<Vec<_>>();
         thread_join::join_workers(workers)
     });
+    drop(burst);
     let (outputs, timings): (Vec<_>, Vec<_>) = workers.into_iter().unzip();
     if outputs.iter().any(|output| !output.status.success()) {
         storage_trace::concurrent_workers(&outputs, &timings);
@@ -740,6 +745,7 @@ fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
 
 #[test]
 fn simultaneous_initialization_and_ingest_preserve_every_event() {
+    let _burst = contention::exclusive_burst();
     for round in 0..4 {
         let dir = tempfile::tempdir().unwrap();
         let barrier = std::sync::Barrier::new(16);
@@ -873,6 +879,7 @@ fn exclusive_store() -> (tempfile::TempDir, rusqlite::Connection) {
 fn contended_ingests(
     hold: std::time::Duration,
 ) -> (Vec<ContendedWorker>, std::time::Duration, u64) {
+    let _burst = contention::exclusive_burst();
     let (dir, blocker) = exclusive_store();
     let barrier = std::sync::Barrier::new(17);
     let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
@@ -957,6 +964,47 @@ fn near_deadline_contention_counts_every_success_and_fails_explicitly() {
         stored, successes,
         "actual_hold={actual_hold:?}, workers={workers:#?}"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs this whole test binary again beside a simulated slow durable volume"]
+fn contention_cases_keep_their_budget_beside_slow_shared_flushes() {
+    // Every other case runs in parallel, as in a hosted owner run, while each
+    // durable flush takes 50 ms and queues behind every other flush. Bursts of
+    // sixteen writers fit their unchanged budget only when they run alone.
+    let directory = tempfile::tempdir().unwrap();
+    let library = directory.path().join("slow_flush.so");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = Command::new(compiler)
+        .args(["-shared", "-fPIC", "-O2", "-o"])
+        .arg(&library)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/slow_flush.c"
+        ))
+        .arg("-ldl")
+        .status()
+        .expect("build the slow flush simulation");
+    assert!(built.success());
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--test-threads=4")
+        .env("LD_PRELOAD", &library)
+        .env("LAZYSH_TEST_SLOW_FLUSH_MS", "50")
+        .env(
+            "LAZYSH_TEST_SLOW_FLUSH_LOCK",
+            directory.path().join("volume.lock"),
+        )
+        .env_remove("LAZYSH_STORAGE_DIAGNOSTICS")
+        .env_remove("LAZYSH_TEST_STORAGE_TRACE_DIR")
+        .output()
+        .unwrap();
+    let report = String::from_utf8_lossy(&output.stdout);
+    let summary = report
+        .lines()
+        .filter(|line| line.ends_with("FAILED") || line.starts_with("test result:"))
+        .collect::<Vec<_>>();
+    assert!(output.status.success(), "{summary:#?}");
 }
 
 #[test]
