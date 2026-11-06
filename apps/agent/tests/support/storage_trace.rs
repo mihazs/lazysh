@@ -466,6 +466,7 @@ const FAILED_TESTS: &[&str] = &[
     "concurrent_hooks_preserve_every_event",
     "concurrent_ingest_recovers_after_a_transient_database_lock",
     "config_is_print_only_and_contains_supported_hooks",
+    "contention_cases_keep_their_budget_beside_slow_shared_flushes",
     "additional_native_agents_report_only_their_actual_lifecycle_contracts",
     "copilot_distinct_children_complete_without_retiring_the_parent",
     "unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent",

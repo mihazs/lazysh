@@ -131,6 +131,10 @@ jobs:
           name: lazysh-storage-syscalls
           path: ${{ runner.temp }}/lazysh-storage-traces
           if-no-files-found: warn
+      - name: Keep storage contention budgets beside a simulated slow shared volume
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 5
+        run: cargo test --locked --package lazysh-agent --test cli contention_cases_keep_their_budget_beside_slow_shared_flushes -- --ignored --exact
       - name: Measure hosted SQLite phases (diagnostic, no injected delay)
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2

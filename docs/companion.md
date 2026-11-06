@@ -687,6 +687,16 @@ Issue #36 now includes an actual failing subprocess trace from run `40195936923`
 
 A bounded local baseline/WAL comparison uses the unchanged sixteen-process CLI case, separate Cargo target directories and strace 7.2. Both preserve sixteen events. The rollback baseline records 68 sync calls, 206.764 ms elapsed sync time and 249.509 ms aggregate RESERVED-lock occupancy. The FULL/WAL candidate records 43 sync calls, 86.619 ms elapsed sync time and 86.574 ms aggregate write-lock occupancy (WAL's write-lock byte plus the one-time rollback-to-WAL conversion). Last-close checkpoints/reopens mean this is not simply one sync per event. It is one local observation with an observer effect, not a statistical benchmark, CI acceptance result, power-loss test or promise that a finite wait budget handles arbitrarily slow storage.
 
+Each sixteen-writer contention case (`concurrent_hooks_preserve_every_event`, `simultaneous_initialization_and_ingest_preserve_every_event`, `concurrent_ingest_recovers_after_a_transient_database_lock` and `near_deadline_contention_counts_every_success_and_fails_explicitly`) times one burst against one otherwise idle store. Every commit holds the WAL write lock across one FULL flush, so a burst needs sixteen serialized flushes inside the three-second budget. Durable flushes on one volume slow each other, and on NTFS `FlushFileBuffers` also commits the shared volume log, so other cases in the same test process stretch every commit of a burst. In the release-tag Windows failure (run `42154258979`) the successful commits of one round were 0.04 to 1.5 seconds apart, while the same sixteen-writer probe run alone in that job committed in 2 to 8 ms. The cases now take an exclusive test gate for the whole burst; every other companion run in the CLI test process holds it shared. Production storage, FULL durability and the three-second budget are unchanged.
+
+The ignored Linux case `contention_cases_keep_their_budget_beside_slow_shared_flushes` runs the whole CLI test binary again with four test threads beside a simulated slow volume: an `LD_PRELOAD` shim delays every `fsync` by 50 ms and queues it behind all other flushes from every thread and process. Without the gate the three burst cases above fail; with it every case passes. The CI `agent` job runs it with:
+
+```sh
+cargo test --locked --package lazysh-agent --test cli contention_cases_keep_their_budget_beside_slow_shared_flushes -- --ignored --exact
+```
+
+The shim models a queue of flushes, not NTFS itself. Windows coverage is the companion candidate job, which runs the same gated cases natively.
+
 ## Antigravity explicit step records
 
 `--agent antigravity-jsonl` reads only an explicitly selected JSONL file:
