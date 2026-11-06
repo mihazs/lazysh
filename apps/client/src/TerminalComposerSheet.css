@@ -26,6 +26,52 @@
   padding: 14px 16px; margin: 0; border: 0; border-radius: 16px; resize: none; outline: none; overflow: auto;
   background: transparent; color: var(--theme-text, var(--text)); font: inherit; font-size: 16px; line-height: 1.5;
 }
+/* Inline attachment tokens: a mirror behind the transparent editor highlights each token as a chip. */
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-editor { position: relative; overflow: hidden; }
+.terminal-stage > .terminal-composer-sheet > .terminal-draft-editor > textarea { position: relative; z-index: 1; white-space: pre-wrap; overflow-wrap: break-word; }
+.terminal-composer-sheet .terminal-composer-mirror {
+  position: absolute; top: 0; left: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
+  padding: 14px 16px; margin: 0; border: 0; font: inherit; font-size: 16px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+}
+.terminal-composer-sheet .terminal-composer-mirror > mark {
+  color: transparent; border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.terminal-composer-sheet .terminal-composer-mirror > mark[data-kind="file"] {
+  background: color-mix(in srgb, var(--theme-muted, var(--muted)) 26%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-muted, var(--muted)) 26%, transparent);
+}
+.terminal-stage > .terminal-composer-sheet > .terminal-composer-attachments {
+  display: flex; flex: 0 0 auto; gap: 8px; margin: 0; padding: 0 2px 2px; list-style: none; overflow-x: auto; scrollbar-width: thin;
+}
+.terminal-composer-sheet .terminal-composer-chip {
+  display: inline-flex; align-items: center; flex: 0 0 auto; min-height: 36px; border-radius: 18px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--theme-panel, var(--panel)));
+  color: var(--theme-text, var(--text)); font-size: 14px; font-variant-numeric: tabular-nums;
+}
+.terminal-composer-sheet .terminal-composer-chip[data-kind="file"] { background: var(--theme-control, var(--panel)); }
+.terminal-stage > .terminal-composer-sheet .terminal-composer-chip > button {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 36px; margin: 0; border: 0; background: transparent; color: inherit; font: inherit;
+}
+.terminal-stage > .terminal-composer-sheet .terminal-composer-chip > .terminal-composer-chip-open { padding: 0 4px 0 12px; border-radius: 18px 0 0 18px; }
+.terminal-stage > .terminal-composer-sheet .terminal-composer-chip > .terminal-composer-chip-remove { justify-content: center; min-width: 36px; padding: 0 10px 0 4px; border-radius: 0 18px 18px 0; color: var(--theme-muted, var(--muted)); }
+.terminal-stage > .terminal-composer-sheet .terminal-composer-chip > button:hover { color: var(--theme-text, var(--text)); }
+.terminal-stage > .terminal-composer-sheet > .terminal-composer-preview {
+  display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; margin: 0; padding: 8px;
+  border-radius: 12px; background: var(--theme-panel, var(--panel));
+}
+.terminal-composer-sheet .terminal-composer-preview > img { display: block; max-width: 40%; max-height: 120px; border-radius: 8px; object-fit: contain; }
+.terminal-composer-sheet .terminal-composer-preview > figcaption { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; }
+.terminal-composer-sheet .terminal-composer-preview > figcaption > code { color: var(--theme-muted, var(--muted)); overflow-wrap: anywhere; }
+@media (max-height: 480px) {
+  .terminal-composer-sheet .terminal-composer-preview > img { max-height: 64px; }
+}
+/* Phone widths wrap chips instead of clipping them in a row with no visible scroll cue. */
+@media (max-width: 600px) {
+  .terminal-stage > .terminal-composer-sheet > .terminal-composer-attachments { flex-wrap: wrap; max-height: 80px; overflow: hidden auto; }
+}
 .terminal-stage > .terminal-composer-sheet > .terminal-draft-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 0; }
 .terminal-composer-sheet .terminal-composer-secondary, .terminal-composer-sheet .terminal-composer-primary { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .terminal-composer-sheet .terminal-composer-primary { gap: 12px; margin-inline-start: auto; }

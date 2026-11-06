@@ -2,12 +2,13 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
+import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
 import { api as nativeApi } from "./bridge";
 import { bodyGestureSlots, decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
@@ -52,7 +53,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
-  onOpenAttachments?: () => void;
+  /** Opens the attachment tool; `composer` asks for the upload to return as a draft token. */
+  onOpenAttachments?: (target?: 'composer') => void;
   controlsTarget?: HTMLElement | null;
   onBackChange?: (sessionId:string, close:(()=>boolean)|null)=>void;
 }) {
@@ -177,6 +179,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const composingRef = useRef(composing);
   composingRef.current = composing;
   const [draft, setDraft] = useState("");
+  // Uploads stay known for the life of the draft, so undo or an IME correction
+  // that restores a deleted token restores its attachment; only tokens still in
+  // the draft show as chips and expand on send.
+  const [draftAttachments, setDraftAttachments] = useState<readonly ComposerAttachment[]>([]);
+  const draftAttachmentsRef = useRef(draftAttachments);
+  draftAttachmentsRef.current = draftAttachments;
+  const liveAttachments = useMemo(() => liveComposerAttachments(draft, draftAttachments), [draft, draftAttachments]);
+  const liveAttachmentsRef = useRef(liveAttachments);
+  liveAttachmentsRef.current = liveAttachments;
   // Expanded input tools share the keyboard-sized workspace.
   useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
   // Selection handles appear after a touch long-press; actions also after a mouse selection.
@@ -330,6 +341,15 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     window.addEventListener("lazysh-prompt-draft", stage);
     return () => window.removeEventListener("lazysh-prompt-draft", stage);
   }, [session.id, reportError]);
+  useEffect(() => onComposerAttachment(session.id, staged => {
+    const known = draftAttachmentsRef.current;
+    const attachment: ComposerAttachment = {...staged, number: nextComposerAttachmentNumber(draftRef.current, known)};
+    const editor = composerInput.current;
+    const inserted = insertComposerToken(draftRef.current, editor ? editor.selectionStart : draftRef.current.length, attachment, liveAttachmentsRef.current);
+    if (inserted.value.length > 65536) {reportError(new LocalUiError('terminalDraftLimit')); return;}
+    draftRef.current = inserted.value; draftAttachmentsRef.current = [...known, attachment];
+    setDraft(inserted.value); setDraftAttachments(draftAttachmentsRef.current); setComposing(true);
+  }), [session.id, reportError]);
 
   useEffect(() => {
     if (composing && active && draft) focusTerminal(composerInput.current);
@@ -999,7 +1019,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     // Saved snippets and chords get their own page, so the configured key rows keep their layout.
     if (!preferences.snippets.length && !preferences.chords.length) return tools;
     return <ToolbarPages repeats={() => repeatStarts.current} pages={[{id: "tools", content: tools}, {id: "snippets", content: <div className="terminal-keys-snippets">
-      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
+      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setDraftAttachments([]); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
     </div>}]} />;
   }
@@ -1041,14 +1061,14 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     <div ref={container} className={`terminal-canvas${preferences.screenReader ? " terminal-screen-reader" : ""}`} style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {active && selectionTools && createPortal(<TerminalSelectionTools terminal={session.terminal} handles={selectionTools.handles}
       onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
-    {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput}
+    {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput} attachments={liveAttachments}
       disabled={!session.connected} sendEnter={preferences.composerSendEnter}
       onSubmit={() => {
         if (!session.connected || !composerDraftReady(draftRef.current, preferences.composerSendEnter)) return;
-        pasteLiteral(draftRef.current, preferences.composerSendEnter); setDraft(""); setComposing(false); focusTerminal();
+        pasteLiteral(expandComposerDraft(draftRef.current, liveAttachmentsRef.current), preferences.composerSendEnter); setDraft(""); setDraftAttachments([]); setComposing(false); focusTerminal();
       }}
       onClose={() => setComposing(false)}
-      onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.();} : undefined} />}
+      onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.('composer');} : undefined} />}
     </div>
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}

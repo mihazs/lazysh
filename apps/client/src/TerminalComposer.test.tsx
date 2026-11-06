@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import {cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,within} from '@testing-library/react';
+import {useState} from 'react';
 import {afterEach,expect,it,vi} from 'vitest';
 import TerminalComposer from './TerminalComposer';
 afterEach(cleanup);
@@ -46,4 +47,53 @@ it('clears the draft explicitly and keeps focus in the editor',()=>{
   view.rerender(<TerminalComposer value="keep?" onChange={onChange} onSubmit={()=>{}} onClose={()=>{}} sendEnter disabled={false}/>);
   fireEvent.click(screen.getByRole('button',{name:'Clear draft'}));
   expect(onChange).toHaveBeenCalledWith('');expect(document.activeElement).toBe(screen.getByRole('textbox',{name:'Compose text'}));
+});
+it('shows attachment tokens as labelled chips that delete atomically with their attachment',()=>{
+  const attachments=[
+    {number:1,kind:'image' as const,path:'/tmp/one.png',name:'one.png'},
+    {number:2,kind:'file' as const,path:'/tmp/notes.txt',name:'notes.txt'},
+  ];
+  function Harness() {
+    const [value,setValue]=useState('[Image #1] [File #2] compare');
+    return <TerminalComposer value={value} onChange={setValue} onSubmit={()=>{}} onClose={()=>{}} sendEnter disabled={false} attachments={attachments.filter(item=>value.includes(`[${item.kind==='image'?'Image':'File'} #${item.number}]`))}/>;
+  }
+  render(<Harness/>);
+  const chips=screen.getByRole('list',{name:'Draft attachments'});
+  expect(within(chips).getAllByRole('button').map(button=>button.getAttribute('aria-label'))).toEqual(['Image #1: one.png. Show preview','Remove Image #1','File #2: notes.txt. Show preview','Remove File #2']);
+  fireEvent.click(screen.getByRole('button',{name:'File #2: notes.txt. Show preview'}));
+  expect(screen.getByRole('figure',{name:'Preview of File #2'}).textContent).toContain("'/tmp/notes.txt'");
+  const editor=screen.getByRole('textbox',{name:'Compose text'}) as HTMLTextAreaElement;
+  // Backspace after the first token removes only its closing bracket in the browser.
+  fireEvent.change(editor,{target:{value:'[Image #1 [File #2] compare'}});
+  expect(editor.value).toBe(' [File #2] compare');
+  expect(within(chips).queryByRole('button',{name:'Remove Image #1'})).toBeNull();
+  expect(screen.getByRole('status').textContent).toBe('Image #1 removed from the draft');
+  fireEvent.click(screen.getByRole('button',{name:'Remove File #2'}));
+  expect(editor.value).toBe(' compare');
+  expect(screen.queryByRole('list',{name:'Draft attachments'})).toBeNull();
+  expect(screen.queryByRole('figure')).toBeNull();
+});
+it('removes a whole token when a committed IME composition deleted part of it',()=>{
+  const attachments=[{number:1,kind:'image' as const,path:'/tmp/one.png',name:'one.png'}];
+  function Harness() {
+    const [value,setValue]=useState('look [Image #1] ');
+    return <TerminalComposer value={value} onChange={setValue} onSubmit={()=>{}} onClose={()=>{}} sendEnter disabled={false} attachments={attachments.filter(()=>value.includes('[Image #1]'))}/>;
+  }
+  render(<Harness/>);
+  const editor=screen.getByRole('textbox',{name:'Compose text'}) as HTMLTextAreaElement;
+  // A composition that only adds text next to a token leaves the token and its chip.
+  fireEvent.compositionStart(editor);
+  fireEvent.change(editor,{target:{value:'look [Image #1] ok'}});
+  fireEvent.compositionEnd(editor);
+  expect(editor.value).toBe('look [Image #1] ok');
+  expect(screen.getByRole('button',{name:'Remove Image #1'})).toBeTruthy();
+  fireEvent.change(editor,{target:{value:'look [Image #1] '}});
+  // Gboard reopens composition on the word before the caret, and Backspace removes the bracket mid-composition.
+  fireEvent.compositionStart(editor);
+  fireEvent.change(editor,{target:{value:'look [Image #1 '}});
+  expect(editor.value).toBe('look [Image #1 ');
+  fireEvent.compositionEnd(editor);
+  expect(editor.value).toBe('look  ');
+  expect(editor.selectionStart).toBe(5);
+  expect(screen.queryByRole('list',{name:'Draft attachments'})).toBeNull();
 });
