@@ -174,11 +174,37 @@ export async function buildIdentity(root: string): Promise<Identity> {
   return identity;
 }
 
-export async function releaseNotes(root: string, version: string, initial = false) {
+const stableVersion = /^\d+\.\d+\.\d+$/;
+const changelogSection = (changelog: string, version: string) =>
+  changelog.split(new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
+
+/** Stable versions prepared after the latest published version below `version` but never published themselves. */
+export function skippedVersions(changelog: string, version: string, published: string[]) {
+  const below = published.filter(item => stableVersion.test(item) && Bun.semver.order(item, version) < 0);
+  if (below.length === 0) return [];
+  const previous = below.sort(Bun.semver.order).at(-1)!;
+  const prepared = [...changelog.matchAll(/^## (\d+\.\d+\.\d+)\s*$/gm)].map(match => match[1]);
+  return [...new Set(prepared)].filter(item => Bun.semver.order(item, previous) > 0 && Bun.semver.order(item, version) < 0)
+    .sort((a, b) => Bun.semver.order(b, a));
+}
+
+/** Published stable versions from the candidate checkout's `v*` tags (empty when tags are unavailable). */
+export function publishedTagVersions(root: string) {
+  const result = Bun.spawnSync(['git', 'tag', '--list', 'v*'], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+  if (result.exitCode !== 0) return [];
+  return result.stdout.toString().split('\n').map(tag => tag.trim().replace(/^v/, '')).filter(item => stableVersion.test(item));
+}
+
+export async function releaseNotes(root: string, version: string, initial = false, published: string[] = []) {
   const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
-  const section = changelog.split(new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
+  const section = changelogSection(changelog, version);
   requireArtifact(section?.trim(), 'missing version changelog');
   let notes = section.trim();
+  // A prepared version whose publication never happened still shipped to users through this release.
+  for (const skipped of skippedVersions(changelog, version, published)) {
+    const body = changelogSection(changelog, skipped)?.trim();
+    if (body) notes += `\n\n## Also included from ${skipped} (prepared but not published separately)\n\n${body}`;
+  }
   if (initial) {
     const policy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
     requireArtifact(policy.initialPublication?.version === version, 'initial notes version not allowlisted');
@@ -208,7 +234,8 @@ if (import.meta.main) {
   } else if (command === 'verify') {
     await verifyAggregate(identity, directory);
   } else if (command === 'notes') {
-    await Bun.write(join(directory, 'release-notes.md'), await releaseNotes(root, identity.version, process.env.LAZYSH_RELEASE_INITIAL === 'true'));
+    await Bun.write(join(directory, 'release-notes.md'), await releaseNotes(root, identity.version, process.env.LAZYSH_RELEASE_INITIAL === 'true',
+      publishedTagVersions(root)));
     await copyFile(join(root, 'docs/install-and-update.md'), join(directory, 'INSTALL-AND-UPDATE.md'));
   } else {
     requireArtifact(command === 'stage', 'unknown command');
