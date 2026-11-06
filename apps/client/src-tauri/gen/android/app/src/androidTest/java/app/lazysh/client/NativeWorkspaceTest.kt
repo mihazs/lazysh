@@ -3144,7 +3144,11 @@ class NativeWorkspaceTest {
                 "window[$key]?.token===$token && window[$key].terminal===document.querySelector('.terminal-canvas') && window[$key].terminal.isConnected && document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
             val fresh = UUID.randomUUID().toString().replace("-", "")
             val response = "BG_${fresh}_RESUMED"
-            val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; if ! test -f $directory/background-expired; then " +
+            // An interactive dash still reports the waited writer as "[1] + Done (<its
+            // whole command>)" before its next prompt, after the response. That notice
+            // wraps past a keyboard-sized viewport and pushes the response into
+            // scrollback, outside the rendered rows. `jobs` consumes the notice first.
+            val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; jobs >/dev/null 2>&1; if ! test -f $directory/background-expired; then " +
                 record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
