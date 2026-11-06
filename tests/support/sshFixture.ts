@@ -53,7 +53,7 @@ export async function reportOwnedSshPromptFailure(fixture:Pick<SshFixture,'promp
 export async function sshCommand(stage:string,program:string,args:string[],cwd?:string) {
   return new OwnedProcess(program,args,cwd).finish(stage,5000);
 }
-async function availablePort() {
+export async function availablePort() {
   const listener=createServer();
   await new Promise<void>((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});
   const port=(listener.address() as {port:number}).port;
@@ -117,6 +117,24 @@ async function installOwnedBinary(directory:string,name:string,binary:string) {
   await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
   return bin;
 }
+const nssWrapperCandidates=['/usr/lib/x86_64-linux-gnu','/usr/lib/aarch64-linux-gnu','/usr/lib64','/usr/lib'].flatMap(dir=>['libnss_wrapper.so','libnss_wrapper.so.0'].map(name=>join(dir,name)));
+async function nssWrapper() {
+  const explicit=process.env.LAZYSH_TEST_NSS_WRAPPER;
+  for(const candidate of explicit?[explicit]:nssWrapperCandidates)
+    if(isAbsolute(candidate) && await stat(candidate).then(value=>value.isFile(),()=>false))return candidate;
+  throw new Error('Owned password fixture requires nss_wrapper (Debian/Ubuntu: libnss-wrapper) or LAZYSH_TEST_NSS_WRAPPER');
+}
+/** Private passwd, group and shadow databases for this daemon only; returns its environment. */
+async function passwordAccount(directory:string,username:string,password:string) {
+  const hashing=new OwnedProcess('openssl',['passwd','-6','-stdin']);
+  hashing.child.stdin!.end(password);
+  const hash=(await hashing.finish('owned password hash',5000)).trim();
+  if(!/^\$6\$[./A-Za-z0-9]+\$[./A-Za-z0-9]+$/.test(hash))throw new Error('Owned password hash invalid');
+  const {uid,gid}=userInfo();
+  const files={passwd:`${username}:x:${uid}:${gid}::${directory}:/bin/sh\n`,group:`${username}:x:${gid}:\n`,shadow:`${username}:${hash}:19000:0:99999:7:::\n`};
+  for(const [name,text] of Object.entries(files))await writeFile(join(directory,`nss-${name}`),text,{mode:0o600,flag:'wx'});
+  return {LD_PRELOAD:await nssWrapper(),NSS_WRAPPER_PASSWD:join(directory,'nss-passwd'),NSS_WRAPPER_GROUP:join(directory,'nss-group'),NSS_WRAPPER_SHADOW:join(directory,'nss-shadow')};
+}
 // Two actual native installation budgets, plus explicit SSH/UI setup and teardown.
 export const companionFixtureBudget=2*240_000+120_000;
 export class SshFixture {
@@ -138,7 +156,9 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean}={}) {
+    if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
+    if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
     if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
@@ -188,15 +208,19 @@ export class SshFixture {
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
       const commandSeconds=options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary?companionFixtureBudget/1000:90;
+      // nss_wrapper gives the unprivileged sshd a private account with a password hash,
+      // so password login never reads or needs the runner's real account database.
+      const accounts=options.password===undefined?undefined:await passwordAccount(directory,username,options.password);
+      const log=options.log?join(directory,'sshd.log'):undefined;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
-        `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
+        `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no',`PasswordAuthentication ${accounts?'yes':'no'}`,'KbdInteractiveAuthentication no','UsePAM no','StrictModes no',`LogLevel ${log?'DEBUG1':'ERROR'}`,
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
         ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
         environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
         `Banner none`,''].join('\n'),{mode:0o600});
-      const arguments_=['-D','-e','-f',config];
+      const arguments_=['-D','-e','-f',config,...(log?['-E',log]:[])];
       const privateTtyGroup=options.privateTtyGroup===true || !!tools;
       let toolNamespace:string[]|undefined;
       if(privateTtyGroup) {
@@ -241,7 +265,7 @@ export class SshFixture {
         // System tmux daemonizes out of the SSH tree; unlike the pinned tmuxBinary server, it lives
         // in sshd's private PID namespace, so retiring sshd also retires that server.
         daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary||options.tmux?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
-      } else daemon=new OwnedProcess(sshd,arguments_);
+      } else daemon=new OwnedProcess(sshd,arguments_,undefined,accounts?{...process.env,...accounts}:process.env);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,privateTtyGroup,toolNamespace);
       const deadline=performance.now()+3000;
