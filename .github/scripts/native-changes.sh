@@ -28,7 +28,7 @@ package() {
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
     account-usage/* | ai-usagebar-vendor/*) add client agent ;;
-    notification-client/*) add agent push ;;
+    notification-client/*) add agent push relay ;; # native-linux-runtimes runs the real Apprise API relay case.
     push-registration/*) add client android ios push ;;
     mosh-transport/*) add client ios mosh ;;
     credential-vault/* | display-idle/* | apple-speech/* | apple-status/*) add client ios ;;
@@ -52,7 +52,7 @@ classify() {
       apps/client/src-tauri/src/apple_*) add client ios ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
-    apps/notification-service/*) add agent push ;;
+    apps/notification-service/*) add agent push relay ;;
     tests/herdr-source.test.ts) add herdr ;;
     tests/android-herdr-navigation.test.ts | tests/support/androidHerdr.ts) add android herdr ;;
     tests/android-ntfy.test.ts | tests/android-push-artifact.test.ts | tests/support/androidNtfy.ts) add android push ;;
@@ -84,7 +84,7 @@ fi
 
 flag() { if "$@"; then echo true; else echo false; fi; }
 linux=$(flag any client agent herdr)
-linux_runtimes=$(flag any client herdr)
+linux_runtimes=$(flag any client herdr relay)
 android_runtime=$(flag any client android agent herdr)
 android_herdr=$(flag any herdr android agent)
 # herdr-native produces the same-run binaries these consumers verify, so it runs for any of them.

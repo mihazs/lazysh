@@ -32,7 +32,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Dictate editable text or import a local speech model | [Voice](voice.md) · [Parakeet](voice-parakeet.md) |
 | Configure an optional cloud transcription service | [Cloud transcription](cloud-transcription.md) |
 | Keep a supported active mobile screen awake | [Keep awake](keep-awake.md) |
-| Enroll a notification device or configure relay delivery | [Notifications](notifications.md) · [Push registration](push-registration.md) · [UnifiedPush enrollment](unifiedpush-enrollment.md) · [Notification relay](notification-relay.md) · [Web push server](web-push-server.md) |
+| Enroll a notification device or configure relay delivery (webhook, Gotify, Apprise) | [Notifications](notifications.md) · [Push registration](push-registration.md) · [UnifiedPush enrollment](unifiedpush-enrollment.md) · [Notification relay](notification-relay.md) · [Web push server](web-push-server.md) |
 | Inspect/control an owned Android device or iOS simulator | [Devices](devices.md) |
 | Build and validate native client interfaces | [Native GUI testing](native-gui-testing.md) · [Android testing](android-testing.md) · [iOS testing](ios-testing.md) |
 | Verify exact published APKs or startup CPU evidence | [Published APK qualification](android-published-apk.md) · [Android startup CPU budget](android-startup-cpu-budget.md) |

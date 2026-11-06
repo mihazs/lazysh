@@ -1048,6 +1048,22 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         run: bunx turbo run test:parakeet-product --filter=@lazysh/client
+      # Official caronc/apprise-api 2.0.2 image (Docker Hub caronc/apprise), pinned by its
+      # multi-arch index digest. Host networking lets its json:// service reach the test's
+      # loopback receiver; the relay reaches it only through the test's owned TLS proxy.
+      - name: Deliver relay events through the pinned official Apprise API
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          APPRISE_IMAGE: docker.io/caronc/apprise@sha256:6ae97e24b3447f85f725a03ba73c6dc3a5f4b99f4273ac126de2d9b5ed6205d5
+          CASE_NAME: tests::apprise_server::real_apprise_api_stateful_key_delivers_mapped_events_through_an_owned_tls_proxy
+          LAZYSH_APPRISE_API: http://127.0.0.1:8000
+        run: |
+          docker run --detach --rm --name lazysh-apprise --network host "$APPRISE_IMAGE"
+          trap 'docker logs lazysh-apprise 2>&1 | tail -n 40; docker rm --force lazysh-apprise >/dev/null' EXIT
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
 
   native-android-auxiliary:
     needs: changes

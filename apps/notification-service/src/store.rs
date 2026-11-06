@@ -30,6 +30,23 @@ pub(crate) struct Store {
     pub push: Option<std::sync::Arc<crate::push::PushConfig>>,
     _lock: File,
 }
+/// Finite delivery outcome; only Apprise answers can end as partial or rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    Accepted,
+    Partial,
+    Rejected,
+    Retry,
+}
+impl From<bool> for Delivery {
+    fn from(accepted: bool) -> Self {
+        if accepted {
+            Self::Accepted
+        } else {
+            Self::Retry
+        }
+    }
+}
 pub(crate) struct Job {
     pub receipt: Receipt,
     pub generation: i64,
@@ -430,13 +447,13 @@ impl Store {
             push,
         }))
     }
-    pub fn finish(&mut self, job: &Job, accepted: bool) -> Result<(), ApiError> {
-        let state = if accepted {
-            "accepted"
-        } else if job.attempts >= 3 {
-            "failed_unknown"
-        } else {
-            "queued"
+    pub fn finish(&mut self, job: &Job, outcome: impl Into<Delivery>) -> Result<(), ApiError> {
+        let state = match outcome.into() {
+            Delivery::Accepted => "accepted",
+            Delivery::Partial => "partial",
+            Delivery::Rejected => "rejected",
+            Delivery::Retry if job.attempts >= 3 => "failed_unknown",
+            Delivery::Retry => "queued",
         };
         self.connection.execute("UPDATE events SET state=?1,next=?2 WHERE receipt=?3 AND generation=?4 AND state='sending'",params![state,now()+2,job.receipt.receipt_id,job.generation])?;
         Ok(())

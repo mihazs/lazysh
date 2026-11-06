@@ -1833,6 +1833,8 @@ export const english = {
   pushTitle: "Remote push registration",
   pushProvider: "Push service",
   pushProviderChoiceHint: "Pause registration and finish cleanup before switching services.",
+  pushRelayDestinations: "A private lazysh relay delivers agent events to one destination you run: an authenticated webhook, a Gotify app, or an Apprise API server that forwards them to Telegram, Discord, Slack, Matrix, email and other services.",
+  pushRelayGuide: "Open the relay setup guide",
   pushUnifiedSetup: "For ntfy, configure your server in the ntfy distributor app, then connect your private relay here. Gotify delivery uses the separate Gotify app.",
   pushScope: "Register this device with {{provider}} only if this native build is configured for remote push. Registration alone does not connect a delivery service or send host events.",
   pushNativeRequired: "Remote push registration requires the native app.",

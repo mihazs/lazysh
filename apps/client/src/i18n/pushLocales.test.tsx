@@ -75,7 +75,8 @@ it('explains a provider-free build in every UI language without Google consent o
     expect(screen.getByRole('status').textContent).toBe(t('pushUnavailable'));
     expect(document.body.textContent).not.toContain('Google Firebase');
     expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.getAllByRole('button')).toHaveLength(1);
+    // Only refresh and the relay guide remain: relay destinations need no push provider.
+    expect(screen.getAllByRole('button').map(button=>button.getAttribute('aria-label')??button.textContent)).toEqual([t('pushRefresh'),t('pushRelayGuide')]);
   });
   expect(invoke).toHaveBeenCalledExactlyOnceWith('push_registration_status',undefined,{headers:{'X-Lazysh-Access':'f'.repeat(64)}});
 });

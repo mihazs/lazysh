@@ -14,7 +14,8 @@ import abseilLicense from "../../../packages/mosh-transport/vendor-android/absei
 import etLicense from "../../../packages/et-transport/LICENSE-MIT?raw";
 import moshAppleLicense from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
 import quircsLicense from "../src-tauri/licenses/quircs-LICENSE?raw";
-import { api as nativeApi, native } from "./bridge";
+import { api as nativeApi } from "./bridge";
+import { openWebPage } from "./webPage";
 import { errorMessage } from "./SessionTools";
 
 export default function AboutPanel() {
@@ -23,9 +24,7 @@ export default function AboutPanel() {
   const [error, setError] = useState("");
   const source = `https://github.com/mihazs/lazysh${__LAZYSH_SOURCE_REVISION__ ? `/tree/${__LAZYSH_SOURCE_REVISION__}` : ""}`;
   function open(url: string) {
-    if (native)
-      void api.openWebUrl(url).catch((e) => setError(errorMessage(e)));
-    else window.open(url, "_blank", "noopener,noreferrer");
+    void openWebPage((page) => api.openWebUrl(page), url).catch((e) => setError(errorMessage(e)));
   }
   return (
     <section className="preferences-panel about-panel" aria-label={t('appAboutLazysh')}>

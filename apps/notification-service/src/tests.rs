@@ -1,3 +1,6 @@
+mod apprise_delivery;
+#[cfg(target_os = "linux")]
+mod apprise_server;
 mod bound_push;
 #[cfg(target_os = "linux")]
 mod gotify_server;

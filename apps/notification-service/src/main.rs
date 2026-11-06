@@ -30,10 +30,17 @@ struct DestinationArgs {
     admin_file: PathBuf,
     #[arg(long)]
     destination_file: PathBuf,
+    /// Required for webhook and Gotify; optional reverse-proxy Bearer for Apprise.
     #[arg(long)]
-    destination_token_file: PathBuf,
+    destination_token_file: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "webhook")]
     destination_format: DestinationFormat,
+    /// Apprise only: acknowledges sending without a reverse-proxy token.
+    #[arg(long)]
+    destination_unauthenticated: bool,
+    /// Apprise only: selects tagged services of the stored configuration (repeatable).
+    #[arg(long = "apprise-tag", value_name = "TAG")]
+    apprise_tags: Vec<String>,
 }
 #[derive(Subcommand)]
 enum Command {
@@ -152,18 +159,48 @@ enum Command {
 fn config(args: DestinationArgs) -> Result<Config, String> {
     let admin = client::read_token(&args.admin_file)?;
     let url = lazysh_common::service_secrets::read_secret(&args.destination_file)?;
-    let key = match args.destination_format {
-        DestinationFormat::Webhook => client::read_token(&args.destination_token_file)?,
-        DestinationFormat::Gotify => {
-            lazysh_common::service_secrets::read_secret(&args.destination_token_file)?
+    let secret = |path: &PathBuf| lazysh_common::service_secrets::read_secret(path);
+    if !matches!(args.destination_format, DestinationFormat::Apprise) {
+        if args.destination_unauthenticated || !args.apprise_tags.is_empty() {
+            return Err("Unauthenticated and tag options apply only to Apprise".into());
+        }
+        let path = args
+            .destination_token_file
+            .as_ref()
+            .ok_or("Require --destination-token-file")?;
+        let key = match args.destination_format {
+            DestinationFormat::Webhook => client::read_token(path)?,
+            _ => secret(path)?,
+        };
+        return Config::with_format(
+            args.data_dir,
+            admin.trim(),
+            url.trim(),
+            key.trim(),
+            args.destination_format,
+        );
+    }
+    let token = match (
+        &args.destination_token_file,
+        args.destination_unauthenticated,
+    ) {
+        (Some(path), false) => Some(secret(path)?),
+        (None, true) => None,
+        (Some(_), true) => {
+            return Err("Choose a proxy token file or --destination-unauthenticated".into())
+        }
+        (None, false) => {
+            return Err(
+                "Apprise without a proxy token requires --destination-unauthenticated".into(),
+            )
         }
     };
-    Config::with_format(
+    Config::apprise(
         args.data_dir,
         admin.trim(),
         url.trim(),
-        key.trim(),
-        args.destination_format,
+        token.as_ref().map(|token| token.trim()),
+        &args.apprise_tags,
     )
 }
 fn print(value: impl serde::Serialize) -> Result<(), String> {
@@ -427,29 +464,129 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gotify_config_reads_private_opaque_application_token_instead_of_a_relay_capability() {
+        let (directory, admin, url, token) = private_files(
+            b"https://gotify.example/message\n",
+            b"opaque-gotify-app-token\n",
+        );
+        let load = |destination_format| {
+            config(args(
+                directory.path(),
+                &admin,
+                &url,
+                Some(&token),
+                destination_format,
+            ))
+        };
+        assert!(load(DestinationFormat::Gotify).is_ok());
+        assert!(load(DestinationFormat::Webhook).is_err());
+    }
+
+    /// Owner-only admin, destination URL and token files in a private directory.
+    #[cfg(unix)]
+    fn private_files(url: &[u8], token: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let admin = directory.path().join("admin");
-        let url = directory.path().join("url");
-        let token = directory.path().join("token");
+        let [admin, url_file, token_file] =
+            ["admin", "url", "token"].map(|name| directory.path().join(name));
         client::write_private(
             &admin,
             b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         .unwrap();
-        client::write_private(&url, b"https://gotify.example/message\n").unwrap();
-        client::write_private(&token, b"opaque-gotify-app-token\n").unwrap();
-        let load = |destination_format| {
-            config(DestinationArgs {
-                data_dir: directory.path().join("state"),
-                admin_file: admin.clone(),
-                destination_file: url.clone(),
-                destination_token_file: token.clone(),
-                destination_format,
-            })
+        client::write_private(&url_file, url).unwrap();
+        client::write_private(&token_file, token).unwrap();
+        (directory, admin, url_file, token_file)
+    }
+
+    fn args(
+        directory: &std::path::Path,
+        admin: &std::path::Path,
+        url: &std::path::Path,
+        token: Option<&std::path::Path>,
+        destination_format: DestinationFormat,
+    ) -> DestinationArgs {
+        DestinationArgs {
+            data_dir: directory.join("state"),
+            admin_file: admin.into(),
+            destination_file: url.into(),
+            destination_token_file: token.map(Into::into),
+            destination_format,
+            destination_unauthenticated: false,
+            apprise_tags: vec![],
+        }
+    }
+
+    #[test]
+    fn apprise_flags_parse_repeatable_tags_and_an_explicit_unauthenticated_acknowledgement() {
+        let parsed = Cli::try_parse_from([
+            "lazysh-notifications",
+            "serve",
+            "--data-dir",
+            "/owned/state",
+            "--admin-file",
+            "/owned/admin",
+            "--destination-file",
+            "/owned/url",
+            "--destination-format",
+            "apprise",
+            "--destination-unauthenticated",
+            "--apprise-tag",
+            "phone",
+            "--apprise-tag",
+            "desk",
+        ])
+        .unwrap();
+        let Command::Serve { destination, .. } = parsed.command else {
+            panic!("wrong command");
         };
-        assert!(load(DestinationFormat::Gotify).is_ok());
-        assert!(load(DestinationFormat::Webhook).is_err());
+        assert!(matches!(
+            destination.destination_format,
+            DestinationFormat::Apprise
+        ));
+        assert!(destination.destination_unauthenticated);
+        assert!(destination.destination_token_file.is_none());
+        assert_eq!(destination.apprise_tags, ["phone", "desk"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apprise_config_requires_a_private_proxy_token_or_an_explicit_unauthenticated_choice() {
+        use std::os::unix::fs::PermissionsExt;
+        let (directory, admin, url, token) = private_files(
+            b"https://apprise.example/notify/lazysh-key\n",
+            b"opaque-proxy-token\n",
+        );
+        let linked = directory.path().join("linked-token");
+        std::os::unix::fs::symlink(&token, &linked).unwrap();
+        let load = |token: Option<&std::path::Path>, unauthenticated: bool, tags: &[&str]| {
+            let mut args = args(
+                directory.path(),
+                &admin,
+                &url,
+                token,
+                DestinationFormat::Apprise,
+            );
+            args.destination_unauthenticated = unauthenticated;
+            args.apprise_tags = tags.iter().map(|tag| tag.to_string()).collect();
+            config(args)
+        };
+        assert!(load(Some(&token), false, &["phone"]).is_ok());
+        assert!(load(None, true, &[]).is_ok());
+        assert!(load(None, false, &[]).is_err());
+        assert!(load(Some(&token), true, &[]).is_err());
+        assert!(load(Some(&linked), false, &[]).is_err());
+        assert!(load(Some(&token), false, &["bad tag"]).is_err());
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(Some(&token), false, &[]).is_err());
+        for format in [DestinationFormat::Webhook, DestinationFormat::Gotify] {
+            let mut flagged = args(directory.path(), &admin, &url, None, format);
+            flagged.destination_unauthenticated = true;
+            assert!(config(flagged).is_err());
+            let mut tagged = args(directory.path(), &admin, &url, None, format);
+            tagged.apprise_tags = vec!["phone".into()];
+            assert!(config(tagged).is_err());
+            assert!(config(args(directory.path(), &admin, &url, None, format)).is_err());
+        }
     }
 }
