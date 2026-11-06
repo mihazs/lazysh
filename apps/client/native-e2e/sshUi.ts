@@ -11,12 +11,20 @@ export async function workspaceAction(gui:NativeGui,name:string) {
   const browser=gui.browser!,opener=await browser.$('button[aria-label="Workspace tools"]');
   await opener.click();
   const menu=await browser.$('[role="dialog"][aria-label="Workspace tools"]');await menu.waitForDisplayed();
-  for(const group of ['workspace-more-tools','workspace-connection-actions','workspace-application-options']) {
-    const details=await menu.$(`details.${group}`);if(!await details.isExisting())continue;
-    const action=await details.$(`button=${name}`);
-    if(await action.isExisting() && !await action.isDisplayed())await (await details.$(':scope > summary')).click();
+  // Tool groups are carousel pages; only the shown page takes clicks, so turn to the owner first.
+  const owner=await browser.execute((name:string)=>Array.from(document.querySelectorAll('[role="dialog"][aria-label="Workspace tools"] .workspace-tools-page'))
+    .find(page=>Array.from(page.querySelectorAll('button')).some(button=>button.textContent?.trim()===name))?.id??'',name);
+  let scope:Terminal=menu;
+  if(owner) {
+    const tab=await menu.$(`[role="tab"][aria-controls="${owner}"]`);
+    if(await tab.isExisting() && await tab.getAttribute('aria-selected')!=='true')await tab.click();
+    await browser.waitUntil(()=>browser.execute((id:string)=>{
+      const page=document.getElementById(id) as HTMLElement|null,track=page?.parentElement;
+      return !!page && !!track && !page.inert && Math.abs(page.getBoundingClientRect().left-track.getBoundingClientRect().left)<2;
+    },owner),{timeout:5000,timeoutMsg:`Workspace tools page for ${name} did not settle`});
+    scope=await menu.$(`#${owner}`);
   }
-  const action=await menu.$(`button=${name}`);await action.waitForDisplayed();await action.click();
+  const action=await scope.$(`button=${name}`);await action.waitForDisplayed();await action.click();
   return opener;
 }
 

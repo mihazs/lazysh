@@ -1,4 +1,5 @@
 import './WorkspaceHierarchy.css';
+import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel} from './WorkspaceToolsCarousel';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
@@ -2447,28 +2448,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="workspace-tools-content">
-            {active && <>
-              <nav className="mobile-session-views workspace-primary-tools" aria-label={t('appSessionViews')}>
+            <WorkspaceToolsCarousel initialPage={rememberedToolsPage()} onPageChange={rememberToolsPage} pages={[
+              ...(active?[{id:'session',title:t('appSessionViews'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('appSessionViews')}>
                 <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
                 {primaryTools.map(mobileToolButton)}
-              </nav>
-              {secondaryTools.length>0 && <details className="workspace-more-tools">
-                <summary>{t('workspaceMoreTools')}</summary>
-                <nav className="mobile-session-views" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>
-              </details>}
-              <details className="workspace-connection-actions">
-                <summary>{t('navigationConnections')}</summary>
-                <div className="workspace-tools-group">
-                  <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
-                  {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-                  {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
-                  {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
-                </div>
-              </details>
-            </>}
-            <details className="workspace-application-options">
-              <summary>{t('workspaceApplicationOptions')}</summary>
-              <div className="workspace-tools-group">
+              </nav>},
+              ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
+              {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
+                <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+                {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
+                {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+                {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+              </div>}]:[]),
+              {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
                 <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
                 <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
                 <button
@@ -2498,8 +2490,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     setPalette(true);
                   }}
                 >{t("appSearchSavedHosts")}</button>
-              </div>
-            </details>
+              </div>},
+            ]}/>
             {active && <div className="workspace-tools-danger">
               <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
             </div>}

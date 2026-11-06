@@ -475,8 +475,8 @@ async function connectForNavigation(sessionId:string){
 async function chooseWorkspaceTool(user:ReturnType<typeof userEvent.setup>,name:string) {
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
   const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
-  const owner=Array.from(dialog.querySelectorAll('details')).find(group=>Array.from(group.querySelectorAll('button')).some(button=>button.textContent===name));
-  if(owner&&!owner.open)await user.click(owner.querySelector('summary')!);
+  const owner=Array.from(dialog.querySelectorAll<HTMLElement>('.workspace-tools-page')).find(page=>Array.from(page.querySelectorAll('button')).some(button=>button.textContent===name));
+  if(owner?.getAttribute('aria-hidden')==='true')await user.click(dialog.querySelector<HTMLElement>(`[role=tab][aria-controls="${owner.id}"]`)!);
   await user.click(within(dialog).getByRole('button',{name}));
 }
 
@@ -1569,31 +1569,56 @@ it('restores Auto by probing transports again rather than restoring its last SSH
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
 });
 
-it('starts Workspace tools with seven primary destinations and explicit closed action groups',async()=>{
+it('starts Workspace tools on seven primary destinations with the other tool groups as labelled pages',async()=>{
+  const stored=new Map<string,string>();
+  vi.stubGlobal('localStorage',{setItem:(key:string,value:string)=>stored.set(key,value),getItem:(key:string)=>stored.get(key)??null,removeItem:(key:string)=>stored.delete(key),length:0});
   const user=await connectForNavigation('short-tools');
   await user.click(screen.getByRole('button',{name:'Workspace tools'}));
   const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
-  const primary=within(dialog).getByRole('navigation',{name:'Session views'});
-  expect(within(primary).getAllByRole('button').map(button=>button.textContent)).toEqual(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
-  const groups=Array.from(dialog.querySelectorAll('details'));
-  expect(groups.map(group=>group.open)).toEqual([false,false,false]);
-  expect(groups.map(group=>group.querySelector('summary')?.textContent)).toEqual(['More tools','Connections','Application options']);
+  expect(dialog.querySelectorAll('details')).toHaveLength(0);
+  const carousel=within(dialog).getByRole('region',{name:'Workspace tool pages'});
+  expect(carousel.getAttribute('aria-roledescription')).toBe('carousel');
+  const tabs=within(carousel).getAllByRole('tab');
+  expect(tabs.map(tab=>tab.getAttribute('aria-label'))).toEqual(['Session views','More tools','Connections','Application options']);
+  expect(tabs.map(tab=>tab.getAttribute('aria-selected'))).toEqual(['true','false','false','false']);
+  expect(tabs.map(tab=>tab.tabIndex)).toEqual([0,-1,-1,-1]);
+  const current=within(carousel).getByRole('tabpanel');
+  expect(current.getAttribute('aria-label')).toBe('Session views, 1 of 4');
+  expect(current.getAttribute('aria-roledescription')).toBe('page');
+  expect(within(current).getAllByRole('button').map(button=>button.textContent)).toEqual(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
+  expect(within(dialog).queryByRole('button',{name:'Transcript'})).toBeNull();
+  expect((within(carousel).getByRole('button',{name:'Previous tools page'}) as HTMLButtonElement).disabled).toBe(true);
   const end=within(dialog).getByRole('button',{name:'End Home connection'});
-  expect(end.closest('details')).toBeNull();expect(end.classList.contains('danger-button')).toBe(true);
-  expect(mocks.api.disconnect).not.toHaveBeenCalled();
-  await user.click(within(dialog).getByText('More tools',{selector:'summary'}));
-  expect(groups[0].open).toBe(true);
-  expect(within(groups[0]).getAllByRole('button').map(button=>button.textContent)).toEqual(['Apple status','Transcript','Diff','Preview','Dictate','Devices']);
-  await user.click(within(groups[0]).getByRole('button',{name:'Transcript'}));
+  expect(end.closest('.workspace-tools-carousel')).toBeNull();expect(end.classList.contains('danger-button')).toBe(true);
+  await user.click(within(carousel).getByRole('button',{name:'Next tools page'}));
+  expect(within(carousel).getByRole('tabpanel').getAttribute('aria-label')).toBe('More tools, 2 of 4');
+  expect(within(within(carousel).getByRole('tabpanel')).getAllByRole('button').map(button=>button.textContent)).toEqual(['Apple status','Transcript','Diff','Preview','Dictate','Devices']);
+  // Arrow keys move the selected page tab and its focus; Home and End reach the ends.
+  tabs[1].focus();await user.keyboard('{ArrowRight}');
+  expect(document.activeElement).toBe(tabs[2]);expect(tabs[2].getAttribute('aria-selected')).toBe('true');
+  expect(within(within(carousel).getByRole('tabpanel')).getByRole('button',{name:'New connection'})).toBeTruthy();
+  await user.keyboard('{End}');expect(document.activeElement).toBe(tabs[3]);
+  expect((within(carousel).getByRole('button',{name:'Next tools page'}) as HTMLButtonElement).disabled).toBe(true);
+  await user.keyboard('{Home}');expect(document.activeElement).toBe(tabs[0]);
+  await user.click(tabs[1]);
+  await user.click(within(dialog).getByRole('button',{name:'Transcript'}));
   expect(screen.queryByRole('dialog',{name:'Workspace tools'})).toBeNull();
+  // Reopening the sheet returns to the page last turned to, which outlives this session.
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const reopened=within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('tabpanel');
+  expect(reopened.getAttribute('aria-label')).toBe('More tools, 2 of 4');
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+  // A restarted app with a new connection still opens on that page.
+  cleanup();
+  const restarted=await connectForNavigation('short-tools-restarted');
+  await restarted.click(screen.getByRole('button',{name:'Workspace tools'}));
+  expect(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('tabpanel').getAttribute('aria-label')).toBe('More tools, 2 of 4');
 });
 
 it('exposes remote push settings from Workspace tools',async()=>{
   const user=userEvent.setup();
   render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
-  await user.click(screen.getByText('Application options',{selector:'summary'}));
   await user.click(screen.getByRole('button',{name:'Remote push settings'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
@@ -2089,9 +2114,7 @@ it('opens the active host multiplexer setting directly from workspace tools with
   await selectConnectionTransport(user, 'ssh');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   const terminal=await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
-  await user.click(screen.getByText('Connections',{selector:'summary'}));
-  await user.click(screen.getByRole('button',{name:'Default multiplexer'}));
+  await chooseWorkspaceTool(user,'Default multiplexer');
   const editor=await screen.findByRole('dialog',{name:'Edit host'});
   const setting=within(editor).getByLabelText('Default multiplexer');
   expect(document.activeElement).toBe(setting);

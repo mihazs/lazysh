@@ -1,4 +1,4 @@
-import {workspaceControl,openPreferenceCategory,closePreferences} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWith} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
@@ -93,9 +93,18 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await page.screenshot({path:testInfo.outputPath('default-multiplexer-connect.png')});
 });
 
-async function openWorkspaceGroup(page:Page,group:'more'|'connections'|'application'){
-  const selector={more:'workspace-more-tools',connections:'workspace-connection-actions',application:'workspace-application-options'}[group];
-  await page.getByRole('dialog',{name:'Workspace tools',exact:true}).locator(`details.${selector} > summary`).click();
+const toolPageNames={session:'Session views',more:'More tools',connections:'Connections',application:'Application options'};
+async function openWorkspaceGroup(page:Page,group:keyof typeof toolPageNames){
+  const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  await expect(dialog).toBeVisible();
+  const tab=dialog.getByRole('tab',{name:toolPageNames[group],exact:true});
+  // Without a session the sheet has one page and no page tabs.
+  if(!await tab.count())return;
+  await tab.click();await expect(tab).toHaveAttribute('aria-selected','true');
+  // Wait for the page turn to settle so measurements and screenshots show the page in place.
+  const shown=dialog.locator(`#${await tab.getAttribute('aria-controls')}`);
+  await expect.poll(()=>shown.evaluate(node=>
+    Math.abs(node.getBoundingClientRect().left-node.parentElement!.getBoundingClientRect().left)<2)).toBe(true);
 }
 
 async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?:string[]){
@@ -559,6 +568,7 @@ test('mobile terminal keeps one compact header and reaches every session control
     await more.getByRole('button',{name:'Preferences',exact:true}).click();
     await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+    await openWorkspaceGroup(page,'session');
     await more.getByRole('button',{name:'Attach',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Attach to this host',exact:true})).toBeVisible();
     await expect(strip).toBeHidden();await expect(tabs).toBeHidden();
@@ -605,10 +615,7 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
   const phone=testInfo.project.name==='phone';
   await page.setViewportSize({width:phone?411:1280,height:phone?659:600});
   await installWorkspaceNavigation(page,true);
-  await page.goto('/');
-  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await connectPasswordHost(page);
-  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await openConnectedWorkspaceTools(page,phone);
   const agents=page.getByRole('button',{name:'Agents',exact:true});
   if(action==='dom')await agents.evaluate(node=>(node as HTMLElement).click());else await agents.click();
   const context='HERDR_'+'a'.repeat(32)+' / 1 / /tmp/lazysh-h-abcdef';
@@ -848,7 +855,99 @@ test('a long saved host keeps its actions touchable after a fresh load at the An
   await expect(page.getByRole('dialog',{name:'Delete host',exact:true})).toBeVisible();
 });
 
-test('Workspace tools is a short default sheet with explicit reachable expansions at 393px',async({page},testInfo)=>{
+/** Connect the fixture host from the real host list and open Workspace tools over its terminal. */
+async function openConnectedWorkspaceTools(page:Page,phone:boolean){
+  await page.goto('/');
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+}
+
+/** No page turn or sheet action may disconnect the session or type into its terminal. */
+async function expectNoTerminalInput(page:Page){
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
+}
+
+/** Drag across the tool pages with a finger on a phone and with the mouse on desktop. */
+async function swipeToolPages(page:Page,direction:'next'|'previous',phone:boolean){
+  const box=(await page.locator('.workspace-tools-track').boundingBox())!;
+  const y=box.y+Math.min(box.height/2,60),[from,to]=direction==='next'?[.85,.15]:[.15,.85];
+  const at=(fraction:number)=>({x:box.x+box.width*fraction,y});
+  if(!phone){
+    await page.mouse.move(at(from).x,y);await page.mouse.down();
+    for(let step=1;step<=8;step++)await page.mouse.move(at(from+(to-from)*step/8).x,y);
+    await page.mouse.up();return;
+  }
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[at(from)]});
+  for(let step=1;step<=12;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[at(from+(to-from)*step/12)]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await cdp.detach();
+}
+
+test('Workspace tools swipe between labelled carousel pages and remember the last page',async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';
+  await installWorkspaceNavigation(page);
+  await openConnectedWorkspaceTools(page,phone);
+  const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  const carousel=dialog.getByRole('region',{name:'Workspace tool pages',exact:true});
+  await expect(carousel).toHaveAttribute('aria-roledescription','carousel');
+  const tabs=carousel.getByRole('tablist',{name:'Workspace tool pages',exact:true}).getByRole('tab');
+  await expect(tabs).toHaveCount(4);
+  expect(await tabs.evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')))).toEqual(['Session views','More tools','Connections','Application options']);
+  const panel=carousel.getByRole('tabpanel');
+  const shows=async(label:string,selected:number)=>{
+    await expect(panel).toHaveCount(1);await expect(panel).toHaveAttribute('aria-label',label);
+    await expect(panel).toHaveAttribute('aria-roledescription','page');
+    expect(await tabs.evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-selected')))).toEqual([0,1,2,3].map(index=>String(index===selected)));
+    await expect(carousel.getByRole('heading',{name:label.split(',')[0],exact:true})).toBeVisible();
+    // The shown page fills the track, so no other page can be tapped by accident.
+    await expect.poll(()=>panel.evaluate(node=>{const page=node.getBoundingClientRect(),track=node.parentElement!.getBoundingClientRect();return Math.abs(page.left-track.left)<2&&Math.abs(page.right-track.right)<2;})).toBe(true);
+    // The sheet fits the shown page: its dots follow the last control without a band of empty space.
+    await expect.poll(()=>panel.evaluate(node=>{
+      const controls=Array.from(node.querySelectorAll('button')).map(button=>button.getBoundingClientRect().bottom);
+      const dots=node.closest('.workspace-tools-carousel')!.querySelector('[role=tablist]')!.getBoundingClientRect().top;
+      return Math.round(dots-Math.max(...controls));
+    })).toBeLessThanOrEqual(16);
+  };
+  await shows('Session views, 1 of 4',0);
+  await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toHaveCount(0);
+  await expect(carousel.getByRole('button',{name:'Previous tools page',exact:true})).toBeDisabled();
+  for(const target of [...await tabs.all(),carousel.getByRole('button',{name:'Next tools page',exact:true})]){
+    const box=(await target.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.width).toBeGreaterThanOrEqual(24);
+  }
+  await swipeToolPages(page,'next',phone);
+  await shows('More tools, 2 of 4',1);
+  const transcript=dialog.getByRole('button',{name:'Transcript',exact:true});
+  await expect(transcript).toBeInViewport({ratio:1});
+  await swipeToolPages(page,'next',phone);
+  await shows('Connections, 3 of 4',2);
+  await swipeToolPages(page,'previous',phone);
+  await shows('More tools, 2 of 4',1);
+  await page.screenshot({path:testInfo.outputPath('workspace-tools-carousel.png')});
+  // Arrow keys move between page tabs, with focus following the selected page.
+  await tabs.nth(1).focus();await page.keyboard.press('ArrowRight');
+  await expect(tabs.nth(2)).toBeFocused();await shows('Connections, 3 of 4',2);
+  await page.keyboard.press('End');await expect(tabs.nth(3)).toBeFocused();await shows('Application options, 4 of 4',3);
+  await expect(carousel.getByRole('button',{name:'Next tools page',exact:true})).toBeDisabled();
+  await carousel.getByRole('button',{name:'Previous tools page',exact:true}).click();await shows('Connections, 3 of 4',2);
+  await tabs.nth(1).click();await shows('More tools, 2 of 4',1);
+  await transcript.click();await expect(dialog).toHaveCount(0);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await shows('More tools, 2 of 4',1);
+  await expect(transcript).toBeInViewport({ratio:1});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await expectNoTerminalInput(page);
+  // The last page outlives the session: a restarted app reopens the sheet on it.
+  await tabs.nth(3).click();await shows('Application options, 4 of 4',3);
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+  await openConnectedWorkspaceTools(page,phone);
+  await shows('Application options, 4 of 4',3);
+  await expectNoTerminalInput(page);
+});
+
+test('Workspace tools is a short default sheet whose tool pages stay reachable at 393px',async({page},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Measured mobile sheet');
   await page.setViewportSize({width:393,height:852});
   await installWorkspaceNavigation(page);await page.goto('/');
@@ -860,7 +959,7 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
   const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
   const primary=dialog.getByRole('navigation',{name:'Session views',exact:true});
   await expect(primary.getByRole('button')).toHaveText(['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach']);
-  await expect(dialog.locator('details[open]')).toHaveCount(0);
+  await expect(dialog.locator('details')).toHaveCount(0);
   const metrics=await dialog.evaluate(node=>({height:node.getBoundingClientRect().height,content:node.scrollHeight,viewport:node.clientHeight}));
   expect(metrics.height).toBeLessThan(600);expect(metrics.content).toBeLessThanOrEqual(metrics.viewport+1);
   const end=dialog.getByRole('button',{name:'End Navigation host connection',exact:true});
@@ -879,8 +978,9 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
   await media.send('Emulation.setEmulatedMedia',{features:[]});
   await page.screenshot({path:testInfo.outputPath('workspace-tools-default-393.png')});
   await testInfo.attach('default-sheet-measurement',{body:JSON.stringify({viewport:{width:393,height:852},...metrics}),contentType:'application/json'});
-  for(const group of ['more','connections','application'] as const)await openWorkspaceGroup(page,group);
-  await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toBeVisible();
+  await openWorkspaceGroup(page,'more');
+  await expect(dialog.getByRole('button',{name:'Transcript',exact:true})).toBeInViewport({ratio:1});
+  await openWorkspaceGroup(page,'application');
   await page.setViewportSize({width:393,height:393});
   await dialog.evaluate(node=>{for(const control of node.querySelectorAll<HTMLElement>('button, summary'))control.style.fontSize='24px';});
   const content=dialog.locator('.workspace-tools-content');
@@ -896,8 +996,7 @@ test('Workspace tools is a short default sheet with explicit reachable expansion
   await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
   await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})));
   await expect(dialog).toHaveCount(0);await expect(canvas).toHaveCount(1);
-  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
-  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
+  await expectNoTerminalInput(page);
 });
 
 test('Workspaces prioritizes current app sessions and discloses healthy server setup',async({page},testInfo)=>{
@@ -1273,13 +1372,14 @@ test('focused work destinations retain the terminal and expose every contextual 
   await expect(page.getByRole('navigation',{name:'Session views',exact:true})).toHaveCount(0);
   const tools=page.getByRole('button',{name:'Workspace tools',exact:true});await tools.click();
   const dialog=page.getByRole('dialog',{name:'Workspace tools',exact:true});
-  await expect(dialog.locator('details.workspace-application-options')).toHaveJSProperty('open',false);
+  await expect(dialog.getByRole('tab',{name:'Session views',exact:true})).toHaveAttribute('aria-selected','true');
+  await expect(dialog.getByRole('button',{name:'Preferences',exact:true})).toHaveCount(0);
   await (await workspaceControl(page,'Preferences')).click();
   await expect(page.getByRole('dialog',{name:'Preferences',exact:true})).toBeVisible();
   await page.keyboard.press('Escape');await expect(tools).toBeFocused();await tools.click();
-  await dialog.locator('details.workspace-more-tools > summary').click();
   for(const name of ['Workspaces','Terminal','Agents','Files','Sessions','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices']) {
-    const action=dialog.getByRole('button',{name,exact:true});await action.scrollIntoViewIfNeeded();await expect(action).toBeInViewport();
+    await openToolsPageWith(page,name);
+    const action=dialog.getByRole('button',{name,exact:true});await action.scrollIntoViewIfNeeded();await expect(action).toBeInViewport({ratio:1});
     expect((await action.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   }
   await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(tools).toBeFocused();
