@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
-  validateReceipt, releaseNotes, type ArtifactTarget } from '../.changeset/release-artifacts';
+  validateReceipt, releaseNotes, publishedTagVersions, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
@@ -170,6 +170,33 @@ test('initial notes include current development changes and explicit native limi
     await Bun.write(join(root, 'docs/install-and-update.md'), status);
     await expect(releaseNotes(root, version)).rejects.toThrow('native acceptance status');
   }
+}));
+
+test('notes carry the changes of prepared versions that were never published since the last published tag', () => fixture(async root => {
+  await mkdir(join(root, 'apps/client'), { recursive: true });
+  await mkdir(join(root, 'docs'));
+  await Bun.write(join(root, 'docs/install-and-update.md'), '# Install\n\n## Current native acceptance status\n\nNative gaps.\n');
+  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 1.21.0\n\nToolbar pages.\n\n## 1.20.1\n\nSkipped patch.\n\n'
+    + '## 1.20.0\n\nSkipped minor.\n\n## 1.19.0\n\nPublished earlier.\n\n## 1.18.0\n\nOlder release.\n');
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+      GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
+    expect(result.exitCode).toBe(0);
+  };
+  git('init', '-q', '-b', 'main');
+  git('commit', '-q', '--allow-empty', '-m', 'chore: release history');
+  for (const tag of ['v1.18.0', 'v1.19.0', 'v1.21.0', 'not-a-version', 'v2.0.0-rc.1']) git('tag', tag);
+  expect(publishedTagVersions(root).sort()).toEqual(['1.18.0', '1.19.0', '1.21.0']);
+  const notes = await releaseNotes(root, '1.21.0', false, publishedTagVersions(root));
+  const order = ['Toolbar pages.', 'Also included from 1.20.1', 'Skipped patch.', 'Also included from 1.20.0', 'Skipped minor.', 'Native gaps.']
+    .map(text => notes.indexOf(text));
+  expect(order.every(index => index >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  for (const text of ['Published earlier.', 'Older release.']) expect(notes).not.toContain(text);
+  // A release directly after a published version, or without any tags, keeps only its own section.
+  expect(await releaseNotes(root, '1.21.0', false, ['1.20.1'])).not.toContain('Also included');
+  expect(await releaseNotes(root, '1.21.0')).not.toContain('Also included');
 }));
 
 test('publication uploads a complete digest-acknowledged draft before making it public', () => fixture(async root => {
