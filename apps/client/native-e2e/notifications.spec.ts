@@ -1,10 +1,8 @@
 import {expect,it} from 'vitest';
-import {chmod,copyFile,mkdir} from 'node:fs/promises';
-import {dirname,join} from 'node:path';
-import {SshFixture} from '../../../tests/support/sshFixture';
+import type {SshFixture} from '../../../tests/support/sshFixture';
 import type {OwnedProcess} from '../../../tests/support/ownedProcess';
 import {NativeGui} from './fixture';
-import {challengeOwnedSsh,openOwnedSsh,ownedSshGui,workspaceAction} from './sshUi';
+import {challengeOwnedSsh,openOwnedSsh,ownedCompanionSsh,ownedSshGui,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 type ServerRecord={event:'ready'|'notify'|'close'|'invoked'|'rejected';id?:number;summary?:string;body?:string;actions?:string[];action?:string};
@@ -19,11 +17,7 @@ async function report(ssh:SshFixture,companion:string,event:Record<string,string
 }
 
 it('delivers inbox notifications to the desktop notification server, pauses them and opens the reporting session from the action',async()=>{
-  const source=process.env.LAZYSH_TEST_AGENT_BIN;
-  if(!source?.startsWith('/'))throw new Error('An owned current-source companion binary is required');
-  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
-  const companion=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
-  await mkdir(dirname(companion),{recursive:true,mode:0o700});await copyFile(source,companion);await chmod(companion,0o700);
+  const {ssh,companion}=await ownedCompanionSsh(fixture);
   await report(ssh,companion,{hook_event_name:'UserPromptSubmit'});
   const gui=fixture.gui=await NativeGui.start();
   const server=await gui.notificationServer();
