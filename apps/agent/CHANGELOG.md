@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.25.0
+
+### Patch Changes
+
+- Updated dependencies [a89a721]
+  - @lazysh/notification-client@1.25.0
+  - @lazysh/account-usage@1.25.0
+  - @lazysh/common@1.25.0
+
 ## 1.24.0
 
 ### Patch Changes
