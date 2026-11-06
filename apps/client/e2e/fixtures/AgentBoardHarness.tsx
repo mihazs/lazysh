@@ -4,7 +4,7 @@ import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src
 import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inactiveBoardDisplay} from '../../src/test/agentBoardData';
 
 /** Real board with synthetic host records and deliberately held native decisions. */
-export function mountAgentBoard(){
+export function mountAgentBoard(host?:{key:string;label:string}){
   const calls:{command:string;args:unknown}[]=[];
   let reports=[agentBoardRecord];
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
@@ -20,8 +20,8 @@ export function mountAgentBoard(){
     if(command==='board_keep_awake_status')return inactiveBoardDisplay;
     throw new Error('Unexpected agent board fixture command');
   }}});
-  const host=document.createElement('div');host.className='agent-board-fixture';
-  Object.assign(host.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(host);
-  const root=createRoot(host);root.render(<AgentPanel sessionId={agentBoardSession}/>);
-  return {calls,setReports(rows:typeof reports){reports=rows;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();host.remove();}};
+  const container=document.createElement('div');container.className='agent-board-fixture';
+  Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
+  const root=createRoot(container);root.render(<AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/>);
+  return {calls,setReports(rows:typeof reports){reports=rows;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
 }
