@@ -2388,7 +2388,7 @@ test('native toolbar paint observation distinguishes latched Shift from released
 });
 
 test('recorded companion preflight compares full protocol values independently of JSON object key order',async()=>{
-  const owner=await readFile(join(import.meta.dir,'support/androidSsh.ts'),'utf8');
+  const owner=await readFile(join(import.meta.dir,'support/recordedConversation.ts'),'utf8');
   const expression=owner.split("const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));")[1].split('\n  }')[0];
   const {isDeepStrictEqual}=await import('node:util');
   const source={agent:'codex',sessionId:'owned-session',messages:[{role:'user',text:'Original question\nwith interior whitespace'},{role:'assistant',text:'Original complete answer'}]};
