@@ -919,3 +919,70 @@ it('never mistakes filtered reports for an empty Activity setup failure',async()
   expect(screen.getByText(t('agentsNoMatches'))).toBeTruthy();
   expect(screen.queryByRole('button',{name:t('hooksTitle')})).toBeNull();
 });
+
+describe('project groups and archive', () => {
+  const report=(sessionId:string,project:string,summary:string,updatedAt:string)=>({...session,sessionId,project,state:'working',summary,updatedAt});
+  beforeEach(()=>localStorage.clear());
+  async function board(rows:{current:unknown[]}) {
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:rows.current}:{schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+  }
+  const groupNames=(state:string)=>within(screen.getByRole('region',{name:state})).getAllByRole('region').map(region=>region.getAttribute('aria-label'));
+  const refresh=async()=>{fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await act(async()=>{});};
+
+  it('groups each state by project on the connected host, newest project first', async () => {
+    await board({current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z'),report('b1','/work/docs','Docs one','2026-10-24T19:34:00Z'),report('a2','/work/api','API two','2026-10-24T19:33:00Z'),{...report('c1','/work/api','API done','2026-10-24T19:32:00Z'),state:'done'}]});
+    render(<AgentPanel sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
+    await screen.findByText('API one');
+    expect(groupNames('Working')).toEqual(['api on Build box','docs on Build box']);
+    expect(groupNames('Done')).toEqual(['api on Build box']);
+    const api=within(screen.getByRole('region',{name:'Working'})).getByRole('region',{name:'api on Build box'});
+    expect(Array.from(api.querySelectorAll('.agent-row-summary')).map(node=>node.textContent)).toEqual(['API one','API two']);
+  });
+
+  it('archives a report on this device until a newer event, and forgets it after age-out', async () => {
+    const rows={current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z'),report('b1','/work/docs','Docs one','2026-10-24T19:34:00Z')]};
+    await board(rows);
+    const view=render(<AgentPanel sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
+    await screen.findByText('API one');
+    fireEvent.click(screen.getByRole('button',{name:'Archive Claude Code report for api'}));
+    expect(screen.queryByText('API one')).toBeNull();
+    const toggle=screen.getByRole('button',{name:'Archived 1'});
+    expect(document.activeElement).toBe(toggle);
+    expect(screen.getByText('Showing 1 of 1 reported sessions')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(within(screen.getByRole('region',{name:'Archived reports'})).getByText('API one')).toBeTruthy();
+
+    view.unmount();
+    render(<AgentPanel sessionId="ssh-two" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
+    await screen.findByText('Docs one');
+    expect(screen.queryByText('API one')).toBeNull();
+    expect(screen.getByRole('button',{name:'Archived 1'})).toBeTruthy();
+
+    rows.current=[report('a1','/work/api','API again','2026-10-24T19:40:00Z'),rows.current[1]];
+    await refresh();
+    expect(screen.getByText('API again')).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/^Archived/})).toBeNull();
+    expect(JSON.parse(localStorage.getItem('lazysh.agentArchive.v1')??'{}')).toEqual({});
+
+    fireEvent.click(screen.getByRole('button',{name:'Archive Claude Code report for api'}));
+    fireEvent.click(screen.getByRole('button',{name:'Archived 1'}));
+    fireEvent.click(screen.getByRole('button',{name:'Restore Claude Code report for api'}));
+    expect(screen.getByText('API again')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Archive Claude Code report for api'}));
+    rows.current=[rows.current[1]];
+    await refresh();
+    expect(screen.queryByRole('button',{name:/^Archived/})).toBeNull();
+    expect(JSON.parse(localStorage.getItem('lazysh.agentArchive.v1')??'{}')).toEqual({});
+  });
+
+  it('keeps archives separate per host', async () => {
+    await board({current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z')]});
+    const view=render(<AgentPanel sessionId="ssh-one" hostKey="host-1" showHerdr={false}/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Archive Claude Code report for api'}));
+    view.unmount();
+    render(<AgentPanel sessionId="ssh-two" hostKey="host-2" showHerdr={false}/>);
+    expect(await screen.findByText('API one')).toBeTruthy();
+    expect(within(screen.getByRole('region',{name:'Working'})).getByRole('region',{name:'api'})).toBeTruthy();
+  });
+});

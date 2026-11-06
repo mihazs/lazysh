@@ -75,6 +75,8 @@ flow; the user must choose and confirm its destination explicitly.
 
 The displayed status is the last reported event, not proof that a process is still running. The visible Agents board refreshes every five seconds while the app is in the foreground; hidden boards and background windows do not start automatic reads. A pending snapshot is never duplicated, and Refresh remains available. Automatic refresh does not scan transcripts, load history or reload host settings. Respond to prompts in the live terminal until race-safe approvals are implemented.
 
+Within each state, the board groups reports by project on the connected host, most recently reported project first. **Archive** hides a report on this device only; **Archived N** lists archived reports with **Restore**. An archived report returns when its agent reports a newer event, and the archive forgets it once the companion ages the report out. Archives are stored per saved host on the device and are not synced or written to the host.
+
 ## Other agents and scripts
 
 Use the [generic lifecycle event protocol and storage reference](reference/companion-events.md) for schema, retention, WAL backups, filesystem admission and bounded syscall-observation evidence. For a reporting task, follow [configure the companion](how-to/configure-companion.md). Only configure hosts and agents you control.
