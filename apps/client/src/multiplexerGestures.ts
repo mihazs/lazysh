@@ -49,7 +49,8 @@ const levelDefaults: Record<'multiplexer' | 'plain', Partial<Record<GestureSlot,
   multiplexer: {twoLeft: 'nextTab', twoRight: 'previousTab', twoUp: 'nextPane', twoDown: 'previousPane', pinch: 'zoomPane', pullShallow: 'nextTab', pullDeep: 'nextSession'},
   plain: {twoLeft: 'nextSession', twoRight: 'previousSession', twoUp: 'openAgents', twoDown: 'openWorkspaces', pinch: 'fontSize', pullDeep: 'nextSession'},
 };
-export function resolveGesture(action: GestureAction, slot: GestureSlot | undefined, kind: MultiplexerKind | undefined): Exclude<GestureAction, 'auto'> {
-  if (action !== 'auto') return action;
-  return (slot && levelDefaults[kind ? 'multiplexer' : 'plain'][slot]) || 'none';
+/** A local terminal has no Agents, so a gesture bound to it stays inert there, matching its disabled toolbar key. */
+export function resolveGesture(action: GestureAction, slot: GestureSlot | undefined, kind: MultiplexerKind | undefined, local = false): Exclude<GestureAction, 'auto'> {
+  const resolved = action !== 'auto' ? action : (slot && levelDefaults[kind ? 'multiplexer' : 'plain'][slot]) || 'none';
+  return local && resolved === 'openAgents' ? 'none' : resolved;
 }

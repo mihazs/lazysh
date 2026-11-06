@@ -200,9 +200,11 @@ chord again to return to the terminal; on a wide screen the sidebar goes back to
 Connections. Both chords work from a focused terminal and never reach the shell,
 which keeps Ctrl+A and Ctrl+W. They do nothing while typing in another field or
 inside a dialog. The command palette shows them beside **Agents** and
-**Workspaces**. Agents needs a connected remote session, so the chord does
-nothing in the local terminal. The chords themselves are fixed; the gestures
-and toolbar keys below are configurable.
+**Workspaces**, and screen readers announce them as the commands' keyboard
+shortcuts. Agents needs a connected remote session, so in the local terminal
+Ctrl+Shift+A stays an ordinary terminal keypress, the Agents toolbar key is
+disabled and an Agents gesture does nothing. The chords themselves are fixed;
+the gestures and toolbar keys below are configurable.
 
 On a touch screen, a two-finger swipe up in a plain terminal opens Agents and a
 two-finger swipe down opens Workspaces. In tmux, Herdr and Zellij these swipes

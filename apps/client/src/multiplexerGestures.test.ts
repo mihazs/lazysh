@@ -31,4 +31,8 @@ it('resolves level-aware defaults by multiplexer presence and leaves explicit ch
   expect(resolveGesture('auto', undefined, 'tmux')).toBe('none');
   expect(resolveGesture('find', 'pullShallow', 'tmux')).toBe('find');
   expect(resolveGesture('none', 'twoLeft', undefined)).toBe('none');
+  // A local terminal has no Agents: the default and an explicit binding both stay inert; Workspaces still opens.
+  expect(resolveGesture('auto', 'twoUp', undefined, true)).toBe('none');
+  expect(resolveGesture('openAgents', 'pullDeep', undefined, true)).toBe('none');
+  expect(resolveGesture('auto', 'twoDown', undefined, true)).toBe('openWorkspaces');
 });

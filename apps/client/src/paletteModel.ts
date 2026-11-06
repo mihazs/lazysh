@@ -1,4 +1,5 @@
 /** Pure command palette model: matching, ranking and keyboard selection. */
+import type {ChordHint} from './keyboard';
 export type PaletteGroup = 'host' | 'session' | 'tool' | 'action';
 export type PaletteCommand = Readonly<{
   id: string;
@@ -6,7 +7,7 @@ export type PaletteCommand = Readonly<{
   label: string;
   detail?: string;
   /** The hardware chord that runs this command outside the palette. */
-  shortcut?: string;
+  shortcut?: ChordHint;
   keywords?: readonly string[];
   current?: boolean;
   disabled?: boolean;

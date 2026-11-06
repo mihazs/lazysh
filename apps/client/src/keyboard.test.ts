@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { appShortcut, navigationShortcut, paletteShortcut, shiftedChordLabel } from "./keyboard";
+import { appShortcut, navigationShortcut, paletteShortcut, shiftedChordHint } from "./keyboard";
 afterEach(() => {document.body.innerHTML = "";});
 function shortcut(key: string, target: Element = document.body, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {key, ctrlKey: true, bubbles: true, cancelable: true, ...options});
@@ -68,7 +68,7 @@ describe("hardware app shortcuts", () => {
     expect(shortcut("w", terminal)).toEqual({action: "closeSession"});
   });
   it("labels Ctrl+Shift chords for the platform", () => {
-    expect(shiftedChordLabel("A", false)).toBe("Ctrl+Shift+A");
-    expect(shiftedChordLabel("W", true)).toBe("⌘⇧W");
+    expect(shiftedChordHint("A", false)).toEqual({label: "Ctrl+Shift+A", keys: "Control+Shift+A"});
+    expect(shiftedChordHint("W", true)).toEqual({label: "⌘⇧W", keys: "Meta+Shift+W"});
   });
 });

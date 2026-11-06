@@ -513,7 +513,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (activeRef.current && mounted.current && access.current() && !document.hidden && !document.querySelector('[role="dialog"][aria-modal="true"]')) runGesture(preferences.bodyGestures[depth], depth);
   };
   // Without a pull action the header keeps its native touch scrolling.
-  const pulls = (['pullShallow', 'pullDeep'] as const).some(depth => resolveGesture(preferences.bodyGestures[depth], depth, multiplexer) !== "none");
+  const pulls = (['pullShallow', 'pullDeep'] as const).some(depth => resolveGesture(preferences.bodyGestures[depth], depth, multiplexer, session.local) !== "none");
   useEffect(() => {
     const header = controlsTarget?.closest('header');
     if (!header || !active || preferences.screenReader || !pulls) return;
@@ -555,7 +555,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       setPull(null);
     };
   }, [controlsTarget, active, preferences.screenReader, session.id, pulls]);
-  const pullAction = pull ? resolveGesture(preferences.bodyGestures[pull], pull, multiplexer) : "none";
+  const pullAction = pull ? resolveGesture(preferences.bodyGestures[pull], pull, multiplexer, session.local) : "none";
 
   useEffect(() => {
     const element = container.current;
@@ -853,7 +853,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     followLive();
   }
   function runGesture(requested: GestureAction, slot?: GestureSlot, keys = slot ? preferences.gestureChords[slot] : undefined) {
-    const action = resolveGesture(requested, slot, multiplexer);
+    const action = resolveGesture(requested, slot, multiplexer, session.local);
     if (isMultiplexerAction(action)) {runMultiplexer(action); return;}
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {

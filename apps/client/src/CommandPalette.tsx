@@ -53,12 +53,12 @@ export default function CommandPalette({commands, query, onQuery, onDone, note}:
         const Icon = groupIcons[command.group];
         return <li key={command.id} id={optionId(index)} role="option" aria-selected={index === active}
           aria-disabled={command.disabled || undefined} title={command.disabled ? command.reason : undefined}
-          data-current={command.current || undefined}
+          data-current={command.current || undefined} aria-keyshortcuts={command.shortcut?.keys}
           onPointerMove={() => { if (!command.disabled && index !== active) setSelection({query, index}); }}
           onMouseDown={event => event.preventDefault()} onClick={() => run(command)}>
           <Icon size={17} aria-hidden="true"/>
           <span className="command-palette-text"><strong>{command.label}</strong>{command.detail && <small>{command.detail}</small>}</span>
-          {command.shortcut && <kbd className="command-palette-shortcut">{command.shortcut}</kbd>}
+          {command.shortcut && <kbd className="command-palette-shortcut" aria-hidden="true">{command.shortcut.label}</kbd>}
           <span className="command-palette-group">{command.current ? t('paletteCurrent') : groupLabel(command.group)}</span>
         </li>;
       })}

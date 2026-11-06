@@ -1379,14 +1379,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
   const pickerInFlight=pickerVisible && (pickerState?.owner!==currentPickerOwner || pickerState.busy);
-  function showNavigation(mode:NavigationMode) {
+  /** Returns false when the current connection cannot show `mode`. */
+  function showNavigation(mode:NavigationMode):boolean {
     agentDrawerOffset.current=undefined;
-    if(mode!=='connections' && pendingMuxRequest)return;
-    if(mode==='agents' && !remoteActive)return;
+    if(mode!=='connections' && pendingMuxRequest)return false;
+    if(mode==='agents' && !remoteActive)return false;
     const id=activeId??'';
     setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
     if(mode!=='connections'){if(view!=='terminal')rememberContext();setView('terminal');}
     setSidebar(true);
+    return true;
   }
   /** Leaves Agents or Workspaces for the terminal, as the destination heading's back control does. */
   function returnToTerminal(focusConnections:boolean) {
@@ -1394,11 +1396,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else setSidebar(false);
     setView('terminal');
   }
-  /** Shortcuts, gestures and toolbar keys open a view for the current connection, or return to the terminal when it is open. */
-  function toggleNavigation(mode:NavigationShortcut) {
-    if(!active || navigationCovered)return;
-    if(sidebarShown && view==='terminal' && navigationEntry.mode===mode)returnToTerminal(false);
-    else showNavigation(mode);
+  /**
+   * Shortcuts, gestures and toolbar keys open a view for the current connection, or return to the terminal when it is open.
+   * Returns false when nothing changed, so an unclaimed chord still reaches the shell.
+   */
+  function toggleNavigation(mode:NavigationShortcut):boolean {
+    if(!active || navigationCovered)return false;
+    if(sidebarShown && view==='terminal' && navigationEntry.mode===mode){returnToTerminal(false);return true;}
+    return showNavigation(mode);
   }
   const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
   useCapturedShortcut(navigationShortcut,toggleNavigation);

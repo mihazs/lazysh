@@ -40,20 +40,24 @@ export function navigationShortcut(event: KeyboardEvent): NavigationShortcut | u
   return (Object.keys(navigationShortcutKeys) as NavigationShortcut[]).find(view => navigationShortcutKeys[view].toLowerCase() === key);
 }
 
+/** A chord as shown to sighted users (`label`) and as `aria-keyshortcuts` announces it (`keys`). */
+export type ChordHint = Readonly<{label: string; keys: string}>;
 /** How a Ctrl/Cmd+Shift chord reads on this platform, as shown beside palette commands. */
-export function shiftedChordLabel(key: string, apple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)): string {
-  return apple ? `⌘⇧${key}` : `Ctrl+Shift+${key}`;
+export function shiftedChordHint(key: string, apple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)): ChordHint {
+  return apple ? {label: `⌘⇧${key}`, keys: `Meta+Shift+${key}`} : {label: `Ctrl+Shift+${key}`, keys: `Control+Shift+${key}`};
 }
 
-/** Runs `run` for chords `match` accepts, in the capture phase, before the terminal can consume them. */
-export function useCapturedShortcut<T>(match: (event: KeyboardEvent) => T | undefined | false, run: (value: T) => void) {
+/**
+ * Runs `run` for chords `match` accepts, in the capture phase, before the terminal can consume them.
+ * When `run` returns false it did not act, so the chord reaches the terminal as if unclaimed.
+ */
+export function useCapturedShortcut<T>(match: (event: KeyboardEvent) => T | undefined | false, run: (value: T) => boolean | void) {
   const latest = useRef({match, run}); latest.current = {match, run};
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const value = latest.current.match(event);
-      if (value === undefined || value === false) return;
+      if (value === undefined || value === false || latest.current.run(value) === false) return;
       event.preventDefault(); event.stopPropagation();
-      latest.current.run(value);
     };
     window.addEventListener('keydown', keydown, true);
     return () => window.removeEventListener('keydown', keydown, true);

@@ -2841,8 +2841,6 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
 
-    // The target-UID-only synthetic provider exists only in the instrumentation APK.
-    // Reads use the normal foreground Attachments action; this never uploads.
     // The toolbar editor's Agents and Workspaces keys open each view for the real
     // connection, and the destination heading's back control returns to the terminal.
     private fun verifyNavigationToolbarKeys(scenario: ActivityScenario<MainActivity>) {
@@ -2870,6 +2868,8 @@ class NativeWorkspaceTest {
         println("lazysh navigation: Agents and Workspaces toolbar keys opened and returned through the real UI")
     }
 
+    // The target-UID-only synthetic provider exists only in the instrumentation APK.
+    // Reads use the normal foreground Attachments action; this never uploads.
     private fun verifyOwnedClipboardImages(scenario: ActivityScenario<MainActivity>, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.context

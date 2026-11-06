@@ -1,5 +1,6 @@
 import {expect,test,type Page,type TestInfo} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
+import {installLocalTerminal} from './fixtures/localTerminal';
 
 type Call={command:string;args:Record<string,unknown>};
 declare global {interface Window {navigationCalls:Call[]}}
@@ -46,6 +47,20 @@ async function expectOpen(page:Page,phone:boolean,name:'Agents'|'Workspaces') {
   await expect(mode(page,name==='Agents'?'Agents navigation':'Workspaces')).toHaveAttribute('aria-current','page');
   if(phone)await expect(page.locator('.sidebar')).toHaveClass(/sidebar-open/);
 }
+/** Vertical two-finger swipes across the visible terminal, through real touch input. */
+async function twoFingerSwipes(page:Page,phone:boolean) {
+  const cdp=await page.context().newCDPSession(page);
+  if(!phone)await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});
+  const swipe=async(dy:number)=>{
+    const box=(await page.locator('.terminal-canvas:visible').boundingBox())!;
+    const x=box.x+box.width/2,y=box.y+box.height/2;
+    const fingers=(offset:number)=>[{x:x-40,y:y+offset,id:0},{x:x+40,y:y+offset,id:1}];
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(0)});
+    for(let step=1;step<=8;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(dy*step/8)});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  };
+  return {swipe,cdp};
+}
 /** Back at the terminal: the phone drawer is closed, and a wide sidebar shows Connections again. */
 async function expectTerminal(page:Page,phone:boolean) {
   if(phone){await expect(page.locator('.sidebar')).not.toHaveClass(/sidebar-open/);await expect(heading(page)).not.toBeInViewport();}
@@ -81,6 +96,9 @@ test('the command palette lists the Agents and Workspaces chords',async({page},t
   for(const [label,chord] of [['Agents','Ctrl+Shift+A'],['Workspaces','Ctrl+Shift+W']]){
     const option=palette.getByRole('option').filter({has:page.getByText(label,{exact:true})});
     await expect(option.locator('kbd')).toHaveText(chord);
+    // Assistive technology hears the chord as a shortcut, not as part of the option's name.
+    await expect(option).toHaveAttribute('aria-keyshortcuts',chord.replace('Ctrl','Control'));
+    await expect(option).not.toHaveAccessibleName(new RegExp(chord.replaceAll('+','\\+')));
   }
   // Inside the palette's own field the chord is not taken.
   await page.keyboard.press('Control+Shift+A');
@@ -91,16 +109,7 @@ test('the command palette lists the Agents and Workspaces chords',async({page},t
 test('two-finger swipes up and down in a plain terminal open Agents and Workspaces',async({page},testInfo)=>{
   const phone=testInfo.project.name==='phone';
   await openConnectedTerminal(page,testInfo);
-  const cdp=await page.context().newCDPSession(page);
-  if(!phone)await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});
-  const swipe=async(dy:number)=>{
-    const box=(await page.locator('.terminal-canvas:visible').boundingBox())!;
-    const x=box.x+box.width/2,y=box.y+box.height/2;
-    const fingers=(offset:number)=>[{x:x-40,y:y+offset,id:0},{x:x+40,y:y+offset,id:1}];
-    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(0)});
-    for(let step=1;step<=8;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(dy*step/8)});
-    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-  };
+  const {swipe,cdp}=await twoFingerSwipes(page,phone);
   for(const [dy,name] of [[-120,'Agents'],[120,'Workspaces']] as const){
     await swipe(dy);
     await expectOpen(page,phone,name);
@@ -125,4 +134,32 @@ test('Agents and Workspaces toolbar keys open their views and return',async({pag
     await expectTerminal(page,phone);
   }
   expect(await typed(page)).toEqual([]);
+});
+
+test('in a local terminal, which has no Agents, the Agents chord and swipe stay with the shell',async({page},testInfo)=>{
+  const phone=testInfo.project.name==='phone';
+  await installLocalTerminal(page);
+  await page.goto('/');
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  const canvas=page.locator('.terminal-canvas:visible');
+  await expect(canvas.locator('.xterm-screen')).toBeVisible();
+  if(!phone){
+    await canvas.click();
+    // Unclaimed, the chord stays an ordinary terminal keypress: it reaches the terminal's own handlers unprevented, and nothing opens.
+    const reached=page.evaluate(()=>new Promise(resolve=>{
+      const input=document.querySelector('.terminal-canvas .xterm-helper-textarea')!;
+      const seen=(event:Event)=>{if((event as KeyboardEvent).key.toLowerCase()!=='a')return;input.removeEventListener('keydown',seen);resolve({prevented:event.defaultPrevented});};
+      input.addEventListener('keydown',seen);
+    }));
+    await page.keyboard.press('Control+Shift+A');
+    expect(await reached).toEqual({prevented:false});
+    await expect(heading(page)).toHaveCount(0);
+  }
+  const {swipe,cdp}=await twoFingerSwipes(page,phone);
+  await swipe(-120);
+  await page.waitForTimeout(300);
+  await expect(heading(page)).toHaveCount(0);
+  await expect(canvas.locator('.xterm-screen')).toBeInViewport();
+  await cdp.detach();
 });
