@@ -31,9 +31,15 @@ const fromBottom=(viewport:Locator)=>viewport.evaluate(node=>node.scrollHeight-n
 /** The agent redraws its menu and the reader is left one screen up in history, looking at the earlier copy. */
 async function readStaleMenu(page:Page,viewport:Locator) {
   const rows=page.locator('.terminal-canvas:visible .xterm-rows');
-  await page.evaluate(()=>(Reflect.get(window,'agentRedraw') as ()=>void)());
+  // xterm 5.5 follows the redraw by moving the viewport itself and ignores the next scroll event, so a reader
+  // scroll landing before that event is dispatched is swallowed (the view stays live). Read only after xterm's own follow.
+  await viewport.evaluate(node=>{
+    Reflect.set(window,'agentFollowed',new Promise(resolve=>node.addEventListener('scroll',resolve,{once:true})));
+    (Reflect.get(window,'agentRedraw') as ()=>void)();
+  });
   // The live screen now holds only the redrawn menu; the earlier copy sits after the history in scrollback.
   await expect(rows).not.toContainText('history 119');
+  await page.evaluate(async()=>{await (Reflect.get(window,'agentFollowed') as Promise<unknown>);});
   await expect.poll(()=>fromBottom(viewport)).toBe(0);
   await viewport.evaluate(node=>{node.scrollTop-=node.clientHeight;});
   await expect(rows).toContainText('history 119');
@@ -59,5 +65,5 @@ for(const via of ['toolbar','chord button','keyboard'] as const) test(`${via} En
   await expect(rows).toContainText('ANSWER_DONE');
   await expect(rows).toContainText('agent reply 59');
   await expect(rows).not.toContainText('Pick a color');
-  expect(await fromBottom(viewport)).toBe(0);
+  await expect.poll(()=>fromBottom(viewport)).toBe(0);
 });
