@@ -176,3 +176,23 @@ test('a quick touch swipe over the keys scrolls the settings page instead of dra
   await expect(page.locator('.toolbar-drag-ghost')).toHaveCount(0);
   expect(await stored(page)).toEqual(['esc','ctrl','tab']);
 });
+
+test('adding keys from the palette keeps the full-page Preferences close control on screen and tappable',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Only the phone page presentation pins the heading above its own scrolling body.');
+  await openApp(page,['esc','ctrl','tab','left','right','up','down']);
+  await openToolbarSettings(page);
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  // Each add moves focus to the next palette key, which sits below the first screen of the page.
+  for(const key of ['Shift','enter'])await dialog.getByRole('button',{name:`Add ${key}`,exact:true}).click();
+  expect(await stored(page)).toEqual(['esc','ctrl','tab','left','right','up','down','shift','enter']);
+  const close=dialog.getByRole('button',{name:'Close Preferences',exact:true});
+  const box=(await close.boundingBox())!;
+  const viewport=page.viewportSize()!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x+box.width).toBeLessThanOrEqual(viewport.width);
+  // A finger at the control's on-screen centre reaches it without any page scrolling first.
+  const hit=await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.closest('button')?.getAttribute('aria-label')??null,{x:box.x+box.width/2,y:box.y+box.height/2});
+  expect(hit).toBe('Close Preferences');
+  await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
+  await expect(dialog).toHaveCount(0);
+});
