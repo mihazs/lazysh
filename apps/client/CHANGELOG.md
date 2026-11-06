@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.20.0
+
+### Minor Changes
+
+- fcd7063: Split the terminal toolbar into a Tools page and a Snippets page that slide horizontally, with page indicators, overscroll-to-next-page and a remembered last page.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.20.0
+  - @lazysh/common@1.20.0
+  - @lazysh/display-idle@1.20.0
+  - @lazysh/et-transport@1.20.0
+  - @lazysh/mosh-transport@1.20.0
+
 ## 1.19.0
 
 ### Minor Changes
