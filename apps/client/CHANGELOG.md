@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.26.0
+
+### Minor Changes
+
+- aea6aab: Save attachments to a private, uniquely named file under the host's `/tmp` by default instead of the login directory; an explicit destination path still saves there.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.26.0
+  - @lazysh/common@1.26.0
+  - @lazysh/display-idle@1.26.0
+  - @lazysh/et-transport@1.26.0
+  - @lazysh/mosh-transport@1.26.0
+
 ## 1.25.1
 
 ### Patch Changes
