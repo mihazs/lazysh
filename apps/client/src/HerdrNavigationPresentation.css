@@ -1,6 +1,3 @@
-.herdr-navigation-tree ul { margin-left: 8px; padding-left: 5px; }
-.herdr-navigation .herdr-navigation-heading { gap: 3px; }
-.herdr-navigation .herdr-navigation-heading > .subtle-button { flex: 0 0 44px; }
 .herdr-navigation header h3 { font-size: 16px; }
 .herdr-navigation .herdr-agent-row small { font-size: 11px; line-height: 1.4; }
 .herdr-navigation .herdr-shared-focus-note { margin-block: 4px 8px; }
@@ -21,12 +18,6 @@
 .herdr-navigation [data-agent-status=blocked] > span::before { background: var(--theme-warning); }
 .herdr-navigation .herdr-navigation-row[data-current=true] { outline: 1px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: -1px; }
 .herdr-navigation[data-mode=agents] h4 { margin: 18px 2px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree { margin: 8px 0; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree > li { margin-bottom: 16px; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading { border-bottom: 1px solid color-mix(in srgb, var(--theme-border) 45%, transparent); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading .herdr-navigation-row { background: transparent; border: 0; border-radius: 0; min-height: 48px; }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul { margin-top: 4px; margin-left: 8px; padding-left: 12px; border-color: color-mix(in srgb, var(--theme-border) 40%, transparent); }
-.herdr-navigation[data-mode=spaces] .herdr-navigation-tree ul ul .herdr-navigation-row { background: transparent; border: 0; border-radius: 6px; min-height: 52px; }
 .herdr-navigation > header { position: relative; }
 .herdr-navigation > header .herdr-shared-focus-note { margin: 0; flex: 0 0 44px; }
 .herdr-navigation > header .herdr-shared-focus-note summary { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0; border-radius: 8px; list-style: none; }
@@ -38,5 +29,3 @@
 .herdr-navigation[data-mode=agents] [data-agent-status=blocked] > span::before { background: var(--theme-warning); }
 .herdr-navigation[data-mode=agents] .herdr-navigation-row[data-current=true] { outline: 0; }
 .herdr-navigation[data-mode=agents] .herdr-agent-row:has([data-current=true]) { border-color: color-mix(in srgb, var(--accent) 65%, var(--theme-border)); }
-
-.herdr-navigation[data-mode=spaces] .herdr-navigation-heading .herdr-navigation-row[data-current=true] { outline: 0; }

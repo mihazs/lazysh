@@ -1,5 +1,4 @@
-.herdr-create-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-bottom: 8px; }
-.herdr-navigation .herdr-create-worktree { flex: 0 0 44px; min-width: 44px; min-height: 44px; }
+.herdr-create-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; }
 .herdr-create .dialog { max-width: 560px; }
 .herdr-create .form-stack { min-width: 0; }
 .herdr-create code, .herdr-create p { overflow-wrap: anywhere; }

@@ -1,4 +1,4 @@
-import {CornerLeftUp,FolderOpen,FolderPlus,GitBranchPlus,X} from 'lucide-react';
+import {CornerLeftUp,Ellipsis,FolderOpen,FolderPlus,GitBranchPlus,X} from 'lucide-react';
 import {useEffect,useMemo,useRef,useState,type FormEvent,type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {bindProtectedInvoke,type AccessLease} from './access';
@@ -32,17 +32,30 @@ export function HerdrWorkspaceCreate(props:Shared) {
     {open && <CreateFlow {...props} close={()=>setOpen(false)}/>}
   </>;
 }
-/** Offered on workspaces with a reported directory; the dialog checks that it is in a Git repository. */
-export function HerdrWorktreeCreate({workspace,...props}:Shared&{tree:HerdrTree;workspace:{workspace_id:string;label:string}}) {
+/** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
+export function HerdrSpaceActions({workspace,open,onOpenChange,...props}:Shared&{tree:HerdrTree;workspace:{workspace_id:string;label:string};open:boolean;onOpenChange:(open:boolean)=>void}) {
   useUi();
-  const [open,setOpen]=useState(false);
+  const [creating,setCreating]=useState(false);
+  const trigger=useRef<HTMLButtonElement>(null),menu=useRef<HTMLDivElement>(null);
+  const change=useRef(onOpenChange);change.current=onOpenChange;
+  useEffect(()=>{
+    if(!open)return;
+    menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const back=(event:Event)=>{event.preventDefault();event.stopImmediatePropagation();change.current(false);trigger.current?.focus();};
+    window.addEventListener('lazysh-workspace-back',back,true);
+    return()=>window.removeEventListener('lazysh-workspace-back',back,true);
+  },[open]);
   const directory=workspaceDirectory(props.tree,workspace.workspace_id);
   if(!directory)return null;
-  const title=t('herdrCreateWorktree',{name:workspace.label});
-  return <>
-    <button className="icon-button herdr-create-worktree" disabled={props.disabled} title={title} aria-label={title} onClick={()=>setOpen(true)}><GitBranchPlus size={17} aria-hidden="true"/></button>
-    {open && <CreateFlow {...props} source={{...workspace,directory}} close={()=>setOpen(false)}/>}
-  </>;
+  const name=t('herdrSpaceActions',{name:workspace.label});
+  return <div className="herdr-space-actions" onBlur={event=>{if(open && !event.currentTarget.contains(event.relatedTarget))onOpenChange(false);}}
+    onKeyDownCapture={event=>{if(open && event.key==='Escape'){event.preventDefault();event.stopPropagation();onOpenChange(false);trigger.current?.focus();}}}>
+    <button ref={trigger} type="button" className="icon-button" title={name} aria-label={name} aria-haspopup="menu" aria-expanded={open} disabled={props.disabled} onClick={()=>onOpenChange(!open)}><Ellipsis size={18} aria-hidden="true"/></button>
+    {open && <div ref={menu} className="herdr-space-menu" role="menu" aria-label={name}>
+      <button type="button" role="menuitem" disabled={props.disabled} onClick={()=>{trigger.current?.focus();onOpenChange(false);setCreating(true);}}><GitBranchPlus size={17} aria-hidden="true"/>{t('herdrCreateWorktree',{name:workspace.label})}</button>
+    </div>}
+    {creating && <CreateFlow {...props} source={{...workspace,directory}} close={()=>setCreating(false)}/>}
+  </div>;
 }
 
 function Modal({title,close,step,children}:{title:string;close:()=>void;step:string;children:ReactNode}) {

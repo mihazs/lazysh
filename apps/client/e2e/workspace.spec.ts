@@ -1112,6 +1112,30 @@ for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable
 });
 
 
+test('a space menu in the real Workspaces sidebar closes alone on Escape and Android back',async({page},testInfo)=>{
+  await openClockedNavigation(page);const phone=testInfo.project.name==='phone';
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  // A new desktop terminal takes focus once it is ready; let it settle so it cannot close the menu under test.
+  if(!phone)await expect(page.getByRole('textbox',{name:'Terminal input',exact:true})).toBeFocused();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Workspaces',exact:true}).click();
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  const more=live.getByRole('button',{name:'More actions for Development',exact:true});
+  const menu=page.getByRole('menu',{name:'More actions for Development',exact:true});
+  for(const close of ['Escape','back'] as const) {
+    await more.click();
+    await expect(menu.getByRole('menuitem',{name:'New worktree from Development',exact:true})).toBeFocused();
+    if(close==='Escape')await page.keyboard.press('Escape');
+    else await page.evaluate(()=>window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})));
+    await expect(menu,close).toHaveCount(0);
+    await expect(live,close).toBeVisible();
+    await expect(more,close).toBeFocused();await expect(more).toHaveAttribute('aria-expanded','false');
+  }
+  // With the menu closed, Escape keeps its sidebar meaning on phones.
+  if(phone){await page.keyboard.press('Escape');await expect(live).toBeHidden();await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();}
+});
+
 test('Workspaces keeps three long app sessions compact while mobile pane choices stay in view',async({page},testInfo)=>{
   const phone=testInfo.project.name==='phone';await page.setViewportSize({width:phone?393:1200,height:852});
   const names=['Desktop development with a long connection name','Desktop development with a long connection name / review','Desktop development with a long connection name / review / agents'];

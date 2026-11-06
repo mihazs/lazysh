@@ -24,14 +24,14 @@ const tree={
 };
 
 /** Real Herdr Spaces view and creation dialog over a recorded synthetic bridge. */
-export function mountHerdrCreate(options:{outcome?:Record<string,unknown>}={}) {
+export function mountHerdrCreate(options:{outcome?:Record<string,unknown>;tree?:unknown;hostLabel?:string;sidebar?:boolean}={}) {
   const calls:{command:string;args:Record<string,unknown>}[]=[];
   const navigations:HerdrNavigationTarget[]=[];
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic Herdr creation authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'d'.repeat(64)});acknowledgeAccessReady(accessSnapshot().epoch);
   Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:Record<string,unknown>)=>{
     calls.push({command,args});
     if(command==='multiplexer_sessions')return [{name:'default'}];
-    if(command==='herdr_tree')return tree;
+    if(command==='herdr_tree')return options.tree??tree;
     if(command==='list_directory')return args.path==='/'?[{name:'srv',isDir:true,size:0},{name:'.hidden',isDir:true,size:0},{name:'notes.txt',isDir:false,size:3}]:args.path==='/srv'?[{name:'api',isDir:true,size:0}]:[];
     if(command==='herdr_repository')return {root:'/srv/app',main:'/srv/app',head:'main',detached:false,worktrees:['/srv/app','/srv/app-worktrees/old']};
     if(command==='herdr_agent_kinds')return [{kind:'codex',label:'Codex',executable:'codex',prompt:true},{kind:'opencode',label:'OpenCode',executable:'opencode',prompt:false}];
@@ -41,7 +41,9 @@ export function mountHerdrCreate(options:{outcome?:Record<string,unknown>}={}) {
   }}});
   const host=document.createElement('div');host.className='herdr-create-fixture';Object.assign(host.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'20',background:'var(--background)',padding:'12px'});document.body.append(host);
   const root=createRoot(host);
-  root.render(<HerdrNavigation sessionId="herdr-create-host" hostLabel="builder" herdrSession="default" visible mode="spaces"
-    onNavigate={async(_server,target)=>{navigations.push(target);}} onAttach={async()=>{throw new Error('No attach');}} onClose={()=>{}}/>);
+  const view=<HerdrNavigation sessionId="herdr-create-host" hostLabel={options.hostLabel??'builder'} herdrSession="default" visible mode="spaces"
+    onNavigate={async(_server,target)=>{navigations.push(target);}} onAttach={async()=>{throw new Error('No attach');}} onClose={()=>{}}/>;
+  // The sidebar option places the view in the app's Workspaces sidebar so its shared grid and widths apply.
+  root.render(options.sidebar?<aside className="sidebar sidebar-open" data-navigation="workspaces">{view}</aside>:view);
   return {calls,navigations,dispose(){root.unmount();host.remove();}};
 }
