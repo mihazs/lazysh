@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.23.0
+
+### Minor Changes
+
+- 1bd1e51: Rebuild Preferences as a grouped settings list with section headers, value previews, sub-pages, action rows for related surfaces and a settings search.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.23.0
+  - @lazysh/common@1.23.0
+  - @lazysh/display-idle@1.23.0
+  - @lazysh/et-transport@1.23.0
+  - @lazysh/mosh-transport@1.23.0
+
 ## 1.22.0
 
 ### Minor Changes
