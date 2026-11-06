@@ -1991,8 +1991,14 @@ class NativeWorkspaceTest {
               const result=ownedMoshHistory(root),rows=owned?Array.from(root.querySelectorAll('.xterm-rows > div')):[];
               const cursor=rows.findIndex(row=>row.querySelector('.xterm-cursor'));
               const editor=owned?root.querySelector('.xterm-helper-textarea'):null,viewport=window.visualViewport;
+              // A row is shown when it lies inside the clipped pane and above the soft keyboard.
+              const box=owned?pane.getBoundingClientRect():null,screen=owned?root.querySelector('.xterm-screen'):null;
+              const shown=row=>{const r=row.getBoundingClientRect();return r.height>0&&r.top>=box.top-0.5&&r.bottom<=box.bottom+0.5&&
+                (!viewport||(r.top>=viewport.offsetTop-0.5&&r.bottom<=viewport.offsetTop+viewport.height+0.5));};
               const sheet=owned?pane.parentElement?.querySelector(':scope > .terminal-composer-sheet'):null,cover=sheet?.getBoundingClientRect();
               return {...result,owned,cursorRow:cursor<0?null:cursor,domRows:rows.length,
+                cursorShown:cursor>=0&&shown(rows[cursor]),newestShown:rows.some(row=>row.textContent.includes('OWNED_MOSH_ROW_511')&&shown(row)),
+                panned:Boolean(screen&&screen.style.transform),
                 composing:Boolean(sheet&&cover.height>0&&document.activeElement===sheet.querySelector('textarea')&&pane.hasAttribute('inert')&&
                   sheet.contains(document.elementFromPoint(cover.left+cover.width/2,cover.top+cover.height/2))),
                 painted:rows.some(row=>/OWNED_MOSH_ROW_[0-9]{3}/.test(row.textContent)),
@@ -2029,7 +2035,7 @@ class NativeWorkspaceTest {
                         imeVisible != null && (keyboard == null || imeVisible == keyboard)
                 }
                 val state = JSONObject(evaluate(scenario, observation, remaining.coerceAtMost(1000)))
-                require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "domRows", "composing", "painted", "editable", "centerOwned"))
+                require(state.keys().asSequence().toSet() == setOf("valid", "rows", "historyRows", "owned", "cursorRow", "domRows", "composing", "painted", "editable", "centerOwned", "cursorShown", "newestShown", "panned"))
                 last = state.toString().also { require(it.length <= 256) } + " ime=$imeVisible ready=$ready dismissals=$dismissals"
                 val now = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
                 if (dismissKeyboard && keyboard == false && dismissals < 3 && shown.admit(now, imeVisible == true, "ime")) {
@@ -2043,7 +2049,7 @@ class NativeWorkspaceTest {
                 val matches = ready && state.getBoolean("owned") && state.getBoolean("painted") && state.getBoolean("composing") == covered &&
                     (covered || (state.getBoolean("valid") && (history < 0 || state.getInt("historyRows") == history))) && accept(state)
                 if (settled.admit(now, matches, "$state ime=$imeVisible") && System.nanoTime() < deadline) {
-                    println("lazysh Mosh resize: phase=$stage rows=${state.opt("rows")} domRows=${state.getInt("domRows")} cursor=${state.opt("cursorRow")} history=${state.opt("historyRows")} keyboard=$imeVisible")
+                    println("lazysh Mosh resize: phase=$stage rows=${state.opt("rows")} domRows=${state.getInt("domRows")} cursor=${state.opt("cursorRow")} history=${state.opt("historyRows")} keyboard=$imeVisible cursorShown=${state.getBoolean("cursorShown")} newestShown=${state.getBoolean("newestShown")} panned=${state.getBoolean("panned")}")
                     return state
                 }
                 val pause = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtMost(50)
@@ -2060,23 +2066,26 @@ class NativeWorkspaceTest {
             """) == "true"
             assertTrue("Mosh resize owns only its original document and terminal", installed)
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
-            val baseline = awaitPhase("baseline", false, dismissKeyboard = true) { it.getBoolean("editable") && it.getBoolean("centerOwned") && !it.isNull("cursorRow") }
+            val baseline = awaitPhase("baseline", false, dismissKeyboard = true) { it.getBoolean("editable") && it.getBoolean("centerOwned") && !it.isNull("cursorRow") && it.getBoolean("cursorShown") }
             history = baseline.getInt("historyRows")
             // Espresso's ordinary native center tap is admitted only when the
             // current document proves that center belongs to its original xterm.
             onView(isAssignableFrom(WebView::class.java)).perform(click())
-            val keyboard = awaitPhase("keyboard-shrink", true) { it.getInt("rows") < baseline.getInt("rows") && it.getInt("rows") <= baseline.getInt("cursorRow") }
+            // mosh-server shrinks from the top, dropping the bottom rows where the newest output
+            // and the cursor are. The keyboard covers them instead: the remote screen keeps its
+            // rows and the pane pans, so the cursor row and the newest output stay on screen.
+            fun kept(state: JSONObject) = state.getInt("rows") == baseline.getInt("rows") && state.optInt("cursorRow", -1) == baseline.getInt("cursorRow") &&
+                state.getBoolean("cursorShown") && (!baseline.getBoolean("newestShown") || state.getBoolean("newestShown"))
+            awaitPhase("keyboard-hold", true) { kept(it) && it.getBoolean("panned") }
             device.pressBack()
-            val expanded = awaitPhase("keyboard-grow", false) { it.getInt("rows") > keyboard.getInt("rows") }
+            val expanded = awaitPhase("keyboard-release", false) { kept(it) && !it.getBoolean("panned") }
             button("Compose")
             // The sheet covers the output and pauses fitting: the soft keyboard it raises must
             // leave the original terminal rows, and so the remote Mosh size, unchanged.
             awaitPhase("compose-cover", true, covered = true) { it.getInt("domRows") == expanded.getInt("rows") }
             button("Close composer")
-            // Closing refits to the current viewport: fewer rows while the keyboard stays up, else the original rows.
-            awaitPhase("compose-refit", null) {
-                if (phaseIme == true) it.getInt("rows") < expanded.getInt("rows") else it.getInt("rows") == expanded.getInt("rows")
-            }
+            // Closing refits to the current viewport; a keyboard that stays up still keeps the remote rows.
+            awaitPhase("compose-refit", null) { it.getInt("rows") == expanded.getInt("rows") && it.getBoolean("cursorShown") }
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
             val portrait = awaitPhase("portrait", false, dismissKeyboard = true) { true }
             scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
@@ -2085,7 +2094,7 @@ class NativeWorkspaceTest {
             awaitPhase("orientation-grow", false) { activity.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT && it.getInt("rows") > landscape.getInt("rows") }
             // The same append-only receiver's existing final exact chat ledger
             // excludes extra passive bytes posthoc; this is not a per-phase read.
-            println("lazysh Mosh resize: firstKeyboardCrossed=true ordinaryAosp=true receiverLedger=pending-host-final")
+            println("lazysh Mosh resize: keyboardKeptCursorRow=true newestAtBaseline=${baseline.getBoolean("newestShown")} ordinaryAosp=true receiverLedger=pending-host-final")
         } catch (failure: Throwable) { primary = failure; throw failure }
         finally {
             var cleanup: Throwable? = null
@@ -3205,14 +3214,13 @@ class NativeWorkspaceTest {
                 "window[$key]?.token===$token && window[$key].terminal===document.querySelector('.terminal-canvas') && window[$key].terminal.isConnected && document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
             val fresh = UUID.randomUUID().toString().replace("-", "")
             val response = "BG_${fresh}_RESUMED"
-            // Send reopens the soft keyboard, and the canonical Mosh screen shrinks to it
-            // top-anchored: mosh-server keeps the top rows and drops the bottom ones. A
-            // response printed before that resize reaches the server would be lost from
-            // the screen, so print it from the home row. Dash also reports the waited
-            // writer as "[1] + Done (<its whole command>)" before its next prompt; that
-            // notice is longer than a keyboard-sized screen, so `jobs` consumes it first.
+            // Send reopens the soft keyboard. mosh-server shrinks its screen from the top, so a
+            // keyboard-sized resize would drop a response printed just before it on the bottom
+            // rows; the keyboard keeps the remote rows instead, and the response stays where it
+            // is printed. Dash also reports the waited writer as "[1] + Done (<its whole
+            // command>)" before its next prompt; `jobs` consumes that notice first.
             val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; jobs >/dev/null 2>&1; if ! test -f $directory/background-expired; then " +
-                record("after") + "printf '\\033[H\\033[2JBG_%s_RESUMED\\n' '$fresh'; fi"
+                record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
             awaitDocument(scenario, "owned Mosh fresh response after background", proof(response), observe = { remaining ->

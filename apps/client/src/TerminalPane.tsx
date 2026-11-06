@@ -16,6 +16,7 @@ import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, va
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
+import { fitMoshKeyboard, moshKeyboardPan, type KeyboardHold } from "./moshKeyboard";
 import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
@@ -672,6 +673,18 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       syncTerminalViewport(terminal);
     };
     element.addEventListener("scroll", clamped, true);
+    // Held soft-keyboard rows keep the canonical Mosh screen taller than the pane.
+    let keyboard: KeyboardHold | null = null, desired: {cols: number; rows: number} | undefined, measured: {width: number; height: number} | undefined;
+    let visibleHeight = 0;
+    const pan = () => {
+      if (!screen) return;
+      const buffer = terminal.buffer.active, height = Number.parseFloat(screen.style.height);
+      const offset = keyboard ? moshKeyboardPan({rows: terminal.rows, rowHeight: height / terminal.rows, visible: visibleHeight, cursorRow: buffer.baseY + buffer.cursorY - buffer.viewportY}) : 0;
+      const transform = offset > 0 ? `translateY(${-offset}px)` : "";
+      if (screen.style.transform !== transform) screen.style.transform = transform;
+    };
+    // Output, scrolling and canonical resizes all render, so each one re-pans.
+    const panned = session.moshResize ? terminal.onRender(pan) : undefined;
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
       const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
@@ -687,7 +700,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       if (session.moshResize) {
         const proposed = session.connected ? addon.proposeDimensions() : undefined;
         if (proposed) {
-          try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
+          const size = {width: window.innerWidth, height: window.innerHeight};
+          const next = fitMoshKeyboard({proposed, desired: desired ?? {cols: terminal.cols, rows: terminal.rows}, hold: keyboard,
+            touch: window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches === false, window: size, previous: measured});
+          keyboard = next.hold; measured = size; desired = next.request;
+          try {session.moshResize.requestSize(next.request.cols, next.request.rows);}
           catch {reportError(t('appUnavailableInThisAppBuild'));}
         }
       } else {
@@ -704,6 +721,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       }
       syncTerminalViewport(terminal);
       if (viewport) viewportHeight = viewport.clientHeight;
+      visibleHeight = element.clientHeight;
+      pan();
     };
     fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);
@@ -719,6 +738,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       element.removeEventListener("scroll", clamped, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
       resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
+      panned?.dispose(); if (screen) screen.style.transform = "";
       terminal.attachCustomKeyEventHandler(() => true);
       fit.current = null;
     };

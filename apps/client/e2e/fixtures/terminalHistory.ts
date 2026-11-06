@@ -16,12 +16,12 @@ export async function openHistoryWorkspace(page:Page) {
   await page.goto('/');
 }
 
-export async function mountHistory(page:Page,mosh:boolean,load=true) {
+export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=false) {
   if(load)await openHistoryWorkspace(page);
-  await page.evaluate(async mosh=>{
+  await page.evaluate(async({mosh,topAnchored})=>{
     const fixture=await import('/e2e/fixtures/TerminalHistoryHarness.tsx');
-    window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,input:data=>window.ownedHistoryInput?.(data)});
-  },mosh);
+    window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,topAnchored,input:data=>window.ownedHistoryInput?.(data)});
+  },{mosh,topAnchored});
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   // A Mosh terminal adopts its geometry only from the first authoritative frame.
   if(mosh)await expect.poll(()=>page.evaluate(()=>window.ownedHistory.resizes.length)).toBeGreaterThan(0);
@@ -57,7 +57,9 @@ export async function rowHeight(page:Page) {
 /** Moves the reader up by `rows` with the project's own input: wheel notches or finger moves of `step` rows. */
 export async function scrollHistory(page:Page,phone:boolean,rows:number,between:()=>Promise<unknown>=async()=>{},step=1) {
   const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!,height=await rowHeight(page);
-  const x=box.x+box.width/2,y=box.y+box.height/4;
+  // A soft keyboard can leave part of a panned Mosh screen outside the pane.
+  const pane=(await page.locator('.terminal-canvas').boundingBox())!,top=Math.max(box.y,pane.y),bottom=Math.min(box.y+box.height,pane.y+pane.height);
+  const x=box.x+box.width/2,y=top+(bottom-top)/4;
   if(!phone) {
     await page.mouse.move(x,y);
     for(let row=0;row<rows;row++){await page.mouse.wheel(0,-height);await between();}
