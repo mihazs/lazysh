@@ -3000,6 +3000,14 @@ class NativeWorkspaceTest {
             .put("notificationForeground", notifications.singleOrNull()?.let {
                 it.packageName == context.packageName &&
                     it.notification.flags and android.app.Notification.FLAG_FOREGROUND_SERVICE != 0
+            } == true).put("notificationRunning", notifications.singleOrNull()?.let {
+                // Ongoing "lazysh is running" with the one owned session; no other text is retained.
+                val extras = it.notification.extras
+                it.isOngoing && it.notification.contentIntent != null &&
+                    extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() ==
+                        context.getString(R.string.session_notification_title) &&
+                    extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ==
+                        context.resources.getQuantityString(R.plurals.session_notification_sessions, 1, 1)
             } == true).put("wakeLock", held)
     }
 
@@ -3061,6 +3069,17 @@ class NativeWorkspaceTest {
             while (scenario.state != androidx.lifecycle.Lifecycle.State.CREATED && System.nanoTime() < deadline) Thread.sleep(50)
             assertEquals("Owned Mosh Activity must actually stop", androidx.lifecycle.Lifecycle.State.CREATED, scenario.state)
         }
+        fun openFromNotification() {
+            // The real shade row, as a user taps it; SystemUI sends the notification's own PendingIntent.
+            val device = UiDevice.getInstance(instrumentation)
+            assertTrue("Owned notification shade must open", device.openNotification())
+            val row = device.wait(Until.findObject(By.text(context.getString(R.string.session_notification_title))), 5000)
+            assertTrue("Owned ongoing notification must be visible in the shade", row != null)
+            row!!.click()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED && System.nanoTime() < deadline) Thread.sleep(50)
+            assertEquals("Notification tap must resume the workspace Activity", androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
+        }
         fun send(command: String) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
@@ -3077,7 +3096,8 @@ class NativeWorkspaceTest {
         fun execution(active: Boolean) {
             val sample = connectionExecutionObservation()
             val valid = if (active) sample.getInt("serviceCount") == 1 && sample.getBoolean("foreground") &&
-                sample.getInt("notificationCount") == 1 && sample.getBoolean("notificationForeground") && sample.getBoolean("wakeLock")
+                sample.getInt("notificationCount") == 1 && sample.getBoolean("notificationForeground") &&
+                sample.getBoolean("notificationRunning") && sample.getBoolean("wakeLock")
             else sample.getInt("serviceCount") == 0 && sample.getInt("notificationCount") == 0 && !sample.getBoolean("wakeLock")
             assertTrue("Owned connection execution active=$active observation=$sample", valid)
         }
@@ -3116,7 +3136,7 @@ class NativeWorkspaceTest {
                 execution(true)
                 Thread.sleep(1000)
             }
-            foreground()
+            openFromNotification()
             assertEquals("Owned Mosh must retain the native app process", process, android.os.Process.myPid())
             assertEquals("Owned Mosh must retain its exact terminal DOM", "true", evaluate(scenario,
                 "window[$key]?.token===$token && window[$key].terminal===document.querySelector('.terminal-canvas') && window[$key].terminal.isConnected && document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
@@ -3143,7 +3163,7 @@ class NativeWorkspaceTest {
                 Thread.sleep(100)
             }
             assertTrue("Owned last Mosh worker must release execution while Activity is stopped", released)
-            println("lazysh Mosh background: >35s busy Home interval, same app/terminal, fresh remote challenge and last-worker foreground service/notification/wake-lock cleanup before foreground")
+            println("lazysh Mosh background: >35s busy Home interval with the ongoing session notification, notification tap back to the same app/terminal, fresh remote challenge and last-worker foreground service/notification/wake-lock cleanup before foreground")
         } catch (failure: Throwable) { primary = failure; throw failure }
         finally {
             try {
@@ -3241,14 +3261,16 @@ class NativeWorkspaceTest {
             require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(owned.getString("directory"))) {
                 "Owned Mosh directory invalid"
             }
-            // This owned-install case proves the granted-permission notification record only.
-            val context = instrumentation.targetContext
-            if (Build.VERSION.SDK_INT >= 33) {
-                if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-                    instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
-                assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
-                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
-            }
+        }
+        // lazysh asks for POST_NOTIFICATIONS on a first connection; every owned connection case
+        // grants it first, so no system prompt covers the WebView. The Mosh background case
+        // proves the granted-permission notification record.
+        val context = instrumentation.targetContext
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+            assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
+                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
         }
         val scenario = NativeActivityFixture.scenario
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

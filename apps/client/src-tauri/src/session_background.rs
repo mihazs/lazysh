@@ -53,7 +53,7 @@ impl Controller {
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn start<F, Fut>(mut update: F) -> Self
     where
-        F: FnMut(u64, bool) -> Fut + Send + 'static,
+        F: FnMut(u64, usize) -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), String>> + Send,
     {
         let (commands, mut incoming) = mpsc::unbounded_channel();
@@ -65,16 +65,18 @@ impl Controller {
                     Command::Acquire(id, reply) => {
                         workers.insert(id);
                         revision += 1;
-                        let result =
-                            tokio::time::timeout(Duration::from_secs(10), update(revision, true))
-                                .await
-                                .unwrap_or_else(|_| Err(FAILURE.into()));
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(10),
+                            update(revision, workers.len()),
+                        )
+                        .await
+                        .unwrap_or_else(|_| Err(FAILURE.into()));
                         if result.is_err() {
                             workers.remove(&id);
                             revision += 1;
                             let _ = tokio::time::timeout(
                                 Duration::from_secs(10),
-                                update(revision, !workers.is_empty()),
+                                update(revision, workers.len()),
                             )
                             .await;
                         }
@@ -84,7 +86,7 @@ impl Controller {
                         revision += 1;
                         let _ = tokio::time::timeout(
                             Duration::from_secs(10),
-                            update(revision, !workers.is_empty()),
+                            update(revision, workers.len()),
                         )
                         .await;
                     }
@@ -112,13 +114,14 @@ pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             let controller = {
                 let handle =
                     api.register_android_plugin("app.lazysh.client", "SessionBackgroundPlugin")?;
-                Controller::start(move |revision, active| {
+                // The count of live terminal workers is the notification's session count.
+                Controller::start(move |revision, sessions| {
                     let handle = handle.clone();
                     async move {
                         handle
                             .run_mobile_plugin_async::<()>(
                                 "update",
-                                serde_json::json!({ "revision": revision, "active": active }),
+                                serde_json::json!({ "revision": revision, "sessions": sessions }),
                             )
                             .await
                             .map_err(|_| FAILURE.to_owned())
@@ -139,12 +142,12 @@ pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    type Update = (u64, bool, oneshot::Sender<Result<(), String>>);
+    type Update = (u64, usize, oneshot::Sender<Result<(), String>>);
     fn controlled() -> (Controller, mpsc::UnboundedReceiver<Update>) {
         let (send, updates) = mpsc::unbounded_channel();
-        let controller = Controller::start(move |revision, active| {
+        let controller = Controller::start(move |revision, sessions| {
             let (reply, response) = oneshot::channel();
-            send.send((revision, active, reply)).unwrap();
+            send.send((revision, sessions, reply)).unwrap();
             async move { response.await.unwrap() }
         });
         (controller, updates)
@@ -157,11 +160,11 @@ mod tests {
     }
     async fn update(
         updates: &mut mpsc::UnboundedReceiver<Update>,
-        expected: (u64, bool),
+        expected: (u64, usize),
         fail: bool,
     ) {
-        let (revision, active, reply) = next_update(updates).await;
-        assert_eq!((revision, active), expected);
+        let (revision, sessions, reply) = next_update(updates).await;
+        assert_eq!((revision, sessions), expected);
         reply
             .send(if fail {
                 Err("start denied".into())
@@ -178,35 +181,36 @@ mod tests {
     async fn only_last_actual_worker_releases_background_execution() {
         let (controller, mut updates) = controlled();
         let first = acquire(&controller);
-        update(&mut updates, (1, true), false).await;
+        update(&mut updates, (1, 1), false).await;
         let first = first.await.unwrap().unwrap();
         let second = acquire(&controller);
-        update(&mut updates, (2, true), false).await;
+        // Each update reports the live session count shown by the notification.
+        update(&mut updates, (2, 2), false).await;
         let second = second.await.unwrap().unwrap();
         // Neither a UI owner nor a replaced Activity owns a reservation.
         drop(controller.clone());
         drop(first);
-        update(&mut updates, (3, true), false).await;
+        update(&mut updates, (3, 1), false).await;
         drop(second);
-        update(&mut updates, (4, false), false).await;
+        update(&mut updates, (4, 0), false).await;
     }
     #[tokio::test]
     async fn cancelled_and_failed_acquisition_compensate_before_new_workers() {
         let (controller, mut updates) = controlled();
         let cancelled = acquire(&controller);
-        let (revision, active, reply) = next_update(&mut updates).await;
-        assert_eq!((revision, active), (1, true));
+        let (revision, sessions, reply) = next_update(&mut updates).await;
+        assert_eq!((revision, sessions), (1, 1));
         cancelled.abort();
         assert!(matches!(cancelled.await, Err(error) if error.is_cancelled()));
         reply.send(Ok(())).unwrap();
-        update(&mut updates, (2, false), false).await;
+        update(&mut updates, (2, 0), false).await;
         let failed = acquire(&controller);
-        update(&mut updates, (3, true), true).await;
-        update(&mut updates, (4, false), false).await;
+        update(&mut updates, (3, 1), true).await;
+        update(&mut updates, (4, 0), false).await;
         assert!(failed.await.unwrap().is_err());
         let successful = acquire(&controller);
-        update(&mut updates, (5, true), false).await;
+        update(&mut updates, (5, 1), false).await;
         drop(successful.await.unwrap().unwrap());
-        update(&mut updates, (6, false), false).await;
+        update(&mut updates, (6, 0), false).await;
     }
 }
