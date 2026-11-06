@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.19.0
+
+### Minor Changes
+
+- 1695c0c: Declutter the Herdr Spaces tree: compact space cards with one status summary, tabs and panes one indentation step in, single-line rows with `~` paths, pane counts on collapsed tabs and space actions in an overflow or long-press menu.
+- 4bb1b92: Show an ongoing Android notification with the active session count while lazysh keeps terminal sessions running in the background; tapping it returns to the workspace, and it is removed after the last session ends. Android 13+ asks for notification permission once on the first session.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.19.0
+  - @lazysh/common@1.19.0
+  - @lazysh/display-idle@1.19.0
+  - @lazysh/et-transport@1.19.0
+  - @lazysh/mosh-transport@1.19.0
+
 ## 1.18.2
 
 ### Patch Changes
