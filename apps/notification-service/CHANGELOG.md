@@ -1,5 +1,17 @@
 # @lazysh/notification-service
 
+## 1.25.0
+
+### Minor Changes
+
+- a89a721: Deliver relay events through an Apprise API stateful key with `--destination-format apprise`, optional proxy Bearer token, repeatable `--apprise-tag`, and finite `partial` and `rejected` receipts that the host companion also accepts on replay; push setup help now names the relay destinations and links the relay guide.
+
+### Patch Changes
+
+- Updated dependencies [a89a721]
+  - @lazysh/notification-client@1.25.0
+  - @lazysh/common@1.25.0
+
 ## 1.24.0
 
 ### Patch Changes

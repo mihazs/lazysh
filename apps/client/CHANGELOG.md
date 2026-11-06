@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.25.0
+
+### Minor Changes
+
+- a89a721: Deliver relay events through an Apprise API stateful key with `--destination-format apprise`, optional proxy Bearer token, repeatable `--apprise-tag`, and finite `partial` and `rejected` receipts that the host companion also accepts on replay; push setup help now names the relay destinations and links the relay guide.
+
+### Patch Changes
+
+- 5dd1d1d: Detach the tmux navigation control client cleanly before closing its SSH channel or transport. On tmux older than 3.8, closing the transport while tmux still had output queued for that client left the client, and therefore the tmux server, running forever after lazysh disconnected. lazysh now ends control mode first, waits up to 500 ms for tmux to confirm, and only then closes the channel.
+- 0ebee54: Keep the newest Mosh output and the cursor line on screen when the soft keyboard opens: the remote screen keeps its rows and the terminal pans to the cursor instead of shrinking.
+- @lazysh/account-usage@1.25.0
+  - @lazysh/common@1.25.0
+  - @lazysh/display-idle@1.25.0
+  - @lazysh/et-transport@1.25.0
+  - @lazysh/mosh-transport@1.25.0
+
 ## 1.24.0
 
 ### Minor Changes
