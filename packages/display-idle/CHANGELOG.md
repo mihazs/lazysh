@@ -1,5 +1,9 @@
 # @lazysh/display-idle
 
+## 1.18.2
+
+No changes in this release.
+
 ## 1.18.1
 
 No changes in this release.

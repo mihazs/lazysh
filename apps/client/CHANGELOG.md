@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.18.2
+
+### Patch Changes
+
+- 942bb91: Keep finger scrolling responsive after a pause in history while the on-screen keyboard holds a word in composition, including full-screen agents with mouse reporting, and stop a toolbar key that sends the composed word from blocking later drags and long-presses.
+- @lazysh/account-usage@1.18.2
+  - @lazysh/common@1.18.2
+  - @lazysh/display-idle@1.18.2
+  - @lazysh/et-transport@1.18.2
+  - @lazysh/mosh-transport@1.18.2
+
 ## 1.18.1
 
 ### Patch Changes
