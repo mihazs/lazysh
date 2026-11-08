@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.27.0
+
+### Minor Changes
+
+- 6f06a27: Group agent board reports by project on the connected host, and archive reports on this device until the agent reports again or the report ages out.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.27.0
+  - @lazysh/common@1.27.0
+  - @lazysh/display-idle@1.27.0
+  - @lazysh/et-transport@1.27.0
+  - @lazysh/mosh-transport@1.27.0
+
 ## 1.26.1
 
 ### Patch Changes
