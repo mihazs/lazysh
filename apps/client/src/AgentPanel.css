@@ -62,3 +62,20 @@
   .agent-panel[data-activity-detail] .agent-report-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
   .agent-panel[data-activity-detail] .agent-report-history { display: inline-flex; min-height: 44px; }
 }
+
+/* Reports group by project on the connected host inside each state. */
+.agent-panel .agent-project-group { margin-block: 6px 12px; }
+.agent-panel .agent-project-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
+.agent-panel .agent-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-panel .agent-project-host { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; }
+.agent-panel .agent-project-heading .status-group-count { margin-left: auto; }
+.agent-panel .agent-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 0 8px 8px; }
+.agent-panel .agent-card-actions > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: 0; }
+.agent-panel .agent-archived { padding: 0 18px 18px; }
+.agent-panel .agent-archive-toggle, .agent-panel .agent-report-archive { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.agent-panel .agent-archived-card { display: flex; align-items: center; gap: 8px; margin: 8px 0; padding: 4px 4px 4px 12px; border: 1px solid var(--border); border-radius: 14px; overflow-wrap: anywhere; }
+.agent-panel .agent-archived-card > .agent-row-body { flex: 1; min-width: 0; }
+.agent-panel .agent-archived-card > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+@media (max-width: 600px) {
+  .agent-panel[data-activity-detail] > .agent-archived { display: none; }
+}
