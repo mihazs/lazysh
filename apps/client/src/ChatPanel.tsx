@@ -5,6 +5,7 @@ import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
+import {formatCountdown} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -157,12 +158,31 @@ export function groupTurns(messages: Message[]): Turn[] {
   return turns;
 }
 
+const commandTools = new Set(['bash', 'command', 'shell', 'exec_command', 'local_shell', 'run_terminal_cmd']);
+const editTools = new Set(['edit', 'multiedit', 'write', 'notebookedit', 'apply_patch', 'str_replace_based_edit_tool']);
+/** The folded activity row: what the agent did ("Ran 3 commands · Made 2 edits · 1 failed · 1:12"). */
+export function activitySummary(turn: Turn): string {
+  const blocks = turn.activity.flatMap(message => message.blocks);
+  const uses = blocks.filter(block => block.type === 'tool_use').map(block => block.name?.toLowerCase() ?? '');
+  const commands = uses.filter(name => commandTools.has(name)).length, edits = uses.filter(name => editTools.has(name)).length;
+  // A call can fail on its use (status) and its result (isError); count it once.
+  const failed = new Set(blocks.flatMap((block, index) => block.isError === true || block.status === 'failed' ? [block.id ?? index] : [])).size;
+  const parts = [
+    commands && t('agentTurnCommands', {count: commands}), edits && t('agentTurnEdits', {count: edits}),
+    uses.length - commands - edits && t('agentTurnTools', {count: uses.length - commands - edits}), failed && t('agentTurnFailed', {count: failed}),
+  ].filter((part): part is string => !!part);
+  if (!parts.length) parts.push(t('agentViewActivity', {count: turn.activity.length}));
+  const start = Date.parse(turn.prompt?.timestamp ?? ''), end = Date.parse([...turn.activity, turn.answer].map(message => message?.timestamp).filter(Boolean).at(-1) ?? '');
+  if (end > start) parts.push(formatCountdown(end - start));
+  return parts.join(' · ');
+}
+
 /** A conversation the Agent view found for its pane from hook reports. */
 export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -417,15 +437,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   }
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (bound && !opened && !error) void read(true);}, [bound, opened, error, completed]);
+  const turns = useMemo(() => timeline ? groupTurns(messages) : [], [timeline, messages]);
+  const turnStart = turns.at(-1)?.prompt?.timestamp;
+  useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
     if (composing.current || !draft.trim()) return;
     if (draft.length > 65536) { setDraftStatus("chatDraftTooLong"); return; }
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
   }
+  const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
+  // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const renderMessage = (message: Message) => (
-    <article key={message.id} className="chat-message">
-      <h4>{t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role])}</h4>
+    <article key={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
+      {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
         {t("chatRecordMetadata", {source:message.record.source, type:message.record.type, status:message.record.status})}
@@ -460,6 +485,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       )}
     </article>
   );
+  // Bound to the Agent view, the composer is one row: these tools move beside Stage.
+  const draftTools = <div className="chat-draft-tools">
+    {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
+    <button ref={attachmentButton} type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>toggleAttachment(!attachmentOpen)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
+    <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>
+  </div>;
   return (
     <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
       {!bound && <>
@@ -586,13 +617,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {followable && <div className="chat-follow-controls">
+      {bound && !atLatest && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
+      {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
           if (!event.target.checked && automaticRequest.current) request.current++;
           if (event.target.checked) setError('');
         }} />{t(recorded ? "chatRecordedFollow" : opened?.agent === 'opencode' ? 'chatOpencodeFollow' : opened?.agent==='codex' ? 'chatCodexFollow' : "chatFollow")}</label>
-        {!bound && <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>}
+        <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
         {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}
         {!atLatest && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
@@ -602,21 +634,17 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
       }}>
-        {timeline ? groupTurns(messages).map(turn => <section key={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
+        {timeline ? turns.map(turn => <section key={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.prompt && renderMessage(turn.prompt)}
-          {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{t('agentViewActivity', {count: turn.activity.length})}</summary>{turn.activity.map(renderMessage)}</details>}
+          {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : messages.map(renderMessage)}
       </div>
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
       <div className="chat-draft">
         <div className="chat-draft-header">
-          <label htmlFor={draftId}>{t("chatDraftLabel")}</label>
-          <div className="chat-draft-tools">
-            {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
-            <button ref={attachmentButton} type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>toggleAttachment(!attachmentOpen)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
-            <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>
-          </div>
+          <label htmlFor={draftId} className={bound ? "sr-only" : undefined}>{t("chatDraftLabel")}</label>
+          {!bound && draftTools}
         </div>
         <p id={draftHelpId} className="chat-draft-help" hidden={!draftHelpOpen}>{t("chatDraftExplanation")}</p>
         {attachmentOpen && access.current() && <div className="chat-attachment-view">
@@ -630,10 +658,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           }}/>
         </div>}
         <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
-          <textarea id={draftId} rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
-          <div className="chat-draft-commands">{onOpenTerminal && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button><button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button></div>
+          <textarea id={draftId} rows={bound && !draft ? 1 : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
+          <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button><button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button></div>
           {shown && terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
-            key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
+            key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput} notes={!bound || draftHelpOpen}
             access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
             onSent={(text,revision)=>{
               if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}

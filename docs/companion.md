@@ -66,12 +66,14 @@ Every remote session has a **Terminal | Agent** switch in the header; on desktop
 **Both** appears when the session area is at least 1100 px wide. The terminal keeps
 running unchanged and stays mounted, so switching never reconnects, writes to it or
 trims its scrollback. The choice is remembered on this device per saved host and
-multiplexer target; new sessions open in Terminal.
+multiplexer target; a plain shell without a multiplexer keeps it only while it is
+open. New sessions open in Terminal.
 
 For a native tmux terminal, the Agent view reads the pane's `TMUX_PANE` identity,
 finds the newest Claude Code or Codex report from that pane, and looks up its
 reported history. When the history is available, it opens that conversation,
-follows it every 2 seconds and groups it by turn. Input still goes through the
+follows it every 2 seconds and groups it by turn. A history that is missing is
+asked for again on the next check, every 5 seconds while the Agent view is shown. Input still goes through the
 [confirmed terminal input](chat-terminal-input.md) or **Stage in terminal**. Without
 a report from the pane, or without reported history for it, the Agent view says so
 and offers **Show terminal** and **Choose transcript**, the manual picker. A pane ID

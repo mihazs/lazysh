@@ -149,6 +149,8 @@ test('offers Both only from 1100 px of session width and updates both views duri
   await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
   const [left,right]=[await terminal.boundingBox(),await agent.boundingBox()];
   expect(left!.x+left!.width).toBeLessThanOrEqual(right!.x+1);
+  // The conversation, not the composer, fills the Agent side.
+  expect((await agent.getByRole('form',{name:'Transcript draft',exact:true}).boundingBox())!.height).toBeLessThan(right!.height/4);
   await terminal.locator('.xterm').click();
   await page.keyboard.type('Both views');await page.keyboard.press('Enter');
   await expect(terminal.locator('.xterm-rows')).toContainText('> Both views');
@@ -166,4 +168,15 @@ test('phone never offers Both',async({page},testInfo)=>{
   await expect(switcher(page).getByRole('button')).toHaveText(['Terminal','Agent']);
   const box=await switcher(page).boundingBox();
   expect(box!.x+box!.width).toBeLessThanOrEqual(390);
+  // Icon segments are full touch targets and leave the session title readable.
+  for(const button of await switcher(page).getByRole('button').all())expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(page.locator('.workspace-header').getByText('Fixture / work',{exact:true})).toBeVisible();
+  expect(await page.locator('.workspace-header').getByText('Fixture / work',{exact:true}).evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  // The Agent view reads like a chat: no recorded-reader follow controls, and the conversation keeps most of the screen.
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(agent.getByRole('checkbox')).toHaveCount(0);
+  await expect(agent.getByRole('heading',{name:'user',exact:true})).toHaveCount(0);
+  expect((await agent.getByRole('region',{name:'Conversation messages',exact:true}).boundingBox())!.height).toBeGreaterThan(844/2);
 });

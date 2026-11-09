@@ -95,9 +95,10 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend']):unk
   return kind===prefix+'invalid'?new InputFailure('chatTerminalInvalid'):kind===prefix+'stale'?new InputFailure('chatTerminalStale'):kind===prefix+'busy'?new InputFailure('chatTerminalBusy'):error;
 }
 
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent}:{
+/** `notes` false keeps the heading and disclaimer behind the composer's info button. */
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
-  draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;
+  draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
 }) {
   useUi();
   const accessState=useAccessSnapshot();
@@ -189,8 +190,8 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
-    <h4>{t('chatTerminalTitle')}</h4><p>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
-    <p>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>
+    <h4 hidden={!notes}>{t('chatTerminalTitle')}</h4><p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
+    <p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>
     <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t('chatTerminalChoose')}</button>
     {snapshot && <div>
       <dl><dt>{t('chatTerminalHost')}</dt><dd>{labels.hostLabel}</dd><dt>{t('chatTerminalTab')}</dt><dd>{labels.terminalLabel}</dd>{snapshot.kind==='destination'?<><dt>{t('chatTerminalSession')}</dt><dd>{snapshot.sessionName}</dd><dt>{t('chatTerminalWindow')}</dt><dd>{snapshot.windowName}</dd><dt>{t('chatTerminalPane')}</dt><dd>{formatNumber(snapshot.paneIndex)}</dd></>:<>{(['workspace','tab','pane','terminal'] as const).map(key=><div key={key}><dt>{t(key==='workspace'?'chatHerdrWorkspace':key==='tab'?'chatHerdrTab':key==='pane'?'chatTerminalPane':'chatTerminalTab')}</dt><dd>{snapshot.destination[key]}</dd></div>)}<dt>{t('chatHerdrViewport')}</dt><dd>{Object.values(snapshot.destination.viewport).map(value=>formatNumber(value)).join(' × ')}</dd></>}</dl>
@@ -207,6 +208,6 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     {busy && <p role="status">{t('chatTerminalPending')}</p>}
     {status && <p role="status">{t(status)}</p>}
     {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
-    <p>{t('chatTerminalCloseHint')}</p>
+    <p hidden={!notes}>{t('chatTerminalCloseHint')}</p>
   </section>;
 }

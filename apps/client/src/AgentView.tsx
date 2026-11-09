@@ -4,7 +4,7 @@ import ChatPanel, {type BoundConversation} from './ChatPanel';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, reportedTones} from './AgentStatus';
-import {formatRelativeTime, useNow} from './relativeTime';
+import {formatCountdown, useNow} from './relativeTime';
 import {bindProtectedInvoke, captureAccess} from './access';
 import {t, useUi} from './i18n/core';
 import './AgentView.css';
@@ -22,9 +22,10 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
   const invoke = useMemo(() => bindProtectedInvoke(access), [access]);
   const [binding, setBinding] = useState<Binding>({kind: 'finding'});
   const [manual, setManual] = useState(false);
-  // Reported history per agent session id, so polling only re-reads the board.
-  const histories = useRef(new Map<string, BoundConversation | null>());
-  const now = useNow(30000, shown);
+  // Available reported history per agent session id, so polling only re-reads the board.
+  // A missing one is asked again on the next poll: the user may turn it on, or it may be reported later.
+  const histories = useRef(new Map<string, BoundConversation>());
+  const [turnStart, setTurnStart] = useState<string>();
   useEffect(() => {
     if (!shown) return;
     let alive = true, flight = false;
@@ -38,7 +39,7 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
         const agent = row && conversationAgents[row.agent];
         if (row && agent && !histories.current.has(row.sessionId)) {
           const history = parseReportedHistory(await invoke('agent_reported_history', {sessionId, agentSessionId: row.sessionId}), row.sessionId);
-          histories.current.set(row.sessionId, history.status === 'available' ? Object.freeze({agent, path: history.path}) : null);
+          if (history.status === 'available') histories.current.set(row.sessionId, Object.freeze({agent, path: history.path}));
         }
         const conversation = row && histories.current.get(row.sessionId);
         if (alive) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
@@ -54,13 +55,16 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
   }, [shown, sessionId, tmux, invoke, access]);
   const row = binding.kind === 'bound' || binding.kind === 'partial' ? binding.row : undefined;
   const reader = manual || binding.kind === 'bound';
+  // Elapsed time of the running turn, from its prompt in the conversation.
+  const started = binding.kind === 'bound' && row?.state !== 'done' && turnStart ? Date.parse(turnStart) : NaN;
+  const now = useNow(1000, shown && Number.isFinite(started));
   return <section className="agent-view" hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
       {row ? <>
         <StatusRing tone={reportedTones[row.state]} />
         <strong>{row.agent}</strong>
         <span>{t(reportedStateNames[row.state])}</span>
-        <time dateTime={row.updatedAt}>{formatRelativeTime(row.updatedAt, now)}</time>
+        {Number.isFinite(started) && <time dateTime={turnStart} title={t('agentViewElapsed')}>{formatCountdown(now - started)}</time>}
       </> : <strong>{t('agentViewTitle')}</strong>}
       <button type="button" className="subtle-button" onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true" />{t('agentViewTerminal')}</button>
     </header>
@@ -75,6 +79,6 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
     {manual && <p className="security-note">{t('agentViewManualNotice')}</p>}
     {reader && !terminalInput && <p className="agent-view-note">{t('agentViewStageOnly')}</p>}
     {reader && <ChatPanel key={manual ? 'manual' : JSON.stringify(binding.kind === 'bound' && binding.conversation)} sessionId={sessionId} shown={shown}
-      bound={!manual && binding.kind === 'bound' ? binding.conversation : undefined} timeline onOpenTerminal={onShowTerminal} terminalInput={terminalInput} />}
+      bound={!manual && binding.kind === 'bound' ? binding.conversation : undefined} timeline onTurnStart={setTurnStart} onOpenTerminal={onShowTerminal} terminalInput={terminalInput} />}
   </section>;
 }

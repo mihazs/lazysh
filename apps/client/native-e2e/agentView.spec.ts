@@ -22,7 +22,7 @@ it('shows the Agent view of a real tmux pane and returns to the same pane withou
   await switcher.waitForDisplayed({timeout:20_000});
 
   gui.stage='owned Agent view of the same tmux pane';
-  await (await switcher.$('button=Agent')).click();
+  await (await switcher.$('button[aria-label="Agent"]')).click();
   const agent=await browser.$('section.agent-view:not([hidden])');
   await agent.waitForDisplayed({timeout:20_000});
   await terminal.waitForDisplayed({reverse:true});
@@ -31,7 +31,7 @@ it('shows the Agent view of a real tmux pane and returns to the same pane withou
   expect(await history()).toBe(before);
 
   gui.stage='owned terminal after the Agent view';
-  await (await switcher.$('button=Terminal')).click();
+  await (await switcher.$('button[aria-label="Terminal"]')).click();
   await terminal.waitForDisplayed({timeout:20_000});
   expect(paneIdentity(await terminal.getText(),'BEFORE')).toBe(pane);
   expect(await history()).toBe(before);

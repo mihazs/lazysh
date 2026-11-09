@@ -31,6 +31,7 @@ import {
   Bot,
   Activity,
   ChevronRight,
+  Columns2,
   ArrowLeft,
   Command,
   FolderOpen,
@@ -1434,6 +1435,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const active = sessions.find((session) => session.id === activeId);
   const activeSessionView = active ? sessionViewOf(active) : 'terminal';
   useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
+  // A closed session's id never comes back.
+  useEffect(()=>{setAgentMounted(ids=>ids.every(id=>sessions.some(session=>session.id===id))?ids:ids.filter(id=>sessions.some(session=>session.id===id)));},[sessions]);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
   const navigationState=useRef(navigation);navigationState.current=navigation;
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
@@ -2244,7 +2247,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
           <div className="header-right">
             {active && view==='terminal' && active.connected && !active.local && <div className="session-view-switch" role="group" aria-label={t('sessionViewLabel')}>
-              {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=><button key={mode} type="button" aria-pressed={activeSessionView===mode} onClick={()=>chooseSessionView(active,mode)}>{t(mode==='terminal'?'sessionViewTerminal':mode==='agent'?'sessionViewAgent':'sessionViewBoth')}</button>)}
+              {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=>{
+                const [label,Icon]=mode==='terminal'?[t('sessionViewTerminal'),TerminalSquare]:mode==='agent'?[t('sessionViewAgent'),Bot]:[t('sessionViewBoth'),Columns2];
+                // Narrow headers show only the icon, so the session title keeps its room.
+                return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} title={label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
+              })}
             </div>}
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
