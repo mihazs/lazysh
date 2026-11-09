@@ -55,6 +55,29 @@ unverified. Ordinary manual path entry remains available, including when the
 host has an older companion or no usable association. Raw host diagnostics are
 preserved rather than matching English error text or guessing versions.
 
+Codex uses the same opt-in: run `lazysh-agent codex-config --reported-history` and
+merge the printed hooks into your Codex `hooks.json` in place of the ordinary lazysh
+ingest commands. Codex reports `session_id` and `transcript_path` together in its
+common hook input, and the companion keeps them under the same limits as Claude's.
+
+### Agent view
+
+Every remote session has a **Terminal | Agent** switch in the header; on desktop,
+**Both** appears when the session area is at least 1100 px wide. The terminal keeps
+running unchanged and stays mounted, so switching never reconnects, writes to it or
+trims its scrollback. The choice is remembered on this device per saved host and
+multiplexer target; new sessions open in Terminal.
+
+For a native tmux terminal, the Agent view reads the pane's `TMUX_PANE` identity,
+finds the newest Claude Code or Codex report from that pane, and looks up its
+reported history. When the history is available, it opens that conversation,
+follows it every 2 seconds and groups it by turn. Input still goes through the
+[confirmed terminal input](chat-terminal-input.md) or **Stage in terminal**. Without
+a report from the pane, or without reported history for it, the Agent view says so
+and offers **Show terminal** and **Choose transcript**, the manual picker. A pane ID
+is server-scoped; the binding is a display convenience, not proof that the agent is
+still running, and it grants no input authority.
+
 The companion's metadata lookup is
 `lazysh-agent reported-history --session-id=OPAQUE_ID`; use the exact reported
 session identifier, not an inferred filename. It obeys the host's transcript

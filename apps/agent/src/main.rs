@@ -114,7 +114,10 @@ enum Command {
         reported_history: bool,
     },
     /// Print a Codex hook fragment; never changes settings or hook trust.
-    CodexConfig,
+    CodexConfig {
+        #[arg(long)]
+        reported_history: bool,
+    },
     /// Print a Gemini hook fragment; never changes settings.
     GeminiConfig,
     /// Print a standalone Droid hooks.json fragment; never changes settings.
@@ -311,7 +314,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } else {
             lazysh_agent::claude_config()
         }),
-        Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::CodexConfig { reported_history } => Some(if reported_history {
+            lazysh_agent::reported_history::codex_config()
+        } else {
+            lazysh_agent::hooks::codex_config()
+        }),
         Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
         Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
         Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
@@ -447,11 +454,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } => {
             let pane = std::env::var("TMUX_PANE").ok();
             if reported_history {
-                if !matches!(agent, Agent::Claude) {
-                    return Err(Error::InvalidArgument);
-                }
-                let (event, source) =
-                    lazysh_agent::reported_history::read_hook(io::stdin().lock(), pane.as_deref())?;
+                let (event, source) = lazysh_agent::reported_history::read_hook(
+                    io::stdin().lock(),
+                    agent,
+                    pane.as_deref(),
+                )?;
                 if event.is_some() || source.is_some() {
                     Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
                         event.as_ref(),

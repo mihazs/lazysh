@@ -95,9 +95,11 @@ import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
 import type {UploadedAttachment} from "./AttachmentPanel";
 import {stageComposerAttachment} from "./composerTokens";
+import {bothMinWidth,readSessionViews,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
+const AgentView = lazy(() => import("./AgentView"));
 const UsagePanel = lazy(() => import("./UsagePanel"));
 const PreviewPanel = lazy(() => import("./PreviewPanel"));
 const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
@@ -302,6 +304,11 @@ const views = () => [
   { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
 ];
 
+/** Confirmed input is offered only for native tmux and guarded Herdr terminals. */
+function terminalInputFor(session:LiveSession) {
+  const kind=session.attached?.kind;
+  return native && (kind==='tmux' || kind==='herdr') ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
+}
 function focusableWithin(container:HTMLElement|null) {
   return Array.from(
         container?.querySelectorAll<HTMLElement>(
@@ -1283,6 +1290,27 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   // from the terminal or a tool keeps its messages, reading position and unsent draft.
   // A reader opened from reported history still retires when its view is left.
   const [keptChat,setKeptChat]=useState<{sessionId:string;generation:number;reported:boolean}>();
+  // Terminal | Agent | Both per session. Both views stay mounted once shown; the choice only changes visibility.
+  const [viewChoices,setViewChoices]=useState(readSessionViews);
+  const [agentMounted,setAgentMounted]=useState<string[]>([]);
+  const [wideSession,setWideSession]=useState(false);
+  const sessionBodyObserver=useRef<ResizeObserver|null>(null);
+  const measureSessionBody=useCallback((element:HTMLDivElement|null)=>{
+    sessionBodyObserver.current?.disconnect();sessionBodyObserver.current=null;
+    if(!element)return;
+    const measure=()=>setWideSession(element.clientWidth>=bothMinWidth);
+    measure();
+    if(typeof ResizeObserver!=='undefined')(sessionBodyObserver.current=new ResizeObserver(measure)).observe(element);
+  },[]);
+  function sessionViewOf(session:LiveSession):SessionView {
+    if(session.local || !session.connected)return 'terminal';
+    const chosen=viewChoices[sessionViewKey(session)] ?? 'terminal';
+    return chosen==='both' && !wideSession ? 'agent' : chosen;
+  }
+  const sessionViewOfRef=useRef(sessionViewOf);sessionViewOfRef.current=sessionViewOf;
+  function chooseSessionView(session:LiveSession,next:SessionView) {
+    setViewChoices(choices=>saveSessionView(choices,sessionViewKey(session),next));
+  }
   useEffect(()=>{
     setKeptChat(kept=>view==='chat' && activeId ? kept?.sessionId===activeId ? kept : {sessionId:activeId,generation:(kept?.generation??0)+1,reported:false}
       : kept?.reported ? {...kept,sessionId:''} : kept);
@@ -1404,6 +1432,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else sessionConnected(fresh);
   }
   const active = sessions.find((session) => session.id === activeId);
+  const activeSessionView = active ? sessionViewOf(active) : 'terminal';
+  useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
   const navigationState=useRef(navigation);navigationState.current=navigation;
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
@@ -1547,12 +1577,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       setNavigation(previous=>({...previous,[destination.sessionId]:{mode:destination.mode,agents:destination.mode==='agents'||previous[destination.sessionId]?.agents===true}}));
     }else{setView('terminal');setSidebar(false);}
   }
-  const canHandleBack=navigationCovered || (!wideSidebar && sidebar) || terminalHasBack || backCount>0 || (!!active && view!=='terminal');
+  const agentViewBack=!!active && view==='terminal' && activeSessionView==='agent';
+  const canHandleBack=navigationCovered || (!wideSidebar && sidebar) || terminalHasBack || backCount>0 || (!!active && view!=='terminal') || agentViewBack;
   const handleBack = useRef(()=>{});
   handleBack.current=()=>{
     if(!lease.current())return;
     if(!window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))return;
     if(!wideSidebar && sidebar){if(navigationEntry.mode!=='connections' && trail.current.length)returnToContext();else setSidebar(false);return;}
+    if(agentViewBack && active){chooseSessionView(active,'terminal');return;}
     if(terminalBack.current?.sessionId===activeId && terminalBack.current.close())return;
     returnToContext();
   };
@@ -1755,6 +1787,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )
       )
         return;
+      // Stage fills the terminal composer, so a session shown only as its Agent view shows its terminal.
+      const staged=sessionsRef.current.find(session=>session.id===detail.sessionId);
+      if(staged && sessionViewOfRef.current(staged)==='agent')setViewChoices(choices=>saveSessionView(choices,sessionViewKey(staged),'terminal'));
       setActiveId(detail.sessionId);
       setView("terminal");
     };
@@ -2208,6 +2243,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             )}
           </div>
           <div className="header-right">
+            {active && view==='terminal' && active.connected && !active.local && <div className="session-view-switch" role="group" aria-label={t('sessionViewLabel')}>
+              {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=><button key={mode} type="button" aria-pressed={activeSessionView===mode} onClick={()=>chooseSessionView(active,mode)}>{t(mode==='terminal'?'sessionViewTerminal':mode==='agent'?'sessionViewAgent':'sessionViewBoth')}</button>)}
+            </div>}
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
               className="icon-button mobile-tools workspace-tools-trigger"
@@ -2337,7 +2375,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               <span>{sessionViews.find(item=>item.id===view)?.label}</span>
               <button type="button" className="icon-button" title={t('navigationReturnTerminal')} aria-label={t('navigationReturnTerminal')} disabled={pendingMuxRequest} onClick={()=>returnToContext(true)}><TerminalSquare size={18} aria-hidden="true"/></button>
             </nav>}
-            <div className="session-body">
+            <div ref={measureSessionBody} className="session-body" data-session-view={view==='terminal' ? activeSessionView : undefined}>
               <Suspense
                 fallback={
                   <p className="loading" role="status">{t("appOpeningTerminal")}</p>
@@ -2347,7 +2385,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <TerminalPane
                     key={session.id}
                     session={session}
-                    active={activeId === session.id && view === "terminal"}
+                    active={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "agent"}
                     quietActivation={quietTerminal === session.id}
                     reportError={setError}
                     onBackChange={bindTerminalBack}
@@ -2355,6 +2393,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? target => openTerminalAttachments(session, target) : undefined}
                     notice={connectionNotice(session)}
                   />
+                ))}
+                {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
+                  <AgentView key={session.id} sessionId={session.id} shown={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "terminal"}
+                    tmux={native && session.attached?.kind==='tmux'} terminalInput={terminalInputFor(session)} onShowTerminal={()=>chooseSessionView(session,'terminal')} />
                 ))}
                 {active.connected && view === "usage" && (
                   <>
@@ -2369,7 +2411,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     shown={view === "chat"}
                     onOpenTerminal={() => setView("terminal")}
                     reportedHistory={reportedHistory?.sessionId===active.id ? reportedHistory : undefined}
-                    terminalInput={native && (active.attached?.kind==='tmux' || active.attached?.kind==='herdr') ? {backend:active.attached.kind,hostLabel:active.destination,terminalLabel:active.name}:undefined}
+                    terminalInput={terminalInputFor(active)}
                   />
                 )}
                 {active.connected && !active.local && view === "preview" && (
