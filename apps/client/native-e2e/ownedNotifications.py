@@ -24,11 +24,12 @@ XML = f"""<node><interface name="{INTERFACE}">
 <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
 <signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
 </interface></node>"""
-LIMIT = 1024
+LIMIT = 256
 
 
 def emit(record):
-    print(json.dumps(record, separators=(",", ":"))[: 4 * LIMIT], flush=True)
+    # Callers bound every field (at most 8 actions of LIMIT), so each line stays valid JSON.
+    print(json.dumps(record, separators=(",", ":")), flush=True)
 
 
 def main():
@@ -49,7 +50,7 @@ def main():
             identifier = replaces if replaces in issued else len(issued) + 1
             issued.add(identifier)
             emit({"event": "notify", "id": identifier, "app": app[:LIMIT], "summary": summary[:LIMIT],
-                  "body": body[:LIMIT], "actions": [action[:LIMIT] for action in actions[:16]]})
+                  "body": body[:LIMIT], "actions": [action[:LIMIT] for action in actions[:8]]})
             invocation.return_value(GLib.Variant("(u)", (identifier,)))
         elif method == "CloseNotification":
             (identifier,) = parameters.unpack()
