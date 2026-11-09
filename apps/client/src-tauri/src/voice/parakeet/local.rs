@@ -20,7 +20,7 @@ const CACHE_ERROR: &str =
 const CANCELLED: &str = "Parakeet result cancelled; native work may still be finishing";
 const ARCHIVE_NAME: &str = "parakeet-v3-int8.tar.bz2";
 // The release asset URL is mutable upstream; a replaced archive must read as such, not as a network fault.
-const REPUBLISHED: &str = "The publisher replaced the Parakeet archive this lazysh version pins; nothing was installed. Update lazysh to install Parakeet";
+const REPUBLISHED: &str = "The downloaded Parakeet archive does not match the one this lazysh version pins, so nothing was installed. The publisher may have replaced it; if this persists, update lazysh";
 struct Cache {
     root: PathBuf,
     _lock: File,
@@ -100,9 +100,7 @@ impl Cache {
         let metadata = file.metadata().map_err(|_| CACHE_ERROR)?;
         private(&metadata, false)?;
         if metadata.len() != ARCHIVE_BYTES {
-            return Err(
-                "Stored Parakeet archive has an invalid size; remove it and download again".into(),
-            );
+            return Err("Stored Parakeet archive is not the one this lazysh version pins (an earlier version may have installed it); remove it and download again".into());
         }
         Ok(file)
     }

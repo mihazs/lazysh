@@ -42,7 +42,8 @@ the [runtime README](../packages/parakeet-runtime/README.md).
 
 Native Cargo tests hold synthetic workers across cancellation and lease changes,
 check process/cache ownership and exact-ID cleanup, and stream small local HTTP
-fixtures for truncation, oversize, hash mismatch, and body-wait cancellation.
+fixtures for truncation, oversize, hash mismatch, a mismatched Content-Length,
+an HTTP error status, and body-wait cancellation.
 An uncached real-manager acceptance task uses an explicitly supplied public model:
 
 ```sh

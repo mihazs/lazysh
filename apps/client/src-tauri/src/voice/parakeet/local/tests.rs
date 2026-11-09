@@ -243,7 +243,9 @@ async fn invalid_audio_does_not_load_or_reserve_a_model() {
     }
 }
 
+// `head` replaces the default chunked 200 response; its body is then sent as is.
 async fn server(
+    head: Option<String>,
     body: Vec<u8>,
     stall: bool,
 ) -> (
@@ -264,15 +266,19 @@ async fn server(
             request.push(byte[0]);
             assert!(request.len() < 4096);
         }
-        socket
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
+        let chunked = head.is_none();
+        let head = head.unwrap_or_else(|| {
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".into()
+        });
+        socket.write_all(head.as_bytes()).await.unwrap();
         ready.send(()).unwrap();
         if stall {
             std::future::pending::<()>().await;
+        }
+        if !chunked {
+            // The client may hang up after the headers.
+            let _ = socket.write_all(&body).await;
+            return;
         }
         for part in body.chunks(3) {
             socket
@@ -306,33 +312,48 @@ fn status_total_is_the_size_the_verifier_accepts() {
 #[tokio::test]
 async fn actual_streamed_transfer_bounds_hash_and_partial_cleanup() {
     let body = b"synthetic pinned model download bytes".to_vec();
-    for (sent, expected, digest, success) in [
+    let sha = format!("{:x}", Sha256::digest(&body));
+    let length = |status: &str, bytes: usize| {
+        Some(format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {bytes}\r\nConnection: close\r\n\r\n"
+        ))
+    };
+    let size = body.len() as u64;
+    for (head, sent, expected, digest, error) in [
+        (None, body.clone(), size, sha.clone(), None),
+        (None, body.clone(), size, "0".repeat(64), Some(REPUBLISHED)),
+        (None, body.clone(), size - 1, sha.clone(), Some(REPUBLISHED)),
         (
-            body.clone(),
-            body.len() as u64,
-            format!("{:x}", Sha256::digest(&body)),
-            true,
-        ),
-        (body.clone(), body.len() as u64, "0".repeat(64), false),
-        (
-            body.clone(),
-            body.len() as u64 - 1,
-            format!("{:x}", Sha256::digest(&body)),
-            false,
-        ),
-        (
+            None,
             body[..body.len() - 1].to_vec(),
-            body.len() as u64,
-            format!("{:x}", Sha256::digest(&body)),
-            false,
+            size,
+            sha.clone(),
+            Some(REPUBLISHED),
+        ),
+        // A replaced GitHub release asset announces its new size up front; nothing is streamed.
+        (
+            length("200 OK", body.len()),
+            body.clone(),
+            size + 1,
+            sha.clone(),
+            Some(REPUBLISHED),
+        ),
+        (
+            length("404 Not Found", 0),
+            Vec::new(),
+            size,
+            sha.clone(),
+            Some("Parakeet model download failed (HTTP 404)"),
         ),
     ] {
+        let rejected_headers = head.is_some();
+        let success = error.is_none();
         let (_directory, manager, authority) = fixture();
         let mut work = manager
             .reserve(&lease(&authority), &id(), "downloading")
             .unwrap();
         let (path, mut file) = partial(&manager, &mut work);
-        let (url, headers, task) = server(sent, false).await;
+        let (url, headers, task) = server(head, sent, false).await;
         let mut progress = Vec::new();
         let result = transfer(
             &mut work,
@@ -346,9 +367,12 @@ async fn actual_streamed_transfer_bounds_hash_and_partial_cleanup() {
         .await;
         headers.await.unwrap();
         task.await.unwrap();
-        assert_eq!(result.err().as_deref(), (!success).then_some(REPUBLISHED));
+        assert_eq!(result.err().as_deref(), error);
         assert!(!manager.cache.archive().exists());
         assert!(file.metadata().unwrap().len() <= expected);
+        if rejected_headers {
+            assert_eq!(file.metadata().unwrap().len(), 0);
+        }
         if success {
             assert_eq!(fs::read(&path).unwrap(), body);
             assert_eq!(progress.last(), Some(&expected));
@@ -367,7 +391,7 @@ async fn cancelling_body_wait_cleans_exact_partial_and_never_publishes() {
         .reserve(&lease(&authority), &request, "downloading")
         .unwrap();
     let (path, mut file) = partial(&manager, &mut work);
-    let (url, headers, server) = server(Vec::new(), true).await;
+    let (url, headers, server) = server(None, Vec::new(), true).await;
     let task = tokio::spawn(async move {
         let result = transfer(
             &mut work,
