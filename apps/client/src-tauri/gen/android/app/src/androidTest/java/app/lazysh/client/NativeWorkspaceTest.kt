@@ -1083,9 +1083,16 @@ class NativeWorkspaceTest {
             val shade = device.openNotification()
             try {
                 assertTrue("Notification shade must open", shade)
-                // SystemUI animates a new row into the shade, so wait for title and body inside one row.
-                val row = By.res("com.android.systemui", "expandableNotificationRow").hasDescendant(By.text(title)).hasDescendant(By.text(body))
-                assertNotNull("Test notification title and body must share one shade row", device.wait(Until.findObject(row), 5000))
+                // SystemUI animates a new row into the shade, so wait for the title first.
+                val heading = device.wait(Until.findObject(By.pkg("com.android.systemui").text(title)), 5000)
+                assertNotNull("Test notification title must reach the SystemUI shade", heading)
+                val ancestors = generateSequence(heading!!) { it.parent }.toList()
+                val row = ancestors.firstOrNull { it.resourceName == "com.android.systemui:id/expandableNotificationRow" }
+                assertNotNull("Title must sit in a notification row: ${ancestors.map { it.resourceName }}", row)
+                // A collapsed row ellipsizes a long body, so expand it before reading the full text.
+                if (!row!!.hasObject(By.text(body))) row.findObject(By.res("android", "expand_button"))?.click()
+                assertTrue("Test notification body must share the title's shade row: ${row.findObjects(By.textContains("")).map { it.text }}",
+                    row.wait(Until.hasObject(By.text(body)), 5000))
             } finally {
                 manager.cancel(record.tag, record.id)
                 if (shade) device.pressBack()
