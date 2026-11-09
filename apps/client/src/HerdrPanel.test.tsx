@@ -3,8 +3,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import HerdrPanel from './HerdrPanel';
+import { uiI18n } from './i18n/core';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(async () => { cleanup(); vi.resetAllMocks(); await uiI18n.changeLanguage('en'); });
 function reportedTree() { return { workspaces: [{ workspace_id: 'w2', label: 'project', focused: true, agent_status: 'working' }], tabs: [{ tab_id: 'w2:t4', workspace_id: 'w2', label: 'agent', number: 1, focused: true, agent_status: 'blocked' }], panes: [{ pane_id: 'w2:p9', workspace_id: 'w2', tab_id: 'w2:t4', cwd: '/work', focused: true, agent_status: 'blocked' }] }; }
 it('keeps Herdr session, workspace, tab and pane identity in each command', async () => {
   vi.mocked(invoke).mockResolvedValue(reportedTree());
@@ -38,4 +39,12 @@ it('uses only the reported directory and exact selected server/pane when splitti
       sessionId:'ssh-selected',name:'selected-server',action:{type:'splitPane',target:'w2:p9',horizontal,directory},
     },{headers:{'X-Lazysh-Access':expect.any(String)}}));
   }
+});
+it('explains a target closed on the host in the selected language instead of host text', async () => {
+  await uiI18n.changeLanguage('pt-BR');
+  vi.mocked(invoke).mockImplementation(async command => { if (command === 'herdr_action') throw { kind: 'herdr_target_missing', message: 'host text' }; return reportedTree(); });
+  render(<HerdrPanel sessionId="ssh1" name="builds" />);
+  await screen.findByText(/w2:p9 · blocked/);
+  fireEvent.click(screen.getAllByRole('button', { name: /w2:p9/ })[0]);
+  expect((await screen.findByRole('alert')).textContent).toBe('A conexão ou o destino selecionado mudou. Abra a navegação novamente.');
 });

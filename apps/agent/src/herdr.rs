@@ -55,6 +55,12 @@ fn socket_path(bytes: &[u8], name: &str) -> Result<String> {
 #[cfg(any(unix, test))]
 fn response(bytes: &[u8], pane: &str) -> Result<Value> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    // A pane closed on the host is a distinct, recoverable class; other errors stay invalid.
+    if value.get("id").and_then(Value::as_str) == Some("lazysh:focus-pane")
+        && value.pointer("/error/code").and_then(Value::as_str) == Some("pane_not_found")
+    {
+        return Err(Error::Herdr("HerdrFocusMissing"));
+    }
     if value.get("id").and_then(Value::as_str) != Some("lazysh:focus-pane")
         || value.get("error").is_some()
         || value.pointer("/result/type").and_then(Value::as_str) != Some("pane_info")
@@ -149,7 +155,17 @@ mod tests {
             response(&serde_json::to_vec(&body).unwrap(), "w2E:pF").unwrap(),
             json!({"schemaVersion":1,"status":"focused","paneId":"w2E:pF"})
         );
+        let missing =
+            json!({"id":"lazysh:focus-pane","error":{"code":"pane_not_found","message":"x"}});
+        assert_eq!(
+            response(&serde_json::to_vec(&missing).unwrap(), "w2E:pF")
+                .unwrap_err()
+                .class(),
+            "HerdrFocusMissing"
+        );
         for value in [
+            json!({"id":"wrong","error":missing["error"]}),
+            json!({"id":"lazysh:focus-pane","error":{"code":"server_unavailable"}}),
             json!({"id":"wrong","result":body["result"]}),
             json!({"id":"lazysh:focus-pane","result":body["result"],"error":{}}),
             body,

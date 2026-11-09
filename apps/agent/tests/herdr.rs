@@ -16,6 +16,7 @@ async fn exact_public_pane_focus_is_bounded_and_never_retries_uncertain_dispatch
         "exact",
         "wrong",
         "error",
+        "missing",
         "oversized",
         "eof",
         "timeout",
@@ -71,6 +72,7 @@ async fn exact_public_pane_focus_is_bounded_and_never_retries_uncertain_dispatch
             "exact" => Some(json!({"id":"lazysh:focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w2E:pF"}}}).to_string()),
             "wrong" => Some(json!({"id":"lazysh:focus-pane","result":{"type":"pane_info","pane":{"pane_id":"w2E:pG"}}}).to_string()),
             "error" => Some(json!({"id":"lazysh:focus-pane","error":{"message":"fixture-private-not-for-output"}}).to_string()),
+            "missing" => Some(json!({"id":"lazysh:focus-pane","error":{"code":"pane_not_found","message":"fixture-private-not-for-output"}}).to_string()),
             "oversized" => Some("x".repeat(1024 * 1024 + 1)),
             "eof" | "timeout" | "cancel" => None,
             _ => unreachable!(),
@@ -98,8 +100,18 @@ async fn exact_public_pane_focus_is_bounded_and_never_retries_uncertain_dispatch
             assert!(status.success());
         }
         let output = output.await.unwrap();
-        if case == "cancel" {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("HerdrFocusCancelled"));
+        let class = match case {
+            "cancel" => Some("HerdrFocusCancelled"),
+            "missing" => Some("HerdrFocusMissing"),
+            "error" | "wrong" => Some("HerdrFocusInvalid"),
+            _ => None,
+        };
+        if let Some(class) = class {
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr).trim(),
+                format!("lazysh-agent: {class}: operation failed"),
+                "{case}"
+            );
         }
         assert_eq!(output.status.success(), case == "exact", "{case}");
         if case == "exact" {

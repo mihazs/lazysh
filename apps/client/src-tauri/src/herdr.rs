@@ -333,7 +333,8 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
 }
 /// Herdr reports a stale exact target as one JSON error line on stderr. Both
 /// 0.9.3 and 0.9.5 use these codes; 0.9.4+ also returns them for out-of-range
-/// workspace numbers instead of crashing the server.
+/// workspace numbers instead of crashing the server. Exact pane focus goes
+/// through the companion, which reports Herdr's `pane_not_found` as its own class.
 fn missing_target(error: SshError) -> SshError {
     #[derive(Deserialize)]
     struct Failure {
@@ -344,12 +345,13 @@ fn missing_target(error: SshError) -> SshError {
         code: String,
     }
     let missing = error.kind() == "remote_command_failed"
-        && serde_json::from_str::<Failure>(error.message()).is_ok_and(|failure| {
-            matches!(
-                failure.error.code.as_str(),
-                "workspace_not_found" | "tab_not_found" | "pane_not_found" | "agent_not_found"
-            )
-        });
+        && (error.message() == "lazysh-agent: HerdrFocusMissing: operation failed"
+            || serde_json::from_str::<Failure>(error.message()).is_ok_and(|failure| {
+                matches!(
+                    failure.error.code.as_str(),
+                    "workspace_not_found" | "tab_not_found" | "pane_not_found" | "agent_not_found"
+                )
+            }));
     if missing {
         SshError::new(
             "herdr_target_missing",
@@ -774,10 +776,17 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "requires herdr on PATH; runs an isolated headless server"]
+    #[ignore = "requires herdr on PATH and current-source LAZYSH_TEST_AGENT_BIN; runs an isolated headless server"]
     fn real_herdr_lifecycle_and_tree() {
         let herdr = RealHerdr::start();
         let temp = herdr.path();
+        // Exact pane focus runs the companion from the owned `bin` that precedes PATH.
+        std::fs::copy(
+            std::env::var_os("LAZYSH_TEST_AGENT_BIN")
+                .expect("LAZYSH_TEST_AGENT_BIN must name a current-source companion"),
+            temp.join("bin").join("lazysh-agent"),
+        )
+        .unwrap();
         let run = |text: String| herdr.run(text);
         let session = "default";
         run(action_command(
@@ -900,6 +909,7 @@ mod tests {
                 target: "w999".into(),
             },
             HerdrAction::FocusTab { target: gone('t') },
+            HerdrAction::FocusPane { target: gone('p') },
             HerdrAction::FocusAgent { target: gone('p') },
             HerdrAction::ZoomPane { target: gone('p') },
         ] {
@@ -1052,7 +1062,12 @@ mod tests {
                 "herdr_target_missing"
             );
         }
+        assert_eq!(
+            missing_target(failed("lazysh-agent: HerdrFocusMissing: operation failed")).kind(),
+            "herdr_target_missing"
+        );
         for kept in [
+            failed("lazysh-agent: HerdrFocusInvalid: operation failed"),
             failed(r#"{"error":{"code":"server_unavailable","message":"x"},"id":"cli"}"#),
             failed("workspace_not_found"),
             SshError::new(
