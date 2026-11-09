@@ -2872,7 +2872,8 @@ class NativeWorkspaceTest {
             val terminal = "Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')"
             val before = evaluate(scenario, """(()=>{const pane=$terminal,x=pane?.querySelector('.xterm');if(!x)return '';
                 x.dataset.agentViewOriginal='';return pane.querySelector('.xterm-scroll-area')?.style.height??'';})()""")
-            require(before.isNotEmpty()) { "Owned tmux terminal must be shown before the Agent view" }
+            // evaluateJavascript returns the height already as a JSON string literal.
+            require(before.length > 2 && before.startsWith("\"")) { "Owned tmux terminal must be shown before the Agent view" }
             click("//div[@role='group' and @aria-label='Session view']/button[@aria-label='Agent']")
             awaitDocument(scenario, "Agent view replaces the visible tmux terminal", """
                 (()=>{const pane=document.querySelector('.xterm[data-agent-view-original]')?.closest('.terminal-pane');
@@ -2884,8 +2885,10 @@ class NativeWorkspaceTest {
                   const pressed=Array.from(document.querySelectorAll("[aria-label='Session view'] button[aria-pressed=true]")).map(x=>x.getAttribute('aria-label'));
                   return !!pane && pane.style.display!=='none' && !document.querySelector('section.agent-view:not([hidden])') &&
                     pressed.length===1 && pressed[0]==='Terminal' && document.querySelectorAll('.session-tabs [role=tab]').length===2 &&
-                    pane.querySelector('.xterm-scroll-area')?.style.height===${JSONObject.quote(before)};})()
-            """)
+                    pane.querySelector('.xterm-scroll-area')?.style.height===$before;})()
+            """) { ms -> evaluate(scenario, """(()=>{const pane=document.querySelector('.xterm[data-agent-view-original]')?.closest('.terminal-pane');
+                return [pane?.style.display, !!document.querySelector('section.agent-view:not([hidden])'), document.querySelector("[aria-label='Session view'] button[aria-pressed=true]")?.getAttribute('aria-label'),
+                  pane?.querySelector('.xterm-scroll-area')?.style.height, $before].join('|');})()""", ms) }
         }
         var primaryFailure: Throwable? = null
         try {
