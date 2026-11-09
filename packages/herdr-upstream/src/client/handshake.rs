@@ -146,7 +146,10 @@ pub(crate) fn probe_endpoint_negotiation(
         24,
         0,
         0,
-        false,
+        HandshakePixelCapabilities {
+            exact_geometry: false,
+            sgr_mouse: false,
+        },
         Some(crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 }),
         false,
         false,
@@ -168,6 +171,11 @@ pub(super) struct HandshakeTransport {
     pub(super) guard_nonce: Option<crate::guarded_input::protocol::Secret>,
 }
 
+pub(super) struct HandshakePixelCapabilities {
+    pub(super) exact_geometry: bool,
+    pub(super) sgr_mouse: bool,
+}
+
 /// Performs the client→server handshake.
 ///
 /// Direct terminal clients retain the same-install private protocol. Client-owned
@@ -180,7 +188,7 @@ pub(super) fn do_handshake(
     rows: u16,
     cell_width_px: u32,
     cell_height_px: u32,
-    exact_cell_size: bool,
+    pixel_capabilities: HandshakePixelCapabilities,
     shell_surface_size: Option<crate::protocol::ClientSurfaceSize>,
     endpoint_keybindings: bool,
     mouse_capture: bool,
@@ -204,10 +212,10 @@ pub(super) fn do_handshake(
             guard_nonce: guard_nonce.clone(),
             cell_width_px,
             cell_height_px,
-            pixel_mouse: exact_cell_size && cfg!(unix),
+            pixel_mouse: pixel_capabilities.exact_geometry && pixel_capabilities.sgr_mouse,
             direct_graphics: direct_graphics_capability(
                 local_transport,
-                exact_cell_size,
+                pixel_capabilities.exact_geometry,
                 (cell_width_px, cell_height_px),
                 direct_graphics_profile_allowed(),
             ),
@@ -232,7 +240,7 @@ pub(super) fn do_handshake(
             rows,
             cell_width_px,
             cell_height_px,
-            pixel_mouse: exact_cell_size && cfg!(unix),
+            pixel_mouse: pixel_capabilities.exact_geometry && pixel_capabilities.sgr_mouse,
         }
     };
     protocol::write_message(stream, &hello)
