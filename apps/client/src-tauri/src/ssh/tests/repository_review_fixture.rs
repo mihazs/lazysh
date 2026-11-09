@@ -283,11 +283,17 @@ async fn serve_http(listener: tokio::net::TcpListener) {
 /// Real `ss`/`lsof` discovery on the host, the HTTP probe through SSH, and the
 /// optional allowlist filter.
 pub(super) async fn verify_discovery(app: &App, id: &str) {
-    let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let http_port = http.local_addr().unwrap().port();
+    // Six owned HTTP listeners alone exceed the session's four concurrent
+    // channel openings, whatever else listens on the host.
+    let mut http_ports = Vec::new();
+    let mut servers = Vec::new();
+    for _ in 0..6 {
+        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        http_ports.push(http.local_addr().unwrap().port());
+        servers.push(tokio::spawn(serve_http(http)));
+    }
     let raw = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let raw_port = raw.local_addr().unwrap().port();
-    let server = tokio::spawn(serve_http(http));
     let silent = tokio::spawn(async move {
         // Accept and close at once, so the probe sees no HTTP status line.
         while let Ok((socket, _)) = raw.accept().await {
@@ -317,15 +323,17 @@ pub(super) async fn verify_discovery(app: &App, id: &str) {
             .cloned()
     };
     let all = discover(None, true).await;
-    let web = listener(&all, http_port).unwrap_or_else(|| panic!("{http_port} not in {all}"));
-    assert_eq!(web["address"], "127.0.0.1");
-    assert_eq!(web["pid"], std::process::id());
-    assert!(
-        web["process"].as_str().is_some_and(|name| !name.is_empty()),
-        "{web}"
-    );
-    assert_eq!(web["http"], true, "{all}");
-    assert_eq!(web["framework"], "nextJs");
+    for &http_port in &http_ports {
+        let web = listener(&all, http_port).unwrap_or_else(|| panic!("{http_port} not in {all}"));
+        assert_eq!(web["address"], "127.0.0.1");
+        assert_eq!(web["pid"], std::process::id());
+        assert!(
+            web["process"].as_str().is_some_and(|name| !name.is_empty()),
+            "{web}"
+        );
+        assert_eq!(web["http"], true, "{all}");
+        assert_eq!(web["framework"], "nextJs");
+    }
     assert_eq!(listener(&all, raw_port).unwrap()["http"], false);
     let ports: Vec<_> = all
         .as_array()
@@ -336,7 +344,9 @@ pub(super) async fn verify_discovery(app: &App, id: &str) {
     assert!(ports.windows(2).all(|pair| pair[0] <= pair[1]), "{ports:?}");
 
     let allowed = discover(Some(vec![raw_port]), false).await;
-    assert!(listener(&allowed, http_port).is_none());
+    assert!(http_ports
+        .iter()
+        .all(|&port| listener(&allowed, port).is_none()));
     let only = listener(&allowed, raw_port).unwrap();
     assert_eq!(
         only["http"],
@@ -347,6 +357,8 @@ pub(super) async fn verify_discovery(app: &App, id: &str) {
         discover(Some(Vec::new()), true).await,
         json(Vec::<()>::new())
     );
-    server.abort();
+    for server in servers {
+        server.abort();
+    }
     silent.abort();
 }
