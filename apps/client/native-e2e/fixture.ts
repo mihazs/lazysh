@@ -330,7 +330,7 @@ export class NativeGui {
   /** An owned Desktop Notifications server on this private bus; see ownedNotifications.py. */
   async notificationServer() {
     if(this.notifications)throw new Error('Owned notification server already started');
-    const interpreter=await realpath('/usr/bin/python3'),name=basename(interpreter);
+    const interpreter=await realpath(process.env.LAZYSH_NATIVE_GUI_PYTHON??'/usr/bin/python3'),name=basename(interpreter);
     if(!/^python3(?:\.[0-9]+)?$/.test(name))throw new Error('Owned notification server requires the system Python 3');
     const server=this.notifications=new OwnedProcess(await executable(interpreter,'owned notification server interpreter',name),
       ['-I',join(dirname(fileURLToPath(import.meta.url)),'ownedNotifications.py'),this.busAddress],this.directory,this.env);
