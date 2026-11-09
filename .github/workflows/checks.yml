@@ -499,7 +499,7 @@ jobs:
       - name: Prepare owned native GUI system tools
         run: |
           tools_dir=$(mktemp -d "$RUNNER_TEMP/lazysh-native-tools.XXXXXX")
-          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon; do
+          for tool in WebKitWebDriver Xvfb gnome-keyring-daemon python3; do
             source=$(readlink -f "/usr/bin/$tool")
             install -m 0755 "$source" "$tools_dir/$tool"
             cmp "$source" "$tools_dir/$tool"
@@ -507,6 +507,7 @@ jobs:
           echo "LAZYSH_NATIVE_GUI_WEBKIT_DRIVER=$tools_dir/WebKitWebDriver" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
           echo "LAZYSH_NATIVE_GUI_SECRET_SERVICE=$tools_dir/gnome-keyring-daemon" >> "$GITHUB_ENV"
+          echo "LAZYSH_NATIVE_GUI_PYTHON=$tools_dir/python3" >> "$GITHUB_ENV"
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
