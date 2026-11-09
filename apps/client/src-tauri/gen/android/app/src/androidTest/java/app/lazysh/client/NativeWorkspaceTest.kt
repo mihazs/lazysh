@@ -2271,8 +2271,8 @@ class NativeWorkspaceTest {
               const panels=Array.from(document.querySelectorAll('.multiplexer-panel'));
               const panel=panels.length===1?panels[0]:null;
               const list=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent.trim()==='List herdr sessions');
-              const capabilityText=panel?.querySelector('p.muted')?.textContent.match(/(?:^| · )Herdr (detected|not installed)(?: · |${'$'})/)?.[1];
-              const capability=capabilityText==='detected'?'detected':capabilityText==='not installed'?'missing':'unknown';
+              const capabilityText=panel?.querySelector('p.muted')?.textContent.match(/(?:^| · )Herdr (detected|not installed|\S+ \((?:Supported|Limited)\))(?: · |${'$'})/)?.[1];
+              const capability=capabilityText==='not installed'?'missing':capabilityText?'detected':'unknown';
               const selected=label=>Array.from(document.querySelectorAll('.view-tabs button[aria-current=page], .mobile-session-views button[aria-current=page]')).some(x=>x.textContent.trim()===label);
               const count=selector=>Math.min(8,document.querySelectorAll(selector).length);
               const child=document.querySelector($childDisconnect);
@@ -2835,7 +2835,7 @@ class NativeWorkspaceTest {
                   if(panel.querySelector('.loading,[role=alert]') || sessions.length!==1)return false;
                   const expected=$expected,windows=Array.from(sessions[0].querySelectorAll(':scope > details > summary')).map(x=>x.textContent.trim());
                   const attach=Array.from(panel.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote("Attach $server")});
-                  return (panel.querySelector('p.muted')?.textContent??'').startsWith('tmux available') &&
+                  return /^tmux \S+ \((?:Supported|Limited)\)/.test(panel.querySelector('p.muted')?.textContent??'') &&
                     sessions[0].querySelector(':scope > summary')?.textContent.trim()===${JSONObject.quote("$server · 2 windows")} &&
                     windows.length===expected.length && windows.every((x,i)=>x===expected[i]) && attach.length===1 && !attach[0].disabled;})()
             """)

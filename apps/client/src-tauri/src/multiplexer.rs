@@ -346,9 +346,7 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
                 .trim_end_matches(|c: char| c.is_ascii_lowercase()),
         )
         .is_some_and(|v| v.len() == 2 && (v[0], v[1]) >= (3, 4)),
-        MultiplexerKind::Zellij => {
-            numbers(version).is_some_and(|v| v.len() == 3 && v[..2] == [0, 45] && v[2] >= 1)
-        }
+        MultiplexerKind::Zellij => numbers(version).is_some_and(|v| v == [0, 45, 1]),
         MultiplexerKind::Herdr => numbers(version)
             .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2])),
     });
@@ -824,6 +822,7 @@ mod tests {
             (Tmux, "", None, Support::Degraded),
             (Zellij, "zellij 0.45.1", Some("0.45.1"), Support::Full),
             (Zellij, "zellij 0.44.3", Some("0.44.3"), Support::Degraded),
+            (Zellij, "zellij 0.45.2", Some("0.45.2"), Support::Degraded),
             (Herdr, "herdr 0.9.3", Some("0.9.3"), Support::Full),
             (Herdr, "herdr 0.9.5", Some("0.9.5"), Support::Full),
             (Herdr, "herdr 0.8.2", Some("0.8.2"), Support::Degraded),
