@@ -48,11 +48,17 @@ it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their c
   await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
   gui.stage='owned synthetic recorded Conversation';await workspaceAction(gui,'Transcript');
   const panel='//section[contains(concat(" ",@class," ")," chat-panel ")]';
+  const choose=(label:string,value:string)=>browser.waitUntil(async()=>{
+    const select=await browser.$(`${panel}//label[normalize-space(text())="${label}"]/select`);
+    if(await select.getValue()!==value)await select.selectByAttribute('value',value);
+    return await select.getValue()===value;
+  },{timeout:5000,timeoutMsg:`Recorded ${label} did not select ${value}`});
   const open=async(source:RecordedSource)=>{
-    await (await browser.$(`${panel}//label[normalize-space(text())="Agent"]/select`)).selectByAttribute('value',source.agent);
-    await (await browser.$(`${panel}//label[normalize-space(text())="View"]/select`)).selectByAttribute('value',source.view??'conversation');
+    // Choosing Codex resets View to records, so View is chosen after Agent.
+    await choose('Agent',source.agent);await choose('View',source.view??'conversation');
     await (await browser.$('.chat-panel input[placeholder="Absolute host path to session.jsonl"]')).setValue(source.path);
     if(source.sessionId!==undefined && source.agent==='opencode')await (await browser.$(`${panel}//label[normalize-space(text())="Transcript session ID"]/input`)).setValue(source.sessionId);
+    expect(await browser.execute(()=>Array.from(document.querySelectorAll<HTMLSelectElement>('.chat-panel select'),x=>x.value).slice(0,2))).toEqual([source.agent,source.view??'conversation']);
     await (await browser.$(`${panel}//button[normalize-space(.)="Open transcript"]`)).click();
   };
   // The page compares in place, so the result never depends on driver object serialization.
@@ -72,9 +78,15 @@ it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their c
   }
   gui.stage='owned recorded reader Home and Refresh';
   const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';await draft.setValue(text);
+  // Two synthetic messages fit the default desktop window; a shorter window makes the reader overflow.
+  await browser.setWindowSize(1200,520);
   const region=await browser.$('.chat-panel .chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
   await browser.waitUntil(async()=>await browser.execute(()=>{const r=document.querySelector('.chat-panel .chat-conversation-messages');return !!r&&document.activeElement===r&&r.scrollHeight>r.clientHeight&&r.scrollTop===0;}),
-    {timeout:5000,timeoutMsg:'Recorded reader did not overflow and settle at Home'});
+    {timeout:5000,timeoutMsg:'Recorded reader did not overflow and settle at Home'}).catch(async primary=>{
+    console.info('Owned recorded reader position',await browser.execute(()=>{const r=document.querySelector('.chat-panel .chat-conversation-messages');
+      return JSON.stringify(r&&{focused:document.activeElement===r,top:r.scrollTop,height:r.clientHeight,total:r.scrollHeight,window:[innerWidth,innerHeight]});}).catch(()=>'unavailable'));
+    throw primary;
+  });
   // Refresh must disable its button and enable it again; old attribute values catch both changes in one callback.
   expect(await browser.execute(()=>{
     const button=document.querySelector<HTMLButtonElement>('.chat-panel button[aria-label="Refresh new messages"]');

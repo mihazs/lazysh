@@ -7,6 +7,10 @@ import {sshCommand} from './sshFixture';
 export type RecordedCheck={selector:string;texts:string[]};
 export type RecordedCardSource={label:string;agent:'claude'|'codex'|'opencode';view:'conversation'|'records';path:string;sessionId?:string;checks:RecordedCheck[]};
 
+// The bounded Chat panel state both failure reports include; `panel` is in scope.
+const panelState=`panel:!!panel,hidden:!!panel&&panel.hidden,selects:panel?Array.from(panel.querySelectorAll('select'),x=>x.value.slice(0,40)).slice(0,4):[],
+      inputs:panel?Array.from(panel.querySelectorAll('input:not([type=checkbox])'),x=>x.value.slice(-80)).slice(0,4):[],
+      alerts:panel?Array.from(panel.querySelectorAll('[role=alert]'),x=>x.textContent.slice(0,240)).slice(0,2):[],busy:!!panel&&Array.from(panel.querySelectorAll('button')).some(x=>x.disabled&&x.type==='submit')`;
 /**
  * Page functions both native cases evaluate; the Android fixture carries these exact strings.
  * With `observe` false each returns whether the page matches; with `observe` true it returns
@@ -17,14 +21,12 @@ export const recordedPage={
   messages:`(expected,observe)=>{const panel=document.querySelector('.chat-panel'),cards=Array.from(panel?panel.querySelectorAll('.chat-conversation-messages .chat-message'):[]),
     seen=cards.map((card,i)=>({role:card.querySelector('h4')?.textContent??null,paragraphs:card.querySelectorAll('p').length,exact:!!expected[i]&&card.querySelector('p')?.textContent===expected[i].text}));
     if(!observe)return cards.length===expected.length&&seen.every((m,i)=>m.paragraphs===1&&m.role===expected[i].role&&m.exact);
-    return JSON.stringify({panel:!!panel,hidden:!!panel&&panel.hidden,regions:panel?panel.querySelectorAll('.chat-conversation-messages').length:0,expected:expected.length,messages:seen.slice(0,8),
-      selects:panel?Array.from(panel.querySelectorAll('select'),x=>x.value.slice(0,40)).slice(0,4):[],inputs:panel?Array.from(panel.querySelectorAll('input:not([type=checkbox])'),x=>x.value.slice(-80)).slice(0,4):[],
-      alerts:panel?Array.from(panel.querySelectorAll('[role=alert]'),x=>x.textContent.slice(0,240)).slice(0,2):[],busy:!!panel&&Array.from(panel.querySelectorAll('button')).some(x=>x.disabled&&x.type==='submit')});}`,
+    return JSON.stringify({${panelState},regions:panel?panel.querySelectorAll('.chat-conversation-messages').length:0,expected:expected.length,messages:seen.slice(0,8)});}`,
   // Each check names a selector inside the Chat panel and the exact whitespace-collapsed text of
   // each match, in order; an empty list requires that nothing matches.
   cards:`(checks,observe)=>{const panel=document.querySelector('.chat-panel'),text=e=>e.textContent.replace(/\\s+/g,' ').trim(),
     actual=checks.map(c=>panel?Array.from(panel.querySelectorAll(c.selector),text):null);
-    return observe?JSON.stringify(actual.map(v=>v&&v.slice(0,8).map(x=>x.slice(0,160)))):actual.every((v,i)=>JSON.stringify(v)===JSON.stringify(checks[i].texts));}`,
+    return observe?JSON.stringify({${panelState},texts:actual.map(v=>v&&v.slice(0,8).map(x=>x.slice(0,160)))}):actual.every((v,i)=>JSON.stringify(v)===JSON.stringify(checks[i].texts));}`,
 };
 /** One page function applied to its JSON argument, as an expression. */
 export const recordedPageCall=(name:keyof typeof recordedPage,argument:unknown,observe=false)=>`(${recordedPage[name]})(${JSON.stringify(argument)},${observe})`;
