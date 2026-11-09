@@ -4,6 +4,8 @@
 
 - Add the local workspace specification: how desktop local sessions on Linux and Windows will gain the Files, repository, multiplexer, companion, Agents board, Agent view and other features of remote sessions. Documentation only; no application defaults change.
 
+- Add the multiplexer compatibility specification: one capability checklist, supported versions and per-platform targets for tmux, Zellij, Herdr and rmux. Documentation only; no application defaults change.
+
 - Add the Agent view specification: a native, switchable view of a running agent that co-exists with its terminal session. Documentation only; no application defaults change.
 
 - Group the Agents board by project and host, and archive finished or stale reports. Inside **Attention**, **Working** and **Done**, reports from the same project now sit together under a heading with the project folder and the host's name, with the most recently reported project first. Each report has an **Archive** action (also in the selected report's details), which hides it on this device: **Archived N** below the board lists archived reports with **Restore**. An archived report comes back on its own when its agent reports a newer event, and the archive forgets it when the host companion ages the report out (seven days, as before). Archives are kept per saved host on this device and are not synced or sent to the host. No defaults change.
