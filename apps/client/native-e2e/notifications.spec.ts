@@ -71,6 +71,9 @@ it('delivers inbox notifications to the desktop notification server, pauses them
 
   gui.stage='owned paused notifications';
   inbox=await openInbox();
+  // With monitoring on and rows present, the inbox reopens with its settings collapsed.
+  const settings=await inbox.$('details.inbox-settings');
+  if(await settings.getAttribute('open')===null)await (await settings.$('summary')).click();
   await (await inbox.$('button=Pause system notifications')).click();
   await (await inbox.$('button=Enable system notifications')).waitForDisplayed();
   expect(await (await inbox.$('button=Test notification')).isEnabled()).toBe(false);
