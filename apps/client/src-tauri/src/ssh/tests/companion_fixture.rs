@@ -16,13 +16,18 @@ pub(super) fn environment(directory: &Path) -> String {
     assert!(!directory.to_str().unwrap().chars().any(char::is_whitespace));
     format!("SetEnv PATH={}:/usr/bin:/bin HOME={} CODEX_HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",bin.display(),directory.display(),directory.join(".codex").display(),directory.join(".config").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
 }
-pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
+/// The current-source release companion the CI step built for owned SSH cases.
+pub(super) fn owned_agent_binary() -> PathBuf {
     let binary = PathBuf::from(
         std::env::var_os("LAZYSH_TEST_AGENT_BIN")
             .expect("An explicitly owned current-source release companion binary is required"),
     );
     assert!(binary.is_absolute() && binary.is_file());
     assert!(fs::metadata(&binary).unwrap().len() <= 64 * 1024 * 1024);
+    binary
+}
+pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str, directory: &Path) {
+    let binary = owned_agent_binary();
     let session = app.state::<AppState>().session(id).await.unwrap();
     let lease = access_lease();
     assert_eq!(

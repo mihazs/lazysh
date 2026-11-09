@@ -3473,6 +3473,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "account_usage_fixture.rs"]
     mod account_usage_fixture;
+    #[cfg(target_os = "linux")]
+    #[path = "agent_board_fixture.rs"]
+    mod agent_board_fixture;
     #[cfg(unix)]
     #[path = "client_environment_fixture.rs"]
     mod client_environment_fixture;
@@ -6112,6 +6115,13 @@ mod tests {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH and a current-source companion binary"]
+    async fn openssh_agent_board_and_approvals_through_companion_hooks() {
+        openssh_interoperability(OpenSshCheck::AgentBoard).await;
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires owned OpenSSH and a current-source companion binary"]
@@ -6146,6 +6156,8 @@ mod tests {
         TranscriptImages,
         TemporaryAttachments,
         CompanionInstall,
+        #[cfg(target_os = "linux")]
+        AgentBoard,
         AccountUsage,
     }
 
@@ -6213,6 +6225,12 @@ mod tests {
         } else {
             String::new()
         };
+        #[cfg(target_os = "linux")]
+        let environment = if matches!(check, OpenSshCheck::AgentBoard) {
+            agent_board_fixture::environment(dir.path())
+        } else {
+            environment
+        };
         let key = ed25519_key();
         let user_key = ed25519_key();
         let authorized = dir.path().join("authorized_keys");
@@ -6275,6 +6293,11 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if matches!(check, OpenSshCheck::AgentBoard) {
+            agent_board_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {

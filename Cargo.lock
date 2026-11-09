@@ -3796,6 +3796,7 @@ version = "1.27.0"
 dependencies = [
  "age",
  "axum",
+ "chrono",
  "dunce",
  "futures-util",
  "hound",
@@ -3804,6 +3805,7 @@ dependencies = [
  "hyper-util",
  "image",
  "lazysh-account-usage",
+ "lazysh-agent",
  "lazysh-common",
  "lazysh-et-transport",
  "lazysh-mosh-transport",
