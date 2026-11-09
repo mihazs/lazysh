@@ -50,6 +50,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Generic lifecycle protocol, retention and SQLite/WAL safety | [Companion events and storage](reference/companion-events.md) |
 | Provider-specific transcript formats and reader limits | [Companion contracts](companion.md) |
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
+| Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Recorded token counters, context and provider-window freshness | [Recorded usage](usage.md) |
 | Explicit live account collectors and unsupported/unknown states | [AI account usage](ai-account-usage.md) |
 | Native local-speech models, inference and interop limits | [Voice native interop](voice-native-interop.md) |
