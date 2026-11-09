@@ -179,4 +179,9 @@ test('phone never offers Both',async({page},testInfo)=>{
   await expect(agent.getByRole('checkbox')).toHaveCount(0);
   await expect(agent.getByRole('heading',{name:'user',exact:true})).toHaveCount(0);
   expect((await agent.getByRole('region',{name:'Conversation messages',exact:true}).boundingBox())!.height).toBeGreaterThan(844/2);
+  // Back on Terminal, a touch screen does not open the soft keyboard, which would shrink the remote pane.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  await expect(page.locator('.terminal-pane:visible .xterm-rows')).toContainText('work scrollback 40');
+  await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+  expect(await page.evaluate(()=>Boolean(document.activeElement?.closest('.terminal-pane')))).toBe(false);
 });

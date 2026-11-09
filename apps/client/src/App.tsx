@@ -1310,6 +1310,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const sessionViewOfRef=useRef(sessionViewOf);sessionViewOfRef.current=sessionViewOf;
   function chooseSessionView(session:LiveSession,next:SessionView) {
+    // Showing the terminal again is not a request to type: no soft keyboard, so the remote pane keeps its size.
+    if(next!=='agent')setQuietTerminal(session.id);
     setViewChoices(choices=>saveSessionView(choices,sessionViewKey(session),next));
   }
   useEffect(()=>{
