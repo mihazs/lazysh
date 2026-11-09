@@ -4423,10 +4423,13 @@ class NativeWorkspaceTest {
             for ((name, expected) in listOf(plain to "AGENT__0_0_", forwarding to "AGENT_set_1_1_")) {
                 openOwnedConnect(scenario, name)
                 if (name == forwarding) {
+                    // The plain host's trust already pinned this address and port, so no fingerprint review appears.
+                    parity.mark("primary")
                     typeInto(scenario, parityPassword, parity.fixture.getString("password"))
                     submitOwnedConnect(scenario)
-                    trustOwnedHostKey(scenario, parity.fingerprint("primary"), "127.0.0.1:${parity.port("primary")}")
                     awaitOwnedRefusal(scenario, "forwarding without a key", "Agent forwarding requires the private key selected for this connection")
+                    val facts = parity.observe("primary")
+                    assertEquals("Forwarding without a key must be refused before authentication: $facts", 0, parityCount(facts, "userauthRequests"))
                 }
                 chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
                 submitOwnedConnect(scenario)

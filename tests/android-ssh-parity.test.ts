@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SshFixture,OwnedProcess} from './support/androidSsh';
@@ -46,7 +46,7 @@ test.skipIf(!parity)('owned password sshd accepts only its password and its log 
   } finally {await fixture.stop();}
 });
 
-test.skipIf(!parity)('owned parity control answers only its nonce and closed actions, and installs exactly one public key',async()=>{
+test.skipIf(!parity)('owned parity control answers only its nonce and closed actions',async()=>{
   const started:SshFixture[]=[];
   try {
     for(let index=0;index<3;index++)started.push(await SshFixture.start(undefined,{log:true}));
@@ -54,7 +54,7 @@ test.skipIf(!parity)('owned parity control answers only its nonce and closed act
     let rotations=0;
     const control=parityControl({primary,bastion,rotated},primary.nonce,async()=>{rotations++;});
     for(const request of [undefined,{nonce:'foreign',action:'mark',server:'primary'},{nonce:primary.nonce,action:'remove'},
-      {nonce:primary.nonce,action:'observe',server:'other'},{nonce:primary.nonce,action:'authorize',publicKey:'ssh-rsa AAAA'}])
+      {nonce:primary.nonce,action:'observe',server:'other'}])
       await expect(control.reply(request)).rejects.toThrow();
     for(const server of ['primary','bastion'])await control.reply({nonce:primary.nonce,action:'mark',server});
     const probe=await primary.client();probe.child.stdin!.end(`${primary.challenge}\nexit\n`);
@@ -65,21 +65,6 @@ test.skipIf(!parity)('owned parity control answers only its nonce and closed act
     expect(await control.reply({nonce:primary.nonce,action:'observe',server:'bastion'})).toMatchObject({connections:0,acceptedPublickey:[]});
     await control.reply({nonce:primary.nonce,action:'rotate'});
     expect(rotations).toBe(1);
-    // A real generated key becomes authorized and its reported fingerprint is OpenSSH's own.
-    const directory=await mkdtemp(join(tmpdir(),'lazysh-parity-generated-'));
-    try {
-      await sshCommand('owned generated key','ssh-keygen',['-q','-t','ed25519','-N','','-C','generated in lazysh','-f',join(directory,'id')]);
-      await chmod(join(directory,'id'),0o600);
-      const publicKey=(await readFile(join(directory,'id.pub'),'utf8')).trim();
-      const before=await readFile(join(primary.directory,'authorized_keys'),'utf8');
-      const reply=await control.reply({nonce:primary.nonce,action:'authorize',publicKey});
-      expect(reply.fingerprint).toBe((await sshCommand('owned generated fingerprint','ssh-keygen',['-l','-E','sha256','-f',join(directory,'id.pub')])).trim().split(/\s+/)[1]);
-      expect(await readFile(join(primary.directory,'authorized_keys'),'utf8')).toBe(before+publicKey+'\n');
-      const generated=new OwnedProcess('ssh',['-T','-p',String(primary.port),'-F','/dev/null','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
-        '-o','StrictHostKeyChecking=no','-o','UserKnownHostsFile=/dev/null','-i',join(directory,'id'),`${primary.username}@127.0.0.1`]);
-      generated.child.stdin!.end(`${primary.challenge}\nexit\n`);
-      expect(await generated.finish('owned generated login',5000)).toContain(primary.expected);
-    } finally {await rm(directory,{recursive:true,force:true});}
   } finally {for(const fixture of started)await fixture.stop();}
 },20_000);
 

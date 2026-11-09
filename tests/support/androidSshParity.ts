@@ -1,5 +1,5 @@
 import {createServer,type Server} from 'node:net';
-import {appendFile,chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,mkdtemp,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
@@ -54,19 +54,12 @@ export function parityControl(fixtures:Fixtures,nonce:string,rotate:()=>Promise<
   const mark=async(name:ParityServer)=>{marks.set(name,(await log(name)).length);};
   return {reply:async request=>{
     if(!request || typeof request!=='object')throw new Error('request');
-    const {nonce:owner,action,server,publicKey}=request as Record<string,unknown>;
+    const {nonce:owner,action,server}=request as Record<string,unknown>;
     if(owner!==nonce)throw new Error('nonce');
     const name=servers.find(value=>value===server);
     if(action==='mark' && name){await mark(name);return {};}
     if(action==='observe' && name)return sshdLogFacts((await log(name)).subarray(marks.get(name)).toString('utf8'));
     if(action==='rotate'){await rotate();await mark('rotated');return {};}
-    if(action==='authorize' && typeof publicKey==='string' && /^ssh-ed25519 [A-Za-z0-9+/]{68}(?: [ -~]{0,128})?$/.test(publicKey)) {
-      const file=join(fixtures.primary.directory,`authorize-${randomBytes(8).toString('hex')}.pub`);
-      await writeFile(file,publicKey+'\n',{mode:0o600,flag:'wx'});
-      const fingerprint=(await sshCommand('owned authorized key fingerprint','ssh-keygen',['-l','-E','sha256','-f',file])).trim().split(/\s+/)[1];
-      await appendFile(join(fixtures.primary.directory,'authorized_keys'),publicKey+'\n');
-      return {fingerprint};
-    }
     throw new Error('action');
   }};
 }
