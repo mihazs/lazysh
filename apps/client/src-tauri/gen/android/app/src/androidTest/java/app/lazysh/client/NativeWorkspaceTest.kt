@@ -4253,9 +4253,11 @@ class NativeWorkspaceTest {
     /** Submits the connection form; a new attempt clears the previous refusal before anything else waits. */
     private fun submitOwnedConnect(scenario: ActivityScenario<MainActivity>) {
         closeSoftKeyboard()
+        // Mark the shown refusal: a fast new refusal is a new node and must not count as the previous one.
+        evaluate(scenario, "(()=>{document.querySelector('[role=dialog] [role=alert]')?.setAttribute('data-owned-previous','');return true;})()")
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role=dialog] form.form-stack button[type=submit]")).perform(webClick())
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (evaluate(scenario, present("[role=dialog] [role=alert]")) == "true") {
+        while (evaluate(scenario, present("[role=dialog] [role=alert][data-owned-previous]")) == "true") {
             assertTrue("Owned connection attempt did not clear its previous refusal", System.nanoTime() < deadline)
             Thread.sleep(50)
         }
@@ -4385,6 +4387,10 @@ class NativeWorkspaceTest {
                   return value('mosh')?.disabled===true && value('et')?.disabled===true && value('ssh')?.disabled===false &&
                     Array.from(document.querySelectorAll('[role=dialog] fieldset legend')).some(x=>x.textContent.includes(${JSONObject.quote(bastion)}));})()
             """))
+            // The bastion's saved credentials are the default; this route proves its own typed password instead.
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//*[@role='dialog']//fieldset[legend[contains(.,'$bastion')]]//label[contains(normalize-space(.),'saved credentials')]/input[@type='checkbox']"))
+                .perform(webScrollIntoView()).perform(webClick())
             typeInto(scenario, "[role=dialog] fieldset input[type=password]", parity.fixture.getString("password"))
             chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
             submitOwnedConnect(scenario)
