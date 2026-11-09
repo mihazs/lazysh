@@ -168,7 +168,7 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 | No agent detected in the pane | "No agent conversation for this terminal", **Show terminal**, **Choose transcript**. |
 | Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
-| Session cannot accept confirmed input (Zellij, local, stock Herdr, web build) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Session cannot accept confirmed input (Zellij, plain PTY, stock Herdr, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
 

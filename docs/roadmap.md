@@ -10,6 +10,8 @@ The [parity matrix](reference/parity-matrix.md) records verified reference-clien
 
 The [Agent view specification](agent-view.md) describes the planned native view of a running agent that co-exists with its terminal.
 
+The [local workspace specification](local-workspace.md) describes how desktop local sessions on Linux and Windows gain every feature remote sessions offer.
+
 Anyone can follow the public issues or propose a focused contribution without
 private project access. Maintainers also use the private
 [GitHub Project](https://github.com/users/mihazs/projects/2) to coordinate work;
