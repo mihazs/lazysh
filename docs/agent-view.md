@@ -1,7 +1,8 @@
 # Agent view
 
-Status: specification. Tracked by the Agent view epic and its slice issues on the
-[GitHub Project](https://github.com/users/mihazs/projects/2). It extends the native
+Status: specification. Tracked by the Agent view epic
+[#1119](https://github.com/mihazs/lazysh/issues/1119) and its slice issues #1120–#1125
+on the [GitHub Project](https://github.com/users/mihazs/projects/2). It extends the native
 Chat umbrella ([#5](https://github.com/mihazs/lazysh/issues/5)); nothing here is
 released until the slice that implements it ships.
 
