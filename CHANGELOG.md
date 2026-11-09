@@ -4,6 +4,8 @@
 
 - Add the local workspace specification: how desktop local sessions on Linux and Windows will gain the Files, repository, multiplexer, companion, Agents board, Agent view and other features of remote sessions. Documentation only; no application defaults change.
 
+- Add the multiplexer compatibility specification: one capability checklist, supported versions and per-platform targets for tmux, Zellij, Herdr and rmux. Documentation only; no application defaults change.
+
 - Add the Agent view specification: a native, switchable view of a running agent that co-exists with its terminal session. Documentation only; no application defaults change.
 
 - Support Herdr 0.9.3 through 0.9.5. lazysh now builds and tests against Herdr 0.9.5, the current upstream release; hosts still on 0.9.3 keep working because lazysh uses only commands, IDs and error codes both versions share. If a Herdr workspace, tab or pane was closed on the host after the tree loaded, navigating to it now says the destination changed instead of showing Herdr's raw JSON error, in the Workspaces navigation and the Herdr tool panel alike; exact pane navigation needs the companion from this release. The optional guarded Herdr build is re-imported from 0.9.5 with its lazysh changes kept. Herdr 0.9.4 and later keep running after the shell that started them closes, so stop a server with `herdr server stop` or SIGTERM instead of SIGHUP. No defaults changed.
