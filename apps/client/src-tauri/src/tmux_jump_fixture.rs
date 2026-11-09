@@ -254,6 +254,7 @@ impl Fixture {
         .unwrap();
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3631,4 +3632,59 @@ async fn real_ssh_user_installed_herdr_discovers_and_attaches_exact_default() {
     .is_err());
     herdr_retired(&state, &source.session_id, &parent, false).await;
     servers.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned OpenSSH, LAZYSH_TEST_TMUX and LAZYSH_EXPECT_MUX_SUPPORT; optional LAZYSH_TEST_ZELLIJ and LAZYSH_TEST_HERDR_STOCK"]
+async fn real_ssh_discovery_reports_multiplexer_versions_and_support() {
+    use crate::multiplexer::multiplexer_tree;
+    // For example `tmux=full zellij=full herdr=full`; each named tool must be supplied.
+    let expected = std::env::var("LAZYSH_EXPECT_MUX_SUPPORT").unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let mut versions = std::collections::BTreeMap::new();
+    for pair in expected.split_whitespace() {
+        let (kind, _) = pair.split_once('=').unwrap();
+        let (variable, flag) = match kind {
+            "tmux" => ("LAZYSH_TEST_TMUX", "-V"),
+            "zellij" => ("LAZYSH_TEST_ZELLIJ", "--version"),
+            "herdr" => ("LAZYSH_TEST_HERDR_STOCK", "--version"),
+            _ => panic!("unknown multiplexer {kind}"),
+        };
+        let binary = std::env::var(variable).unwrap();
+        std::os::unix::fs::symlink(&binary, tools.path().join(kind)).unwrap();
+        let output = Command::new(&binary).arg(flag).output().unwrap();
+        let line = String::from_utf8(output.stdout).unwrap();
+        let version = line
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix(kind)
+            .unwrap()
+            .trim();
+        versions.insert(kind.to_owned(), version.to_owned());
+    }
+    // The fixture puts the Herdr directory first on the owned sshd's PATH.
+    let f = Fixture::with_herdr(Some(&tools.path().join("herdr"))).await;
+    let (_authority, lease) = unlocked_authority();
+    let (app, state) = herdr_native_app(&f);
+    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let discovery = multiplexer_tree(app.state(), source.session_id.clone(), None, lease.clone())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let discovery = serde_json::to_value(discovery).unwrap();
+    eprintln!("owned discovery tools: {}", discovery["tools"]);
+    for pair in expected.split_whitespace() {
+        let (kind, support) = pair.split_once('=').unwrap();
+        let tool = discovery["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["kind"] == kind)
+            .unwrap_or_else(|| panic!("{kind} was not discovered"));
+        assert_eq!(tool["version"], versions[kind].as_str(), "{kind}");
+        assert_eq!(tool["support"], support, "{kind}");
+        assert_eq!(discovery[format!("{kind}Available")], true);
+    }
 }

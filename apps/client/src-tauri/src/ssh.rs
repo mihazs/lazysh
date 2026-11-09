@@ -102,12 +102,19 @@ impl DefaultMultiplexer {
 fn deserialize_default_multiplexer<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<DefaultMultiplexer>, D::Error> {
-    let value = Option::<DefaultMultiplexer>::deserialize(deserializer)?;
-    if let Some(mux) = &value {
-        mux.validate()
-            .map_err(|_| serde::de::Error::custom("Invalid default multiplexer"))?;
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    // A kind added by a newer client imports as no default instead of rejecting the host.
+    if value["kind"].is_string()
+        && crate::multiplexer::MultiplexerKind::deserialize(&value["kind"]).is_err()
+    {
+        return Ok(None);
     }
-    Ok(value)
+    let mux = DefaultMultiplexer::deserialize(value).map_err(serde::de::Error::custom)?;
+    mux.validate()
+        .map_err(|_| serde::de::Error::custom("Invalid default multiplexer"))?;
+    Ok(Some(mux))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +126,14 @@ pub struct Host {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_multiplexer: Option<DefaultMultiplexer>,
+    /// Defaults whose kind released clients reject; they ignore this field (unknown host fields are skipped).
+    #[serde(
+        default,
+        rename = "defaultMultiplexerNext",
+        deserialize_with = "deserialize_default_multiplexer",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_multiplexer_next: Option<DefaultMultiplexer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<Transport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,7 +195,10 @@ impl Host {
         )
     }
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(mux) = &self.default_multiplexer {
+        for mux in [&self.default_multiplexer, &self.default_multiplexer_next]
+            .into_iter()
+            .flatten()
+        {
             mux.validate()?;
         }
         if let Some(options) = &self.mosh {
@@ -3592,6 +3610,7 @@ mod tests {
     fn metadata_host(id: &str, name: &str) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3633,6 +3652,7 @@ mod tests {
         });
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3731,8 +3751,14 @@ mod tests {
                 kind
             );
         }
+        let mut future = base.clone();
+        future["defaultMultiplexer"] = serde_json::json!({"kind":"future-mux","name":"work"});
+        assert!(serde_json::from_value::<Host>(future)
+            .unwrap()
+            .default_multiplexer
+            .is_none());
         for invalid in [
-            serde_json::json!({"kind":"unknown","name":"work"}),
+            serde_json::json!({"kind":7,"name":"work"}),
             serde_json::json!({"kind":"tmux","name":""}),
             serde_json::json!({"kind":"tmux","name":"   "}),
             serde_json::json!({"kind":"tmux","name":"bad.name"}),
@@ -3857,6 +3883,7 @@ mod tests {
         let (_dir, state) = fixture_state();
         let jump = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3874,6 +3901,7 @@ mod tests {
         };
         let mut target = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -4634,6 +4662,7 @@ mod tests {
         });
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -5613,6 +5642,7 @@ mod tests {
         let (_dir, state) = fixture_state();
         let mut host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -6245,6 +6275,7 @@ mod tests {
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,

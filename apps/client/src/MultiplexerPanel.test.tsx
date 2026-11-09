@@ -142,3 +142,19 @@ it('refuses a requested picker routed to a different source ID',async()=>{
   render(<MuxPanel sessionId="wrong-old-active" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
   await act(async()=>{});fireEvent.click(screen.getByRole('button',{name:'Refresh'}));expect(invoke).not.toHaveBeenCalled();
 });
+it('lists discovered versions, explains each limited multiplexer and reports the record once read',async()=>{
+  const tools=[
+    {kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']},
+    {kind:'herdr',version:'0.8.2',support:'degraded',missing:['create']},
+    {kind:'zellij',version:null,support:'degraded',missing:['tree']},
+  ];
+  vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,zellijAvailable:true,tools});const onTools=vi.fn();
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} onTools={onTools}/>);
+  expect(await screen.findByText('tmux 3.2a (Limited) · Herdr 0.8.2 (Limited) · Zellij (Limited)')).toBeTruthy();
+  expect(screen.getAllByRole('note').map(note=>note.textContent)).toEqual([
+    'Jump To and Chat input need tmux 3.4 or newer.',
+    'Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.',
+    'The workspace tree, close, resize and agent launch need Zellij 0.45.1.',
+  ]);
+  expect(onTools).toHaveBeenCalledExactlyOnceWith(tools);
+});

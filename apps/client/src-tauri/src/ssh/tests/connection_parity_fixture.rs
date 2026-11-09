@@ -171,6 +171,7 @@ impl Remote {
     fn host(&self, id: &str, pinned: bool) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,

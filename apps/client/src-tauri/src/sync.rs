@@ -1315,6 +1315,7 @@ mod tests {
     fn host(id: &str) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
@@ -1375,6 +1376,48 @@ mod tests {
         bundle.hosts[0].default_multiplexer.as_mut().unwrap().name = "bad\nname".into();
         assert!(validate_bundle(&bundle, Scope::Settings).is_err());
         assert!(serde_json::from_slice::<Bundle>(&serde_json::to_vec(&bundle).unwrap()).is_err());
+    }
+
+    #[test]
+    fn synced_default_multiplexer_tolerates_kinds_this_client_does_not_know() {
+        let mut encoded = serde_json::to_value(settings()).unwrap();
+        encoded["hosts"][0]["defaultMultiplexer"] =
+            serde_json::json!({"kind":"future-mux","name":"work"});
+        let imported: Bundle = serde_json::from_value(encoded.clone()).unwrap();
+        validate_bundle(&imported, Scope::Settings).unwrap();
+        assert!(imported.hosts[0].default_multiplexer.is_none());
+        // The newer field round-trips here; a released reader skips unknown host fields.
+        let next = serde_json::json!({"kind":"zellij","name":"next"});
+        encoded["hosts"][0]["defaultMultiplexerNext"] = next.clone();
+        let imported: Bundle = serde_json::from_value(encoded.clone()).unwrap();
+        validate_bundle(&imported, Scope::Settings).unwrap();
+        assert_eq!(
+            serde_json::to_value(&imported).unwrap()["hosts"][0]["defaultMultiplexerNext"],
+            next
+        );
+        #[derive(Deserialize)]
+        struct ReleasedHost {
+            #[serde(rename = "defaultMultiplexer", default)]
+            default_multiplexer: Option<crate::ssh::DefaultMultiplexer>,
+            id: String,
+        }
+        #[derive(Deserialize)]
+        struct ReleasedBundle {
+            hosts: Vec<ReleasedHost>,
+        }
+        // Newer clients keep released kinds in the old field and new kinds in the new one.
+        encoded["hosts"][0]["defaultMultiplexer"] =
+            serde_json::json!({"kind":"tmux","name":"work"});
+        encoded["hosts"][0]["defaultMultiplexerNext"] =
+            serde_json::json!({"kind":"future-mux","name":"next"});
+        let released: ReleasedBundle = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(released.hosts[0].id, "remote");
+        assert_eq!(
+            released.hosts[0].default_multiplexer.as_ref().unwrap().name,
+            "work"
+        );
+        let current: Bundle = serde_json::from_value(encoded).unwrap();
+        assert!(current.hosts[0].default_multiplexer_next.is_none());
     }
 
     #[test]

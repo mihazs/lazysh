@@ -207,7 +207,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lazysh-pinned-downloads
-          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig70e49664-tmux551ab8de-mosh872e4b13-et3065d282-zellij40bcc2e0
+          key: lazysh-pinned-downloads-${{ github.job }}-v1-zig70e49664-tmux551ab8de-tmux38e79c699c-mosh872e4b13-et3065d282-zellij40bcc2e0
       - name: Provision checksum-verified Zig 0.16.0 outside the checkout
         # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-linux].shasum
         run: |
@@ -537,7 +537,7 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
-      - name: Reject unsupported apt tmux loops without binding authority
+      - name: Reject unsupported apt tmux loops without binding authority and report it degraded
         shell: bash
         env:
           LAZYSH_TEST_TMUX: /usr/bin/tmux
@@ -546,6 +546,10 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          # Product discovery over owned OpenSSH reports this tmux as degraded.
+          case_name=ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          LAZYSH_EXPECT_MUX_SUPPORT='tmux=degraded' cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact --nocapture
       # Last: the stock verification replaces LAZYSH_TEST_HERDR for any later step.
       - &pinned-zellij
         name: Install the pinned official Zellij 0.45.1 release outside the checkout
@@ -661,6 +665,8 @@ jobs:
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Exercise native desktop launch parsing and original-lease admission
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
+      - name: Exercise multiplexer version gates, command building and tree parsing
+        run: "cargo test --locked -p lazysh --lib -- multiplexer:: zellij:: herdr:: herdr_create:: tmux_jump::"
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
@@ -959,8 +965,8 @@ jobs:
       - *pinned-download-cache
       - uses: ./.github/actions/parakeet-onnxruntime
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install build, OpenSSH, nss_wrapper, tmux, login shell and official ET build dependencies
-        run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish
+      - name: Install build, OpenSSH, nss_wrapper, tmux, login shell, official ET and tmux build dependencies
+        run: sudo sh .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config openssh-server tmux git libsodium-dev libunwind-dev libutempter-dev libnss-wrapper zsh fish libncurses-dev libevent-dev bison
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         timeout-minutes: 25
         # Release asset digest: https://api.github.com/repos/MisterTea/EternalTerminal/releases/tags/et-v7.0.0
@@ -974,6 +980,22 @@ jobs:
           cmake --build "$et_root/build" --parallel 4 --target etserver etterminal
           test "$("$et_root/build/etserver" --version)" = 'et version 7.0.0'
           printf '%s\n' "ET_SERVER_BIN=$et_root/build/etserver" "ET_TERMINAL_BIN=$et_root/build/etterminal" >> "$GITHUB_ENV"
+      - name: Build the newest pinned official tmux 3.8 outside the checkout
+        timeout-minutes: 10
+        # Release asset digest: https://api.github.com/repos/tmux/tmux/releases/tags/3.8
+        run: |
+          tmux_root=$(mktemp -d "$RUNNER_TEMP/lazysh-tmux-3.8-XXXXXX")
+          sh .github/scripts/pinned-download.sh e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e "$tmux_root/tmux-3.8.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 895926 https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
+          test "$(stat -c%s "$tmux_root/tmux-3.8.tar.gz")" -eq 895926
+          printf '%s  %s\n' 'e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e' "$tmux_root/tmux-3.8.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$tmux_root/tmux-3.8.tar.gz" --directory "$tmux_root" --no-same-owner --no-same-permissions
+          cd "$tmux_root/tmux-3.8"
+          ./configure --prefix="$tmux_root/install"
+          make -j4
+          make install
+          test "$("$tmux_root/install/bin/tmux" -V)" = 'tmux 3.8'
+          # Kept off PATH: only the discovery step below runs it.
+          echo "LAZYSH_TMUX_NEWEST=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
       - *pinned-zellij
       - *stock-herdr-guard
       - *stock-herdr-download
@@ -1058,6 +1080,27 @@ jobs:
           CASE_NAME: ssh::tmux_jump_fixture::real_ssh_user_installed_herdr_discovers_and_attaches_exact_default
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: *exact-ignored-case
+      - name: Report tmux 3.4, Zellij 0.45.1 and stock Herdr versions as supported through product discovery over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          LAZYSH_TEST_TMUX: /usr/bin/tmux
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+          LAZYSH_EXPECT_MUX_SUPPORT: tmux=full zellij=full herdr=full
+        run: |
+          test "$(/usr/bin/tmux -V)" = 'tmux 3.4'
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Report the newest pinned tmux as supported through product discovery over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_ssh_discovery_reports_multiplexer_versions_and_support
+          LAZYSH_EXPECT_MUX_SUPPORT: tmux=full
+        run: |
+          test "$("$LAZYSH_TMUX_NEWEST" -V)" = 'tmux 3.8'
+          LAZYSH_TEST_TMUX="$LAZYSH_TMUX_NEWEST" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
       - name: Exercise official ET 7.0.0 transport and SSH bootstrap
         if: ${{ !cancelled() }}
         run: bun run test:et

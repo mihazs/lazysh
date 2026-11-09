@@ -71,6 +71,7 @@ import {
   type AutoOptions,
   type MultiplexerEntry,
   type HerdrNavigationTarget,
+  type MultiplexerTool,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
 import {installMoshResize} from "./moshResize";
@@ -1214,6 +1215,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
+  // Last discovered tool versions per host; a version without Jump To hides it on that host.
+  const [muxTools, setMuxTools] = useState<Record<string, MultiplexerTool[]>>({});
   const [deleting, setDeleting] = useState<Host | null>(null);
   const [error, setError] = useState<UiErrorCause>("");
   const [search, setSearch] = useState("");
@@ -1485,7 +1488,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
-  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
+  const jumpSupported=!muxTools[active?.hostId ?? '']?.some(tool=>tool.kind==='tmux' && tool.missing.includes('jump'));
+  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
@@ -2456,6 +2460,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     sessionId={active.id}
                     attached={active.attached}
                     requested={muxLaunch?.sessionId===active.id ? muxLaunch : undefined}
+                    onTools={tools=>{const hostId=active.hostId;setMuxTools(value=>({...value,[hostId]:tools}));}}
                     onAttach={(name, kind, server) => attachTmux(active, name, kind, server,
                       muxLaunch?.sessionId===active.id ? muxLaunch.lease : lease)}
                   />
@@ -2624,7 +2629,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
                 <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
                 {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-                {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+                {active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
                 {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
               </div>}]:[]),
               {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
