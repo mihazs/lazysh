@@ -8,6 +8,8 @@ current distribution limits. No release dates are promised.
 
 The [parity matrix](reference/parity-matrix.md) records verified reference-client behaviors per platform and links each gap to its issue.
 
+The [Agent view specification](agent-view.md) describes the planned native view of a running agent that co-exists with its terminal.
+
 Anyone can follow the public issues or propose a focused contribution without
 private project access. Maintainers also use the private
 [GitHub Project](https://github.com/users/mihazs/projects/2) to coordinate work;
