@@ -318,15 +318,15 @@ jobs:
         id: stock-source-download
         env:
           HERDR_ARCHIVE_NAME: stock-source
-          HERDR_ARCHIVE_URL: https://codeload.github.com/herdrdev/herdr/tar.gz/7b116c05bfda646af39d2524c54e70c751f57ee8
+          HERDR_ARCHIVE_URL: https://codeload.github.com/herdrdev/herdr/tar.gz/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
         run: *herdr-archive-download
       - name: Verify and extract original stock source
         id: stock-source
         run: |
-          printf '%s  %s\n' 'a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124' "$HERDR_CI_ROOT/stock-source.tar.gz" | sha256sum --check --strict
+          printf '%s  %s\n' 'cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168' "$HERDR_CI_ROOT/stock-source.tar.gz" | sha256sum --check --strict
           manifest="$GITHUB_WORKSPACE/packages/herdr-upstream/SOURCE-MANIFEST.sha256"
-          printf '%s  %s\n' '1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9' "$manifest" | sha256sum --check --strict
-          test "$(wc -l < "$manifest")" -eq 1828
+          printf '%s  %s\n' 'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a' "$manifest" | sha256sum --check --strict
+          test "$(wc -l < "$manifest")" -eq 1843
           mkdir "$HERDR_CI_ROOT/stock-source"
           tar --extract --gzip --file "$HERDR_CI_ROOT/stock-source.tar.gz" --directory "$HERDR_CI_ROOT/stock-source" --strip-components=1 --no-same-owner --no-same-permissions
           cd "$HERDR_CI_ROOT/stock-source"
@@ -345,8 +345,8 @@ jobs:
         run: |
           cargo +1.96.1 build --locked --bin herdr
           manifest="$GITHUB_WORKSPACE/packages/herdr-upstream/SOURCE-MANIFEST.sha256"
-          printf '%s  %s\n' '1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9' "$manifest" | sha256sum --check --strict
-          test "$(wc -l < "$manifest")" -eq 1828
+          printf '%s  %s\n' 'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a' "$manifest" | sha256sum --check --strict
+          test "$(wc -l < "$manifest")" -eq 1843
           sha256sum --check --quiet "$manifest"
       - name: Retain independent stock executable
         id: stock-artifact
@@ -359,7 +359,7 @@ jobs:
           STOCK_BINARY_SHA256: ${{ steps.stock-artifact.outputs.sha256 }}
         run: |
           cp "$HERDR_CI_ROOT/stock-source/LICENSE" "$HERDR_CI_ROOT/stock-artifact/LICENSE"
-          printf '{"schemaVersion":1,"sourceCommit":"7b116c05bfda646af39d2524c54e70c751f57ee8","archiveSha256":"a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124","manifestSha256":"1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9","sourceFiles":1828,"binarySha256":"%s","checkout":"%s"}\n' "$STOCK_BINARY_SHA256" "$GITHUB_SHA" > "$HERDR_CI_ROOT/stock-artifact/source.json"
+          printf '{"schemaVersion":1,"sourceCommit":"2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01","archiveSha256":"cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168","manifestSha256":"c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a","sourceFiles":1843,"binarySha256":"%s","checkout":"%s"}\n' "$STOCK_BINARY_SHA256" "$GITHUB_SHA" > "$HERDR_CI_ROOT/stock-artifact/source.json"
       - uses: actions/upload-artifact@v4
         id: stock-upload
         with:
@@ -582,8 +582,8 @@ jobs:
           printf '%s  herdr\n' "$STOCK_HERDR_SHA256" | sha256sum --check --strict
           bun -e '
           const receipt=await Bun.file("source.json").json();
-          const expected={schemaVersion:1,sourceCommit:"7b116c05bfda646af39d2524c54e70c751f57ee8",archiveSha256:"a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124",
-            manifestSha256:"1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9",sourceFiles:1828,binarySha256:process.env.STOCK_HERDR_SHA256,checkout:process.env.GITHUB_SHA};
+          const expected={schemaVersion:1,sourceCommit:"2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",archiveSha256:"cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168",
+            manifestSha256:"c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a",sourceFiles:1843,binarySha256:process.env.STOCK_HERDR_SHA256,checkout:process.env.GITHUB_SHA};
           if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
           chmod 700 herdr
           printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
@@ -1034,7 +1034,10 @@ jobs:
           bun run --cwd apps/client test:connection-loss
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
-        run: bun run test:multiplexers
+        # Exact Herdr pane focus runs the current-source companion.
+        run: |
+          cargo build --locked -p lazysh-agent --bin lazysh-agent
+          LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
       - name: Exercise Herdr creation argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:

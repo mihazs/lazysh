@@ -18,7 +18,7 @@ test('Herdr exclusions preserve upstream bytes and one native-generated schema',
   const scopes = ignore.map(pattern => new Bun.Glob(pattern));
   const excluded = (path: string) => scopes.some(scope => scope.match(prefix + path));
   const original = await Bun.file(join(directory, 'SOURCE-MANIFEST.sha256')).text();
-  expect(createHash('sha256').update(original).digest('hex')).toBe('1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9');
+  expect(createHash('sha256').update(original).digest('hex')).toBe('c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a');
   const manifest = new Map(original.trimEnd().split('\n').map(line => {
     const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
     if (!match || match[2].startsWith('/') || match[2].split('/').includes('..')) throw new Error('Invalid Herdr source manifest');
@@ -103,14 +103,14 @@ test('CI seals guarded bytes before compiling independently admitted original st
   expect(index('stock-source')).toBeLessThan(index('stock-build'));
   expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
   const download=steps[index('stock-source-download')];
-  expect(download.env.HERDR_ARCHIVE_URL).toBe('https://codeload.github.com/herdrdev/herdr/tar.gz/7b116c05bfda646af39d2524c54e70c751f57ee8');
+  expect(download.env.HERDR_ARCHIVE_URL).toBe('https://codeload.github.com/herdrdev/herdr/tar.gz/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01');
   expect(download.run).toContain('--max-time 180');expect(download.run).toContain('--max-filesize 33554432');
   const source=steps[index('stock-source')],build=steps[index('stock-build')];
-  expect(source.run).toContain('a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124');
+  expect(source.run).toContain('cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168');
   for(const step of [source,build]){
-    expect(step.run).toContain('1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9');
+    expect(step.run).toContain('c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a');
     expect(step.run).toContain('sha256sum --check --quiet "$manifest"');
-    expect(step.run).toContain('-eq 1828');
+    expect(step.run).toContain('-eq 1843');
   }
   expect(build['working-directory']).toBe('${{ runner.temp }}/lazysh-herdr-native/stock-source');
   expect(build.run).toContain('cargo +1.96.1 build --locked --bin herdr');
@@ -140,7 +140,7 @@ test('same-run stock admission rejects changed binary, source, checkout or unkno
   const fixture=await mkdtemp(join(tmpdir(),'lazysh-stock-receipt-')),directory=join(fixture,'lazysh-stock-herdr');
   await mkdir(directory);
   const bytes=Buffer.from('owned validation bytes; never a native executable'),digest=createHash('sha256').update(bytes).digest('hex');
-  const receipt={schemaVersion:1,sourceCommit:'7b116c05bfda646af39d2524c54e70c751f57ee8',archiveSha256:'a8d914d60ae728deec9902ec29d706d305ba51c731424d6ffbf2a8af0b170124',manifestSha256:'1aedd80ed6f09c8421df38bcdac64ec07a089e8f54350f4b198f221d282231a9',sourceFiles:1828,binarySha256:digest,checkout:'a'.repeat(40)};
+  const receipt={schemaVersion:1,sourceCommit:'2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01',archiveSha256:'cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168',manifestSha256:'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a',sourceFiles:1843,binarySha256:digest,checkout:'a'.repeat(40)};
   const mutations:Record<string,Record<string,unknown>>={source:{sourceCommit:'0'.repeat(40)},archive:{archiveSha256:'0'.repeat(64)},manifest:{manifestSha256:'0'.repeat(64)},files:{sourceFiles:0},receiptBinary:{binarySha256:'0'.repeat(64)},checkout:{checkout:'b'.repeat(40)},extra:{private:'not admitted'}};
   try {
     for(const variant of ['matching','binary','source','archive','manifest','files','receiptBinary','checkout','extra'] as const){

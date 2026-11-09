@@ -18,7 +18,7 @@ const AGENT_START_MS: u64 = 60_000;
 /// Shown in a plan in place of the root pane ID that only exists after creation.
 pub(crate) const NEW_PANE: &str = "<new-workspace-pane>";
 
-/// Herdr 0.9.3 `agent start --kind` labels and their canonical executables.
+/// Herdr 0.9.3 to 0.9.5 `agent start --kind` labels and their canonical executables.
 /// `prompt` marks CLIs whose first positional argument is an initial prompt.
 const AGENTS: &[(&str, &str, &str, bool)] = &[
     ("codex", "codex", "Codex", true),

@@ -2,7 +2,7 @@ import {t,useUi,formatNumber} from './i18n/core';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
-import { errorMessage } from './SessionTools';
+import {captureUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 
 import type {HerdrTree} from './useHerdrNavigation';
 type Pane = HerdrTree['panes'][number];
@@ -19,7 +19,7 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
   useUi();
   const invoke = useProtectedInvoke();
   const [tree, setTree] = useState<Tree | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState<Edit | null>(null);
   const [label, setLabel] = useState('');
@@ -31,7 +31,7 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
     const current = ++generation.current;
     setTree(null); setError(''); setEdit(null); setBusy(true);
     void invoke<Tree>('herdr_tree', { sessionId, name }).then(value => { if (generation.current === current) setTree(value); })
-      .catch(e => { if (generation.current === current) setError(errorMessage(e)); })
+      .catch(e => { if (generation.current === current) setError(captureUiError(e)); })
       .finally(() => { if (generation.current === current) setBusy(false); });
     return () => { generation.current++; };
   }, [sessionId, name]);
@@ -44,7 +44,7 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
       if (action) await invoke('herdr_action', { sessionId, name, action });
       const value = await invoke<Tree>('herdr_tree', { sessionId, name });
       if (generation.current === current) { setTree(value); setEdit(null); }
-    } catch (e) { if (generation.current === current) setError(errorMessage(e)); }
+    } catch (e) { if (generation.current === current) setError(captureUiError(e)); }
     finally { locked.current = false; if (generation.current === current) setBusy(false); }
   }
   function split(pane: Pane, horizontal: boolean) {
@@ -60,7 +60,7 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
   }
   return <section aria-label={t('herdrTitle',{name})}>
     <div className="tool-bar"><h3>Herdr: {name}</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}>{t('herdrRefresh')}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWorkspace' })}>{t('herdrNewWorkspace')}</button></div>
-    {busy && <p role="status">{t('herdrReading')}</p>}{error && <p className="inline-error" role="alert">{error}</p>}
+    {busy && <p role="status">{t('herdrReading')}</p>}{error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}
     {edit && <form onSubmit={submit}><label>{t('herdrLabel')}<input autoFocus value={label} maxLength={200} required disabled={busy} onChange={e => setLabel(e.target.value)} /></label>
       {(edit.type === 'createWorkspace' || edit.type === 'createTab') && <label>{t('herdrDirectory')}<input value={directory} maxLength={4096} required disabled={busy} onChange={e => setDirectory(e.target.value)} /></label>}
       <button className="subtle-button" disabled={busy || !label.trim()} type="submit">{t('herdrSave')}</button><button className="subtle-button" disabled={busy} type="button" onClick={() => setEdit(null)}>{t('appCancel')}</button></form>}

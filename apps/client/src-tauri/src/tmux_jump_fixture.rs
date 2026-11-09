@@ -3246,13 +3246,13 @@ async fn herdr_advanced(path: &std::path::Path, prior: u64) -> u64 {
 }
 
 #[tokio::test]
-#[ignore = "requires owned local OpenSSH sshd and absolute LAZYSH_TEST_HERDR pointing to Herdr 0.9.3"]
+#[ignore = "requires owned local OpenSSH sshd and absolute LAZYSH_TEST_HERDR pointing to Herdr 0.9.3 to 0.9.5"]
 async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     use super::test_support::{ready_lease, unlocked_access};
     use crate::herdr::{herdr_action, herdr_tree, HerdrAction};
     use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
     let binary = PathBuf::from(
-        std::env::var("LAZYSH_TEST_HERDR").expect("set an absolute pinned Herdr 0.9.3 binary path"),
+        std::env::var("LAZYSH_TEST_HERDR").expect("set an absolute supported Herdr binary path"),
     );
     let mut f = Fixture::with_herdr(Some(&binary)).await;
     let mut servers = HerdrServers {
@@ -3262,10 +3262,10 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     };
     let version = servers.output("aaa-first", &["--version"]).await;
     assert!(version.status.success());
-    assert_eq!(
+    assert!(matches!(
         String::from_utf8(version.stdout).unwrap().trim(),
-        "herdr 0.9.3"
-    );
+        "herdr 0.9.3" | "herdr 0.9.4" | "herdr 0.9.5"
+    ));
     for (name, label) in [("aaa-first", "OTHER_A"), ("zzz-selected", "OTHER_Z")] {
         servers.start(name).await;
         servers

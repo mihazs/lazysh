@@ -124,6 +124,34 @@ impl App {
             return Vec::new();
         }
 
+        if let AppEvent::RestoredWorktreeSpaceChecked {
+            workspace_id,
+            expected,
+            valid,
+        } = ev
+        {
+            self.pending_restored_worktree_spaces
+                .retain(|(id, space)| id != &workspace_id || space != &expected);
+            let changed_workspace = (!valid)
+                .then(|| {
+                    self.state.workspaces.iter().position(|workspace| {
+                        workspace.id == workspace_id
+                            && workspace.worktree_space.as_ref() == Some(&expected)
+                    })
+                })
+                .flatten();
+            self.state
+                .handle_app_event(AppEvent::RestoredWorktreeSpaceChecked {
+                    workspace_id,
+                    expected,
+                    valid,
+                });
+            if let Some(ws_idx) = changed_workspace {
+                self.emit_workspace_updated(ws_idx);
+            }
+            return Vec::new();
+        }
+
         if let AppEvent::TabBarCommandFinished {
             generation,
             segment_index,
@@ -567,7 +595,13 @@ impl App {
             .terminal_runtimes
             .get(&terminal_id)
             .map(|runtime| runtime.current_size())
-            .unwrap_or_else(|| self.state.estimate_pane_size());
+            .unwrap_or_else(|| {
+                self.state
+                    .new_pane_size(crate::ui::NewPanePlacement::Existing {
+                        ws_idx,
+                        pane: pane_id,
+                    })
+            });
         let Some(launch_env) = self.pane_launch_env(ws_idx, pane_id, Vec::new()) else {
             return false;
         };
@@ -1376,6 +1410,33 @@ pub(super) mod test_support {
             (workspace, first, second)
         }
 
+        /// One workspace whose root terminal is a respawnable Codex with a saved session.
+        pub(crate) fn install_respawnable_codex_test_terminal(
+            &mut self,
+            name: &str,
+            session: &str,
+        ) -> (crate::layout::PaneId, crate::terminal::TerminalId) {
+            let workspace = crate::workspace::Workspace::test_new(name);
+            let pane_id = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+            self.state.workspaces = vec![workspace];
+            self.state.ensure_test_terminals();
+            let terminal = self
+                .state
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("test terminal should exist");
+            terminal.respawn_shell_on_exit = true;
+            terminal.set_agent_name("codex".into());
+            terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id(session)
+                    .expect("test session id should be valid"),
+            });
+            (pane_id, terminal_id)
+        }
+
         pub(crate) fn install_test_announcement(&mut self) {
             self.state.product_announcement = Some(crate::app::state::ProductAnnouncementState {
                 version: "0.8.2".into(),
@@ -1686,7 +1747,18 @@ mod tests {
             &mut app,
             crate::workspace::Workspace::test_new("manifest-reload"),
         );
-        let (reset_notify, _rx) = detection_runtime(&mut app, terminal_id);
+        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        #[cfg(unix)]
+        let (runtime, _detection_events) = {
+            let mut runtime = runtime;
+            runtime.test_process_pty_bytes(b"shell prompt");
+            let events = runtime.test_start_basic_detection();
+            runtime.test_wait_for_detection_reads(1).await;
+            (runtime, events)
+        };
+        #[cfg(not(unix))]
+        let reset_notify = runtime.agent_detection_reset_notify_for_test();
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
         let response = api_value(
             &mut app,
@@ -1703,6 +1775,13 @@ mod tests {
             .unwrap()
             .is_empty());
 
+        #[cfg(unix)]
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_wait_for_detection_reads(2)
+            .await;
+        #[cfg(not(unix))]
         tokio::time::timeout(
             std::time::Duration::from_millis(50),
             reset_notify.notified(),
@@ -2171,25 +2250,9 @@ mod tests {
     #[tokio::test]
     async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
         let (_api_tx, mut app) = test_support::new_app();
-        let workspace = crate::workspace::Workspace::test_new("restored");
         app.state.default_shell = test_support::exiting_test_command().into();
-        let pane_id = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        let terminal = app
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("test terminal should exist");
-        terminal.respawn_shell_on_exit = true;
-        terminal.set_agent_name("codex".into());
-        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
-            agent: "codex".into(),
-            session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
-                .expect("test session id should be valid"),
-        });
+        let (pane_id, terminal_id) =
+            app.install_respawnable_codex_test_terminal("restored", "codex-session");
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id,

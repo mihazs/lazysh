@@ -6,3 +6,6 @@ apps/client/android-version.properties text eol=lf
 
 # Preserve upstream listing text format on Windows checkouts too.
 fastlane/metadata/android/**/*.txt text eol=lf
+
+# Keep the upstream portable-pty patch byte-identical, including its trailing spaces.
+packages/herdr-upstream/vendor/patches/portable-pty/0004-skip-directories-when-resolving-windows-programs.patch -whitespace
