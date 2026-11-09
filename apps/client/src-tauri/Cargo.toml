@@ -82,5 +82,10 @@ tokio-rustls = "0.26"
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Only the Linux owned-OpenSSH agent board case writes companion state directly.
+lazysh-agent = { path = "../../agent" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios"))'.dev-dependencies]
 lazysh-mosh-transport = { path = "../../../packages/mosh-transport", features = ["test-fixtures"] }

@@ -24,7 +24,7 @@ Reading rules:
 
 ## CI evidence
 
-All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-11-06 re-audit: 42239021528 (`358c584f`), 42233140862 (`3b72b0be`), 42220275640 (`0ebee54f`) and 42218585416 (`5dd1d1d7`), all 2026-11-06. Android evidence comes from each job's JUnit results in its uploaded artifact (`lazysh-android-*-results`), Linux and desktop evidence from the step logs, Playwright from the `client` job summary.
+All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-11-06 re-audit: 42239021528 (`358c584f`), 42233140862 (`3b72b0be`), 42220275640 (`0ebee54f`) and 42218585416 (`5dd1d1d7`), all 2026-11-06. Later promotions cite 42453322370 (`4e244b50`, 2026-11-08): `client` green, Playwright 999 passed, 0 failed, 49 skipped. Android evidence comes from each job's JUnit results in its uploaded artifact (`lazysh-android-*-results`), Linux and desktop evidence from the step logs, Playwright from the `client` job summary.
 
 | Job | What it runs on a real runtime | State on `main` (2026-11-06) |
 | --- | --- | --- |
@@ -50,9 +50,9 @@ All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-
 | Platform | verified | implemented | partial | missing | n/a |
 | --- | --- | --- | --- | --- | --- |
 | Android (before re-audit) | 75 | 151 | 21 | 8 | 10 |
-| Android | 104 | 124 | 21 | 6 | 10 |
+| Android | 105 | 124 | 21 | 5 | 10 |
 | Desktop (before re-audit) | 78 | 142 | 25 | 9 | 11 |
-| Desktop | 119 | 103 | 24 | 8 | 11 |
+| Desktop | 120 | 103 | 24 | 7 | 11 |
 
 Most `implemented` rows are not missing features. They are reachable code whose platform proof is unit-level, mocked, ignored, macOS-only or currently red. The [Gaps](#gaps) section groups them into issues.
 
@@ -272,8 +272,8 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | Install the companion from the app | verified | verified | `src-tauri/companion.rs:105`; `apps/client/src/CompanionInstallPanel.tsx`. NWT:2486,3172-3276 ownedCompanionInstallsThroughRealUi (NAR); `ssh.rs:5813` (NL) and `apps/client/published-native-e2e/companion.test.ts:13` (NL, last run 2026-11-03). | Windows GUI; Windows host adapter (#490); in-app installer (#476). |
-| Normalize lifecycle events (Working, Needs you, Done) | implemented | implemented | `apps/agent/src/lib.rs:204-359`; `apps/agent/src/hooks.rs:117-292`. Host tests `apps/agent/tests/cli.rs` (`agent` job). | Client-runtime case that sends a real hook event and sees a populated board. |
-| Managed hook configuration preserves existing hooks | implemented | implemented | `apps/agent/src/hook_setup/mod.rs:76-89`; discovery Linux-only (`hook_setup/discovery.rs:347`). `apps/client/src/CompanionHooksPanel.tsx:93-145`. Host tests `apps/agent/tests/hook_setup.rs` (`agent`); client test mocked (`workspace.spec.ts:637`). | Real client Inspect, Install and Remove against a real profile; macOS hosts report managed setup unsupported. |
+| Normalize lifecycle events (Working, Needs you, Done) | implemented | implemented | `apps/agent/src/lib.rs:204-359`; `apps/agent/src/hooks.rs:117-292`. Host tests `apps/agent/tests/cli.rs` (`agent` job). | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): a client-installed companion runs real Claude hook commands and the client snapshot shows Working, Needs you and Done. Android: NAR companion case with real hook events. |
+| Managed hook configuration preserves existing hooks | implemented | implemented | `apps/agent/src/hook_setup/mod.rs:76-89`; discovery Linux-only (`hook_setup/discovery.rs:347`). `apps/client/src/CompanionHooksPanel.tsx:93-145`. Host tests `apps/agent/tests/hook_setup.rs` (`agent`); client test mocked (`workspace.spec.ts:637`). | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): client Inspect, Install and Remove against a real Claude profile keep its other settings. Android: the same through the NAR companion case. macOS hosts report managed setup unsupported. |
 | Read local agent transcripts | verified | verified | `apps/agent/src/transcript.rs:105-204`; `ChatPanel.tsx:277-350`. Claude records NWT:2243-2248 (NAR); ssh.spec:399-404 (NL). | Desktop Codex/OpenCode cases skipped in CI. |
 | Terminal works without the companion | verified | verified | `apps/client/src/AgentPanel.tsx:166`; `src-tauri/account_usage.rs:63-65`. SSH prompt before install NWT:3328-3330 (NAR); `published-native-e2e/companion.test.ts:24-31` (NL). | — |
 
@@ -281,12 +281,12 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Per-session Needs you, Working and Done | implemented | implemented | `AgentPanel.tsx:27,197`; `apps/agent/src/lib.rs:626-668`. Mocked `e2e/agent-board-locales.spec.ts:39-84`; Android only proves the empty board (NWT:1498-1499). | Real hook events rendered on a native runtime. |
-| Group by project and host | partial | partial | Grouped by state only (`AgentPanel.tsx:197`); one board per connection; project is card text with search (`:177-179`). | Project and cross-host grouping. |
-| Latest events collapse into one row | implemented | implemented | Upsert on agent and session (`apps/agent/src/lib.rs:594-597`); host test `cli.rs:72`. | Client runtime. |
-| Valid approval rows take priority | implemented | implemented | Approvals render above the board (`AgentPanel.tsx:162-164,199`). Mocked `agent-board-locales.spec.ts:25-30`. | Claude only; separate panel. |
-| Archive | missing | missing | No archive or dismiss action. | — |
-| Age-out | implemented | implemented | Seven-day retention, 100-row cap (`apps/agent/src/lib.rs:61,615-633`); host tests `cli.rs:172,202`. | Not configurable; no client runtime test. |
+| Per-session Needs you, Working and Done | implemented | implemented | `AgentPanel.tsx:27,197`; `apps/agent/src/lib.rs:626-668`. Mocked `e2e/agent-board-locales.spec.ts:39-84`; Android only proves the empty board (NWT:1498-1499). | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`) proves the native data path only. Desktop still needs the Linux GUI suite to render real hook events on the board; Android: real hook events rendered in the NAR companion case. |
+| Group by project and host | partial | partial | Reports group by project inside each state under the connected host's name (#1112, `AgentPanel.tsx`). Project grouping is web UI over the reported snapshot: `e2e/agent-board-groups.spec.ts` (PW `phone` and `desktop`, green on 42453322370). | Grouping by host: one board per connection, so every group carries the single connected host; no board merges several hosts (out of scope in #1112). |
+| Latest events collapse into one row | implemented | implemented | Upsert on agent and session (`apps/agent/src/lib.rs:594-597`); host test `cli.rs:72`. | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): four hook events for one session update one row. Android: NAR companion case. |
+| Valid approval rows take priority | implemented | implemented | Approvals render above the board (`AgentPanel.tsx:162-164,199`). Mocked `agent-board-locales.spec.ts:25-30`. A waiting hook moves its session to Needs you: Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`). | Claude only; separate panel. Android: NAR companion case. |
+| Archive | verified | verified | Archive and Restore per device and host until a newer event or age-out (#1112, `apps/client/src/agentArchive.ts`, WebView storage). `e2e/agent-board-groups.spec.ts` (PW `phone` and `desktop`, green on 42453322370). | — |
+| Age-out | implemented | implemented | Seven-day retention, 100-row cap (`apps/agent/src/lib.rs:61,615-633`); host tests `cli.rs:172,202`. | Not configurable. Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): an eight-day-old report is absent from the client board. Android: NAR companion case. |
 | Optional display keep-awake | verified | verified | `apps/client/src/KeepAwakeControl.tsx:9-12` (default off); `src-tauri/keep_awake.rs:67-126`. NWT:1420-1605 and `NativeKeepAwakeTest.kt:11` (NAR); `packages/display-idle/src/portal/tests/real_frontend.rs:336` (NL); `display-idle/src/desktop/platform.rs:170` (ND, Windows). | Desktop GUI-to-native path is mocked (`keep-awake.spec.ts:43`); physical idle acceptance (#81). |
 | Release when hidden or backgrounded | verified | implemented | NWT:1574-1595 (NAR). Desktop focus gate `display-idle/src/lib.rs:17-27`; mocked `keep-awake.spec.ts:67,87`. | Desktop native focus-loss case. |
 
@@ -350,10 +350,10 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Allow or deny a pending request remotely | implemented | implemented | `apps/agent/src/approvals.rs:205-291,327-370`; `src-tauri/approvals.rs:6-84`; `apps/client/src/ApprovalPanel.tsx:99-127`. Host tests `apps/agent/tests/approvals.rs:106,152`; mocked client. | Claude only (`approvals.rs:19-21`); no client-runtime case. |
+| Allow or deny a pending request remotely | implemented | implemented | `apps/agent/src/approvals.rs:205-291,327-370`; `src-tauri/approvals.rs:6-84`; `apps/client/src/ApprovalPanel.tsx:99-127`. Host tests `apps/agent/tests/approvals.rs:106,152`; mocked client. | Claude only (`approvals.rs:19-21`). Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): client Allow and Deny return to the waiting hook. Android: NAR companion case. |
 | Exact multiplexer pane targeting | partial | partial | Pane from `TMUX_PANE` only (`apps/agent/src/main.rs:288`), bound into the decision (`approvals.rs:357`). | Herdr and Zellij pane identity. |
-| Re-validate the pending prompt before answering | implemented | implemented | Lease, hash, expiry and pane checks (`approvals.rs:317-360`); host tests `approvals.rs:237,308`. | Validates the hook request, not a fresh screen capture. |
-| Answer at the host clears the remote request | implemented | implemented | Lease release and cleanup (`approvals.rs:76-95,196-203`); host test `approvals.rs:182`. | Client runtime. |
+| Re-validate the pending prompt before answering | implemented | implemented | Lease, hash, expiry and pane checks (`approvals.rs:317-360`); host tests `approvals.rs:237,308`. | Validates the hook request, not a fresh screen capture. Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): altered hash, other pane and missing pane are refused, a decided request cannot be answered again. Android: NAR companion case. |
+| Answer at the host clears the remote request | implemented | implemented | Lease release and cleanup (`approvals.rs:76-95,196-203`); host test `approvals.rs:182`. | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): ending the hook at the host removes the request from the client list and refuses its answer. Android: NAR companion case. |
 | Works across tmux, Herdr and Zellij | partial | partial | Not tied to a multiplexer, but Claude only and pane context only on tmux (`src-tauri/approvals.rs:41-47`). | Herdr/Zellij targeting; non-Claude agents. |
 
 ## Host settings
@@ -503,7 +503,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | 10 | Real multiplexer lifecycle: Zellij product discovery, saved-default entry, shortcut panel and unavailable Jump; Android Zellij, Herdr create and zoom, tmux create-default, window and pane actions and Chat input; desktop tmux numbered-window and detach effects; tmux and Herdr prefix delivery and persistence; recent directories and launcher; Zellij create in a directory | implemented / partial to implemented | #989; umbrella #7 |
 | 11 | Herdr navigation: non-unknown agent state on Android and the Linux GUI, Herdr current marker, list, accordion and grid layouts, desktop pane focus and exact-pane context | partial to implemented / partial to implemented | #990; related #591, #634 |
 | 12 | Desktop launch `-mux` end-to-end | n/a / partial | #86 |
-| 13 | Agent board: project and host grouping, archive, real-event rendering on native runtimes, desktop focus-loss release | partial to missing / partial to missing | #991 |
+| 13 | Agent board: a board grouped across several hosts, real-event rendering on native runtimes, desktop focus-loss release | partial to implemented / partial to implemented | #991 |
 | 14 | Native Chat: Markdown, thinking, plans, questions and working indicator on a native runtime; image transport; Linux Codex and OpenCode cases skipped in CI; Android tmux Chat input | implemented / implemented | #992; umbrella #5 |
 | 15 | Agent coverage beyond Claude, Codex and OpenCode: live transcript acceptance for the other 14 Chat View agents and Gemini; desktop Codex and OpenCode; Qwen lifecycle reporting | partial to implemented / partial to implemented | #5 |
 | 16 | Remote approvals: non-Claude agents, Herdr and Zellij pane targeting, client-runtime case | partial / partial | #6 |
