@@ -13,6 +13,12 @@ tool calls, diffs, plans, questions, approvals, sub-agents, state, usage and a
 composer. It improves reading and answering on a phone and a desktop. It does not
 replace the terminal.
 
+The first part of slice 1 ([#1120](https://github.com/mihazs/lazysh/issues/1120))
+ships the **Terminal | Agent | Both** switch, hook-report binding for Claude Code and
+Codex on native tmux, the turn timeline, the header strip and the fallbacks; see
+[Agent view in the companion guide](companion.md#agent-view). The later sections
+describe the remaining slices.
+
 ## Co-existence contract
 
 This is the governing rule. Every slice must keep it and prove it in tests.

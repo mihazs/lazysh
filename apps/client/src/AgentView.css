@@ -1,0 +1,27 @@
+.agent-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.agent-view[hidden] { display: none; }
+.session-body[data-session-view="both"] > .agent-view { border-inline-start: 1px solid var(--theme-border, var(--border)); }
+.agent-view-header { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--theme-border, var(--border)); flex-shrink: 0; min-width: 0; }
+.agent-view-header > :is(strong, span, time) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-view-header > time { color: var(--muted); font-size: 12px; }
+.agent-view-header > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-inline-start: auto; flex-shrink: 0; }
+.agent-view-fallback, .agent-view > :is(p, [role="status"]) { margin: 12px 18px; }
+.agent-view-fallback .button-row button { min-height: 44px; }
+.agent-view .agent-turn { display: grid; gap: 8px; align-content: start; }
+/* Prompt and answer read as chat bubbles: the prompt on the trailing side, the answer as plain text. */
+.agent-view .agent-bubble { border: 0; padding: 0; }
+.agent-view .agent-turn > .agent-bubble-user { justify-self: end; max-width: min(85%, 640px); padding: 10px 14px; border-radius: 16px 16px 4px 16px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-view .agent-turn > .agent-bubble-user > :is(p, div):first-child { margin-top: 0; }
+.agent-view .agent-turn > .agent-bubble-user > :is(p, div):last-child { margin-bottom: 0; }
+.agent-view .agent-turn-activity .agent-bubble { padding-inline-start: 12px; border-inline-start: 2px solid var(--theme-border, var(--border)); }
+.agent-view .agent-turn-activity > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--muted); }
+.agent-view .agent-turn-activity[open] { display: grid; gap: 8px; }
+/* The timeline scrolls; the composer stays in reach below it. */
+.agent-view > .chat-panel[data-bound] { overflow: hidden; }
+.agent-view > .chat-panel[data-bound] > .chat-messages { flex: 1 1 auto; min-height: 120px; max-height: none; margin: 0; padding: 12px 18px; overflow: auto; }
+.agent-view > .chat-panel[data-bound] > .chat-draft { flex-shrink: 0; max-height: 45%; overflow: auto; margin-block: 8px 12px; }
+.agent-view > .chat-panel[data-bound] > .chat-follow-controls { flex-shrink: 0; margin-inline: 18px; }
+.agent-view > .chat-panel[data-bound] .chat-draft-header { padding: 0; }
+.agent-view > .chat-panel[data-bound] .chat-composer { padding-top: 12px; }
+.agent-view > .chat-panel[data-bound] .chat-draft-commands { flex-wrap: nowrap; }
+.agent-view > .chat-panel[data-bound] > .chat-messages { align-content: start; }

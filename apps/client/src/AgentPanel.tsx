@@ -30,7 +30,8 @@ export type AgentSession = {
 };
 const states: AgentState[] = ['needs_attention', 'working', 'done'];
 function reportKey(row:AgentSession) {return JSON.stringify([row.agent,row.sessionId]);}
-const names = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
+export const reportedStateNames = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
+const names = reportedStateNames;
 /** Groups reports by project, most recently reported project first. */
 function projectGroups(rows:AgentSession[]) {
   const groups=new Map<string,AgentSession[]>();

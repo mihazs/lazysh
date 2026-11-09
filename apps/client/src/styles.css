@@ -1961,3 +1961,11 @@ button svg {
   .sidebar > .workspace-navigation-modes { flex-shrink: 0; flex-wrap: nowrap; }
   .sidebar .workspace-navigation-modes button { flex: 0 0 auto; }
 }
+/* Terminal | Agent | Both, in the session header; loaded with the app so the switch is styled before any Agent view. */
+.session-view-switch { display: inline-flex; flex-shrink: 0; border: 1px solid var(--theme-border, var(--border)); border-radius: 8px; overflow: hidden; }
+.session-view-switch > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 0 10px; border: 0; border-radius: 0; background: transparent; color: inherit; font-size: 12px; }
+.session-view-switch > button[aria-pressed="true"] { background: var(--ui-fill-selected, var(--theme-control, var(--surface))); font-weight: 600; }
+@media (max-width: 760px) {
+  .session-view-switch > button { padding: 0; }
+  .session-view-switch > button > span { display: none; }
+}

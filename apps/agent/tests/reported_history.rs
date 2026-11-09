@@ -87,3 +87,61 @@ fn unsupported_opt_in_and_disabled_discovery_fail_without_fabricated_results() {
         .unwrap()
         .contains("TranscriptDiscoveryDisabled"));
 }
+
+#[test]
+fn codex_opt_in_reports_its_transcript_with_the_pane_of_its_lifecycle_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rollout codex 世界.jsonl");
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"019a-codex","cwd":"/owned","transcript_path":path,"model":"gpt","prompt":"never leak"});
+    let output = |args: &[&str], input: &Value| {
+        let output = run(directory.path(), args, input);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    let lookup = || {
+        serde_json::from_slice::<Value>(&output(
+            &["reported-history", "--session-id=019a-codex"],
+            &Value::Null,
+        ))
+        .unwrap()
+    };
+    output(&["ingest", "--agent", "codex"], &payload);
+    assert_eq!(lookup()["status"], "missing");
+    output(
+        &["ingest", "--agent", "codex", "--reported-history"],
+        &payload,
+    );
+    let source = lookup();
+    assert_eq!(
+        (&source["status"], &source["path"], &source["paneId"]),
+        (&json!("available"), &json!(path), &json!("%7"))
+    );
+    let snapshot: Value = serde_json::from_slice(&output(&["snapshot"], &Value::Null)).unwrap();
+    let row = &snapshot["sessions"][0];
+    assert_eq!(
+        (&row["agent"], &row["sessionId"], &row["paneId"]),
+        (&json!("Codex"), &json!("019a-codex"), &json!("%7"))
+    );
+    assert!(!snapshot.to_string().contains("never leak"));
+    let config: Value = serde_json::from_slice(&output(
+        &["codex-config", "--reported-history"],
+        &Value::Null,
+    ))
+    .unwrap();
+    let commands: Vec<_> = config["hooks"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|rows| rows[0]["hooks"][0]["command"].clone())
+        .collect();
+    assert!(!commands.is_empty());
+    assert!(commands
+        .iter()
+        .all(|command| command == "lazysh-agent ingest --agent codex --reported-history"));
+    let plain: Value = serde_json::from_slice(&output(&["codex-config"], &Value::Null)).unwrap();
+    assert_eq!(plain, lazysh_agent::hooks::codex_config());
+}

@@ -73,9 +73,9 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const activeRef = useRef(active);
   const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
-  // Released once focus enters this terminal, so later focus restores behave as before.
+  // Released once focus enters this terminal, so later focus restores behave as before; each activation re-reads it.
   const quiet = useRef(quietActivation);
-  useEffect(() => {quiet.current = quietActivation;}, [quietActivation]);
+  useEffect(() => {quiet.current = quietActivation;}, [quietActivation, active]);
   const zellijBusy = useRef(false);
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();

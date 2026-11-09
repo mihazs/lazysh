@@ -3184,7 +3184,7 @@ fn reported_history_command(agent_session_id: &str) -> Result<String> {
     {
         return Err(SshError::new(
             "invalid_input",
-            "Invalid reported Claude session identifier",
+            "Invalid reported agent session identifier",
         ));
     }
     Ok(format!(

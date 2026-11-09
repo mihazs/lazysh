@@ -44,12 +44,17 @@ pub fn validate_session_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Claude and Codex both report `session_id` with `transcript_path` in their common hook input.
 pub fn read_hook(
     input: impl Read,
+    agent: Agent,
     pane: Option<&str>,
 ) -> Result<(Option<Event>, Option<ReportedSource>)> {
+    if !matches!(agent, Agent::Claude | Agent::Codex) {
+        return Err(Error::InvalidArgument);
+    }
     let payload = read_bounded_json(input, MAX_INPUT)?;
-    let event = normalize(&payload, Agent::Claude, pane)?;
+    let event = normalize(&payload, agent, pane)?;
     let top_level = matches!(payload.get("agent_id"), None | Some(Value::Null))
         || payload["agent_id"].as_str() == Some("");
     let source = if top_level
@@ -137,9 +142,19 @@ pub fn claude_config() -> Value {
     let mut config = super::claude_config();
     let hooks = config["hooks"].as_object_mut().unwrap();
     hooks.insert("SessionStart".into(), json!([{"hooks":[{"type":"command","command":"lazysh-agent ingest --agent claude","timeout":5}]}]));
-    for rows in hooks.values_mut() {
-        rows[0]["hooks"][0]["command"] =
-            json!("lazysh-agent ingest --agent claude --reported-history");
+    flag_reported_history(config, "claude")
+}
+
+/// The Codex fragment with each ingest command opted in to reported history.
+pub fn codex_config() -> Value {
+    flag_reported_history(super::hooks::codex_config(), "codex")
+}
+
+fn flag_reported_history(mut config: Value, agent: &str) -> Value {
+    for rows in config["hooks"].as_object_mut().unwrap().values_mut() {
+        rows[0]["hooks"][0]["command"] = json!(format!(
+            "lazysh-agent ingest --agent {agent} --reported-history"
+        ));
     }
     config
 }
@@ -152,8 +167,12 @@ mod tests {
         json!({"hook_event_name":"UserPromptSubmit","session_id":id,"transcript_path":path,"cwd":"/owned","prompt":"never stored"})
     }
     fn ingest(store: &mut Store, payload: &Value, at: DateTime<Utc>) {
-        let (event, source) =
-            read_hook(serde_json::to_vec(payload).unwrap().as_slice(), Some("%7")).unwrap();
+        let (event, source) = read_hook(
+            serde_json::to_vec(payload).unwrap().as_slice(),
+            Agent::Claude,
+            Some("%7"),
+        )
+        .unwrap();
         store
             .ingest_with_reported_history(event.as_ref(), source.as_ref(), at)
             .unwrap();
