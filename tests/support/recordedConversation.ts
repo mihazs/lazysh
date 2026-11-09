@@ -3,7 +3,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {sshCommand, type SshFixture} from './sshFixture';
-import {prepareRecordedCards} from './recordedCards';
+import {prepareRecordedCards,recordedPage} from './recordedCards';
 
 export async function recordedCompanionBytes(path:string|undefined) {
   if(!path || !path.startsWith('/') || /[\x00-\x1f\x7f]/.test(path))throw new Error('Explicit current-source recorded companion required');
@@ -49,7 +49,7 @@ c.commit();c.close()`,input,path]);
     const expected=source.messages.map((message:{role:string;text:string})=>({role:message.role,blocks:[{type:'text',text:message.text}]}));
     if(page.schemaVersion!==1 || page.agent!==source.agent || page.view!=='active_branch' || page.branchId!==source.sessionId || !isDeepStrictEqual(actual,expected))throw new Error('Synthetic recorded preflight mismatch');
   }
-  return {metadata:{provenance:'synthetic',sources:sources.map(source=>({...source,messages:source.messages.map(({role,text}:{role:string;text:string})=>({role,text}))})),cards:cards.map(({expression:_,observation:__,...card})=>card)},cards,verify:async()=>{
+  return {metadata:{provenance:'synthetic',sources:sources.map(source=>({...source,messages:source.messages.map(({role,text}:{role:string;text:string})=>({role,text}))})),cards,page:recordedPage},verify:async()=>{
     for(const item of before) {const after=await stat(item.path);if(await hash(item.path)!==item.sha256 || after.dev!==item.info.dev || after.ino!==item.info.ino || after.size!==item.info.size || after.mtimeMs!==item.info.mtimeMs || after.mode!==item.info.mode || after.nlink!==1)throw new Error('Synthetic recorded corpus changed');}
     if(await hash(image)!==createHash('sha256').update(companion).digest('hex'))throw new Error('Recorded companion image changed');
   }};

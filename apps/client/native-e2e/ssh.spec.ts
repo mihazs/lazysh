@@ -7,6 +7,7 @@ import {OwnedSshRelay} from './sshRelay';
 import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
 import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests/support/recordedConversation';
+import {recordedPageCall} from '../../../tests/support/recordedCards';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
@@ -40,33 +41,54 @@ it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their c
   fixture.captureSafe=false;
   const root=join(import.meta.dirname,'../../..'),companion=await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN);
   const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
-  const recorded=await prepareRecordedConversation(ssh,root,companion),sources=recorded.metadata.sources,cards=recorded.cards;
+  const recorded=await prepareRecordedConversation(ssh,root,companion),sources=recorded.metadata.sources,cards=recorded.metadata.cards;
   expect(sources.map(source=>source.agent)).toEqual(['codex','opencode','opencode']);expect(cards).toHaveLength(8);
   const gui=fixture.gui=await NativeGui.start();
   const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
   await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
   gui.stage='owned synthetic recorded Conversation';await workspaceAction(gui,'Transcript');
+  const panel='//section[contains(concat(" ",@class," ")," chat-panel ")]';
   const open=async(source:RecordedSource)=>{
-    await (await browser.$('//label[normalize-space(text())="Agent"]/select')).selectByAttribute('value',source.agent);
-    await (await browser.$('//label[normalize-space(text())="View"]/select')).selectByAttribute('value',source.view??'conversation');
-    await (await browser.$('input[placeholder="Absolute host path to session.jsonl"]')).setValue(source.path);
-    if(source.sessionId!==undefined && source.agent==='opencode')await (await browser.$('//label[normalize-space(text())="Transcript session ID"]/input')).setValue(source.sessionId);
-    await (await browser.$('button=Open transcript')).click();
+    await (await browser.$(`${panel}//label[normalize-space(text())="Agent"]/select`)).selectByAttribute('value',source.agent);
+    await (await browser.$(`${panel}//label[normalize-space(text())="View"]/select`)).selectByAttribute('value',source.view??'conversation');
+    await (await browser.$('.chat-panel input[placeholder="Absolute host path to session.jsonl"]')).setValue(source.path);
+    if(source.sessionId!==undefined && source.agent==='opencode')await (await browser.$(`${panel}//label[normalize-space(text())="Transcript session ID"]/input`)).setValue(source.sessionId);
+    await (await browser.$(`${panel}//button[normalize-space(.)="Open transcript"]`)).click();
   };
-  const readMessages=()=>browser.execute(()=>Array.from(document.querySelectorAll('.chat-conversation-messages .chat-message'),article=>({
-    role:article.querySelector('h4')?.textContent??'',paragraphs:article.querySelectorAll('p').length,text:article.querySelector('p')?.textContent??''})));
+  // The page compares in place, so the result never depends on driver object serialization.
+  const awaitPage=async(stage:string,name:'messages'|'cards',argument:unknown)=>{
+    try{await browser.waitUntil(async()=>await browser.execute(`return ${recordedPageCall(name,argument)}`)===true,{timeout:20_000,timeoutMsg:stage});}
+    catch(primary){
+      console.info('Owned recorded page observation',stage,await browser.execute(`return ${recordedPageCall(name,argument,true)}`).catch(()=>'unavailable'));
+      throw primary;
+    }
+  };
   const unchanged=async()=>{expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);};
-  let expected:{role:string;paragraphs:number;text:string}[]=[];
+  let expected:{role:string;text:string}[]=[];
   for(const source of sources){
-    expected=source.messages.map(message=>({role:message.role,paragraphs:1,text:message.text}));
-    await open(source);
-    await browser.waitUntil(async()=>JSON.stringify(await readMessages())===JSON.stringify(expected),{timeout:20_000,timeoutMsg:`Synthetic ${source.agent} conversation did not match its records`});
+    expected=source.messages;await open(source);
+    await awaitPage(`Synthetic ${source.agent} conversation did not match its records`,'messages',expected);
     await unchanged();
   }
+  gui.stage='owned recorded reader Home and Refresh';
   const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';await draft.setValue(text);
-  const refresh=await browser.$('button[aria-label="Refresh new messages"]');await refresh.click();
-  await browser.waitUntil(async()=>await refresh.isExisting() && await refresh.isEnabled(),{timeout:20_000,timeoutMsg:'Recorded Refresh did not settle'});
-  expect(JSON.stringify(await readMessages())===JSON.stringify(expected)).toBe(true);expect(await draft.getValue()).toBe(text);
+  const region=await browser.$('.chat-panel .chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
+  await browser.waitUntil(async()=>await browser.execute(()=>{const r=document.querySelector('.chat-panel .chat-conversation-messages');return !!r&&document.activeElement===r&&r.scrollHeight>r.clientHeight&&r.scrollTop===0;}),
+    {timeout:5000,timeoutMsg:'Recorded reader did not overflow and settle at Home'});
+  // Refresh must disable its button and enable it again; old attribute values catch both changes in one callback.
+  expect(await browser.execute(()=>{
+    const button=document.querySelector<HTMLButtonElement>('.chat-panel button[aria-label="Refresh new messages"]');
+    if(!button||button.disabled)return false;
+    const state={started:false,settled:false};(window as unknown as {__ownedRecordedRefresh?:typeof state}).__ownedRecordedRefresh=state;
+    new MutationObserver(records=>{if(records.some(record=>record.oldValue===null))state.started=true;if(state.started&&!button.disabled)state.settled=true;})
+      .observe(button,{attributes:true,attributeFilter:['disabled'],attributeOldValue:true});
+    return true;
+  })).toBe(true);
+  await (await browser.$('.chat-panel button[aria-label="Refresh new messages"]')).click();
+  await browser.waitUntil(async()=>await browser.execute(()=>(window as unknown as {__ownedRecordedRefresh?:{settled:boolean}}).__ownedRecordedRefresh?.settled===true),
+    {timeout:20_000,timeoutMsg:'Recorded Refresh did not start and settle'});
+  await awaitPage('Recorded Refresh changed the exact messages','messages',expected);
+  expect(await browser.execute(()=>document.querySelector('.chat-panel .chat-conversation-messages')?.scrollTop)).toBe(0);expect(await draft.getValue()).toBe(text);
   await (await browser.$('button=Stage in terminal')).click();await terminal.waitForDisplayed();
   expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
   const staged=await browser.$('.terminal-compose textarea');await staged.waitForDisplayed();expect(await staged.getValue()).toBe(text);expect(await terminal.getText()).not.toContain(text);
@@ -74,12 +96,7 @@ it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their c
   await workspaceAction(gui,'Transcript');
   for(const card of cards){
     gui.stage=`owned recorded cards: ${card.label}`;await open(card);
-    try{
-      await browser.waitUntil(async()=>await browser.execute(`return ${card.expression}`)===true,{timeout:20_000,timeoutMsg:`Recorded cards did not render: ${card.label}`});
-    }catch(primary){
-      console.info('Owned recorded card observation',card.label,await browser.execute(`return ${card.observation}`).catch(()=>'unavailable'));
-      throw primary;
-    }
+    await awaitPage(`Recorded cards did not render: ${card.label}`,'cards',card.checks);
     await unchanged();
   }
   await workspaceAction(gui,'Terminal');await terminal.waitForDisplayed();

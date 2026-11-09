@@ -35,6 +35,9 @@ import androidx.core.view.WindowCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.Espresso.onData
+import org.hamcrest.Matchers.anything
+import android.widget.ListView
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
@@ -3530,6 +3533,11 @@ class NativeWorkspaceTest {
                 require(labels.length() == 1 && labels.getString(0).length in 1..128)
                 labels.getString(0)
             }
+            // The popup opens scrolled to the current choice, so an option further down has no row
+            // view yet. Scroll its row on screen by the select's option index before matching it.
+            val position = evaluate(scenario, "Array.from(document.querySelector(${JSONObject.quote(selector)}).options).findIndex(x=>x.value===${JSONObject.quote(value)})").toInt()
+            require(position >= 0) { "Owned select option must exist" }
+            onData(anything()).inAdapterView(isAssignableFrom(ListView::class.java)).inRoot(isDialog()).atPosition(position).check(matches(isDisplayed()))
             val option = onView(withText(transportLabel)).inRoot(isDialog())
             option.check(matches(isDisplayed()))
             println("lazysh SSH UI: native transport chooser ready")
@@ -3764,19 +3772,17 @@ class NativeWorkspaceTest {
                       owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && owned.tab===document.querySelector('[role=tab]') && document.querySelectorAll('[role=tab]').length===1;})()
                 """))
             }
-            fun exactMessages(): String = """
-                (()=>{const expected=$messages,cards=Array.from(document.querySelectorAll('.chat-conversation-messages .chat-message'));
-                  return cards.length===expected.length && cards.every((card,i)=>card.querySelectorAll('p').length===1 &&
-                    card.querySelector('h4')?.textContent===expected[i].role && card.querySelector('p')?.textContent===expected[i].text);})()
-            """
-            // Every check names a selector inside the Chat panel and the exact whitespace-collapsed
-            // text of each match, in order; an empty list requires that nothing matches.
-            fun cardTexts(checks: JSONArray, observe: Boolean): String = """
-                (()=>{const panel=document.querySelector('.chat-panel'),checks=$checks,text=e=>e.textContent.replace(/\s+/g,' ').trim(),
-                  actual=checks.map(c=>panel?Array.from(panel.querySelectorAll(c.selector),text):null);
-                  return ${if (observe) "JSON.stringify(actual.map(v=>v&&v.slice(0,8).map(x=>x.slice(0,160))))"
-                    else "actual.every((v,i)=>JSON.stringify(v)===JSON.stringify(checks[i].texts))"};})()
-            """
+            // The host fixture carries the page functions the Linux case evaluates too (tests/support/recordedCards.ts).
+            val page = recorded.getJSONObject("page")
+            fun pageCall(name: String, argument: JSONArray, observe: Boolean = false) = "(${page.getString(name)})($argument,$observe)"
+            fun exactMessages(): String = pageCall("messages", messages)
+            fun awaitPage(stage: String, name: String, argument: JSONArray) {
+                try {awaitDocument(scenario, stage, pageCall(name, argument))}
+                catch (failure: Throwable) {
+                    runCatching {failure.addSuppressed(AssertionError("Recorded page observation: " + evaluate(scenario, pageCall(name, argument, true))))}
+                    throw failure
+                }
+            }
             val cards = recorded.getJSONArray("cards")
             require(cards.length() == 8)
             var primary: Throwable? = null
@@ -3796,7 +3802,7 @@ class NativeWorkspaceTest {
                         if (index > 0) ".chat-panel input[required]:not([placeholder])" to source.getString("sessionId") else null)
                     for ((selector, value) in fields) replaceNativeText(scenario, selector, value)
                     closeSoftKeyboard();clickButton("Open transcript")
-                    awaitDocument(scenario, "exact synthetic recorded source $index", exactMessages())
+                    awaitPage("exact synthetic recorded source $index", "messages", messages)
                     owner()
                 }
                 val draft = "Owned unsent Android recorded Conversation draft"
@@ -3867,12 +3873,7 @@ class NativeWorkspaceTest {
                     replaceNativeText(scenario, path, card.getString("path"))
                     if (agent == "opencode") replaceNativeText(scenario, ".chat-panel input[required]:not([placeholder])", card.getString("sessionId"))
                     closeSoftKeyboard();clickButton("Open transcript")
-                    val checks = card.getJSONArray("checks")
-                    try {awaitDocument(scenario, "recorded cards: ${card.getString("label")}", cardTexts(checks, false))}
-                    catch (failure: Throwable) {
-                        runCatching {failure.addSuppressed(AssertionError("Recorded card texts: " + evaluate(scenario, cardTexts(checks, true))))}
-                        throw failure
-                    }
+                    awaitPage("recorded cards: ${card.getString("label")}", "cards", card.getJSONArray("checks"))
                     owner()
                 }
                 sessionView(scenario, "Terminal")

@@ -5,17 +5,29 @@ import {sshCommand} from './sshFixture';
 // One recorded source the native Chat cases open, and the exact rendered text
 // each selector inside `.chat-panel` must show (an empty list means absent).
 export type RecordedCheck={selector:string;texts:string[]};
-export type RecordedCardSource={label:string;agent:'claude'|'codex'|'opencode';view:'conversation'|'records';path:string;sessionId?:string;checks:RecordedCheck[];expression:string;observation:string};
+export type RecordedCardSource={label:string;agent:'claude'|'codex'|'opencode';view:'conversation'|'records';path:string;sessionId?:string;checks:RecordedCheck[]};
 
-const texts=(checks:RecordedCheck[])=>`const panel=document.querySelector('.chat-panel'),checks=${JSON.stringify(checks)},text=e=>e.textContent.replace(/\\s+/g,' ').trim(),actual=checks.map(c=>panel?Array.from(panel.querySelectorAll(c.selector),text):null);`;
-/** A page expression that is true only when every check matches exactly. */
-export function recordedCardsExpression(checks:RecordedCheck[]) {
-  return `(()=>{${texts(checks)}return actual.every((value,i)=>JSON.stringify(value)===JSON.stringify(checks[i].texts));})()`;
-}
-/** The rendered texts for each check, for failure reports; fixture text only. */
-export function recordedCardsObservation(checks:RecordedCheck[]) {
-  return `(()=>{${texts(checks)}return JSON.stringify(actual.map(value=>value&&value.slice(0,8).map(item=>item.slice(0,160))));})()`;
-}
+/**
+ * Page functions both native cases evaluate; the Android fixture carries these exact strings.
+ * With `observe` false each returns whether the page matches; with `observe` true it returns
+ * a bounded JSON report of what the Chat panel shows, for failure messages (fixture text only).
+ */
+export const recordedPage={
+  // Each expected {role,text} message must be one article with that role and one exact paragraph.
+  messages:`(expected,observe)=>{const panel=document.querySelector('.chat-panel'),cards=Array.from(panel?panel.querySelectorAll('.chat-conversation-messages .chat-message'):[]),
+    seen=cards.map((card,i)=>({role:card.querySelector('h4')?.textContent??null,paragraphs:card.querySelectorAll('p').length,exact:!!expected[i]&&card.querySelector('p')?.textContent===expected[i].text}));
+    if(!observe)return cards.length===expected.length&&seen.every((m,i)=>m.paragraphs===1&&m.role===expected[i].role&&m.exact);
+    return JSON.stringify({panel:!!panel,hidden:!!panel&&panel.hidden,regions:panel?panel.querySelectorAll('.chat-conversation-messages').length:0,expected:expected.length,messages:seen.slice(0,8),
+      selects:panel?Array.from(panel.querySelectorAll('select'),x=>x.value.slice(0,40)).slice(0,4):[],inputs:panel?Array.from(panel.querySelectorAll('input:not([type=checkbox])'),x=>x.value.slice(-80)).slice(0,4):[],
+      alerts:panel?Array.from(panel.querySelectorAll('[role=alert]'),x=>x.textContent.slice(0,240)).slice(0,2):[],busy:!!panel&&Array.from(panel.querySelectorAll('button')).some(x=>x.disabled&&x.type==='submit')});}`,
+  // Each check names a selector inside the Chat panel and the exact whitespace-collapsed text of
+  // each match, in order; an empty list requires that nothing matches.
+  cards:`(checks,observe)=>{const panel=document.querySelector('.chat-panel'),text=e=>e.textContent.replace(/\\s+/g,' ').trim(),
+    actual=checks.map(c=>panel?Array.from(panel.querySelectorAll(c.selector),text):null);
+    return observe?JSON.stringify(actual.map(v=>v&&v.slice(0,8).map(x=>x.slice(0,160)))):actual.every((v,i)=>JSON.stringify(v)===JSON.stringify(checks[i].texts));}`,
+};
+/** One page function applied to its JSON argument, as an expression. */
+export const recordedPageCall=(name:keyof typeof recordedPage,argument:unknown,observe=false)=>`(${recordedPage[name]})(${JSON.stringify(argument)},${observe})`;
 
 const english={working:'Agent is working',waiting:'Agent is waiting for your answer',idle:'Agent is idle',stopped:'Agent turn was stopped'} as const;
 const terminal="Answer in the terminal: Chat cannot choose options in the agent's prompt.";
@@ -55,7 +67,7 @@ for p in f['parts']: c.execute('INSERT INTO part VALUES(?,?,?,?)',(p['id'],p['me
 c.commit();c.close()`,join(fixtures,'opencode-v1.json'),opencode]);
   await chmod(opencode,0o400);
   const session=JSON.parse(await readFile(join(fixtures,'opencode-v1.json'),'utf8')).sessionId as string;
-  const sources:Omit<RecordedCardSource,'expression'|'observation'>[]=[
+  const sources:RecordedCardSource[]=[
     {label:'Claude question waiting for its answer',agent:'claude',view:'conversation',path:await write('claude-waiting.jsonl',claude.slice(0,4)),checks:[
       ...activity('waiting'),plan('PendingWrite the reader tests'),...layout('Flat'),...answer(false),{selector:'.chat-proposed-plan-card',texts:[]}]},
     {label:'Claude answered question and proposed plan',agent:'claude',view:'conversation',path:await write('claude.jsonl',claude),checks:[
@@ -75,5 +87,5 @@ c.commit();c.close()`,join(fixtures,'opencode-v1.json'),opencode]);
     {label:'OpenCode todos and multiple-choice question',agent:'opencode',view:'conversation',path:opencode,sessionId:session,checks:[
       ...activity('idle'),plan('CancelledDrop the legacy layout'),...layout('Flat'),{selector:'.chat-question-card fieldset > p',texts:['More than one option can be chosen.']},...answer(true)]},
   ];
-  return sources.map(source=>({...source,expression:recordedCardsExpression(source.checks),observation:recordedCardsObservation(source.checks)})) as RecordedCardSource[];
+  return sources;
 }
