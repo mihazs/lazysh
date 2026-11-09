@@ -2993,7 +2993,7 @@ pub async fn get_diff(
                 argv.push("--cached");
             }
             argv.push("--");
-            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+            crate::host::Host::resolve_dir(&state, &local, &session_id, &lease, &path)
                 .await?
                 .run(&lease, &crate::host::Cmd::new(&[], &argv))
                 .await

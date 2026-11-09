@@ -38,10 +38,11 @@ impl Cmd {
             .iter()
             .map(|(name, value)| format!("{name}={value}"))
             .chain(self.argv.iter().map(|arg| {
+                // No `=`: zsh expands a word that starts with it (EQUALS).
                 if !arg.is_empty()
                     && arg
                         .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"-_./=:,+@".contains(&b))
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_./:,+@".contains(&b))
                 {
                     arg.clone()
                 } else {
@@ -76,6 +77,24 @@ impl Host {
             }
         }
         Ok(Self::Remote(state.session(id).await?))
+    }
+    /// Resolves a session for a tool that names `dir`; local Windows sessions refuse
+    /// UNC and device paths here, before Git could open an SMB share with them.
+    pub(crate) async fn resolve_dir(
+        state: &AppState,
+        local: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+        dir: &str,
+    ) -> Result<Self> {
+        let host = Self::resolve(state, local, id, lease).await?;
+        #[cfg(desktop)]
+        if matches!(host, Self::Local(_)) {
+            local_fs::resolve(dir)?;
+        }
+        #[cfg(not(desktop))]
+        let _ = dir;
+        Ok(host)
     }
     /// A one-shot command with the default 30 s deadline and 1 MiB output bound.
     pub(crate) async fn run(&self, lease: &AccessLease, cmd: &Cmd) -> Result<String> {
@@ -341,7 +360,7 @@ mod local_fs {
     use std::{fs, io::Read, path::PathBuf};
 
     /// Absolute drive or POSIX paths; relative paths resolve under the home directory.
-    fn resolve(path: &str) -> Result<PathBuf> {
+    pub(super) fn resolve(path: &str) -> Result<PathBuf> {
         let path = std::path::Path::new(path);
         let path = if path.is_absolute() {
             path.to_owned()

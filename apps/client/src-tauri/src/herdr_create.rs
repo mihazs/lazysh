@@ -714,4 +714,4 @@ pub async fn herdr_repository(
 
 #[cfg(all(test, unix))]
 #[path = "herdr_create_tests.rs"]
-mod tests;
+pub(crate) mod tests;

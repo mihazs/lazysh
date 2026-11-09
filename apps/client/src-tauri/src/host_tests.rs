@@ -255,6 +255,32 @@ mod local {
         .unwrap();
         assert_eq!(blob["text"], "before\n");
         assert_eq!(blob["binary"], false);
+
+        // `"` cannot be in an NTFS name, so it reaches Git as a pathspec that matches nothing.
+        let quoted = serde_json::to_value(ok(diff("say \"hi\" & 100%.txt", false)).await).unwrap();
+        assert_eq!(quoted["patch"], "");
+
+        // UNC and device paths never reach Git, which would open an SMB share with them.
+        #[cfg(windows)]
+        for refused in [r"\\localhost\lazysh-missing\repo", r"\\?\C:\", r"\\.\C:\"] {
+            let status = crate::repository::repository_status(
+                app.state(),
+                app.state(),
+                id.clone(),
+                refused.to_owned(),
+                lease(),
+            );
+            assert_eq!(kind(status).await, "invalid_path", "{refused}");
+            let whole = crate::ssh::get_diff(
+                lease(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                refused.to_owned(),
+                false,
+            );
+            assert_eq!(kind(whole).await, "invalid_path", "{refused}");
+        }
     }
 
     #[tokio::test]
@@ -286,22 +312,38 @@ mod local {
         let access = lease();
         let pid_file = temp.path().join("pid");
         let script;
-        let command = if cfg!(windows) {
+        // PowerShell's first start on a busy runner can take most of a short deadline,
+        // so it is warmed up outside the deadline, and a failed write ends the script
+        // with its error on stderr instead of sleeping silently.
+        let (command, deadline) = if cfg!(windows) {
+            let warm = Command::new("powershell")
+                .args(["-NoProfile", "-Command", "exit 0"])
+                .status()
+                .unwrap();
+            assert!(warm.success(), "{warm:?}");
             script = format!(
-                "$PID | Set-Content -LiteralPath '{}'; Start-Sleep 60",
+                "$ErrorActionPreference = 'Stop'; Set-Content -LiteralPath '{}' -Value $PID; Start-Sleep 600",
                 path(&pid_file)
             );
-            Cmd::new(&[], &["powershell", "-NoProfile", "-Command", &script])
+            (
+                Cmd::new(&[], &["powershell", "-NoProfile", "-Command", &script]),
+                Duration::from_secs(60),
+            )
         } else {
             script = format!("echo $$ > '{}'; exec sleep 60", path(&pid_file));
-            Cmd::new(&[], &["sh", "-c", &script])
+            (
+                Cmd::new(&[], &["sh", "-c", &script]),
+                Duration::from_secs(15),
+            )
         };
         let started = std::time::Instant::now();
-        let result = host
-            .exec(&access, &command, Duration::from_secs(15), 64 * 1024)
-            .await;
-        assert_eq!(result.unwrap_err().kind(), "timeout");
-        assert!(started.elapsed() < Duration::from_secs(40));
+        let result = host.exec(&access, &command, deadline, 64 * 1024).await;
+        assert_eq!(
+            result.as_ref().map(drop).unwrap_err().kind(),
+            "timeout",
+            "{result:?}"
+        );
+        assert!(started.elapsed() < deadline + Duration::from_secs(25));
         let pid: u32 = fs::read_to_string(&pid_file)
             .unwrap()
             .trim()

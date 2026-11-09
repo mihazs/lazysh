@@ -77,18 +77,9 @@ pub async fn repository_image(
 ) -> std::result::Result<Guarded<Image>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             if let Some(object_id) = object_id {
-                return image(
-                    read_blob(
-                        &host,
-                        &access,
-                        &path,
-                        &object_id,
-                        "Historical image exceeds the 200 KiB preview limit",
-                    )
-                    .await?,
-                );
+                return image(read_blob(&host, &access, &path, &object_id, IMAGE_TEXT).await?);
             }
             check_file_path(&file_path)?;
             git(&path, &[])?;
@@ -98,6 +89,7 @@ pub async fn repository_image(
                 .await
                 .map_err(|error| match error.kind() {
                     "not_regular_file" => invalid("Image preview requires a regular file"),
+                    "timeout" => SshError::new("timeout", "Reading image timed out"),
                     _ => error,
                 })?;
             if bytes.len() > 2 * 1024 * 1024 {
@@ -107,13 +99,27 @@ pub async fn repository_image(
         })
         .await
 }
+/// Error messages for a historical object: size, limit, encoding, changed.
+type BlobText = [&'static str; 4];
+const IMAGE_TEXT: BlobText = [
+    "Invalid image size",
+    "Historical image exceeds the 200 KiB preview limit",
+    "Invalid image encoding",
+    "Image changed while reading",
+];
+const FILE_TEXT: BlobText = [
+    "Invalid object size",
+    "Historical file exceeds the 200 KiB preview limit",
+    "Invalid blob encoding",
+    "Repository blob changed while reading",
+];
 /// A historical object's bytes, bounded by its size before it is read.
 async fn read_blob(
     host: &Host,
     access: &AccessLease,
     path: &str,
     object_id: &str,
-    too_large: &str,
+    [size_text, too_large, encoding, changed]: BlobText,
 ) -> Result<Vec<u8>> {
     oid(object_id)?;
     let size = host
@@ -121,15 +127,19 @@ async fn read_blob(
         .await?
         .trim()
         .parse::<u64>()
-        .map_err(|_| invalid("Invalid object size"))?;
+        .map_err(|_| invalid(size_text))?;
     if size > BLOB_LIMIT {
         return Err(invalid(too_large));
     }
     let bytes = host
         .run_bytes(access, &git(path, &["cat-file", "blob", object_id])?)
-        .await?;
+        .await
+        .map_err(|error| match error.kind() {
+            "invalid_output" => invalid(encoding),
+            _ => error,
+        })?;
     if bytes.len() as u64 != size {
-        return Err(invalid("Repository blob changed while reading"));
+        return Err(invalid(changed));
     }
     Ok(bytes)
 }
@@ -274,7 +284,7 @@ pub async fn repository_status(
 ) -> std::result::Result<Guarded<Status>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             let root = host
                 .run(&access, &git(&path, &["rev-parse", "--show-toplevel"])?)
                 .await?;
@@ -338,7 +348,7 @@ pub async fn repository_history(
             if !revision.is_empty() {
                 command = command.arg(&revision);
             }
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             parse_history(&host.run(&access, &command).await?)
         })
         .await
@@ -365,7 +375,7 @@ pub async fn repository_tree(
             } else {
                 format!("{revision}:{directory}")
             };
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             let mut entries = parse_tree(
                 &host
                     .run(
@@ -407,16 +417,9 @@ pub async fn repository_blob(
 ) -> std::result::Result<Guarded<Blob>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             Ok(decode_blob(
-                read_blob(
-                    &host,
-                    &access,
-                    &path,
-                    &object_id,
-                    "Historical file exceeds the 200 KiB preview limit",
-                )
-                .await?,
+                read_blob(&host, &access, &path, &object_id, FILE_TEXT).await?,
             ))
         })
         .await
@@ -434,7 +437,7 @@ pub async fn repository_diff(
     access
         .run(async {
             check_file_path(&file_path)?;
-            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let host = Host::resolve_dir(&state, &local, &session_id, &access, &path).await?;
             let diff = |options: &[&str]| -> Result<Cmd> {
                 let mut args = vec!["diff", "--no-ext-diff", "--no-textconv"];
                 args.extend_from_slice(options);
@@ -494,6 +497,48 @@ mod tests {
             image(b"\x89PNG\r\n\x1a\n".to_vec()).unwrap().mime,
             "image/png"
         );
+    }
+    /// zsh expands an unquoted word that starts with `=`; a pip `>=1.0` slip leaves such files.
+    #[cfg(unix)]
+    #[test]
+    fn remote_diff_command_reads_equals_prefixed_paths_under_every_login_shell() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        let git = |args: &[&str]| run(git(dir, args).unwrap().render());
+        git(&["init", "-q"]);
+        fs::write(temp.path().join("=config.txt"), "before\n").unwrap();
+        git(&["add", "--", "."]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "initial",
+        ]);
+        fs::write(temp.path().join("=config.txt"), "after\n").unwrap();
+        let command = super::git(
+            dir,
+            &["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z"],
+        )
+        .unwrap()
+        .arg("--")
+        .arg("=config.txt")
+        .render();
+        for shell in crate::herdr_create::tests::login_shells() {
+            let output = Command::new(&shell[0])
+                .args(&shell[1..])
+                .args(["-c", &command])
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "1\t1\t=config.txt\0",
+                "{shell:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
     #[cfg(unix)]
     #[test]

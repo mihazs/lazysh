@@ -1089,11 +1089,11 @@ jobs:
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
-      - name: Exercise Herdr creation argv quoting under sh, bash, zsh and fish login shells
+      - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:
           LAZYSH_REQUIRE_FISH: '1'
-        run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib herdr_create::tests::"
+        run: "cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- herdr_create::tests:: repository::tests::remote_diff_command_reads_equals_prefixed_paths_under_every_login_shell"
       - name: Exercise discovery, attach, tree and actions on a user-installed stock Herdr over real OpenSSH
         if: ${{ !cancelled() }}
         shell: bash
