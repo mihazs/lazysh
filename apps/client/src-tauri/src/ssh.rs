@@ -2513,81 +2513,110 @@ pub(crate) async fn sftp(session: &Session, lease: &AccessLease) -> Result<SftpS
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
-    name: String,
-    is_dir: bool,
-    size: u64,
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) size: u64,
+}
+/// The directory preview bound shared by every host.
+pub(crate) fn admit_entry(entries: usize, name_bytes: usize) -> Result<()> {
+    if entries >= 10000 || name_bytes > 2 * 1024 * 1024 {
+        return Err(SshError::new(
+            "directory_too_large",
+            "Directory preview is limited to 10000 entries or 2 MiB of names",
+        ));
+    }
+    Ok(())
+}
+pub(crate) fn sort_entries(entries: &mut [FileEntry]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+/// Text preview of at most FILE_LIMIT UTF-8 bytes; `bytes` holds up to one byte more.
+pub(crate) fn preview_text(bytes: Vec<u8>) -> Result<String> {
+    if bytes.len() as u64 > FILE_LIMIT {
+        return Err(SshError::new(
+            "file_too_large",
+            "Text preview is limited to 1 MiB",
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
 }
 #[tauri::command]
 pub async fn list_directory(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
 ) -> AccessResult<Vec<FileEntry>> {
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            let raw = timeout(OP_TIMEOUT, async {
-                let raw = russh_sftp::client::RawSftpSession::new(
-                    crate::sftp_stream::SftpStream::new(sftp_channel(&session, &lease).await?),
-                );
-                raw.init().await?;
-                Ok::<_, SshError>(raw)
-            })
-            .await
-            .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
-            let handle = raw.opendir(path).await?.handle;
-            let result = match timeout(OP_TIMEOUT, async {
-                let mut entries = Vec::new();
-                let mut name_bytes = 0usize;
-                loop {
-                    match raw.readdir(handle.clone()).await {
-                        Ok(batch) => {
-                            for entry in batch.files {
-                                if entry.filename == "." || entry.filename == ".." {
-                                    continue;
-                                }
-                                name_bytes += entry.filename.len();
-                                if entries.len() >= 10000 || name_bytes > 2 * 1024 * 1024 {
-                                    return Err(SshError::new(
-                                "directory_too_large",
-                                "Directory preview is limited to 10000 entries or 2 MiB of names",
-                            ));
-                                }
-                                entries.push(FileEntry {
-                                    name: entry.filename,
-                                    is_dir: entry.attrs.is_dir(),
-                                    size: entry.attrs.size.unwrap_or(0),
-                                });
-                            }
-                        }
-                        Err(russh_sftp::client::error::Error::Status(status))
-                            if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
-                        {
-                            break
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                entries.sort_by(|a, b| {
-                    b.is_dir
-                        .cmp(&a.is_dir)
-                        .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                });
-                Ok(entries)
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
-            };
-            let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
-            let _ = raw.close_session();
-            result
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .list_dir(&lease, path)
+                .await
         })
         .await
+}
+pub(crate) async fn sftp_list_dir(
+    session: &Session,
+    lease: &AccessLease,
+    path: String,
+) -> Result<Vec<FileEntry>> {
+    let raw = timeout(OP_TIMEOUT, async {
+        let raw = russh_sftp::client::RawSftpSession::new(crate::sftp_stream::SftpStream::new(
+            sftp_channel(session, lease).await?,
+        ));
+        raw.init().await?;
+        Ok::<_, SshError>(raw)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
+    let handle = raw.opendir(path).await?.handle;
+    let result = match timeout(OP_TIMEOUT, async {
+        let mut entries = Vec::new();
+        let mut name_bytes = 0usize;
+        loop {
+            match raw.readdir(handle.clone()).await {
+                Ok(batch) => {
+                    for entry in batch.files {
+                        if entry.filename == "." || entry.filename == ".." {
+                            continue;
+                        }
+                        name_bytes += entry.filename.len();
+                        admit_entry(entries.len(), name_bytes)?;
+                        entries.push(FileEntry {
+                            name: entry.filename,
+                            is_dir: entry.attrs.is_dir(),
+                            size: entry.attrs.size.unwrap_or(0),
+                        });
+                    }
+                }
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
+                {
+                    break
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        sort_entries(&mut entries);
+        Ok(entries)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
+    };
+    let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
+    let _ = raw.close_session();
+    result
 }
 
 #[tauri::command]
@@ -2595,31 +2624,34 @@ pub async fn read_file(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
 ) -> AccessResult<String> {
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            timeout(OP_TIMEOUT, async {
-                let sftp = sftp(&session, &lease).await?;
-                let file = sftp.open(path).await?;
-                let mut bytes = Vec::new();
-                file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
-                if bytes.len() as u64 > FILE_LIMIT {
-                    return Err(SshError::new(
-                        "file_too_large",
-                        "Text preview is limited to 1 MiB",
-                    ));
-                }
-                String::from_utf8(bytes)
-                    .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
-            })
-            .await
-            .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .read_text(&lease, path)
+                .await
         })
         .await
+}
+pub(crate) async fn sftp_read_text(
+    session: &Session,
+    lease: &AccessLease,
+    path: String,
+) -> Result<String> {
+    timeout(OP_TIMEOUT, async {
+        let sftp = sftp(session, lease).await?;
+        let file = sftp.open(path).await?;
+        let mut bytes = Vec::new();
+        file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
+        preview_text(bytes)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
 }
 #[cfg(test)]
 async fn upload_file(
@@ -2811,8 +2843,20 @@ pub(crate) async fn exec_bounded(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    until_closed(
+        lease,
+        session.cancel.subscribe(),
+        exec_inner(session, command, lease, duration, limit, retained),
+    )
+    .await
+}
+/// Runs host work until it settles, app access changes or its session closes.
+pub(crate) async fn until_closed<T>(
+    lease: &AccessLease,
+    mut cancellation: watch::Receiver<bool>,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
     lease.check()?;
-    let mut cancellation = session.cancel.subscribe();
     if *cancellation.borrow() {
         return Err(SshError::new("disconnected", "Session closed"));
     }
@@ -2820,8 +2864,41 @@ pub(crate) async fn exec_bounded(
         biased;
         _ = lease.cancelled() => Err(SshError::new("app_locked", "App access changed")),
         _ = cancellation.changed() => Err(SshError::new("disconnected", "Session closed")),
-        result = exec_inner(session, command, lease, duration, limit, retained) => result,
+        result = work => result,
     }
+}
+/// Shared stdout plus stderr budget of a one-shot host command.
+pub(crate) fn check_output_budget(used: usize, limit: usize) -> Result<()> {
+    if used <= limit {
+        return Ok(());
+    }
+    Err(SshError::new(
+        "output_too_large",
+        if limit == FILE_LIMIT as usize {
+            "Remote command output exceeds 1 MiB"
+        } else {
+            "Remote command output exceeds its bound"
+        },
+    ))
+}
+/// A one-shot host command succeeds only with exit status 0.
+pub(crate) fn check_exit(status: Option<u32>, error: &[u8]) -> Result<()> {
+    if status == Some(0) {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(error);
+    Err(SshError::new(
+        "remote_command_failed",
+        if message.trim().is_empty() {
+            format!("Remote command exited with status {status:?}")
+        } else {
+            message.trim().to_owned()
+        },
+    ))
+}
+pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes)
+        .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
 }
 async fn exec_inner(
     session: &Session,
@@ -2880,30 +2957,10 @@ async fn exec_inner_with_handle(
                 ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
                 _ => {}
             }
-            if bytes.len() + error.len() > limit {
-                return Err(SshError::new(
-                    "output_too_large",
-                    if limit == FILE_LIMIT as usize {
-                        "Remote command output exceeds 1 MiB"
-                    } else {
-                        "Remote command output exceeds its bound"
-                    },
-                ));
-            }
+            check_output_budget(bytes.len() + error.len(), limit)?;
         }
-        if status != Some(0) {
-            let message = String::from_utf8_lossy(&error);
-            return Err(SshError::new(
-                "remote_command_failed",
-                if message.trim().is_empty() {
-                    format!("Remote command exited with status {status:?}")
-                } else {
-                    message.trim().to_owned()
-                },
-            ));
-        }
-        String::from_utf8(bytes)
-            .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
+        check_exit(status, &error)?;
+        command_text(bytes)
     })
     .await
     .map_err(|_| SshError::new("timeout", "Remote command timed out"));
@@ -2915,6 +2972,7 @@ pub async fn get_diff(
     lease: AccessLease,
 
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     path: String,
     staged: bool,
@@ -2922,17 +2980,23 @@ pub async fn get_diff(
     lease
         .run(async {
             check_path(&path)?;
-            let session = state.session(&session_id).await?;
-            exec(
-                &session,
-                &lease,
-                format!(
-                    "git --no-pager -C {} diff --no-ext-diff --no-textconv {} --",
-                    quote(&path),
-                    if staged { "--cached" } else { "" }
-                ),
-            )
-            .await
+            let mut argv = vec![
+                "git",
+                "--no-pager",
+                "-C",
+                &path,
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+            ];
+            if staged {
+                argv.push("--cached");
+            }
+            argv.push("--");
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .run(&lease, &crate::host::Cmd::new(&[], &argv))
+                .await
         })
         .await
 }
@@ -6297,6 +6361,7 @@ mod tests {
         state.config().unwrap().hosts.push(host.clone());
         let app = tauri::test::mock_app();
         app.manage(state);
+        app.manage(crate::local::LocalState::default());
         async fn manual_session(
             state: &AppState,
             host: &Host,
@@ -6502,11 +6567,17 @@ mod tests {
             .into_inner()
             .unwrap();
             assert_eq!(
-                read_file(access_lease(), app.state(), mosh_id.clone(), file)
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .unwrap(),
+                read_file(
+                    access_lease(),
+                    app.state(),
+                    app.state(),
+                    mosh_id.clone(),
+                    file
+                )
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap(),
                 "SSH control remains alive"
             );
             let screenshot = vec![0xa5; 462_702];
@@ -6690,7 +6761,6 @@ mod tests {
             let sessions_before = state.sessions.lock().await.len();
             // Upload-only recovery must not silently grant remote-command authority.
             // Exercise the real closed-command-to-quota boundary without a provider read.
-            app.manage(crate::local::LocalState::default());
             app.manage(crate::account_usage::UsageState::default());
             let quota = crate::account_usage::account_usage(
                 access_lease(),
@@ -7056,11 +7126,17 @@ mod tests {
         .into_inner()
         .unwrap();
         assert_eq!(
-            read_file(access_lease(), app.state(), id.clone(), upload.clone())
-                .await
-                .unwrap()
-                .into_inner()
-                .unwrap(),
+            read_file(
+                access_lease(),
+                app.state(),
+                app.state(),
+                id.clone(),
+                upload.clone()
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
             "hello 世界"
         );
         assert!(upload_file(
@@ -7075,6 +7151,7 @@ mod tests {
         assert_eq!(fs::read(&upload).unwrap(), "hello 世界".as_bytes());
         let entries = list_directory(
             access_lease(),
+            app.state(),
             app.state(),
             id.clone(),
             dir.path().to_string_lossy().into_owned(),
@@ -7092,6 +7169,7 @@ mod tests {
             read_file(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.clone(),
                 large.to_string_lossy().into_owned()
             )
@@ -7108,6 +7186,7 @@ mod tests {
         assert_eq!(
             read_file(
                 access_lease(),
+                app.state(),
                 app.state(),
                 id.clone(),
                 binary.to_string_lossy().into_owned()
@@ -7128,6 +7207,7 @@ mod tests {
         assert_eq!(
             list_directory(
                 access_lease(),
+                app.state(),
                 app.state(),
                 id.clone(),
                 crowded.to_string_lossy().into_owned()
@@ -7177,6 +7257,7 @@ mod tests {
         let diff = get_diff(
             access_lease(),
             app.state(),
+            app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),
             false,
@@ -7189,6 +7270,7 @@ mod tests {
         assert!(diff.contains("+after"));
         let staged = get_diff(
             access_lease(),
+            app.state(),
             app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),

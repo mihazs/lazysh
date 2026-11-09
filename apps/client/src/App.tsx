@@ -291,6 +291,14 @@ type View =
   | "voice"
   | "devices"
   | "apple";
+type LocalCapability={available:boolean;reason:string;targets?:{id:string;tools?:{files?:boolean;repository?:boolean}}[]};
+const localViewTools:Partial<Record<View,'files'|'repository'>>={files:'files',diff:'repository'};
+/** A local session offers its terminal tools plus the host tools its default target reports. */
+function localView(capability:LocalCapability,id:View) {
+  if(id==='terminal' || id==='voice' || id==='usage')return true;
+  const tool=localViewTools[id];
+  return !!tool && capability.targets?.find(target=>target.id==='default')?.tools?.[tool]===true;
+}
 const views = () => [
   { id: "terminal" as const, label: t("appTerminal"), Icon: TerminalSquare },
   { id: "apple" as const, label: t("appAppleStatus"), Icon: Activity },
@@ -1184,7 +1192,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useClientAppearance();
   const {sessionLayout} = usePreferences();
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [localCapability, setLocalCapability] = useState({available:false,reason:t("appCheckingLocalTerminalSupport")});
+  const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);
   const localOpening = useRef(false);
   const [appleUsage, setAppleUsage] = useState<Record<string,AppleUsageReport>>({});
@@ -1457,7 +1465,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
-  const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
+  const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id)) : [];
   const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
@@ -1647,13 +1655,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
 
   useEffect(()=>{
     let alive=true;
-    if(native) void invoke<{available:boolean;reason:string}>('local_capability').then(value=>{
+    if(native) void invoke<LocalCapability>('local_capability').then(value=>{
       if(alive && value && typeof value.available==='boolean') setLocalCapability(value);
     }).catch(()=>{if(alive)setLocalCapability({available:false,reason:t("appLocalTerminalCapabilityIsUnavailable")});});
     else setLocalCapability({available:false,reason:t("appLocalTerminalsRequireTheNativeDesktopApp")});
     return()=>{alive=false;};
   },[]);
-  useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice' && view!=='usage')setView('terminal');},[active?.id,active?.local,view]);
+  useEffect(()=>{if(active?.local && !localView(localCapability,view))setView('terminal');},[active?.id,active?.local,view,localCapability]);
   const launchBusy=!!fileRecovery || openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
     || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
     || (view==='sessions' && muxLaunch?.sessionId===activeId);
@@ -2463,10 +2471,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && !active.local && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && !active.local && view === "files" && (
+                {active.connected && (!active.local || localView(localCapability,'files')) && view === "files" && (
                   <FilesPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && !active.local && view === "diff" && (
+                {active.connected && (!active.local || localView(localCapability,'diff')) && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}

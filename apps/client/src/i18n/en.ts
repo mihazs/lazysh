@@ -819,7 +819,7 @@ export const english = {
   "appNewConnection": "New connection",
   "appSessionViews": "Session views",
   "appEndValue1Connection": "End {{value1}} connection",
-  "appLocalShellOnThisDeviceSSHHostToolsRemote": "Local shell on this device. SSH host tools, remote files, agents and previews are unavailable in this session.",
+  "appLocalShellOnThisDeviceSSHHostToolsRemote": "Local shell on this device. Files and repository review use this device; agents, previews and other SSH host tools are unavailable in this session.",
   "appOpeningTerminal": "Opening terminal…",
   "appThisConnectionHasEnded": "This connection has ended.",
   "appConnectAgainFromHostsToReadLiveData": "Connect again from Hosts to read live data.",

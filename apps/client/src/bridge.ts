@@ -143,9 +143,9 @@ export const api = {
   /** Asks each SSH connection behind these sessions to answer at once; a silent route closes as lost. */
   probeConnections: (sessionIds: string[]) => invoke<void>('probe_connections', { sessionIds }),
   listDirectory: (sessionId: string, path: string) =>
-    remoteInvoke<FileEntry[]>("list_directory", { sessionId, path }),
+    invoke<FileEntry[]>("list_directory", { sessionId, path }),
   readFile: (sessionId: string, path: string) =>
-    remoteInvoke<string>("read_file", { sessionId, path }),
+    invoke<string>("read_file", { sessionId, path }),
   hostClipboardCopy: (sessionId: string, uploadId: string) =>
     remoteInvoke<void>("host_clipboard_copy", {sessionId,uploadId}),
   reserveUpload: (sessionId: string, size: number) =>
@@ -156,7 +156,7 @@ export const api = {
   uploadFile: (sessionId: string, path: string, data: number[], uploadId: string, temporary = false) =>
     remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId, ...(temporary ? {temporary} : {}) }),
   diff: (sessionId: string, path: string, staged = false) =>
-    remoteInvoke<string>("get_diff", { sessionId, path, staged }),
+    invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),

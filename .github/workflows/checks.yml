@@ -1059,6 +1059,12 @@ jobs:
           fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
           fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
           printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
+      - name: Exercise local sessions, files and Git review through the host context
+        if: ${{ !cancelled() }}
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep -c ': test$' | grep -Fx 4
+          bunx turbo run test:local --filter=@lazysh/client
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
         if: ${{ !cancelled() }}

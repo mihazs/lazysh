@@ -1,11 +1,9 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
-use crate::ssh::{exec, quote, sftp, AppState, Result, SshError};
+use crate::host::{Cmd, Host};
+use crate::local::LocalState;
+use crate::ssh::{AppState, Result, SshError};
 use serde::Serialize;
 use tauri::State;
-use tokio::{
-    io::AsyncReadExt,
-    time::{timeout, Duration},
-};
 
 const ENTRY_LIMIT: usize = 10_000;
 const BLOB_LIMIT: u64 = 200 * 1024;
@@ -70,6 +68,7 @@ fn image(data: Vec<u8>) -> Result<Image> {
 #[tauri::command]
 pub async fn repository_image(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     file_path: String,
@@ -78,75 +77,84 @@ pub async fn repository_image(
 ) -> std::result::Result<Guarded<Image>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             if let Some(object_id) = object_id {
-                oid(&object_id)?;
-                let prefix = git(&path)?;
-                let size = exec(
-                    &session,
-                    &access,
-                    format!("{prefix} cat-file -s {object_id}"),
-                )
-                .await?
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| invalid("Invalid image size"))?;
-                if size > BLOB_LIMIT {
-                    return Err(invalid(
+                return image(
+                    read_blob(
+                        &host,
+                        &access,
+                        &path,
+                        &object_id,
                         "Historical image exceeds the 200 KiB preview limit",
-                    ));
-                }
-                let encoded = exec(
-                    &session,
-                    &access,
-                    format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
-                )
-                .await?;
-                let bytes = encoded
-                    .split_whitespace()
-                    .map(|s| {
-                        s.parse::<u8>()
-                            .map_err(|_| invalid("Invalid image encoding"))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                if bytes.len() as u64 != size {
-                    return Err(invalid("Image changed while reading"));
-                }
-                return image(bytes);
+                    )
+                    .await?,
+                );
             }
             check_file_path(&file_path)?;
-            git(&path)?;
-            timeout(Duration::from_secs(30), async {
-                let sftp = sftp(&session, &access).await?;
-                let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
-                let metadata = sftp.symlink_metadata(&target).await?;
-                if metadata.is_symlink() || !metadata.is_regular() {
-                    return Err(invalid("Image preview requires a regular file"));
-                }
-                let file = sftp.open(target).await?;
-                let mut bytes = Vec::new();
-                file.take(2 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .await?;
-                if bytes.len() > 2 * 1024 * 1024 {
-                    return Err(invalid("Image preview is limited to 2 MiB"));
-                }
-                image(bytes)
-            })
-            .await
-            .map_err(|_| SshError::new("timeout", "Reading image timed out"))?
+            git(&path, &[])?;
+            let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
+            let bytes = host
+                .read_regular(&access, target, 2 * 1024 * 1024)
+                .await
+                .map_err(|error| match error.kind() {
+                    "not_regular_file" => invalid("Image preview requires a regular file"),
+                    _ => error,
+                })?;
+            if bytes.len() > 2 * 1024 * 1024 {
+                return Err(invalid("Image preview is limited to 2 MiB"));
+            }
+            image(bytes)
         })
         .await
+}
+/// A historical object's bytes, bounded by its size before it is read.
+async fn read_blob(
+    host: &Host,
+    access: &AccessLease,
+    path: &str,
+    object_id: &str,
+    too_large: &str,
+) -> Result<Vec<u8>> {
+    oid(object_id)?;
+    let size = host
+        .run(access, &git(path, &["cat-file", "-s", object_id])?)
+        .await?
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| invalid("Invalid object size"))?;
+    if size > BLOB_LIMIT {
+        return Err(invalid(too_large));
+    }
+    let bytes = host
+        .run_bytes(access, &git(path, &["cat-file", "blob", object_id])?)
+        .await?;
+    if bytes.len() as u64 != size {
+        return Err(invalid("Repository blob changed while reading"));
+    }
+    Ok(bytes)
 }
 
 fn invalid(message: &str) -> SshError {
     SshError::new("invalid_repository", message)
 }
-fn git(path: &str) -> Result<String> {
+const GIT_ENV: &[(&str, &str)] = &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_NO_REPLACE_OBJECTS", "1")];
+fn git(path: &str, args: &[&str]) -> Result<Cmd> {
     if path.is_empty() || path.len() > 4096 || path.contains('\0') {
         return Err(invalid("Invalid repository directory"));
     }
-    Ok(format!("GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1 git --no-pager --literal-pathspecs -c core.fsmonitor=false -c core.quotePath=false -C {}", quote(path)))
+    let mut argv = vec![
+        "git",
+        "--no-pager",
+        "--literal-pathspecs",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.quotePath=false",
+        "-C",
+        path,
+    ];
+    argv.extend_from_slice(args);
+    Ok(Cmd::new(GIT_ENV, &argv))
 }
 fn oid(value: &str) -> Result<()> {
     if !matches!(value.len(), 40 | 64) || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -259,30 +267,34 @@ fn parse_tree(text: &str) -> Result<Vec<TreeEntry>> {
 #[tauri::command]
 pub async fn repository_status(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     access: AccessLease,
 ) -> std::result::Result<Guarded<Status>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let root = exec(
-                &session,
-                &access,
-                format!("{} rev-parse --show-toplevel", git(&path)?),
-            )
-            .await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let root = host
+                .run(&access, &git(&path, &["rev-parse", "--show-toplevel"])?)
+                .await?;
             let root = root.strip_suffix('\n').unwrap_or(&root).to_owned();
             let changes = parse_status(
-                &exec(
-                    &session,
-                    &access,
-                    format!(
-                        "{} status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all",
-                        git(&root)?
-                    ),
-                )
-                .await?,
+                &host
+                    .run(
+                        &access,
+                        &git(
+                            &root,
+                            &[
+                                "status",
+                                "--porcelain=v1",
+                                "-z",
+                                "--untracked-files=all",
+                                "--ignore-submodules=all",
+                            ],
+                        )?,
+                    )
+                    .await?,
             )?;
             Ok(Status {
                 path: root,
@@ -294,36 +306,47 @@ pub async fn repository_status(
 #[tauri::command]
 pub async fn repository_history(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     offset: Option<u32>,
     revision: Option<String>,
     access: AccessLease,
 ) -> std::result::Result<Guarded<Vec<Commit>>, GuardedError<crate::ssh::SshError>> {
-    access.run(async {
-    let offset = offset.unwrap_or(0);
-    if offset > 100_000 {
-        return Err(invalid("History cursor exceeds 100,000 commits"));
-    }
-    let revision = revision.unwrap_or_default();
-    if !revision.is_empty() {
-        oid(&revision)?;
-    }
-    let session = state.session(&session_id).await?;
-    parse_history(
-        &exec(&session, &access,
-            format!(
-                "{} log -z --skip={offset} --max-count=50 --format='%H%x00%s' --no-show-signature {revision}",
-                git(&path)?
-            ),
-        )
-        .await?,
-    )
- }).await
+    access
+        .run(async {
+            let offset = offset.unwrap_or(0);
+            if offset > 100_000 {
+                return Err(invalid("History cursor exceeds 100,000 commits"));
+            }
+            let revision = revision.unwrap_or_default();
+            if !revision.is_empty() {
+                oid(&revision)?;
+            }
+            let skip = format!("--skip={offset}");
+            let mut command = git(
+                &path,
+                &[
+                    "log",
+                    "-z",
+                    &skip,
+                    "--max-count=50",
+                    "--format=%H%x00%s",
+                    "--no-show-signature",
+                ],
+            )?;
+            if !revision.is_empty() {
+                command = command.arg(&revision);
+            }
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            parse_history(&host.run(&access, &command).await?)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn repository_tree(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     revision: String,
@@ -342,14 +365,14 @@ pub async fn repository_tree(
             } else {
                 format!("{revision}:{directory}")
             };
-            let session = state.session(&session_id).await?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
             let mut entries = parse_tree(
-                &exec(
-                    &session,
-                    &access,
-                    format!("{} ls-tree -l -z --full-tree {}", git(&path)?, quote(&tree)),
-                )
-                .await?,
+                &host
+                    .run(
+                        &access,
+                        &git(&path, &["ls-tree", "-l", "-z", "--full-tree", &tree])?,
+                    )
+                    .await?,
             )?;
             if !directory.is_empty() {
                 for entry in &mut entries {
@@ -360,31 +383,23 @@ pub async fn repository_tree(
         })
         .await
 }
-fn decode_blob(text: &str, size: u64) -> Result<Blob> {
-    let bytes = text
-        .split_whitespace()
-        .map(|s| {
-            s.parse::<u8>()
-                .map_err(|_| invalid("Invalid blob encoding"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if bytes.len() as u64 != size {
-        return Err(invalid("Repository blob changed while reading"));
-    }
+fn decode_blob(bytes: Vec<u8>) -> Blob {
+    let size = bytes.len() as u64;
     let text = if bytes.contains(&0) {
         None
     } else {
         String::from_utf8(bytes).ok()
     };
-    Ok(Blob {
+    Blob {
         binary: text.is_none(),
         text,
         bytes: size,
-    })
+    }
 }
 #[tauri::command]
 pub async fn repository_blob(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     object_id: String,
@@ -392,61 +407,58 @@ pub async fn repository_blob(
 ) -> std::result::Result<Guarded<Blob>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
-            oid(&object_id)?;
-            let prefix = git(&path)?;
-            let session = state.session(&session_id).await?;
-            let size = exec(
-                &session,
-                &access,
-                format!("{prefix} cat-file -s {object_id}"),
-            )
-            .await?
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| invalid("Invalid object size"))?;
-            if size > BLOB_LIMIT {
-                return Err(invalid("Historical file exceeds the 200 KiB preview limit"));
-            }
-            let encoded = exec(
-                &session,
-                &access,
-                format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
-            )
-            .await?;
-            decode_blob(&encoded, size)
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            Ok(decode_blob(
+                read_blob(
+                    &host,
+                    &access,
+                    &path,
+                    &object_id,
+                    "Historical file exceeds the 200 KiB preview limit",
+                )
+                .await?,
+            ))
         })
         .await
 }
 #[tauri::command]
 pub async fn repository_diff(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     path: String,
     file_path: String,
     staged: bool,
     access: AccessLease,
 ) -> std::result::Result<Guarded<Diff>, GuardedError<crate::ssh::SshError>> {
-    access.run(async {
-    check_file_path(&file_path)?;
-    let session = state.session(&session_id).await?;
-    let prefix = git(&path)?;
-    let cached = if staged { "--cached" } else { "" };
-    let pathspec = quote(&file_path);
-    let stats = exec(&session, &access,
-        format!("{prefix} diff --no-ext-diff --no-textconv --numstat -z {cached} -- {pathspec}"),
-    )
-    .await?;
-    let binary = stats
-        .split_terminator('\0')
-        .any(|row| row.starts_with("-\t-\t"));
-    let patch = exec(&session, &access, format!("{prefix} diff --no-ext-diff --no-textconv --no-color --no-renames {cached} -- {pathspec}")).await?;
-    if patch.lines().count() > 10_000 {
-        return Err(invalid(
-            "Diff preview exceeds 10,000 lines; review a smaller change in the terminal",
-        ));
-    }
-    Ok(Diff { patch, binary })
- }).await
+    access
+        .run(async {
+            check_file_path(&file_path)?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let diff = |options: &[&str]| -> Result<Cmd> {
+                let mut args = vec!["diff", "--no-ext-diff", "--no-textconv"];
+                args.extend_from_slice(options);
+                if staged {
+                    args.push("--cached");
+                }
+                args.extend_from_slice(&["--", &file_path]);
+                git(&path, &args)
+            };
+            let stats = host.run(&access, &diff(&["--numstat", "-z"])?).await?;
+            let binary = stats
+                .split_terminator('\0')
+                .any(|row| row.starts_with("-\t-\t"));
+            let patch = host
+                .run(&access, &diff(&["--no-color", "--no-renames"])?)
+                .await?;
+            if patch.lines().count() > 10_000 {
+                return Err(invalid(
+                    "Diff preview exceeds 10,000 lines; review a smaller change in the terminal",
+                ));
+            }
+            Ok(Diff { patch, binary })
+        })
+        .await
 }
 
 #[cfg(test)]
@@ -486,68 +498,104 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn real_git_history_status_and_binary_objects_preserve_hostile_names() {
+        // The remote arm sends the rendered command line to a POSIX shell.
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("repo';$() name");
         fs::create_dir(&dir).unwrap();
-        let prefix = git(dir.to_str().unwrap()).unwrap();
-        run(format!("{prefix} init -q"));
+        let dir = dir.to_str().unwrap();
+        let git = |args: &[&str]| run(git(dir, args).unwrap().render());
+        git(&["init", "-q"]);
         let hostile = "--strange\tname\nfile.txt";
-        fs::write(dir.join(hostile), "before\n").unwrap();
-        fs::write(dir.join("binary.dat"), [0, 255, 34, 10]).unwrap();
-        fs::create_dir(dir.join("nested")).unwrap();
-        fs::write(dir.join("nested/file.txt"), "nested text").unwrap();
-        run(format!("{prefix} add -- ."));
-        run(format!(
-            "{prefix} -c user.name=Test -c user.email=test@example.invalid commit -qm initial"
-        ));
-        let history = parse_history(&run(format!(
-            "{prefix} log -z --max-count=50 --format='%H%x00%s' --no-show-signature"
-        )))
+        let path = std::path::Path::new(dir);
+        fs::write(path.join(hostile), "before\n").unwrap();
+        fs::write(path.join("binary.dat"), [0, 255, 34, 10]).unwrap();
+        fs::create_dir(path.join("nested")).unwrap();
+        fs::write(path.join("nested/file.txt"), "nested text").unwrap();
+        git(&["add", "--", "."]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "initial",
+        ]);
+        let history = parse_history(&git(&[
+            "log",
+            "-z",
+            "--max-count=50",
+            "--format=%H%x00%s",
+            "--no-show-signature",
+        ]))
         .unwrap();
         assert_eq!(history[0].subject, "initial");
-        let tree = parse_tree(&run(format!(
-            "{prefix} ls-tree -r -l -z --full-tree {}",
-            history[0].oid
-        )))
+        let tree = parse_tree(&git(&[
+            "ls-tree",
+            "-r",
+            "-l",
+            "-z",
+            "--full-tree",
+            &history[0].oid,
+        ]))
         .unwrap();
         assert!(tree.iter().any(|entry| entry.path == hostile));
-        let root_tree = parse_tree(&run(format!(
-            "{prefix} ls-tree -l -z --full-tree {}",
-            history[0].oid
-        )))
+        let root_tree = parse_tree(&git(&[
+            "ls-tree",
+            "-l",
+            "-z",
+            "--full-tree",
+            &history[0].oid,
+        ]))
         .unwrap();
         assert!(root_tree
             .iter()
             .any(|entry| entry.path == "nested" && entry.kind == "tree"));
-        let nested = quote(&format!("{}:nested", history[0].oid));
-        let subtree =
-            parse_tree(&run(format!("{prefix} ls-tree -l -z --full-tree {nested}"))).unwrap();
+        let nested = format!("{}:nested", history[0].oid);
+        let subtree = parse_tree(&git(&["ls-tree", "-l", "-z", "--full-tree", &nested])).unwrap();
         assert_eq!(subtree[0].path, "file.txt");
         let binary = tree
             .iter()
             .find(|entry| entry.path == "binary.dat")
             .unwrap();
         let encoded = run(format!(
-            "{prefix} cat-file blob {} | od -An -v -tu1",
-            binary.oid
+            "{} | od -An -v -tu1",
+            super::git(dir, &["cat-file", "blob", &binary.oid])
+                .unwrap()
+                .render()
         ));
-        assert!(decode_blob(&encoded, 4).unwrap().binary);
-        fs::rename(dir.join(hostile), dir.join("renamed.txt")).unwrap();
-        run(format!("{prefix} add -- ."));
-        fs::write(dir.join("untracked.txt"), "new").unwrap();
-        let changes = parse_status(&run(format!(
-            "{prefix} status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all"
-        )))
+        let bytes = encoded
+            .split_whitespace()
+            .map(|byte| byte.parse::<u8>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(bytes, [0, 255, 34, 10]);
+        assert!(decode_blob(bytes).binary);
+        fs::rename(path.join(hostile), path.join("renamed.txt")).unwrap();
+        git(&["add", "--", "."]);
+        fs::write(path.join("untracked.txt"), "new").unwrap();
+        let changes = parse_status(&git(&[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=all",
+        ]))
         .unwrap();
         assert!(changes.iter().any(|change| change.path == "renamed.txt"
             && change.original_path.as_deref() == Some(hostile)));
         assert!(changes
             .iter()
             .any(|change| change.path == "untracked.txt" && change.index == "?"));
-        fs::write(dir.join("binary.dat"), [0, 244]).unwrap();
-        let stats = run(format!(
-            "{prefix} diff --no-ext-diff --no-textconv --numstat -z -- binary.dat"
-        ));
+        fs::write(path.join("binary.dat"), [0, 244]).unwrap();
+        let stats = git(&[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--",
+            "binary.dat",
+        ]);
         assert!(stats.starts_with("-\t-\t"));
     }
 }
