@@ -1042,6 +1042,75 @@ class NativeWorkspaceTest {
         }
     }
 
+    // The inbox test action posts through the packaged notification plugin; Android's own
+    // notification records and the SystemUI shade, not the DOM, prove the delivery.
+    @Test fun inboxTestNotificationReachesTheShadeAndPauseDisablesIt() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+        val device = UiDevice.getInstance(instrumentation)
+        val scenario = NativeActivityFixture.scenario
+        val title = "lazysh notifications"
+        val body = "Local notifications are enabled on this device."
+        val inbox = "[role='dialog'][aria-label='Notification inbox']"
+        val stored = "JSON.parse(localStorage.getItem('lazysh.inbox.v1')??'{}').notifications===true"
+        fun posted() = manager.activeNotifications.filter {
+            it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() == title
+        }
+        fun testButton(enabled: Boolean) = "Array.from(document.querySelectorAll(${JSONObject.quote("$inbox button")}))" +
+            ".some(x=>x.textContent==='Test notification' && x.disabled===${!enabled})"
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+        posted().forEach { manager.cancel(it.tag, it.id) }
+        awaitUnlockedWorkspace(scenario, "notification inbox workspace")
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        preferencesCategory(scenario, "inbox", inbox)
+        try {
+            if (evaluate(scenario, stored) == "true") webButton("Pause system notifications")
+            awaitDocument(scenario, "test action waits for enabled notifications", testButton(false))
+            webButton("Enable system notifications")
+            awaitDocument(scenario, "granted notification permission enables the inbox",
+                visibleStatus("System notifications enabled for new attention events while connected.") + " && " + stored)
+            webButton("Test notification")
+            awaitDocument(scenario, "test notification submitted",
+                visibleStatus("Test notification submitted. Delivery depends on your system notification settings."))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (posted().isEmpty() && System.nanoTime() < deadline) Thread.sleep(100)
+            val record = posted().singleOrNull()
+            assertNotNull("The test action must post exactly one Android notification", record)
+            assertEquals("Test notification body", body,
+                record!!.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+            val shade = device.openNotification()
+            try {
+                assertTrue("Notification shade must open", shade)
+                // SystemUI animates a new row into the shade, so wait for the title first.
+                val heading = device.wait(Until.findObject(By.pkg("com.android.systemui").text(title)), 5000)
+                assertNotNull("Test notification title must reach the SystemUI shade", heading)
+                val ancestors = generateSequence(heading!!) { it.parent }.toList()
+                val row = ancestors.firstOrNull { it.resourceName == "com.android.systemui:id/expandableNotificationRow" }
+                assertNotNull("Title must sit in a notification row: ${ancestors.map { it.resourceName }}", row)
+                // A collapsed row ellipsizes a long body, so expand it before reading the full text.
+                if (!row!!.hasObject(By.text(body))) row.findObject(By.res("android", "expand_button"))?.click()
+                assertTrue("Test notification body must share the title's shade row: ${row.findObjects(By.textContains("")).map { it.text }}",
+                    row.wait(Until.hasObject(By.text(body)), 5000))
+            } finally {
+                manager.cancel(record.tag, record.id)
+                if (shade) device.pressBack()
+            }
+            val focus = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!NativeActivityFixture.readiness(scenario).ready && System.nanoTime() < focus) Thread.sleep(50)
+            assertTrue("Workspace must be ready after the shade closes: ${NativeActivityFixture.readiness(scenario)}",
+                NativeActivityFixture.readiness(scenario).ready)
+            webButton("Pause system notifications")
+            awaitDocument(scenario, "pause disables system notifications and the test action",
+                testButton(false) + " && !($stored) && Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Enable system notifications')")
+        } finally {
+            posted().forEach { manager.cancel(it.tag, it.id) }
+            if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(inbox)}))") == "true")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Notification inbox']")).perform(webClick())
+        }
+    }
+
     // Launcher entries are aliases of LauncherActivity, so switching never removes the workspace task.
     @Test fun appIconAliasSwitchKeepsTheRunningWorkspaceActivity() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -4837,8 +4906,9 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
-    private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String) {
-        val active = ".settings-navigation [data-settings-page='$id']:not([hidden])"
+    // `opened` is the selector a row that opens its own dialog, instead of a page, leaves shown.
+    private fun preferencesCategory(scenario: ActivityScenario<MainActivity>, id: String, opened: String? = null) {
+        val active = opened ?: ".settings-navigation [data-settings-page='$id']:not([hidden])"
         val target = ".settings-navigation button[data-settings-target='$id']"
         repeat(3) {
             if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(active)}))") == "true") return
