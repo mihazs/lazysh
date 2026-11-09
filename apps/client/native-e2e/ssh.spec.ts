@@ -9,7 +9,7 @@ import {NativeGui} from './fixture';
 import {nativeOpenCodeManifest,nativeOpenCodeParagraphText} from './policy';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
+import {openOwnedSsh,ownedCompanionSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -44,10 +44,7 @@ const protectedInput=async(path:string,limit:number,allowEmpty=false)=>{
 
 async function installRecordedCompanion(companion:Buffer,clientSha256:string) {
   expect(createHash('sha256').update(await readFile(join(import.meta.dirname,'../../../target/release/lazysh'))).digest('hex')).toBe(clientSha256);
-  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
-  const image=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
-  await mkdir(join(ssh.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});
-  await writeFile(image,companion,{flag:'wx',mode:0o700});await chmod(image,0o700);
+  const {ssh,companion:image}=await ownedCompanionSsh(fixture,companion);
   return {ssh,image};
 }
 
