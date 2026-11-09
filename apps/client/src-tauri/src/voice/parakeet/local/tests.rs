@@ -299,6 +299,10 @@ fn partial(manager: &Arc<Manager>, work: &mut Work) -> (PathBuf, File) {
     work.partial = Some(path.clone());
     (path, file)
 }
+#[test]
+fn status_total_is_the_size_the_verifier_accepts() {
+    assert_eq!(ARCHIVE_BYTES, lazysh_parakeet_runtime::ARCHIVE_BYTES);
+}
 #[tokio::test]
 async fn actual_streamed_transfer_bounds_hash_and_partial_cleanup() {
     let body = b"synthetic pinned model download bytes".to_vec();
@@ -342,7 +346,7 @@ async fn actual_streamed_transfer_bounds_hash_and_partial_cleanup() {
         .await;
         headers.await.unwrap();
         task.await.unwrap();
-        assert_eq!(result.is_ok(), success);
+        assert_eq!(result.err().as_deref(), (!success).then_some(REPUBLISHED));
         assert!(!manager.cache.archive().exists());
         assert!(file.metadata().unwrap().len() <= expected);
         if success {

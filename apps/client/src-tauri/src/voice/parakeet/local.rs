@@ -19,6 +19,8 @@ const CACHE_ERROR: &str =
     "Private Parakeet model storage is unavailable or is in use by another app process";
 const CANCELLED: &str = "Parakeet result cancelled; native work may still be finishing";
 const ARCHIVE_NAME: &str = "parakeet-v3-int8.tar.bz2";
+// The release asset URL is mutable upstream; a replaced archive must read as such, not as a network fault.
+const REPUBLISHED: &str = "The publisher replaced the Parakeet archive this lazysh version pins; nothing was installed. Update lazysh to install Parakeet";
 struct Cache {
     root: PathBuf,
     _lock: File,
@@ -473,12 +475,17 @@ async fn transfer(
         return Err("Invalid Parakeet catalog size".into());
     }
     let mut response = tokio::select! {biased; _=work.cancelled()=>return Err(CANCELLED.into()), result=client.get(url).header(reqwest::header::ACCEPT_ENCODING,"identity").send()=>result.map_err(|_| "Parakeet model download failed or timed out")?};
-    if response.status() != reqwest::StatusCode::OK
-        || response
-            .content_length()
-            .is_some_and(|length| length != expected)
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(format!(
+            "Parakeet model download failed (HTTP {})",
+            response.status().as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length != expected)
     {
-        return Err("Publisher returned an unexpected Parakeet archive".into());
+        return Err(REPUBLISHED.into());
     }
     let mut hash = Sha256::new();
     let mut received = 0;
@@ -486,7 +493,7 @@ async fn transfer(
     while let Some(bytes) = tokio::select! {biased; _=work.cancelled()=>return Err(CANCELLED.into()), result=response.chunk()=>result.map_err(|_| "Parakeet download interrupted or timed out")?}
     {
         if bytes.len() as u64 > expected - received {
-            return Err("Parakeet archive exceeds the catalog size".into());
+            return Err(REPUBLISHED.into());
         }
         work.check()?;
         file.write_all(&bytes)
@@ -500,7 +507,7 @@ async fn transfer(
         }
     }
     if received != expected || format!("{:x}", hash.finalize()) != digest {
-        return Err("Parakeet archive SHA-256 or size verification failed".into());
+        return Err(REPUBLISHED.into());
     }
     work.check()
 }

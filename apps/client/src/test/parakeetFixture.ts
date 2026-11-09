@@ -1,6 +1,6 @@
 import {vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
-export const parakeetBytes = 487170055;
+export const parakeetBytes = 487211443;
 export function parakeetFixture(overrides: Record<string, unknown> = {}) {
   const status = {available:true, reason:'Local CPU engine', installed:false, ready:false, busy:false,
     stage:'idle', requestId:null as string|null, received:0, total:parakeetBytes, ...overrides};

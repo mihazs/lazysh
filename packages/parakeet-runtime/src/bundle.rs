@@ -8,33 +8,36 @@ use std::{
 use tempfile::{NamedTempFile, TempDir};
 
 pub const MODEL_ID: &str = "parakeet-tdt-0.6b-v3-int8";
-pub const ARCHIVE_BYTES: u64 = 487_170_055;
-pub const ARCHIVE_SHA256: &str = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf";
+pub const ARCHIVE_BYTES: u64 = 487_211_443;
+pub const ARCHIVE_SHA256: &str = "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9";
 pub const ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const PREFIX: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
-const FILES: [(&str, u64, Option<&str>); 4] = [
+const FILES: [(&str, u64, &str); 4] = [
     (
         "encoder.int8.onnx",
-        652_184_281,
-        Some("acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247"),
+        652_282_294,
+        "1afbe69c1ffdabee94755f42e4daf1d93549131a3da11356bda84fcef0f2c479",
     ),
     (
         "decoder.int8.onnx",
-        11_845_275,
-        Some("179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e"),
+        11_845_274,
+        "0222a86147299d4dee90edf95b6d13827edb42ad8b7c9cf0b2582f030937c0b5",
     ),
     (
         "joiner.int8.onnx",
         6_355_277,
-        Some("3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3"),
+        "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98",
     ),
-    // The vocabulary is authenticated by the fixed compressed-archive digest; no caller-supplied digest is accepted.
-    ("tokens.txt", 93_939, None),
+    (
+        "tokens.txt",
+        93_939,
+        "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+    ),
 ];
 struct Catalog<'a> {
     bytes: u64,
     sha256: &'a str,
-    files: &'a [(&'a str, u64, Option<&'a str>); 4],
+    files: &'a [(&'a str, u64, &'a str); 4],
 }
 
 /// Private extracted files remain owned for the recognizer lifetime. No arbitrary-directory constructor exists.
@@ -173,9 +176,7 @@ fn prepare(
             file.write_all(&buffer[..n]).map_err(|_| Error::Storage)?;
             digest.update(&buffer[..n]);
         }
-        if copied != bytes
-            || expected_hash.is_some_and(|hash| format!("{:x}", digest.finalize()) != hash)
-        {
+        if copied != bytes || format!("{:x}", digest.finalize()) != expected_hash {
             return Err(Error::InvalidBundle);
         }
         seen[index] = true;
