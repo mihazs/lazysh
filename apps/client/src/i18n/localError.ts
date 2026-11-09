@@ -21,9 +21,13 @@ export class LocalUiError extends Error {
 /** A local native transport failure, independent of host-provided error text. */
 export class SshControlClosedError extends LocalUiError { constructor(){super('hostToolsClosed');} }
 export type UiErrorCause = string | LocalUiError;
+/** Native Herdr failure kinds with a fixed local explanation instead of host text. */
+const herdrKinds:Readonly<Record<string,FixedUiKey>>={herdr_focus_companion_required:'herdrNavigationCompanion',herdr_target_missing:'herdrNavigationChanged'};
 export function captureUiError(error: unknown): UiErrorCause {
   if(error instanceof LocalUiError)return error;
   if(error && typeof error==='object' && 'kind' in error && error.kind==='ssh_host_tools_closed' && 'message' in error && typeof error.message==='string')return new SshControlClosedError();
+  const herdr=error && typeof error==='object' && 'kind' in error && typeof error.kind==='string' && Object.hasOwn(herdrKinds,error.kind)?herdrKinds[error.kind]:undefined;
+  if(herdr)return new LocalUiError(herdr);
   return errorMessage(error);
 }
 export function uiErrorText(error: UiErrorCause): string {

@@ -331,6 +331,34 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
     };
     command(session, args)
 }
+/// Herdr reports a stale exact target as one JSON error line on stderr. Both
+/// 0.9.3 and 0.9.5 use these codes; 0.9.4+ also returns them for out-of-range
+/// workspace numbers instead of crashing the server.
+fn missing_target(error: SshError) -> SshError {
+    #[derive(Deserialize)]
+    struct Failure {
+        error: Code,
+    }
+    #[derive(Deserialize)]
+    struct Code {
+        code: String,
+    }
+    let missing = error.kind() == "remote_command_failed"
+        && serde_json::from_str::<Failure>(error.message()).is_ok_and(|failure| {
+            matches!(
+                failure.error.code.as_str(),
+                "workspace_not_found" | "tab_not_found" | "pane_not_found" | "agent_not_found"
+            )
+        });
+    if missing {
+        SshError::new(
+            "herdr_target_missing",
+            "The Herdr workspace, tab or pane no longer exists",
+        )
+    } else {
+        error
+    }
+}
 #[tauri::command]
 pub async fn herdr_tree(
     state: State<'_, AppState>,
@@ -394,7 +422,8 @@ pub async fn herdr_action(
                 crate::ssh::FILE_LIMIT as usize,
                 retained,
             )
-            .await?;
+            .await
+            .map_err(missing_target)?;
             if let Some(pane) = pane {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -864,13 +893,37 @@ mod tests {
         .unwrap());
         let tree = snapshot();
         assert_eq!(tree.workspaces.len(), 2);
+        // Stale exact targets fail as one recognizable error and the server survives.
+        let gone = |kind: char| format!("{}:{kind}999", tree.workspaces[0].workspace_id);
+        for action in [
+            HerdrAction::FocusWorkspace {
+                target: "w999".into(),
+            },
+            HerdrAction::FocusTab { target: gone('t') },
+            HerdrAction::FocusAgent { target: gone('p') },
+            HerdrAction::ZoomPane { target: gone('p') },
+        ] {
+            let output = herdr
+                .command("sh")
+                .arg("-c")
+                .arg(action_command(session, &action).unwrap())
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            let failure = SshError::new(
+                "remote_command_failed",
+                String::from_utf8(output.stderr).unwrap().trim(),
+            );
+            assert_eq!(missing_target(failure).kind(), "herdr_target_missing");
+        }
+        assert_eq!(snapshot().workspaces.len(), 2);
         run(command(session, "server stop".into()).unwrap());
     }
     // The fake `codex` is a POSIX shell script made executable with a Unix mode.
     #[cfg(unix)]
     #[test]
     #[ignore = "requires herdr on PATH; runs an isolated headless server"]
-    fn real_herdr_codex_state_is_detected_and_an_idle_prompt_stays_unknown() {
+    fn real_herdr_codex_state_is_detected_and_an_idle_prompt_matches_the_version() {
         use std::os::unix::fs::PermissionsExt;
         let herdr = RealHerdr::start();
         let home = herdr.path();
@@ -945,8 +998,15 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         };
-        // Herdr 0.9.3 has no idle rule for an idle Codex prompt and reports Unknown.
-        expect("unknown");
+        // Herdr 0.9.3 has no idle rule for an idle Codex prompt and reports
+        // Unknown; 0.9.4 and later settle the same prompt to Idle.
+        let version = herdr.run("herdr --version".into());
+        let idle = if version.trim() == "herdr 0.9.3" {
+            "unknown"
+        } else {
+            "idle"
+        };
+        expect(idle);
         paint(
             "\u{2022} Working (12s \u{2022} esc to interrupt)\n\n\u{203a} ",
             "",
@@ -955,7 +1015,7 @@ mod tests {
         paint("\u{203a} ", "Action Required");
         expect("blocked");
         paint("\u{203a} ", "");
-        expect("unknown");
+        expect(idle);
         // Herdr's own Codex session report is the exact pane context the client
         // joins with a companion lifecycle report; it never changes Herdr's state.
         herdr.run(
@@ -968,12 +1028,41 @@ mod tests {
             )
             .unwrap(),
         );
-        let agent = expect("unknown");
+        let agent = expect(idle);
         assert_eq!(
             serde_json::to_value(&agent.agent_session).unwrap(),
             serde_json::json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"lazysh-owned-990"})
         );
         herdr.run(command(session, "server stop".into()).unwrap());
+    }
+    #[test]
+    fn maps_only_herdr_missing_target_failures() {
+        let failed = |message: &str| SshError::new("remote_command_failed", message);
+        for code in [
+            "workspace_not_found",
+            "tab_not_found",
+            "pane_not_found",
+            "agent_not_found",
+        ] {
+            let message = format!(
+                r#"{{"error":{{"code":"{code}","message":"gone"}},"id":"cli:workspace:focus"}}"#
+            );
+            assert_eq!(
+                missing_target(failed(&message)).kind(),
+                "herdr_target_missing"
+            );
+        }
+        for kept in [
+            failed(r#"{"error":{"code":"server_unavailable","message":"x"},"id":"cli"}"#),
+            failed("workspace_not_found"),
+            SshError::new(
+                "timeout",
+                r#"{"error":{"code":"workspace_not_found","message":"x"}}"#,
+            ),
+        ] {
+            let kind = kept.kind();
+            assert_eq!(missing_target(kept).kind(), kind);
+        }
     }
     #[test]
     fn rejects_nonexact_targets_and_quotes_session_and_labels() {

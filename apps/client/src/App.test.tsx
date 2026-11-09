@@ -1989,9 +1989,9 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
-it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','removed-on-host','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
   if(outcome==='unsupported')mocks.realAgents=true;
-  const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported';
+  const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported'||outcome==='removed-on-host';
   mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
   mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'navigation-existing'});
@@ -2007,7 +2007,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
       if(reads===2 && (outcome==='stale'||outcome==='adopt-held-tree'||outcome==='cancel-after-publication'||outcome==='cancel-server'||outcome==='hidden-then-visible'))return new Promise(resolve=>{complete=resolve;});
       return Promise.resolve(outcome==='missing'?{...herdrNavigationTree,panes:[]}:herdrNavigationTree);
     }
-    if(command==='herdr_action'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_focus_companion_required'}):Promise.resolve(undefined);}
+    if(command==='herdr_action'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_focus_companion_required'}):outcome==='removed-on-host'?Promise.reject({kind:'herdr_target_missing',message:'host text'}):Promise.resolve(undefined);}
     return original(command,args);
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
@@ -2056,7 +2056,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
     expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
     expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
   }
-  else if(outcome==='missing')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
+  else if(outcome==='missing'||outcome==='removed-on-host')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
   else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_action',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',name:'named-work',action:{type:'focusPane',target:'w2E:pF'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
   const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_action');
   expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);

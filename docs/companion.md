@@ -831,7 +831,9 @@ server; only the selected server is queried, not every server in the list.
 
 Herdr statuses retain their meaning, including Idle and Unknown, and always take
 precedence. Herdr 0.9.3 reports an idle Codex prompt as Unknown: it has no screen
-rule for that state, and its Codex integration reports only the session ID. When
+rule for that state, and its Codex integration reports only the session ID. Herdr
+0.9.4 and later report the same prompt as Idle, and 0.9.5 no longer installs Codex
+turn hooks, so this replacement applies less often there. When
 Herdr reports Unknown for a pane, its Herdr-reported Codex, Claude Code or OpenCode
 session ID is unique among the live panes, and exactly one companion report from
 this connection has that agent and session ID, the pane shows that report's

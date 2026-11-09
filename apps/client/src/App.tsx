@@ -2010,7 +2010,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       }
       setActiveId(destination.id);setView('terminal');setSidebar(false);setQuietTerminal(destination.id);
     } catch(error) {
-      const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error);
+      const cause=captureUiError(error);
       if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
       throw cause;
     } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}

@@ -121,7 +121,14 @@ Herdr navigation remain separate acceptance work under issue #7.
 
 List running named servers, then attach or browse one. The Herdr tree preserves server/workspace/tab/pane identity and displays reported agent states. Create and rename workspaces/tabs, focus workspaces/tabs, split and zoom exact panes, and focus reported agents. Plain panes can be selected through the terminal; Herdr's `agent focus` command only accepts agent panes.
 
-The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. The native acceptance below was executed against pinned Herdr **0.9.3**; it does not establish other versions. Incompatible response shapes fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
+The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. Incompatible response shapes fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
+
+Supported Herdr versions are **0.9.3 through 0.9.5**. CI builds stock and guarded Herdr 0.9.5 from the pinned source and runs the native and Android Herdr suites against them. lazysh uses only commands, exact IDs, snapshot fields and error codes that 0.9.3 and 0.9.5 share, so hosts still on 0.9.3 keep working. What changed in Herdr 0.9.4 and 0.9.5:
+
+- If a workspace, tab or pane was closed on the host after the tree loaded, Herdr answers `workspace_not_found`, `tab_not_found`, `pane_not_found` or `agent_not_found`. lazysh shows "The selected connection or destination changed" instead of Herdr's raw JSON. Since 0.9.4, an out-of-range workspace number also returns `workspace_not_found` instead of crashing the server.
+- Since 0.9.4, closing the shell that started Herdr no longer stops the server on Linux and macOS. Stop a server with `herdr server stop` or SIGTERM, not SIGHUP. lazysh never stops servers, and its test fixtures use `server stop`, SIGTERM or SIGKILL.
+- Herdr 0.9.4 asks before closing a workspace's only pane from its own keys or menu (`ui.confirm_close`). lazysh has no close action, and CLI/API closes stay immediate.
+- Herdr 0.9.5 reads Codex status from the screen again instead of turn hooks. lazysh shows whatever state Herdr reports.
 
 Agents initially reads the attached Herdr session when discovery lists that exact
 name, including when several servers are running. Choosing another server overrides
@@ -253,10 +260,10 @@ The client workspace handles saved tmux/Herdr attachment intents separately from
 
 ### Owned SSH Herdr acceptance
 
-On a Unix host with local OpenSSH `sshd` and an absolute path to Herdr 0.9.3:
+On a Unix host with local OpenSSH `sshd` and an absolute path to a supported Herdr (0.9.3 to 0.9.5):
 
 ```sh
-LAZYSH_TEST_HERDR=/absolute/path/to/herdr-0.9.3 cargo test \
+LAZYSH_TEST_HERDR=/absolute/path/to/herdr cargo test \
   --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib \
   ssh::tmux_jump_fixture::real_herdr_ssh_child_pty_preserves_source_and_durable_session \
   -- --ignored --exact --nocapture

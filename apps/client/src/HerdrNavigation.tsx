@@ -64,7 +64,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     try {
       if(target)await onNavigate(server,target,lease,owns);else await onAttach(server,lease,owns);
       if(owns()) {await refresh();onClose();}
-    } catch(error) {if(owns())setActionError(error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error));}
+    } catch(error) {if(owns())setActionError(captureUiError(error));}
     finally {action.current=false;if(current.current.sessionId===sessionId)setActionBusy(false);}
   }
   /** `inherited` hides a status already shown by the parent space or tab; it stays in the accessible name. */
