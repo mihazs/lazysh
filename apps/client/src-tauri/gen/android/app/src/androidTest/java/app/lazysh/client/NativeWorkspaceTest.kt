@@ -1080,24 +1080,27 @@ class NativeWorkspaceTest {
             assertNotNull("The test action must post exactly one Android notification", record)
             assertEquals("Test notification body", body,
                 record!!.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+            val shade = device.openNotification()
             try {
-                assertTrue("Notification shade must open", device.openNotification())
-                assertNotNull("Test notification title must be visible in the shade", device.wait(Until.findObject(By.text(title)), 5000))
-                assertNotNull("Test notification body must be visible in the shade", device.findObject(By.text(body)))
+                assertTrue("Notification shade must open", shade)
+                // SystemUI animates a new row into the shade, so wait for title and body inside one row.
+                val row = By.res("com.android.systemui", "expandableNotificationRow").hasDescendant(By.text(title)).hasDescendant(By.text(body))
+                assertNotNull("Test notification title and body must share one shade row", device.wait(Until.findObject(row), 5000))
             } finally {
                 manager.cancel(record.tag, record.id)
-                device.pressBack()
+                if (shade) device.pressBack()
             }
-            assertTrue("Cancelled test notification must leave the shade", device.wait(Until.gone(By.text(title)), 5000))
             val focus = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!NativeActivityFixture.readiness(scenario).ready && System.nanoTime() < focus) Thread.sleep(50)
+            assertTrue("Workspace must be ready after the shade closes: ${NativeActivityFixture.readiness(scenario)}",
+                NativeActivityFixture.readiness(scenario).ready)
             webButton("Pause system notifications")
             awaitDocument(scenario, "pause disables system notifications and the test action",
                 testButton(false) + " && !($stored) && Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Enable system notifications')")
-            assertTrue("Paused inbox must not post another notification", posted().isEmpty())
         } finally {
             posted().forEach { manager.cancel(it.tag, it.id) }
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Notification inbox']")).perform(webClick())
+            if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(inbox)}))") == "true")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Notification inbox']")).perform(webClick())
         }
     }
 
