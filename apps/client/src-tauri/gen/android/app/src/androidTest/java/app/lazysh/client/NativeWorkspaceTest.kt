@@ -3611,16 +3611,19 @@ class NativeWorkspaceTest {
             }
         }
         fun selectTransport() = selectOwnedOption("[role=dialog] select:has(option[value='ssh'])", if (useMosh) "mosh" else "ssh")
-        fun terminalProof(after: Boolean) {
-            val part = if (after) "after" else "before"
-            val proof = "COMPANION_${nonce}_${part}_END"
-            val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
-            assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
+        fun sendShell(command: String) {
             if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
             typeInto(scenario, ".terminal-compose textarea", command)
             closeSoftKeyboard()
             clickButton("Send")
             closeSoftKeyboard()
+        }
+        fun terminalProof(after: Boolean) {
+            val part = if (after) "after" else "before"
+            val proof = "COMPANION_${nonce}_${part}_END"
+            val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
+            assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
+            sendShell(command)
             awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
                 " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
             assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
@@ -3745,6 +3748,61 @@ class NativeWorkspaceTest {
                 catch (cleanup: Throwable) {if(primary != null)primary!!.addSuppressed(cleanup) else throw cleanup}
             }
         }
+        fun openReportedActivity() {
+            sessionView(scenario, "Agents")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"))
+                .perform(webScrollIntoView()).perform(webClick())
+        }
+        fun returnToTerminal() {
+            awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Connections']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "visible companion drawer close", workspaceElementVisible(".sidebar-close", true))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".sidebar-close")).perform(webClick())
+        }
+        // The host prepared `board` and `approvals`: each runs the installed companion exactly
+        // as a configured Claude hook does (tests/support/androidAgentBoard.ts).
+        fun hostHooks(script: String) {
+            val marker = script.uppercase()
+            sendShell("sh $script && printf '${marker}_%s_END\\n' \"${'$'}LI\"")
+            awaitDocument(scenario, "owned companion $script hooks ran", screenContains("${marker}_${nonce}_END"))
+        }
+        fun verifyCompanionHookBoard() {
+            val board = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) .agent-board"
+            val rows = """(state=>Array.from(document.querySelectorAll(${JSONObject.quote(board)}+" .agent-column[data-state='"+state+"'] .agent-card"))
+                .map(card=>card.querySelector('.agent-row-summary')?.textContent+'|'+card.querySelector(".row-tag[data-tone='project']")?.textContent).sort().join(','))"""
+            val cards = "Array.from(document.querySelectorAll('.approval-panel:not([hidden]) .approval-card'))"
+            val approvals = """$cards.map(card=>Array.from(card.querySelectorAll('.approval-facts dd')).map(x=>x.textContent).join('|')+'|'+JSON.parse(card.querySelector('.approval-input')?.textContent||'null')?.command).sort().join(',')"""
+            val observe = { remaining: Long -> evaluate(scenario, "JSON.stringify({needs:$rows('needs_attention'),working:$rows('working'),done:$rows('done'),approvals:$approvals,alert:document.querySelector('.approval-panel [role=alert]')?.textContent??''})", remaining) }
+            hostHooks("board")
+            openReportedActivity()
+            // Five events from three sessions: Working, Needs you and Done, and the three
+            // events of board-alpha collapse into its one Done row.
+            awaitDocument(scenario, "real hook events rendered on the board",
+                "$rows('needs_attention')==='Agent needs attention|beta' && $rows('working')==='Working on your prompt|delta' && $rows('done')==='Turn finished|alpha'" +
+                " && document.querySelectorAll(${JSONObject.quote("$board .agent-card")}).length===3", observe = observe)
+            assertEquals("Hook prompt and tool input must stay on the host", "false", evaluate(scenario,
+                "document.body.textContent.includes('PRIVATE-PROMPT') || document.body.textContent.includes('SECRET-TOKEN')"))
+            returnToTerminal()
+            hostHooks("approvals")
+            openReportedActivity()
+            awaitDocument(scenario, "waiting hooks listed and in Needs you",
+                "$approvals==='/work/epsilon|approval-host|%9|git tag --list,/work/gamma|approval-allow|%7|git push --dry-run,/work/zeta|approval-deny|%8|git push --force'" +
+                " && $rows('needs_attention')==='Agent needs attention|beta,Bash|epsilon,Bash|gamma,Bash|zeta'", observe = observe)
+            for ((session, decision) in listOf("approval-allow" to "allow", "approval-deny" to "deny")) {
+                val card = "//article[contains(@class,'approval-card')][.//dd[normalize-space(.)='$session']]"
+                // A periodic refresh briefly disables every answer button.
+                awaitDocument(scenario, "remote $decision enabled", "$cards.find(card=>card.textContent.includes('$session'))?.querySelector('.approval-$decision')?.disabled===false", observe = observe)
+                onWebView().withElement(findElement(Locator.XPATH, "$card//button[contains(@class,'approval-$decision')]"))
+                    .perform(webScrollIntoView()).perform(webClick())
+                awaitDocument(scenario, "remote $decision accepted", "!$cards.some(card=>card.textContent.includes('$session'))" +
+                    " && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
+            }
+            // The host ends approval-host once both decisions reached their hooks; the next refresh drops it.
+            awaitDocument(scenario, "request answered at the host cleared", "$cards.length===0 && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
+            println("lazysh companion board: real hook events rendered by state with one row per session; device Allow and Deny accepted; host-answered request cleared")
+        }
         fun verifyCompanionInstallation() {
             val companion = fixture.getJSONObject("companion")
             val version = companion.getString("version")
@@ -3753,10 +3811,7 @@ class NativeWorkspaceTest {
             require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/data/lazysh/companion/lazysh-agent").matches(destination))
             val originalProcess = android.os.Process.myPid()
             terminalProof(false)
-            sessionView(scenario, "Agents")
-            val companionActivity = ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, companionActivity))
-                .perform(webScrollIntoView()).perform(webClick())
+            openReportedActivity()
             val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
@@ -3845,14 +3900,10 @@ class NativeWorkspaceTest {
                     proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
-            awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
-            onWebView().withElement(findElement(Locator.XPATH,
-                "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Connections']"))
-                .perform(webScrollIntoView()).perform(webClick())
-            awaitDocument(scenario, "visible companion drawer close", workspaceElementVisible(".sidebar-close", true))
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".sidebar-close")).perform(webClick())
+            returnToTerminal()
             terminalProof(true)
             println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")
+            verifyCompanionHookBoard()
         }
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
