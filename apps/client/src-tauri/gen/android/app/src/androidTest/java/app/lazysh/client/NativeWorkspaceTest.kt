@@ -3750,7 +3750,8 @@ class NativeWorkspaceTest {
         }
         fun openReportedActivity() {
             sessionView(scenario, "Agents")
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"))
+            val companionActivity = ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, companionActivity))
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun returnToTerminal() {

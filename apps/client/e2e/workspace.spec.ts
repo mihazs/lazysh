@@ -1173,8 +1173,7 @@ test('native companion action stays owned during installed and reused results',a
   if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
   await openClockedNavigation(page);
   await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
-  const nativeCaller=nativeWorkspaceSource.slice(nativeWorkspaceSource.indexOf('fun verifyCompanionInstallation()'));
-  const activity=/val companionActivity = "([^"]+)"/.exec(nativeCaller)?.[1];
+  const activity=/val companionActivity = "([^"]+)"/.exec(nativeWorkspaceSource)?.[1];
   if(activity)await page.locator(activity).click();
   await expect(page.locator(nativeCompanionReadiness('Install companion','idle').panel)).toBeVisible();
   const initial=nativeCompanionReadiness('Install companion','idle');
