@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.27.1
+
+### Patch Changes
+
+- ac467c1: Support Herdr 0.9.3 through 0.9.5, and explain a Herdr workspace, tab or pane that was closed on the host instead of showing Herdr's raw error.
+- @lazysh/account-usage@1.27.1
+  - @lazysh/common@1.27.1
+  - @lazysh/notification-client@1.27.1
+
 ## 1.27.0
 
 ### Patch Changes
