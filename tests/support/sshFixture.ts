@@ -273,6 +273,11 @@ export class SshFixture {
         if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error(`Owned sshd not ready; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
         await delay(10);
       }
+      // sshd logs the bare readiness connect asynchronously; wait for it so a later log offset cannot count it.
+      while(log && !/Connection from /.test(await readFile(log,'utf8').catch(()=>''))) {
+        if(daemon.child.exitCode!==null || performance.now()>=deadline+3000)throw new Error('Owned sshd readiness probe was not logged');
+        await delay(10);
+      }
       return fixture;
     } catch(error) {
       try{if(daemon)await stopOwnedTree(daemon,'SSH',options.privateTtyGroup===true || !!tools);}catch{console.error('Owned SSH startup cleanup failed');}

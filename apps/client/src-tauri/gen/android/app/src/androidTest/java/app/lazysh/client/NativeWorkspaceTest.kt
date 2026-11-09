@@ -4383,7 +4383,7 @@ class NativeWorkspaceTest {
                 (()=>{const options=document.querySelectorAll('[role=dialog] .connection-options select option');
                   const value=x=>Array.from(options).find(o=>o.value===x);
                   return value('mosh')?.disabled===true && value('et')?.disabled===true && value('ssh')?.disabled===false &&
-                    Boolean(document.querySelector('[role=dialog] fieldset legend')?.textContent.includes(${JSONObject.quote(bastion)}));})()
+                    Array.from(document.querySelectorAll('[role=dialog] fieldset legend')).some(x=>x.textContent.includes(${JSONObject.quote(bastion)}));})()
             """))
             typeInto(scenario, "[role=dialog] fieldset input[type=password]", parity.fixture.getString("password"))
             chooseOwnedPrivateKey(scenario, parity.fixture.getString("privateKey"), parity.label)
