@@ -3787,17 +3787,28 @@ class NativeWorkspaceTest {
             returnToTerminal()
             hostHooks("approvals")
             openReportedActivity()
-            awaitDocument(scenario, "waiting hooks listed and in Needs you",
+            awaitDocument(scenario, "waiting hooks listed above the board and in Needs you",
                 "$approvals==='/work/epsilon|approval-host|%9|git tag --list,/work/gamma|approval-allow|%7|git push --dry-run,/work/zeta|approval-deny|%8|git push --force'" +
-                " && $rows('needs_attention')==='Agent needs attention|beta,Bash|epsilon,Bash|gamma,Bash|zeta'", observe = observe)
+                " && $rows('needs_attention')==='Agent needs attention|beta,Bash|epsilon,Bash|gamma,Bash|zeta'" +
+                " && !!(document.querySelector('.approval-panel:not([hidden])')?.compareDocumentPosition(document.querySelector(${JSONObject.quote(board)}))&Node.DOCUMENT_POSITION_FOLLOWING)", observe = observe)
             for ((session, decision) in listOf("approval-allow" to "allow", "approval-deny" to "deny")) {
                 val card = "//article[contains(@class,'approval-card')][.//dd[normalize-space(.)='$session']]"
-                // A periodic refresh briefly disables every answer button.
-                awaitDocument(scenario, "remote $decision enabled", "$cards.find(card=>card.textContent.includes('$session'))?.querySelector('.approval-$decision')?.disabled===false", observe = observe)
-                onWebView().withElement(findElement(Locator.XPATH, "$card//button[contains(@class,'approval-$decision')]"))
-                    .perform(webScrollIntoView()).perform(webClick())
-                awaitDocument(scenario, "remote $decision accepted", "!$cards.some(card=>card.textContent.includes('$session'))" +
-                    " && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
+                val state = "(card=>document.querySelector('.approval-panel [role=alert]')?'alert':!card?'gone':card.querySelector('.approval-$decision').disabled?'busy':'ready')($cards.find(card=>card.textContent.includes('$session')))"
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+                // A periodic refresh disables every answer button, so a tap that lands meanwhile is
+                // dropped or refused; tap again until the request leaves the list. An accepted tap
+                // removes the card in the same render that re-enables the buttons.
+                var refused: Throwable? = null
+                while (true) {
+                    val current = evaluate(scenario, state)
+                    if (current == "\"gone\"") break
+                    if (current == "\"alert\"" || System.nanoTime() >= deadline) throw AssertionError("remote $decision not accepted: ${observe(1_000)}", refused)
+                    if (current == "\"ready\"") refused = runCatching {
+                        onWebView().withElement(findElement(Locator.XPATH, "$card//button[contains(@class,'approval-$decision')]"))
+                            .perform(webScrollIntoView()).perform(webClick())
+                    }.exceptionOrNull() ?: refused
+                    Thread.sleep(1_000)
+                }
             }
             // The host ends approval-host once both decisions reached their hooks; the next refresh drops it.
             awaitDocument(scenario, "request answered at the host cleared", "$cards.length===0 && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
