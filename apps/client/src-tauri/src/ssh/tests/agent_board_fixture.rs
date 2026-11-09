@@ -68,6 +68,24 @@ async fn decide(
     .map_err(|error| error.into_inner().unwrap().kind().to_owned())
 }
 
+/// The companion refuses a stale or mismatched identity by exiting non-zero; a
+/// transport or lock failure would surface as a different kind.
+async fn refused(
+    app: &App,
+    id: &str,
+    request: &Value,
+    hash: &str,
+    pane: Option<&str>,
+    decision: &str,
+) {
+    assert_eq!(
+        decide(app, id, request, hash, pane, decision)
+            .await
+            .unwrap_err(),
+        "remote_command_failed"
+    );
+}
+
 /// Runs one hook command on the host exactly as an agent would: the event on stdin
 /// and the pane identity inherited from the multiplexer environment.
 async fn hook(session: &Session, command: &str, pane: &str, payload: Value) -> String {
@@ -316,13 +334,9 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         if hash.starts_with('0') { "1" } else { "0" },
         &hash[1..]
     );
-    assert!(decide(app, id, &listed, &altered, Some("%7"), "allow")
-        .await
-        .is_err());
-    assert!(decide(app, id, &listed, hash, Some("%8"), "allow")
-        .await
-        .is_err());
-    assert!(decide(app, id, &listed, hash, None, "allow").await.is_err());
+    refused(app, id, &listed, &altered, Some("%7"), "allow").await;
+    refused(app, id, &listed, hash, Some("%8"), "allow").await;
+    refused(app, id, &listed, hash, None, "allow").await;
     assert_eq!(
         approvals(app, id).await.len(),
         1,
@@ -335,9 +349,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         json!({"schemaVersion":1,"accepted":true})
     );
     assert_eq!(hook_decision(allowed).await, json!({"behavior":"allow"}));
-    assert!(decide(app, id, &listed, hash, Some("%7"), "deny")
-        .await
-        .is_err());
+    refused(app, id, &listed, hash, Some("%7"), "deny").await;
     assert!(approvals(app, id).await.is_empty());
 
     let denied = waiting_hook(
@@ -380,16 +392,15 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         .success());
     let _ = timeout(Duration::from_secs(20), host.task).await.unwrap();
     assert!(approvals(app, id).await.is_empty());
-    assert!(decide(
+    refused(
         app,
         id,
         &listed,
         listed["expectedHash"].as_str().unwrap(),
         Some("%11"),
-        "allow"
+        "allow",
     )
-    .await
-    .is_err());
+    .await;
     assert!(board(app, id)
         .await
         .iter()

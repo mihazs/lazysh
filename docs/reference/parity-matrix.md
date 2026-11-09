@@ -24,7 +24,7 @@ Reading rules:
 
 ## CI evidence
 
-All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-11-06 re-audit: 42239021528 (`358c584f`), 42233140862 (`3b72b0be`), 42220275640 (`0ebee54f`) and 42218585416 (`5dd1d1d7`), all 2026-11-06. Android evidence comes from each job's JUnit results in its uploaded artifact (`lazysh-android-*-results`), Linux and desktop evidence from the step logs, Playwright from the `client` job summary.
+All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-11-06 re-audit: 42239021528 (`358c584f`), 42233140862 (`3b72b0be`), 42220275640 (`0ebee54f`) and 42218585416 (`5dd1d1d7`), all 2026-11-06. Later promotions cite 42453322370 (`4e244b50`, 2026-11-08): `client` green, Playwright 999 passed, 0 failed, 49 skipped. Android evidence comes from each job's JUnit results in its uploaded artifact (`lazysh-android-*-results`), Linux and desktop evidence from the step logs, Playwright from the `client` job summary.
 
 | Job | What it runs on a real runtime | State on `main` (2026-11-06) |
 | --- | --- | --- |
@@ -50,9 +50,9 @@ All jobs are in `.github/workflows/checks.yml`. Runs on `main` used by the 2026-
 | Platform | verified | implemented | partial | missing | n/a |
 | --- | --- | --- | --- | --- | --- |
 | Android (before re-audit) | 75 | 151 | 21 | 8 | 10 |
-| Android | 106 | 124 | 20 | 5 | 10 |
+| Android | 105 | 124 | 21 | 5 | 10 |
 | Desktop (before re-audit) | 78 | 142 | 25 | 9 | 11 |
-| Desktop | 121 | 103 | 23 | 7 | 11 |
+| Desktop | 120 | 103 | 24 | 7 | 11 |
 
 Most `implemented` rows are not missing features. They are reachable code whose platform proof is unit-level, mocked, ignored, macOS-only or currently red. The [Gaps](#gaps) section groups them into issues.
 
@@ -281,8 +281,8 @@ Most `implemented` rows are not missing features. They are reachable code whose 
 
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
-| Per-session Needs you, Working and Done | implemented | implemented | `AgentPanel.tsx:27,197`; `apps/agent/src/lib.rs:626-668`. Mocked `e2e/agent-board-locales.spec.ts:39-84`; Android only proves the empty board (NWT:1498-1499). | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`) proves the native data path; Android: real hook events rendered in the NAR companion case. |
-| Group by project and host | verified | verified | Reports group by project inside each state under the connected host's name (#1112, `AgentPanel.tsx`). Web UI over the reported snapshot: `e2e/agent-board-groups.spec.ts` (PW `phone` and `desktop`, green on 42453322370). | One board per connection; no board that merges several hosts. |
+| Per-session Needs you, Working and Done | implemented | implemented | `AgentPanel.tsx:27,197`; `apps/agent/src/lib.rs:626-668`. Mocked `e2e/agent-board-locales.spec.ts:39-84`; Android only proves the empty board (NWT:1498-1499). | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`) proves the native data path only. Desktop still needs the Linux GUI suite to render real hook events on the board; Android: real hook events rendered in the NAR companion case. |
+| Group by project and host | partial | partial | Reports group by project inside each state under the connected host's name (#1112, `AgentPanel.tsx`). Project grouping is web UI over the reported snapshot: `e2e/agent-board-groups.spec.ts` (PW `phone` and `desktop`, green on 42453322370). | Grouping by host: one board per connection, so every group carries the single connected host; no board merges several hosts (out of scope in #1112). |
 | Latest events collapse into one row | implemented | implemented | Upsert on agent and session (`apps/agent/src/lib.rs:594-597`); host test `cli.rs:72`. | Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`): four hook events for one session update one row. Android: NAR companion case. |
 | Valid approval rows take priority | implemented | implemented | Approvals render above the board (`AgentPanel.tsx:162-164,199`). Mocked `agent-board-locales.spec.ts:25-30`. A waiting hook moves its session to Needs you: Desktop real-OpenSSH case `src-tauri/ssh/tests/agent_board_fixture.rs` (`openssh_agent_board_and_approvals_through_companion_hooks`, NL owned-OpenSSH step; added, not yet run on `main`). | Claude only; separate panel. Android: NAR companion case. |
 | Archive | verified | verified | Archive and Restore per device and host until a newer event or age-out (#1112, `apps/client/src/agentArchive.ts`, WebView storage). `e2e/agent-board-groups.spec.ts` (PW `phone` and `desktop`, green on 42453322370). | — |
@@ -503,7 +503,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | 10 | Real multiplexer lifecycle: Zellij product discovery, saved-default entry, shortcut panel and unavailable Jump; Android Zellij, Herdr create and zoom, tmux create-default, window and pane actions and Chat input; desktop tmux numbered-window and detach effects; tmux and Herdr prefix delivery and persistence; recent directories and launcher; Zellij create in a directory | implemented / partial to implemented | #989; umbrella #7 |
 | 11 | Herdr navigation: non-unknown agent state on Android and the Linux GUI, Herdr current marker, list, accordion and grid layouts, desktop pane focus and exact-pane context | partial to implemented / partial to implemented | #990; related #591, #634 |
 | 12 | Desktop launch `-mux` end-to-end | n/a / partial | #86 |
-| 13 | Agent board: real-event rendering on native runtimes, desktop focus-loss release | implemented / implemented | #991 |
+| 13 | Agent board: a board grouped across several hosts, real-event rendering on native runtimes, desktop focus-loss release | partial to implemented / partial to implemented | #991 |
 | 14 | Native Chat: Markdown, thinking, plans, questions and working indicator on a native runtime; image transport; Linux Codex and OpenCode cases skipped in CI; Android tmux Chat input | implemented / implemented | #992; umbrella #5 |
 | 15 | Agent coverage beyond Claude, Codex and OpenCode: live transcript acceptance for the other 14 Chat View agents and Gemini; desktop Codex and OpenCode; Qwen lifecycle reporting | partial to implemented / partial to implemented | #5 |
 | 16 | Remote approvals: non-Claude agents, Herdr and Zellij pane targeting, client-runtime case | partial / partial | #6 |
