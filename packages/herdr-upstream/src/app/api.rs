@@ -940,6 +940,8 @@ impl App {
 
         let response = match request.method {
             Method::GuardClaim(_)
+            | Method::GuardObserve(_)
+            | Method::GuardScrollHistory(_)
             | Method::GuardPrepare(_)
             | Method::GuardInput(_)
             | Method::GuardRelease(_)

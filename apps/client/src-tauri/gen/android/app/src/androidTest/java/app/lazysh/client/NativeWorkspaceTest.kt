@@ -2222,6 +2222,7 @@ class NativeWorkspaceTest {
         val before = observedShortHistoryBaseline(511, true)
         assertFalse("An unchanged OLD511 is not progress", completedShortHistoryProgress(before, 511))
         assertTrue("Older rows can progress while the newest row remains visible", completedShortHistoryProgress(before, 508))
+        assertTrue("The observed Mosh redraw advanced from OLD506 to OLD498", completedShortHistoryProgress(506, 498))
         assertEquals(511, observedShortHistoryBaseline(511, false))
         assertEquals(512, observedShortHistoryBaseline(-1, true))
         assertTrue(completedShortHistoryProgress(observedShortHistoryBaseline(-1, true), 511))
@@ -2489,7 +2490,7 @@ class NativeWorkspaceTest {
                     samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
                     assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                     val row = sample.getInt("row")
-                    if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                    if (sample.getBoolean("held") && sample.getInt("moves") >= moves && completedShortHistoryProgress(before, row) && System.nanoTime() < fingerDeadline) return row
                     Thread.sleep(10)
                 }
             }
@@ -2573,14 +2574,30 @@ class NativeWorkspaceTest {
         }
         assertEquals("Both completed short-drag groups must advance remote history", 2, completedProgress)
         val swiped = nativeFingerGesture(false, shortRow).getInt("row")
-        awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
-            (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
-        """)
         // A reader who lifts the finger in history and waits keeps scrolling with the next drag (#1040).
         Thread.sleep(1_500)
         fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         nativeFingerGesture(false, swiped)
+        awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
+            (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
+        """, observe = { remaining -> evaluate(scenario, """
+            (()=>{$fingerScript;return JSON.stringify(ownedHerdrFailureMarkers($screens,window.visualViewport));})()
+        """, remaining) })
         focusTab(originalTab)
+        if (!alreadyAttached) {
+            val question = """(()=>{const screens=$screens;const text=screens.length===1?screens[0].textContent:'';
+                return text.includes('OWNED_QUESTION') && text.includes('> OPTION_ONE') && text.includes('OPTION_TWO');})()"""
+            awaitDocument(scenario, "owned agent question and selection", question)
+            awaitDocument(scenario, "owned agent terminal focus settled", """
+                (()=>{const screens=$screens;return screens.length===1 && screens[0].parentElement?.classList.contains('focus') &&
+                  screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+            """)
+            closeSoftKeyboard()
+            fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            nativeFingerGesture(true, 0)
+            assertEquals("Finger swipe preserves the agent question and selected option", "true", evaluate(scenario, question))
+            // The host's final exact receiver ledger also rejects any swipe-generated input bytes.
+        }
         println("lazysh Herdr finger scroll: five short native drags advanced history repeatedly, then two MOVE phases advanced before one UP, again after a pause in history; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")

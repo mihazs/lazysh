@@ -5,7 +5,14 @@ use serde_json::Value;
 use std::{io::Read, path::Path};
 
 pub(super) fn read_bytes(file: &mut impl Read, length: u64) -> Result<Vec<u8>> {
-    if length > lazysh_common::record_checkpoint::MAX_SNAPSHOT {
+    read_bytes_bounded(file, length, lazysh_common::record_checkpoint::MAX_SNAPSHOT)
+}
+pub(super) fn read_bytes_bounded(
+    file: &mut impl Read,
+    length: u64,
+    maximum: u64,
+) -> Result<Vec<u8>> {
+    if length > maximum {
         return Err(Error::InvalidArgument);
     }
     let mut bytes = Vec::new();

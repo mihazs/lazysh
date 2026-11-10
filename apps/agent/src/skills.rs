@@ -102,7 +102,7 @@ mod unix {
         ffi::CStr,
         fs::File,
         io::{self, Read, Write},
-        os::unix::{fs::MetadataExt, io::IntoRawFd},
+        os::unix::fs::MetadataExt,
     };
     const FILE: &str = "SKILL.md";
     const MARKER: &str = "\n<!-- lazysh-managed-product-skill ";
@@ -237,20 +237,7 @@ mod unix {
         }
     }
     fn sole_file(directory: &Directory, ignore: Option<&str>) -> Result<()> {
-        // SAFETY: fdopendir takes this fresh duplicate; only this inspection reads its cursor.
-        let fd = directory.file.try_clone()?.into_raw_fd();
-        let stream = unsafe { libc::fdopendir(fd) };
-        if stream.is_null() {
-            let error = io::Error::last_os_error();
-            unsafe {
-                libc::close(fd);
-            }
-            return Err(error.into());
-        }
-        let stream = Listing(stream);
-        unsafe {
-            libc::rewinddir(stream.0);
-        }
+        let stream = Listing(crate::directory_listing::listing_stream(&directory.file)?);
         let mut found = false;
         loop {
             #[cfg(target_os = "linux")]

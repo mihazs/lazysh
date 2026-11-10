@@ -139,6 +139,21 @@ server per refresh and does not grant terminal input or approval authority.
 
 ### Create workspaces, worktrees and agents
 
+Agent view lists live agents from the attached Herdr server, including stock
+0.9.3. Select a running Claude Code or Codex session to open the conversation matching its reported session ID, or enter its exact
+Herdr pane. Herdr reports can be stale and do not prove that conversation belongs
+to the pane. Selecting a session does not grant terminal input authority. Conversation reading requires
+the matching updated lazysh companion on the host.
+
+Finger swipes inside Herdr request retained pane history without sending wheel
+events or arrow keys to its program. This needs the optional guarded host's
+`lazysh.guard.observe` and `lazysh.guard.scroll_history` methods. Each request
+checks the original attached client, pane runtime and visible viewport. The
+first implementation supports its focused pane; other panes and older hosts
+report unavailable rather than changing an agent's selected option. Mouse wheels
+keep their ordinary terminal behavior. Updating a host binary does not upgrade
+an already-running server; lazysh does not restart it automatically.
+
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
 

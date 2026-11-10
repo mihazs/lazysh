@@ -2494,6 +2494,22 @@
           ],
           "type": "string"
         },
+        "ObserveParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "ownership": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership"
+          ],
+          "type": "object"
+        },
         "OutputMatch": {
           "oneOf": [
             {
@@ -4016,6 +4032,47 @@
           ],
           "type": "object"
         },
+        "ScrollHistoryParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "lines": {
+              "format": "int16",
+              "maximum": 32767,
+              "minimum": -32768,
+              "type": "integer"
+            },
+            "ownership": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "target": {
+              "$ref": "#/schemas/request/$defs/Target"
+            },
+            "x": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership",
+            "target",
+            "x",
+            "y",
+            "lines"
+          ],
+          "type": "object"
+        },
         "Secret": {
           "type": "string"
         },
@@ -4520,6 +4577,40 @@
           ],
           "type": "object"
         },
+        "Target": {
+          "additionalProperties": false,
+          "properties": {
+            "pane": {
+              "type": "string"
+            },
+            "runtime_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tab": {
+              "type": "string"
+            },
+            "terminal": {
+              "type": "string"
+            },
+            "viewport": {
+              "$ref": "#/schemas/request/$defs/Viewport"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "tab",
+            "pane",
+            "terminal",
+            "runtime_generation",
+            "viewport"
+          ],
+          "type": "object"
+        },
         "ToastHerdrPosition": {
           "enum": [
             "top-left",
@@ -4528,6 +4619,42 @@
             "bottom-right"
           ],
           "type": "string"
+        },
+        "Viewport": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "width": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "type": "object"
         },
         "WorkspaceCloseParams": {
           "properties": {
@@ -4884,6 +5011,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/RevokeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.observe",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ObserveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.scroll_history",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ScrollHistoryParams"
             }
           },
           "required": [
@@ -8043,6 +8202,18 @@
           ],
           "type": "string"
         },
+        "ObservedReply": {
+          "additionalProperties": false,
+          "properties": {
+            "target": {
+              "$ref": "#/schemas/success_response/$defs/Target"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
         "OwnershipReply": {
           "additionalProperties": false,
           "properties": {
@@ -9491,6 +9662,22 @@
               "required": [
                 "type",
                 "owner"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "guard": {
+                  "$ref": "#/schemas/success_response/$defs/ObservedReply"
+                },
+                "type": {
+                  "const": "guard_observed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "guard"
               ],
               "type": "object"
             },

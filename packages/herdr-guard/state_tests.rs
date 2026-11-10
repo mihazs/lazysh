@@ -575,3 +575,28 @@ fn competing_registration_and_saturated_transport_ids_cannot_recreate_authority(
         .claim(&owner.boot, &new_ticket, Cancellation::default(), now)
         .is_ok());
 }
+
+#[test]
+fn observation_keeps_preparation_and_input_binding_and_rejects_foreign_ownership() {
+    let now = Instant::now();
+    let (mut registry, owner, binding, source) = prepared(now);
+    assert_eq!(
+        registry.observed_client(&owner.boot, &owner.ownership, now),
+        Ok(7)
+    );
+    assert_eq!(registry.clients[&7].last_preparation, 1);
+    assert_eq!(
+        registry.clients[&7].binding.as_ref().unwrap().receipt,
+        binding.receipt
+    );
+    assert_eq!(
+        registry.observed_client(&owner.boot, &Secret::generate().unwrap(), now),
+        Err("guard_stale")
+    );
+    assert_eq!(
+        registry.observed_client(&Secret::generate().unwrap(), &owner.ownership, now),
+        Err("guard_stale")
+    );
+    let challenge = admitted(&mut registry, &binding, &source, now);
+    assert_eq!(challenge.client, 7);
+}

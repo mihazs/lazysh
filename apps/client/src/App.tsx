@@ -2018,9 +2018,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       throw error;
     }
   }
-  async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean) {
+  async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean,fromAgent=false) {
     const selectedNavigation=navigationState.current[source.id];
-    if(!selectedNavigation)throw new LocalUiError('herdrNavigationChanged');
+    if(!selectedNavigation && !fromAgent)throw new LocalUiError('herdrNavigationChanged');
+    if(fromAgent && (source.attached?.kind!=='herdr' || source.attached.name!==name || !target))throw new LocalUiError('herdrNavigationChanged');
     const matchingDisplay=(session:LiveSession)=>session.connected && !session.disposed && !closingSessions.current.has(session.id)
       && session.hostId===source.hostId && session.destination===source.destination && session.attached?.kind==='herdr' && session.attached.name===name;
     let destination=matchingDisplay(source)?source:sessionsRef.current.find(matchingDisplay);
@@ -2029,7 +2030,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     herdrNavigationIntent.current=intent;
     const current=()=>mounted.current && herdrNavigationIntent.current===intent && owner.current() && !document.hidden && source.connected && !source.disposed
       && !closingSessions.current.has(source.id) && currentView.current.view==='terminal'
-      && (currentView.current.activeId===source.id ? visible() && navigationState.current[source.id]===selectedNavigation
+      && (currentView.current.activeId===source.id ? visible() && (fromAgent || navigationState.current[source.id]===selectedNavigation)
         : adopted && currentView.current.activeId===destination?.id && navigationState.current[destination.id]===selectedNavigation);
     const assertCurrent=()=>{if(!current())throw new LocalUiError('herdrNavigationChanged');};
     assertCurrent();
@@ -2037,7 +2038,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       if(!destination)await attachTmux(source,name,'herdr',undefined,owner,assertCurrent,session=>{
         destination=session;adopted=true;intent.destination=session.id;
         // Quiet in the same update that activates the new display, before its terminal mounts and claims focus.
-        setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));setQuietTerminal(session.id);
+        if(selectedNavigation)setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));setQuietTerminal(session.id);
       });
       assertCurrent();
       if(!destination?.connected || destination.disposed || closingSessions.current.has(destination.id))throw new LocalUiError('herdrNavigationChanged');
@@ -2054,6 +2055,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         assertCurrent();
       }
       setActiveId(destination.id);setView('terminal');setSidebar(false);setQuietTerminal(destination.id);
+      if(fromAgent)chooseSessionView(destination,'terminal');
     } catch(error) {
       const cause=captureUiError(error);
       if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
@@ -2410,7 +2412,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <AgentView key={session.id} sessionId={session.id} shown={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "terminal"}
-                    tmux={native && session.attached?.kind==='tmux'} terminalInput={terminalInputFor(session)} onShowTerminal={()=>chooseSessionView(session,'terminal')} />
+                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} terminalInput={terminalInputFor(session)} onShowTerminal={()=>chooseSessionView(session,'terminal')}
+                    onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} />
                 ))}
                 {active.connected && view === "usage" && (
                   <>

@@ -613,6 +613,8 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::GuardClaim(_) => "lazysh.guard.claim",
         Method::GuardCancelPreparation(_) => "lazysh.guard.cancel_preparation",
         Method::GuardRevoke(_) => "lazysh.guard.revoke",
+        Method::GuardObserve(_) => "lazysh.guard.observe",
+        Method::GuardScrollHistory(_) => "lazysh.guard.scroll_history",
         Method::GuardPrepare(_) => "lazysh.guard.prepare",
         Method::GuardInput(_) => "lazysh.guard.input",
         Method::GuardRelease(_) => "lazysh.guard.release",

@@ -140,8 +140,11 @@ test('remembers the chosen view per terminal across reopening, keeps new termina
   await other.getByRole('button',{name:'Show terminal',exact:true}).click();
   await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
-  await other.getByRole('button',{name:'Choose transcript',exact:true}).click();
-  await expect(other.getByLabel('Transcript path',{exact:true})).toBeVisible();
+  await expect(other.getByRole('button',{name:'Choose transcript',exact:true})).toHaveCount(0);
+  await other.getByRole('button',{name:/Codex · \/work/}).click();
+  await expect(other.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(other.getByLabel('Transcript path',{exact:true})).toHaveCount(0);
+  await expect(other.getByRole('region',{name:'Terminal input'})).toHaveCount(0);
   await other.getByRole('button',{name:'Terminal',exact:true}).click();
 
   await page.reload();

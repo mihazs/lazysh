@@ -9,7 +9,8 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
@@ -24,7 +25,7 @@ function access(locked=false) {
 }
 beforeEach(() => {
   access();
-  vi.clearAllMocks();
+  vi.clearAllMocks(); mocks.invoke.mockReset();
   vi.stubGlobal("PointerEvent", class extends MouseEvent {
     pointerId: number; pointerType: string; isPrimary:boolean;
     constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string; isPrimary?:boolean} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch"; this.isPrimary=options.isPrimary??true;}
@@ -441,16 +442,17 @@ it.each(['inactive','disconnect','replacement','dispose'] as const)('captures di
     expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
   } finally {warn.mockRestore();}
 });
-function touchScrollFixture(height?:number) {
+function touchScrollFixture(height?:number, herdr=false, reportError=vi.fn()) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
-  if(height) {const surface=document.createElement('div');surface.className='xterm-screen';surface.getBoundingClientRect=()=>({height} as DOMRect);target.append(surface);}
+  if(height) {const surface=document.createElement('div');surface.className='xterm-screen';surface.getBoundingClientRect=()=>({height,width:800,left:0,top:0} as DOMRect);target.append(surface);}
   const wheels: WheelEvent[] = [];
   // Pixel travel in order: xterm wheels, or history rows scrolled directly.
   const moves: number[] = [];
   target.addEventListener('wheel', event => {wheels.push(event); moves.push(event.deltaY);});
   Object.assign(terminal, {scrollLines: vi.fn((lines: number) => moves.push(lines * (target.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / terminal.rows))});
-  const view = mount();
+  if(herdr) Object.assign(terminal,{cols:80});
+  const view = herdr ? render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'herdr',name:'owned'},terminal} as unknown as LiveSession} active reportError={reportError}/>) : mount();
   const canvas = screen.getByLabelText('Terminal for Host');
   const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
     bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
@@ -1050,6 +1052,72 @@ describe("terminal interactions", () => {
       if(gesture===0)expect(wheels).toHaveLength(0);
     }
     expect(wheels.map(event=>[event.deltaY,event.deltaMode])).toEqual(Array.from({length:4},()=>[20,WheelEvent.DOM_DELTA_PIXEL]));
+  });
+  it('sends Herdr touch history through the owned display without wheel or terminal input',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const destination={pane:'owned',viewport:{x:0,y:0,width:80,height:24}};
+    mocks.invoke.mockResolvedValueOnce({kind:'observed',destination}).mockResolvedValue({kind:'scrolled'});
+    const {wheels,touch}=touchScrollFixture(480,true);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchmove',100,80);touch('touchend',100,80);});
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([
+      {kind:'observe'},
+      {kind:'scroll_history',destination,x:10,y:5,lines:2},
+      {kind:'scroll_history',destination,x:10,y:5,lines:-1},
+    ]);
+    expect(wheels).toHaveLength(0);expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('coalesces queued Herdr scroll rows without changing their distance',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const destination={pane:'owned'};
+    mocks.invoke.mockResolvedValueOnce({kind:'observed',destination}).mockResolvedValue({kind:'scrolled'});
+    const {touch}=touchScrollFixture(480,true);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,80);touch('touchmove',100,60);touch('touchmove',100,40);});
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([
+      {kind:'observe'}, {kind:'scroll_history',destination,x:10,y:5,lines:3},
+    ]);
+  });
+  it('caps a Herdr history request at the native protocol limit',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const destination={pane:'owned'};
+    mocks.invoke.mockResolvedValueOnce({kind:'observed',destination}).mockResolvedValue({kind:'released'});
+    const {touch}=touchScrollFixture(24,true);
+    await act(async()=>{touch('touchstart',100,10);touch('touchmove',100,-290);touch('touchend',100,-290);});
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([
+      {kind:'observe'}, {kind:'scroll_history',destination,x:10,y:10,lines:200},
+    ]);
+  });
+  it('drops a pending Herdr swipe when access is revoked and leaves physical wheels alone',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    let observe!:(value:unknown)=>void;
+    mocks.invoke.mockImplementationOnce(()=>new Promise(resolve=>{observe=resolve;}));
+    const {target,wheels,touch}=touchScrollFixture(480,true);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);});
+    target.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:1}));
+    expect(wheels).toHaveLength(1);
+    access(true);
+    await act(async()=>observe({kind:'observed',destination:{pane:'owned'}}));
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('does not apply a Herdr swipe after touch cancellation',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    let observe!:(value:unknown)=>void;
+    mocks.invoke.mockImplementationOnce(()=>new Promise(resolve=>{observe=resolve;}));
+    const {touch}=touchScrollFixture(480,true);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);});
+    touch('touchcancel',100,60);
+    await act(async()=>observe({kind:'observed',destination:{pane:'owned'}}));
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it.each(['tracking','alternate'])('reports unsupported Herdr history in %s mode without forwarding the swipe into the menu',async mode=>{
+    if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
+    else Object.assign(terminal.buffer.active,{type:'alternate'});
+    mocks.invoke.mockRejectedValue({kind:'herdr_chat_unavailable',message:'Herdr history unavailable'});
+    const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    expect(reportError).toHaveBeenCalledWith(expect.objectContaining({key:'unavailable'}));
+    await uiI18n.changeLanguage('pt-BR');
+    expect(uiErrorText(reportError.mock.calls[0][0])).toBe('Indisponível.');
+    expect(wheels).toHaveLength(0);expect(mocks.write).not.toHaveBeenCalled();
   });
   it('does not carry capped whole notches from an ended drag into a new gesture',()=>{
     terminal.modes.mouseTrackingMode='vt200';

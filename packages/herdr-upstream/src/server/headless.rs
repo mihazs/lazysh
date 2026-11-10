@@ -2958,8 +2958,7 @@ impl HeadlessServer {
         }
 
         if crate::guarded_input::protocol::is_guard_method(&msg.request.method) {
-            self.guard_api(msg);
-            return false;
+            return self.guard_api(msg);
         }
         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
             AltScreenReadConflict::None => None,

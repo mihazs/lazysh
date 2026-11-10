@@ -46,6 +46,9 @@ pub enum ResponseResult {
     GuardClaimed {
         owner: crate::guarded_input::protocol::OwnershipReply,
     },
+    GuardObserved {
+        guard: crate::guarded_input::protocol::ObservedReply,
+    },
     GuardPrepared {
         guard: crate::guarded_input::protocol::PreparedReply,
     },

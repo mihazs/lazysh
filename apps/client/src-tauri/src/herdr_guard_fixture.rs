@@ -129,9 +129,15 @@ async fn install_capture(
     pane: &str,
     bytes: &std::path::Path,
     pid: &std::path::Path,
+    history: bool,
 ) -> u64 {
+    let prefix = if history {
+        "i=0; while [ $i -lt 512 ]; do printf 'OLD%03d\\n' $i; i=$((i+1)); done; printf 'NEW512\\n'; "
+    } else {
+        ""
+    };
     let script = format!(
-        "stty raw -echo; echo $$ > {}; exec cat > {}",
+        "{prefix}stty raw -echo; echo $$ > {}; exec cat > {}",
         quote(pid.to_str().unwrap()),
         quote(bytes.to_str().unwrap())
     );
@@ -153,11 +159,143 @@ async fn install_capture(
 }
 
 #[cfg(target_os = "linux")]
+struct OwnedMoshRenderer {
+    directory: tempfile::TempDir,
+    binary: String,
+}
+#[cfg(target_os = "linux")]
+impl OwnedMoshRenderer {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env("TMUX_TMPDIR", self.directory.path())
+            .env_remove("TMUX")
+            .args(["-L", "mosh-render"]);
+        command
+    }
+    fn new(fixture: &Fixture) -> Self {
+        let renderer = Self {
+            directory: tempfile::tempdir_in(fixture.dir.path()).unwrap(),
+            binary: fixture.tmux.clone(),
+        };
+        assert!(renderer
+            .command()
+            .args([
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-s",
+                "owned",
+                "-x",
+                "80",
+                "-y",
+                "23",
+                "stty raw -echo; printf RENDER_READY; exec cat"
+            ])
+            .status()
+            .unwrap()
+            .success());
+        let deadline = std::time::Instant::now() + BOUND;
+        while !renderer.visible().contains("RENDER_READY") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owned renderer did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        renderer
+    }
+    fn feed(&self, bytes: &[u8]) {
+        use std::io::Write;
+        let mut child = self
+            .command()
+            .args(["load-buffer", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(self
+            .command()
+            .args(["paste-buffer", "-dr", "-t", "owned:0.0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    }
+    fn visible(&self) -> String {
+        let output = self
+            .command()
+            .args(["capture-pane", "-p", "-t", "owned:0.0"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for OwnedMoshRenderer {
+    fn drop(&mut self) {
+        let _ = self
+            .command()
+            .arg("kill-server")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+#[cfg(target_os = "linux")]
+async fn render_mosh_until(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session_id: &str,
+    events: &mut mpsc::UnboundedReceiver<Value>,
+    renderer: &OwnedMoshRenderer,
+    newest: bool,
+) {
+    timeout(Duration::from_secs(15), async {
+        let mut total = 0usize;
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    let event = event.expect("owned Mosh stream closed");
+                    assert_ne!(event["type"], "closed");
+                    if let Some(data) = event["data"].as_array() {
+                        let bytes: Vec<u8> = data.iter().map(|value| value.as_u64().unwrap() as u8).collect();
+                        total += bytes.len();
+                        assert!(total <= 1024 * 1024, "owned Mosh render budget exceeded");
+                        renderer.feed(&bytes);
+                        let session = app.state::<AppState>().session(session_id).await.unwrap();
+                        acknowledge(&session, bytes.len() as u32).unwrap();
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+            }
+            let visible = renderer.visible();
+            if visible.contains("NEW512") == newest && visible.contains("OLD480") != newest { break; }
+        }
+    }).await.expect("owned Rust Mosh renderer did not reach expected history");
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER and FD-capable LAZYSH_TEST_HERDR"]
+#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER, FD-capable LAZYSH_TEST_HERDR, and LAZYSH_TEST_TMUX pointing to tmux 3.4"]
 async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure() {
+    let tmux = std::env::var_os("LAZYSH_TEST_TMUX")
+        .expect("LAZYSH_TEST_TMUX must point to the qualified tmux 3.4 renderer");
+    let version = Command::new(tmux)
+        .arg("-V")
+        .output()
+        .expect("cannot run qualified tmux renderer");
+    assert!(
+        version.status.success() && version.stdout == b"tmux 3.4\n",
+        "Mosh renderer fixture requires tmux 3.4"
+    );
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
-    for user_install in [false, true] {
+    for (user_install, preseed) in [(false, false), (true, false), (false, true), (true, true)] {
         let fixture =
             Fixture::with_mosh_mode_and_user_install(Some(&binary), true, user_install).await;
         owned_herdr_shell_config(&fixture);
@@ -168,7 +306,7 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         };
         let name = "owned-mosh-guard";
         servers.start(name).await;
-        servers
+        let workspace = servers
             .json(
                 name,
                 &[
@@ -181,6 +319,38 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
                 ],
             )
             .await;
+        let capture = fixture.dir.path().join("mosh-guard-input");
+        let pid = fixture.dir.path().join("mosh-guard-pid");
+        let seeded = if preseed {
+            let workspace_id = workspace["result"]["workspace"]["workspace_id"]
+                .as_str()
+                .unwrap();
+            let tab = servers
+                .json(
+                    name,
+                    &[
+                        "tab",
+                        "create",
+                        "--workspace",
+                        workspace_id,
+                        "--cwd",
+                        fixture.dir.path().to_str().unwrap(),
+                        "--label",
+                        "OWNED_SCROLL",
+                        "--no-focus",
+                    ],
+                )
+                .await;
+            let tab_id = tab["result"]["tab"]["tab_id"].as_str().unwrap().to_owned();
+            let pane = tab["result"]["root_pane"]["pane_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let pid = install_capture(&servers, name, &pane, &capture, &pid, true).await;
+            Some((tab_id, pane, pid))
+        } else {
+            None
+        };
         let (app, state) = herdr_native_app(&fixture);
         let (_authority, lease) = unlocked_authority();
         let (source, _) = herdr_echo_source(&fixture, &state, &lease).await;
@@ -205,15 +375,24 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         let output =
             owned_terminal_output(&app, &child.session_id, &mut events, b"MOSH_GUARDED").await;
         assert!(!output.windows(14).any(|part| part == b"LAZYSH-GUARD-1"));
+        let renderer = OwnedMoshRenderer::new(&fixture);
+        renderer.feed(&output);
+        crate::ssh::resize(lease.clone(), app.state(), child.session_id.clone(), 80, 23)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
         assert_eq!(
             guard(&app, &lease, &child, json!({"kind":"status"}))
                 .await
                 .unwrap()["available"],
             true
         );
+        if let Some((tab, _, _)) = &seeded {
+            let focused = servers.json(name, &["tab", "focus", tab]).await;
+            assert!(focused.get("error").is_none());
+        }
         let source = context("mosh-owned");
-        let capture = fixture.dir.path().join("mosh-guard-input");
-        let pid = fixture.dir.path().join("mosh-guard-pid");
         let inspected = guard(
             &app,
             &lease,
@@ -223,7 +402,62 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         .await
         .unwrap();
         let pane = inspected["destination"]["pane"].as_str().unwrap();
-        let original_pid = install_capture(&servers, name, pane, &capture, &pid).await;
+        let original_pid = if let Some((_, expected_pane, pid)) = &seeded {
+            assert_eq!(pane, expected_pane);
+            *pid
+        } else {
+            install_capture(&servers, name, pane, &capture, &pid, true).await
+        };
+        render_mosh_until(&app, &child.session_id, &mut events, &renderer, true).await;
+        captured(&capture, b"").await;
+        // Allow the focused pre-existing tab's resize and repaint to settle before observation.
+        if preseed {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let destination = timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok(reply) = guard(&app, &lease, &child, json!({"kind":"observe"})).await {
+                    break reply["destination"].clone();
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("owned Mosh display did not settle");
+        let pane_info = servers.json(name, &["pane", "get", pane]).await;
+        assert_eq!(pane_info["result"]["pane"]["scroll"]["viewport_rows"], 22);
+        let x = destination["viewport"]["x"].as_u64().unwrap();
+        let y = destination["viewport"]["y"].as_u64().unwrap();
+        guard(
+            &app,
+            &lease,
+            &child,
+            json!({"kind":"scroll_history","destination":destination,"x":x,"y":y,"lines":-17}),
+        )
+        .await
+        .unwrap();
+        render_mosh_until(&app, &child.session_id, &mut events, &renderer, false).await;
+        let pane_info = servers.json(name, &["pane", "get", pane]).await;
+        assert_eq!(
+            pane_info["result"]["pane"]["scroll"]["offset_from_bottom"],
+            17
+        );
+        captured(&capture, b"").await;
+        guard(
+            &app,
+            &lease,
+            &child,
+            json!({"kind":"scroll_history","destination":destination,"x":x,"y":y,"lines":17}),
+        )
+        .await
+        .unwrap();
+        render_mosh_until(&app, &child.session_id, &mut events, &renderer, true).await;
+        let pane_info = servers.json(name, &["pane", "get", pane]).await;
+        assert_eq!(
+            pane_info["result"]["pane"]["scroll"]["offset_from_bottom"],
+            0
+        );
+        captured(&capture, b"").await;
         let binding = confirm(&app, &lease, &child, &source).await;
         guard(&app, &lease, &child, json!({"kind":"input","receipt":binding["receipt"],"source":source,"operation":1,"input":{"kind":"send","text":"MOSH-private-fresh"}})).await.unwrap();
         captured(&capture, b"MOSH-private-fresh\r").await;
@@ -305,7 +539,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     let pane = inspected["destination"]["pane"].as_str().unwrap();
     let bytes = fixture.dir.path().join("guarded-input-bytes");
     let pid = fixture.dir.path().join("guarded-input-pid");
-    let original_pid = install_capture(&servers, "guard-left", pane, &bytes, &pid).await;
+    let original_pid = install_capture(&servers, "guard-left", pane, &bytes, &pid, false).await;
     let (other, mut other_events) =
         multiplexer_child(&app, &lease, &source, "guard-right", kind, false).await;
     displays.keep(&state, &other).await;
@@ -332,6 +566,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
         other_inspected["destination"]["pane"].as_str().unwrap(),
         &other_bytes,
         &other_pid,
+        false,
     )
     .await;
     let other_binding = confirm(&app, &lease, &other, &source_a).await;

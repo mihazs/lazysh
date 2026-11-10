@@ -494,6 +494,133 @@ fn wait_bytes(fixture: &Fixture, session: &str, expected: &[u8]) {
 }
 
 #[test]
+fn owned_observation_and_history_keep_input_binding_and_reject_foreign_targets() {
+    let mut fixture = Fixture::new();
+    fixture.start("history");
+    fixture.start("foreign");
+    let created = fixture.api(
+        "history",
+        "workspace.create",
+        json!({"label":"History","cwd":fixture.base.join("history"),"focus":true}),
+    );
+    assert!(created.get("error").is_none());
+    let snapshot = fixture.api("history", "session.snapshot", json!({}));
+    let pane = snapshot["result"]["snapshot"]["focused_pane_id"]
+        .as_str()
+        .unwrap();
+    let setup = "i=0; while [ $i -lt 160 ]; do printf 'history-%03d\\n' \"$i\"; i=$((i+1)); done; stty raw -echo; : > history-ready; exec cat > history-bytes";
+    assert!(fixture
+        .api(
+            "history",
+            "pane.send_input",
+            json!({"pane_id":pane,"text":setup,"keys":["Enter"]})
+        )
+        .get("error")
+        .is_none());
+    crate::support::wait_for_file(&fixture.base.join("history/history-ready"), BOUND);
+    let mut owner = Peer::attach(&fixture, "history", &"55".repeat(32));
+    let foreign = Peer::attach(&fixture, "foreign", &"66".repeat(32));
+    let binding = owner.prepare(&fixture, "history");
+    let credentials =
+        json!({"boot":owner.ownership["boot"],"ownership":owner.ownership["ownership"]});
+    let observed = fixture.api("history", "lazysh.guard.observe", credentials.clone());
+    assert!(observed.get("error").is_none());
+    let target = observed["result"]["guard"]["target"].clone();
+    assert_eq!(target["pane"], pane);
+    let x = target["viewport"]["x"].as_u64().unwrap();
+    let y = target["viewport"]["y"].as_u64().unwrap();
+    let scroll = |owner: &Value, target: &Value, x, y, lines| {
+        fixture.api("history", "lazysh.guard.scroll_history", json!({"boot":owner["boot"],"ownership":owner["ownership"],"target":target,"x":x,"y":y,"lines":lines}))
+    };
+    let offset = || {
+        fixture.api("history", "pane.get", json!({"pane_id":pane}))["result"]["pane"]["scroll"]
+            ["offset_from_bottom"]
+            .as_u64()
+            .unwrap()
+    };
+    let visible = || {
+        fixture.api("history", "pane.read", json!({"pane_id":pane,"source":"visible","lines":1000,"format":"text","strip_ansi":true}))["result"]["read"]["text"]
+            .as_str().expect("visible history text").to_owned()
+    };
+    assert_eq!(offset(), 0);
+    assert!(visible().contains("history-159"));
+    let mut wrong = target.clone();
+    wrong["terminal"] = json!("wrong-terminal");
+    assert!(scroll(&owner.ownership, &wrong, x, y, -4)
+        .get("error")
+        .is_some());
+    let forged = json!({"boot":owner.ownership["boot"],"ownership":"00".repeat(32)});
+    assert!(fixture
+        .api("history", "lazysh.guard.observe", forged.clone())
+        .get("error")
+        .is_some());
+    assert!(fixture
+        .api("history", "lazysh.guard.observe", foreign.ownership.clone())
+        .get("error")
+        .is_some());
+    assert!(scroll(&forged, &target, x, y, -4).get("error").is_some());
+    assert!(scroll(&foreign.ownership, &target, x, y, -4)
+        .get("error")
+        .is_some());
+    assert!(scroll(
+        &owner.ownership,
+        &target,
+        x + target["viewport"]["width"].as_u64().unwrap(),
+        y,
+        -4
+    )
+    .get("error")
+    .is_some());
+    assert_eq!(offset(), 0);
+    assert!(owner
+        .endpoint_request("integration.list", json!({}))
+        .get("error")
+        .is_none());
+    owner.painted = false;
+    assert!(scroll(&owner.ownership, &target, x, y, -4)
+        .get("error")
+        .is_none());
+    owner.wait_view(None);
+    assert_eq!(offset(), 4);
+    assert!(
+        !visible().contains("history-159"),
+        "guarded scroll must change visible history"
+    );
+    assert_eq!(offset(), 4, "visible read did not change scroll offset");
+    assert!(scroll(&owner.ownership, &target, x, y, -13)
+        .get("error")
+        .is_none());
+    assert_eq!(offset(), 17);
+    assert!(!visible().contains("history-159"));
+    assert_eq!(offset(), 17, "visible read did not change scroll offset");
+    assert!(scroll(&owner.ownership, &target, x, y, 17)
+        .get("error")
+        .is_none());
+    assert_eq!(offset(), 0);
+    assert!(
+        visible().contains("history-159"),
+        "return to bottom must restore the newest row"
+    );
+    assert!(fs::read(fixture.base.join("history/history-bytes"))
+        .unwrap()
+        .is_empty());
+    let pending = fixture.request(
+        "history",
+        "lazysh.guard.input",
+        input(&binding, 1, Some("still-bound")),
+    );
+    let challenge = owner.next_control("lazysh.guard.challenge.v1");
+    owner.commit(&challenge);
+    assert!(Fixture::answer(pending).get("error").is_none());
+    let deadline = Instant::now() + BOUND;
+    while fs::read(fixture.base.join("history/history-bytes")).unwrap() != b"still-bound\r" {
+        assert!(Instant::now() < deadline, "owned input deadline");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(fixture.bytes("history").is_empty());
+}
+
+#[test]
 fn original_client_ticket_server_boot_and_final_target_guard_real_queue() {
     let mut fixture = Fixture::new();
     fixture.start("left");

@@ -124,6 +124,7 @@ fn main() {
         "tmux_chat",
         "herdr_chat",
         "herdr_tree",
+        "agent_herdr_conversation",
         "herdr_action",
         "herdr_workspace_plan",
         "herdr_workspace_create",

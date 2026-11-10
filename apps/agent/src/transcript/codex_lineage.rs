@@ -12,6 +12,94 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 const MAX_SOURCES: usize = 16;
 
+struct ListEntry {
+    name: std::ffi::OsString,
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+}
+
+enum SourceAccess {
+    Path,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    Anchored {
+        root: PathBuf,
+        directory: crate::managed_directory::Directory,
+    },
+}
+impl SourceAccess {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn parent(&self, path: &Path) -> Result<(crate::managed_directory::Directory, String)> {
+        let Self::Anchored { root, directory } = self else {
+            return Err(Error::InvalidArgument);
+        };
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| Error::InvalidArgument)?;
+        let leaf = relative
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or(Error::InvalidArgument)?
+            .to_owned();
+        let current = directory.child_or_self(relative.parent().ok_or(Error::InvalidArgument)?)?;
+        current.check()?;
+        Ok((current, leaf))
+    }
+    fn file(&self, path: &Path) -> Result<std::fs::File> {
+        match self {
+            Self::Path => open_transcript(path),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::Anchored { .. } => {
+                let (directory, leaf) = self.parent(path)?;
+                let file = directory.open_file(&leaf, libc::O_RDONLY)?;
+                let metadata = file.metadata()?;
+                if !metadata.is_file() {
+                    return Err(Error::InvalidArgument);
+                }
+                super::check_owner(&metadata)?;
+                Ok(file)
+            }
+        }
+    }
+    fn entries(&self, path: &Path) -> Result<Box<dyn Iterator<Item = std::io::Result<ListEntry>>>> {
+        match self {
+            Self::Path => Ok(Box::new(fs::read_dir(path)?.map(|entry| {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                Ok(ListEntry {
+                    name: entry.file_name(),
+                    is_dir: kind.is_dir(),
+                    is_file: kind.is_file(),
+                    is_symlink: kind.is_symlink(),
+                })
+            }))),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::Anchored { .. } => Ok(Box::new(
+                super::anchored_listing::Listing::new(&self.directory(path)?)?.map(|entry| {
+                    entry.map(|entry| ListEntry {
+                        name: entry.name,
+                        is_dir: entry.is_dir,
+                        is_file: entry.is_file,
+                        is_symlink: entry.is_symlink,
+                    })
+                }),
+            )),
+        }
+    }
+    fn directory(&self, path: &Path) -> Result<std::fs::File> {
+        match self {
+            Self::Path => open_directory(path),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::Anchored { root, directory } => {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| Error::InvalidArgument)?;
+                Ok(directory.child_or_self(relative)?.file)
+            }
+        }
+    }
+}
+
 pub(super) struct Record {
     pub value: Value,
     pub key: String,
@@ -25,6 +113,7 @@ pub(super) struct History {
     sources: Vec<Source>,
     directories: Vec<(PathBuf, SourceSnapshot)>,
     scanned: usize,
+    access: SourceAccess,
 }
 struct Source {
     path: PathBuf,
@@ -34,16 +123,42 @@ struct Source {
 impl History {
     pub fn verify(&self) -> Result<()> {
         for (path, before) in &self.directories {
-            before.same_file(&open_directory(path)?)?;
+            before.same_file(&self.access.directory(path)?)?;
         }
         for source in &self.sources {
-            conversation::verify_captured(&source.path, &source.snapshot, &source.bytes)?;
+            conversation::verify_captured_with(
+                &|| self.access.file(&source.path),
+                &source.snapshot,
+                &source.bytes,
+            )?;
         }
         Ok(())
     }
 }
 
 pub(super) fn read(path: &Path) -> Result<History> {
+    read_with(path, SourceAccess::Path)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn read_anchored(
+    directory: &crate::managed_directory::Directory,
+    path: &Path,
+    expected: &SourceSnapshot,
+) -> Result<History> {
+    let root = directory.path.clone();
+    let directory = directory.child_or_self(Path::new(""))?;
+    let history = read_with(path, SourceAccess::Anchored { root, directory })?;
+    let selected = history
+        .sources
+        .iter()
+        .find(|source| source.path == path)
+        .ok_or(Error::InvalidEvent)?;
+    expected.same_snapshot(&selected.snapshot)?;
+    Ok(history)
+}
+
+fn read_with(path: &Path, access: SourceAccess) -> Result<History> {
     let mut history = History {
         records: Vec::new(),
         thread: String::new(),
@@ -52,6 +167,7 @@ pub(super) fn read(path: &Path) -> Result<History> {
         sources: Vec::new(),
         directories: Vec::new(),
         scanned: 0,
+        access,
     };
     let mut visited = HashSet::new();
     load(path, None, &mut history, &mut visited, &mut 0)?;
@@ -129,7 +245,7 @@ fn qualify_tree(path: &Path, history: &mut History) -> Result<()> {
             if history.directories.len() >= MAX_SOURCES * 5 {
                 return Err(Error::InvalidArgument);
             }
-            let source = open_directory(directory)?;
+            let source = history.access.directory(directory)?;
             history
                 .directories
                 .push((directory.to_owned(), SourceSnapshot::capture(&source)?));
@@ -148,7 +264,7 @@ fn uuid(value: &Value) -> Result<String> {
     }
     Ok(text.to_owned())
 }
-fn referenced(selected: &Path, id: &str) -> Result<PathBuf> {
+fn referenced(selected: &Path, id: &str, access: &SourceAccess) -> Result<PathBuf> {
     let home = home(selected)?;
     let mut pending = Vec::new();
     for name in ["sessions", "archived_sessions"] {
@@ -162,25 +278,25 @@ fn referenced(selected: &Path, id: &str) -> Result<PathBuf> {
     let mut examined = 0;
     while let Some((directory, depth)) = pending.pop() {
         directory_owned(&directory)?;
-        for entry in fs::read_dir(&directory)? {
+        for entry in access.entries(&directory)? {
             examined += 1;
             if examined > MAX_RECORDS {
                 return Err(Error::InvalidArgument);
             }
             let entry = entry?;
-            let kind = entry.file_type()?;
-            if kind.is_symlink() {
+            if entry.is_symlink {
                 continue;
             }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if kind.is_dir() && depth < 3 && name.bytes().all(|n| n.is_ascii_digit()) {
-                directory_owned(&entry.path())?;
-                pending.push((entry.path(), depth + 1));
-            } else if kind.is_file()
+            let filename = entry.name;
+            let logical_path = directory.join(&filename);
+            let name = filename.to_string_lossy();
+            if entry.is_dir && depth < 3 && name.bytes().all(|n| n.is_ascii_digit()) {
+                directory_owned(&logical_path)?;
+                pending.push((logical_path, depth + 1));
+            } else if entry.is_file
                 && name.starts_with("rollout-")
                 && name.ends_with(&format!("-{id}.jsonl"))
-                && found.replace(entry.path()).is_some()
+                && found.replace(logical_path).is_some()
             {
                 return Err(Error::InvalidEvent);
             }
@@ -203,10 +319,10 @@ fn load(
     if !visited.insert(canonical) {
         return Err(Error::InvalidEvent);
     }
-    let original = open_transcript(path)?;
+    let original = history.access.file(path)?;
     let snapshot = SourceSnapshot::capture(&original)?;
-    let bytes = conversation::capture(path)?;
-    snapshot.same_file(&open_transcript(path)?)?;
+    let bytes = conversation::capture_with(|| history.access.file(path))?;
+    snapshot.same_file(&history.access.file(path)?)?;
     *charged = charged
         .checked_add(bytes.len())
         .ok_or(Error::InvalidArgument)?;
@@ -225,7 +341,13 @@ fn load(
     let mut meta = None;
     let mut previous = None;
     while offset < length {
-        let line = read_record_line(&mut cursor)?;
+        let line = match &history.access {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            SourceAccess::Anchored { .. } => {
+                super::read_record_line_bounded(&mut cursor, 4 * 1024 * 1024)?
+            }
+            SourceAccess::Path => read_record_line(&mut cursor)?,
+        };
         if line.last() != Some(&b'\n') {
             if cutoff.is_some() {
                 return Err(Error::InvalidEvent);
@@ -334,7 +456,7 @@ fn load(
             return Err(Error::InvalidEvent);
         }
         load(
-            &referenced(path, &id)?,
+            &referenced(path, &id, &history.access)?,
             Some((end, length, id)),
             history,
             visited,
@@ -374,6 +496,28 @@ fn load(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn anchored_codex_source_rejects_a_replaced_parent() {
+        use super::*;
+        let home = tempfile::tempdir().unwrap();
+        let base = home.path().canonicalize().unwrap();
+        let sessions = base.join("sessions");
+        let year = sessions.join("2026");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&year).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(year.join("rollout.jsonl"), b"original\n").unwrap();
+        std::fs::write(outside.join("rollout.jsonl"), b"outside\n").unwrap();
+        let access = SourceAccess::Anchored {
+            root: base.clone(),
+            directory: crate::managed_directory::Directory::profile(&base).unwrap(),
+        };
+        std::fs::rename(&year, sessions.join("retired")).unwrap();
+        std::os::unix::fs::symlink(&outside, &year).unwrap();
+        assert!(access.file(&year.join("rollout.jsonl")).is_err());
+    }
+
     use super::*;
     use std::io::Write;
 

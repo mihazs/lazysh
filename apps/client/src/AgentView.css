@@ -5,6 +5,7 @@
 .agent-view-header > :is(strong, span, time) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-view-header > time { color: var(--muted); font-size: 12px; }
 .agent-view-header > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-inline-start: auto; flex-shrink: 0; }
+.agent-view-header > button + button { margin-inline-start: 0; }
 .agent-view-fallback, .agent-view > :is(p, [role="status"]) { margin: 12px 18px; }
 .agent-view-fallback .button-row button { min-height: 44px; }
 .agent-view .agent-turn { display: grid; gap: 8px; align-content: start; }

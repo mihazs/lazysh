@@ -1989,6 +1989,41 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.invoke.mock.calls.filter(([command])=>['herdr_action','herdr_chat','prepare_herdr_chat','attach_multiplexer'].includes(command))).toEqual([]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
+it.each(['enter','stale-pane','hidden','locked','wrong-server'] as const)('enters only the owned Agent view Herdr pane: %s',async outcome=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'agent-parent'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'agent-child'});
+  let reads=0,finish!:(value:unknown)=>void;
+  mocks.invoke.mockImplementation((command)=>{
+    if(command==='agent_snapshot')return Promise.resolve({schemaVersion:1,sessions:[]});
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:outcome==='wrong-server'?'other':'named-work'}]);
+    if(command==='herdr_tree')return ++reads===1?Promise.resolve(herdrNavigationTree):new Promise(resolve=>{finish=resolve;});
+    if(command==='herdr_action')return Promise.resolve(undefined);
+    return Promise.resolve(false);
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(within(screen.getByRole('group',{name:'Session view'})).getByRole('button',{name:'Agent'}));
+  const agent=await screen.findByRole('region',{name:'Agent view'});
+  expect(within(agent).queryByRole('button',{name:'Choose transcript'})).toBeNull();
+  if(outcome==='wrong-server'){
+    await waitFor(()=>expect(agent.querySelector('.herdr-agents select')).not.toBeNull());
+    expect(within(agent).queryByRole('button',{name:'Enter session'})).toBeNull();
+    expect(mocks.invoke.mock.calls.filter(([command])=>command==='herdr_tree'||command==='herdr_action')).toHaveLength(0);
+    return;
+  }
+  await user.click(await within(agent).findByRole('button',{name:'Enter session'}));
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  if(outcome==='hidden')await user.click(within(screen.getByRole('group',{name:'Session view'})).getByRole('button',{name:'Terminal'}));
+  if(outcome==='locked')await act(async()=>mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined}}));
+  await act(async()=>finish(outcome==='stale-pane'?{...herdrNavigationTree,panes:[{...herdrNavigationTree.panes[0],terminal_id:'replacement'}]}:herdrNavigationTree));
+  const actions=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_action');
+  if(outcome==='enter'){
+    expect(actions).toEqual([['herdr_action',{sessionId:'agent-child',name:'named-work',action:{type:'focusPane',target:'w2E:pF'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}]]);
+    expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+    expect(screen.queryByRole('region',{name:'Agent view'})).toBeNull();
+  }else expect(actions).toHaveLength(0);
+  expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
 it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','removed-on-host','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
   if(outcome==='unsupported')mocks.realAgents=true;
   const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported'||outcome==='removed-on-host';

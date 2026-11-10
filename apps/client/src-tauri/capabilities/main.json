@@ -81,6 +81,7 @@
     "allow-voice-cloud-transcribe",
     "allow-voice-cloud-cancel",
     "allow-herdr-tree",
+    "allow-agent-herdr-conversation",
     "allow-herdr-action",
     "allow-herdr-workspace-plan",
     "allow-herdr-workspace-create",

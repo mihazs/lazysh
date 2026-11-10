@@ -47,6 +47,11 @@ impl SourceSnapshot {
             Err(Error::Device("TranscriptIdentityUnsupported"))
         }
     }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn same_snapshot(&self, other: &Self) -> Result<()> {
+        self.same_file(&other._source)
+    }
 }
 
 #[cfg(windows)]

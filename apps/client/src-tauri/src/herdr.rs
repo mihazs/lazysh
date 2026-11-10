@@ -361,6 +361,111 @@ fn missing_target(error: SshError) -> SshError {
         error
     }
 }
+
+async fn read_tree(
+    session: &crate::ssh::Session,
+    name: &str,
+    access: &AccessLease,
+) -> Result<HerdrTree> {
+    let command = command(name, "api snapshot".into())?;
+    let command =
+        crate::herdr_path::select(&command, crate::herdr_path::admit(session, access).await?);
+    parse(&crate::ssh::exec_for_access(session, command, access).await?)
+}
+
+fn selected_agent(tree: &HerdrTree, pane: &str, terminal: &str, agent: &str, id: &str) -> bool {
+    let Some(rows) = tree.agents.as_ref() else {
+        return false;
+    };
+    let matches: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.agent_session
+                .as_ref()
+                .is_some_and(|reference| reference.agent == agent && reference.value == id)
+        })
+        .collect();
+    matches.len() == 1
+        && matches[0].pane_id == pane
+        && matches[0].terminal_id == terminal
+        && matches[0].agent.as_deref() == Some(agent)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HerdrConversationTarget {
+    herdr_session: String,
+    pane_id: String,
+    terminal_id: String,
+    agent: String,
+    agent_session_id: String,
+}
+
+#[tauri::command]
+pub async fn agent_herdr_conversation(
+    state: State<'_, AppState>,
+    session_id: String,
+    target: HerdrConversationTarget,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<serde_json::Value> {
+    let HerdrConversationTarget {
+        herdr_session,
+        pane_id,
+        terminal_id,
+        agent,
+        agent_session_id,
+    } = target;
+    access
+        .run(async {
+            self::target(&pane_id, Some('p'))?;
+            text(&terminal_id, 256)?;
+            if !matches!(agent.as_str(), "claude" | "codex")
+                || uuid::Uuid::parse_str(&agent_session_id)
+                    .ok()
+                    .is_none_or(|id| id.to_string() != agent_session_id)
+            {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Invalid agent session reference",
+                ));
+            }
+            let session = state.session(&session_id).await?;
+            let before = read_tree(&session, &herdr_session, &access).await?;
+            if !selected_agent(&before, &pane_id, &terminal_id, &agent, &agent_session_id) {
+                return Err(SshError::new(
+                    "herdr_target_missing",
+                    "The selected agent session is no longer available",
+                ));
+            }
+            let command = format!(
+                "lazysh-agent herdr-conversation --agent {} --session-id {}",
+                quote(&agent),
+                quote(&agent_session_id)
+            );
+            let raw = crate::companion::exec(&session, command, &access).await?;
+            let page: serde_json::Value = serde_json::from_str(&raw)?;
+            if page["schemaVersion"] != 1
+                || page["view"] != "active_branch"
+                || page["agent"] != agent
+            {
+                return Err(SshError::new(
+                    "invalid_output",
+                    "Invalid agent conversation",
+                ));
+            }
+            let after = read_tree(&session, &herdr_session, &access).await?;
+            if !selected_agent(&after, &pane_id, &terminal_id, &agent, &agent_session_id)
+                || !std::sync::Arc::ptr_eq(&session, &state.session(&session_id).await?)
+            {
+                return Err(SshError::new(
+                    "herdr_target_missing",
+                    "The selected agent session changed",
+                ));
+            }
+            Ok(page)
+        })
+        .await
+}
 #[tauri::command]
 pub async fn herdr_tree(
     state: State<'_, AppState>,
@@ -370,13 +475,8 @@ pub async fn herdr_tree(
 ) -> crate::ssh::AccessResult<HerdrTree> {
     access
         .run(async {
-            let command = command(&name, "api snapshot".into())?;
             let session = state.session(&session_id).await?;
-            let command = crate::herdr_path::select(
-                &command,
-                crate::herdr_path::admit(&session, &access).await?,
-            );
-            parse(&crate::ssh::exec_for_access(&session, command, &access).await?)
+            read_tree(&session, &name, &access).await
         })
         .await
 }
@@ -451,6 +551,19 @@ pub async fn herdr_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_target_requires_exact_ipc_fields() {
+        let target = serde_json::json!({"herdrSession":"owned","paneId":"w1:p3","terminalId":"terminal-3","agent":"codex","agentSessionId":"id"});
+        assert!(serde_json::from_value::<HerdrConversationTarget>(target.clone()).is_ok());
+        let mut missing = target.clone();
+        missing.as_object_mut().unwrap().remove("terminalId");
+        assert!(serde_json::from_value::<HerdrConversationTarget>(missing).is_err());
+        let mut extra = target;
+        extra["unexpected"] = true.into();
+        assert!(serde_json::from_value::<HerdrConversationTarget>(extra).is_err());
+    }
+
     fn reported_snapshot() -> serde_json::Value {
         serde_json::json!({"result":{"type":"session_snapshot","snapshot":{
             "workspaces":[{"workspace_id":"w1","label":"Owned","focused":true,"agent_status":"working"}],
@@ -458,6 +571,44 @@ mod tests {
             "panes":[{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","terminal_id":"terminal-3","focused":true,"agent_status":"working"}],
             "agents":[{"terminal_id":"terminal-3","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","name":null,"agent_status":"working"}]
         }}})
+    }
+    #[test]
+    fn selected_conversation_requires_one_exact_live_herdr_row() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let mut source = reported_snapshot();
+        source["result"]["snapshot"]["agents"][0]["agent_session"] =
+            serde_json::json!({"source":"herdr:codex","agent":"codex","kind":"id","value":id});
+        let tree = parse(&source.to_string()).unwrap();
+        assert!(selected_agent(&tree, "w1:p3", "terminal-3", "codex", id));
+        assert!(!selected_agent(&tree, "w1:p4", "terminal-3", "codex", id));
+        assert!(!selected_agent(&tree, "w1:p3", "replacement", "codex", id));
+        assert!(!selected_agent(&tree, "w1:p3", "terminal-3", "claude", id));
+        let mut stale = source.clone();
+        stale["result"]["snapshot"]["agents"][0]["agent_session"]["value"] =
+            "22222222-2222-4222-8222-222222222222".into();
+        assert!(!selected_agent(
+            &parse(&stale.to_string()).unwrap(),
+            "w1:p3",
+            "terminal-3",
+            "codex",
+            id
+        ));
+        let snapshot = &mut source["result"]["snapshot"];
+        let mut second = snapshot["agents"][0].clone();
+        second["pane_id"] = "w1:p4".into();
+        second["terminal_id"] = "terminal-4".into();
+        snapshot["agents"].as_array_mut().unwrap().push(second);
+        let mut pane = snapshot["panes"][0].clone();
+        pane["pane_id"] = "w1:p4".into();
+        pane["terminal_id"] = "terminal-4".into();
+        snapshot["panes"].as_array_mut().unwrap().push(pane);
+        assert!(!selected_agent(
+            &parse(&source.to_string()).unwrap(),
+            "w1:p3",
+            "terminal-3",
+            "codex",
+            id
+        ));
     }
     #[test]
     fn projects_reported_agents_without_fabricating_events_or_retaining_private_fields() {

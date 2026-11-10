@@ -154,6 +154,15 @@ enum Command {
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
     },
+    /// Read one uniquely identified provider session from its managed root.
+    HerdrConversation {
+        #[arg(long, value_enum)]
+        agent: lazysh_agent::transcript::TranscriptAgent,
+        #[arg(long)]
+        session_id: String,
+        #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+    },
     /// Read a bounded page of transcript records without starting an agent.
     Transcript {
         #[arg(long, value_enum)]
@@ -344,6 +353,18 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             serde_json::to_value(lazysh_agent::transcript::discover(
                 agent,
                 root.as_deref(),
+                limit,
+            )?)
+            .map_err(|_| Error::InvalidEvent)?,
+        ),
+        Command::HerdrConversation {
+            agent,
+            session_id,
+            limit,
+        } => Some(
+            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation(
+                agent,
+                &session_id,
                 limit,
             )?)
             .map_err(|_| Error::InvalidEvent)?,
