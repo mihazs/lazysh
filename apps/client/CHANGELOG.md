@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.29.0
+
+### Minor Changes
+
+- 2b1358f: Toggle the Agent view with a keyboard shortcut.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.29.0
+  - @lazysh/common@1.29.0
+  - @lazysh/display-idle@1.29.0
+  - @lazysh/et-transport@1.29.0
+  - @lazysh/mosh-transport@1.29.0
+
 ## 1.28.2
 
 ### Patch Changes
