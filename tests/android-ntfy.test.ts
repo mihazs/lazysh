@@ -52,13 +52,17 @@ test('controlled clock admits only an entire positive interval within the declar
   expect(controlledNtfyClockReadback('101000',clockPoint(NaN),after)).toBe('hostDiscontinuity');
 });
 
-function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean}={}) {
-  const commands:string[][]=[],events:string[]=[];let auto=options.auto??true,set:number|undefined,index=0;
+function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean;absenceFailure?:'before'|'command'|'after'|'response'}={}) {
+  const commands:string[][]=[],events:string[]=[];let auto=options.auto??true,set:number|undefined,index=0,read=false,failed=false,checksAfterRead=0;
   const points=[clockPoint(100000),clockPoint(100010,10000000n),clockPoint(100020,20000000n)].map(point=>({...point,after:point.after+100n}));
   const clock=new OwnedNtfyClock(async args=>{
     commands.push(args);events.push(args.join(' '));
-    if(args[1]==='pm')return options.occupied?'package:app.lazysh.client\n':'';
-    if(args[1]==='date')return options.readback??String(options.unchanged?100015:set!+15)+'\n';
+    if(args[1]==='pm'){
+      if(read&&!failed&&options.absenceFailure==='command'){failed=true;throw new Error('private command');}
+      if(read&&!failed&&options.absenceFailure==='response'){failed=true;return 'private malformed';}
+      return options.occupied?'package:app.lazysh.client\n':'';
+    }
+    if(args[1]==='date'){read=true;return options.readback??String(options.unchanged?100015:set!+15)+'\n';}
     if(args[2]==='alarm'){if(options.unsupported)throw new Error('private unsupported token');set=Number(args[4]);return '';}
     if(args[3]==='is_auto_detection_enabled')return options.autoReply??String(auto)+'\n';
     if(args[3]==='set_auto_detection_enabled'){
@@ -66,11 +70,24 @@ function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readbac
       if(!options.ignoreRestore||set===undefined)auto=args[4]==='true';return '';
     }
     throw new Error('Unexpected command');
-  },async()=>{events.push('identity');if(options.identityLostAfterSet&&set!==undefined)throw new Error('Owned identity changed');},()=>{
+  },async()=>{events.push('identity');if(options.identityLostAfterSet&&set!==undefined)throw new Error('Owned identity changed');
+    if(read&&!failed&&++checksAfterRead===(options.absenceFailure==='before'?2:options.absenceFailure==='after'?3:-1)){failed=true;throw new Error('private identity');}
+  },()=>{
     events.push('sample');return points[index++];
   });
   return {clock,commands,events,get auto(){return auto;}};
 }
+
+test('post-clock package failure records only its bounded stage through restoration',async()=>{
+  for(const stage of ['before','command','after','response'] as const){
+    const f=controlledClockFixture({absenceFailure:stage});
+    await expect(f.clock.prepare()).rejects.toThrow();
+    expect(f.clock.observation().absenceFailure).toEqual({packageIndex:0,stage});
+    await f.clock.restore(async()=>{});
+    expect(f.clock.observation().absenceFailure).toEqual({packageIndex:0,stage});
+    expect(JSON.stringify(f.clock.observation())).not.toContain('private');
+  }
+});
 
 test('one fixed clock setup restores the exact original boolean only after absent-state teardown',async()=>{
   for(const auto of [true,false]) {

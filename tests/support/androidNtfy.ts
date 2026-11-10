@@ -161,14 +161,15 @@ export class OwnedNtfyClock {
   private state:'notStarted'|'preparing'|'verified'='notStarted';
   private readback:ControlledClockReadback='notRead';
   private restoration:'notRequired'|'pending'|'restored'|'blocked'|'failed'='notRequired';
+  private absenceFailure:{packageIndex:number;stage:'before'|'command'|'after'|'response'}|undefined;
   constructor(private readonly command:(args:string[])=>Promise<string>,private readonly check:()=>Promise<void>,private readonly sample=sampleNtfyHostClock) {}
   private async call(args:string[]) {
     try{return await this.command(args);}catch{throw new Error('Owned ntfy controlled clock command failed');}
   }
-  private async request(args:string[]) {
-    await this.check();
-    try{return await this.call(args);}
-    finally{await this.check();}
+  private async request(args:string[],failure?:(stage:'before'|'command'|'after')=>void) {
+    try{await this.check();}catch(error){failure?.('before');throw error;}
+    try{return await this.call(args);}catch(error){failure?.('command');throw error;}
+    finally{try{await this.check();}catch(error){failure?.('after');throw error;}}
   }
   private async autoTime() {
     const value=await this.request(['shell','cmd','time_detector','is_auto_detection_enabled']);
@@ -199,7 +200,14 @@ export class OwnedNtfyClock {
     finally{after=this.sample();await this.check();}
     this.readback=controlledNtfyClockReadback(raw,before,after,at);
     if(this.readback!=='verified')throw new Error('Owned ntfy controlled clock readback not admitted');
-    await absentNtfyPackages(args=>this.request(args));this.state='verified';
+    let packageIndex=0;
+    await absentNtfyPackages(async args=>{
+      const index=packageIndex++;
+      const result=await this.request(args,stage=>{this.absenceFailure={packageIndex:index,stage};});
+      this.absenceFailure={packageIndex:index,stage:'response'};
+      return result;
+    });
+    this.absenceFailure=undefined;this.state='verified';
   }
   async restore(teardown:()=>Promise<void>) {
     if(!this.restoreNeeded)return;
@@ -210,7 +218,7 @@ export class OwnedNtfyClock {
     this.restoration='failed';
     await this.setAutoTime(this.original!);this.restoration='restored';
   }
-  observation() {return {state:this.state,readback:this.readback,restoration:this.restoration,declaredState:'strictlyPositiveAtMostTwoSeconds',maxReadbackUncertaintyMs:250} as const;}
+  observation() {return {state:this.state,readback:this.readback,restoration:this.restoration,...(this.absenceFailure?{absenceFailure:this.absenceFailure}:{}),declaredState:'strictlyPositiveAtMostTwoSeconds',maxReadbackUncertaintyMs:250} as const;}
 }
 type NtfyClockOwner={server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof emulatorContinuity>>};
 export function sameNtfyClockOwner(before:NtfyClockOwner,after:NtfyClockOwner) {
