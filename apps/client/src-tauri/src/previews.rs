@@ -168,18 +168,35 @@ pub(crate) async fn remote_stream(
     port: u16,
     deadline: tokio::time::Instant,
 ) -> Result<russh::ChannelStream<russh::client::Msg>> {
-    let channel = crate::ssh::open_owned(
-        handle,
-        access,
-        deadline,
-        crate::ssh::ChannelRequest::DirectTcp {
-            host: address.into(),
-            port: u32::from(port),
-        },
-    )
-    .await?;
-    access.check()?;
-    Ok(channel.into_stream())
+    // A session confirms at most four channel openings at a time. A page or a
+    // discovery probe burst opens more, so wait for a free opening within this
+    // stream's own deadline instead of failing the extra connections.
+    const BUSY_RETRY: Duration = Duration::from_millis(20);
+    loop {
+        match crate::ssh::open_owned(
+            handle,
+            access,
+            deadline,
+            crate::ssh::ChannelRequest::DirectTcp {
+                host: address.into(),
+                port: u32::from(port),
+            },
+        )
+        .await
+        {
+            Ok(channel) => {
+                access.check()?;
+                return Ok(channel.into_stream());
+            }
+            Err(error)
+                if error.kind() == "ssh_open_busy"
+                    && tokio::time::Instant::now() + BUSY_RETRY < deadline =>
+            {
+                tokio::time::sleep(BUSY_RETRY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 // One owner enforces the connection cap and drains all children before returning.

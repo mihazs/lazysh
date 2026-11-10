@@ -3494,6 +3494,9 @@ mod tests {
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
     #[cfg(unix)]
+    #[path = "repository_review_fixture.rs"]
+    mod repository_review_fixture;
+    #[cfg(unix)]
     #[path = "temporary_attachment_fixture.rs"]
     mod temporary_attachment_fixture;
     #[cfg(unix)]
@@ -7165,6 +7168,8 @@ mod tests {
         .into_inner()
         .unwrap();
         assert!(staged.contains("+before"));
+        repository_review_fixture::verify(&app, &id, &repo).await;
+        repository_review_fixture::verify_discovery(&app, &id).await;
         app.manage(crate::previews::PreviewState::default());
         let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let http_port = http.local_addr().unwrap().port();
