@@ -206,6 +206,7 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
             truncated: false,
             checkpoint: None,
             activity: None,
+            historical_activity: None,
         },
         context,
         windows: limits

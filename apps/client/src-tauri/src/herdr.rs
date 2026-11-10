@@ -437,14 +437,19 @@ pub async fn agent_herdr_conversation(
                     "The selected agent session is no longer available",
                 ));
             }
-            let command = format!(
+            let schema =
+                crate::ssh::negotiated_transcript_schema(&session, &access, &agent, true).await?;
+            let mut command = format!(
                 "lazysh-agent herdr-conversation --agent {} --session-id {}",
                 quote(&agent),
                 quote(&agent_session_id)
             );
+            if schema > 1 {
+                command.push_str(&format!(" --schema-version {schema}"));
+            }
             let raw = crate::companion::exec(&session, command, &access).await?;
             let page: serde_json::Value = serde_json::from_str(&raw)?;
-            if page["schemaVersion"] != 1
+            if page["schemaVersion"] != schema
                 || page["view"] != "active_branch"
                 || page["agent"] != agent
             {

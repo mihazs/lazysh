@@ -1,7 +1,8 @@
 //! Plan and question cards and recorded turn state over the fixtures in
 //! `fixtures/interaction-cards` (provenance in its README).
 use lazysh_agent::transcript::{
-    conversation, opencode_conversation, read_page, TranscriptAgent, TranscriptPage,
+    claude_conversation_v2, conversation, opencode_conversation, read_page, TranscriptAgent,
+    TranscriptPage,
 };
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -46,6 +47,61 @@ fn plan(third: (&str, &str)) -> Value {
 }
 const PROPOSED: &str = "## Fixture plan\n\n1. Add nested fixtures.\n2. Cover each reader.";
 
+fn unmatched_claude_fixture(count: usize) -> (tempfile::TempDir, std::path::PathBuf, Value) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("claude.jsonl");
+    let lines: Vec<_> = CLAUDE.lines().take(count).collect();
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+    let page = lazysh_agent::transcript::claude_conversation_v2(&path, 100).unwrap();
+    let message = page.messages.last().unwrap();
+    assert_eq!(message["partial"], true);
+    (directory, path, message["parts"][0].clone())
+}
+
+#[test]
+fn claude_unmatched_question_preserves_choices_without_answer_state() {
+    let (_directory, path, part) = unmatched_claude_fixture(4);
+    assert_eq!(part["card"], layout(false));
+    assert!(part.get("status").is_none());
+    assert!(part.get("result").is_none());
+    let mut records: Vec<Value> = CLAUDE
+        .lines()
+        .take(4)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    records[3]["message"]["content"][0]["input"]["questions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("multiSelect");
+    fs::write(
+        &path,
+        records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let page = lazysh_agent::transcript::claude_conversation_v2(&path, 100).unwrap();
+    assert!(page.messages.last().unwrap()["parts"][0]
+        .get("card")
+        .is_none());
+}
+
+#[test]
+fn claude_unmatched_proposed_plan_remains_partial_and_visible() {
+    let (_directory, _path, part) = unmatched_claude_fixture(6);
+    assert_eq!(part["type"], "text");
+    assert_eq!(
+        part["card"],
+        json!({"kind":"proposed_plan","text":PROPOSED})
+    );
+    assert!(part.get("status").is_none());
+    assert!(part.get("result").is_none());
+    assert!(part["text"].as_str().unwrap().starts_with("ExitPlanMode: "));
+}
+
 #[test]
 fn claude_recorded_todos_questions_and_plan_approval_become_cards_in_both_views() {
     let directory = tempfile::tempdir().unwrap();
@@ -58,6 +114,12 @@ fn claude_recorded_todos_questions_and_plan_approval_become_cards_in_both_views(
     ];
     let branch = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
     assert_eq!(cards(&branch), expected);
+    let schema_two = lazysh_agent::transcript::claude_conversation_v2(&path, 100).unwrap();
+    assert!(schema_two
+        .messages
+        .iter()
+        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
+        .any(|part| part["name"] == "ExitPlanMode" && part["card"] == expected[2]));
     assert_eq!(activity(&branch), "idle");
     let records = read_page(&path, TranscriptAgent::Claude, 0, 100).unwrap();
     assert_eq!(cards(&records), expected);
@@ -70,6 +132,86 @@ fn claude_recorded_todos_questions_and_plan_approval_become_cards_in_both_views(
     // Claude-shaped Qoder records do not inherit Claude tool semantics.
     let qoder = read_page(&path, TranscriptAgent::QoderIde, 0, 100).unwrap();
     assert!(cards(&qoder).is_empty());
+}
+
+#[test]
+fn claude_recorded_todos_and_questions_project_schema_two_calls() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("claude.jsonl");
+    fs::write(&path, CLAUDE).unwrap();
+    let page = claude_conversation_v2(&path, 100).unwrap();
+    let calls: Vec<_> = page
+        .messages
+        .iter()
+        .flat_map(|message| message["parts"].as_array().unwrap())
+        .filter_map(|part| part.get("call"))
+        .collect();
+    assert_eq!(
+        calls[0],
+        &json!({"kind":"plan","items":[{"text":"Record the fixture shapes","state":"done"},{"text":"Choose a layout","state":"in_progress"},{"text":"Write the reader tests","state":"pending"}]})
+    );
+    assert_eq!(
+        calls[1],
+        &json!({"kind":"question","questions":[{"text":"Which fixture layout should the reader use?","header":"Layout","multiple":false,"options":[{"label":"Flat","description":"One records file per agent."},{"label":"Nested","description":"One directory per agent."}]}]})
+    );
+    let mut records = lines(CLAUDE);
+    records[1]["message"]["content"][0]["input"]["todos"][0]["status"] = json!("unknown");
+    write(&path, &records);
+    let page = claude_conversation_v2(&path, 100).unwrap();
+    let plan = page
+        .messages
+        .iter()
+        .find(|message| message["id"] == "c-a1")
+        .unwrap();
+    assert_eq!(plan["partial"], true);
+    assert!(plan["parts"][0].get("call").is_none());
+}
+
+#[test]
+fn claude_incomplete_questions_do_not_invent_schema_two_choices() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("claude.jsonl");
+    for field in ["multiSelect", "options"] {
+        let mut records = lines(CLAUDE);
+        records[3]["message"]["content"][0]["input"]["questions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        write(&path, &records);
+        let page = claude_conversation_v2(&path, 100).unwrap();
+        let question = page
+            .messages
+            .iter()
+            .find(|message| message["id"] == "c-a2")
+            .unwrap();
+        assert_eq!(question["partial"], true);
+        assert!(question["parts"][0].get("call").is_none());
+        // The established schema-one reader keeps its existing fallback card.
+        assert_eq!(
+            cards(&conversation(&path, TranscriptAgent::Claude, 100).unwrap()).len(),
+            3
+        );
+    }
+}
+
+#[test]
+fn claude_question_call_excludes_recorded_answers_and_has_stable_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("claude.jsonl");
+    let mut records = lines(CLAUDE);
+    records[3]["message"]["content"][0]["input"]["answers"] = json!({"private":"answer"});
+    write(&path, &records);
+    let read = || {
+        claude_conversation_v2(&path, 100)
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|message| message["id"] == "c-a2")
+            .unwrap()
+    };
+    let first = read();
+    assert_eq!(first["rev"], read()["rev"]);
+    assert!(!first["parts"][0]["call"].to_string().contains("answer"));
 }
 
 #[test]

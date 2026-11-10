@@ -13,7 +13,7 @@ it('opens an explicitly selected owned Herdr agent session through the native re
   const id='11111111-1111-4111-8111-111111111111';
   const directory=join(herdr.ssh.directory,'.codex','sessions','2026','11','10');
   await mkdir(directory,{recursive:true,mode:0o700});
-  const records=[{type:'session_meta',payload:{id,history_mode:'legacy'}},{type:'event_msg',payload:{type:'user_message',message:'Owned resolver prompt'}}];
+  const records=[{type:'session_meta',payload:{id,history_mode:'legacy'}},{type:'event_msg',payload:{type:'user_message',message:'Owned resolver prompt'}},{type:'event_msg',payload:{type:'item_completed',turn_id:'one',item:{type:'SubAgentActivity',id:'event',kind:'started',agent_thread_id:'PRIVATE'}}}];
   await writeFile(join(directory,`rollout-2026-11-10T00-00-00-${id}.jsonl`),records.map(row=>JSON.stringify(row)).join('\n')+'\n',{mode:0o600});
   // Herdr admits official lifecycle reports only while it detects that agent.
   // A named sleep process is a controlled stand-in; the original receiver remains untouched.
@@ -39,6 +39,8 @@ it('opens an explicitly selected owned Herdr agent session through the native re
   const open=await agentView.$('button=Open conversation');await open.waitForDisplayed({timeout:20_000});await open.click();
   try {await browser.waitUntil(async()=>(await agentView.getText()).includes('Owned resolver prompt'),{timeout:20_000});}
   catch {throw new Error('Owned Herdr conversation did not resolve: '+await agentView.getText());}
+  expect(await agentView.getText()).toContain('Recorded sub-agent events');
+  expect(await agentView.getText()).not.toContain('PRIVATE');
   expect(await agentView.getText()).toContain('Herdr reports this session. Its association with this pane is unverified.');
   expect(await agentView.$('input[aria-label="Transcript path"]').isExisting()).toBe(false);
   expect(await agentView.$('[aria-label="Terminal input"]').isExisting()).toBe(false);

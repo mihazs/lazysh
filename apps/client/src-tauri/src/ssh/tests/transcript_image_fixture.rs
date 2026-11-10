@@ -256,10 +256,104 @@ async fn verify_conversation(
         assert_eq!(row["blocks"][1]["text"], text);
         verify_preview(&mut row["blocks"][0], bytes, mime);
     }
+    assert_eq!(legacy["schemaVersion"], 2);
+    assert_eq!(legacy["branchId"], page["branchId"]);
+    for (recorded, images) in legacy["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(page["messages"].as_array().unwrap())
+    {
+        assert_eq!(recorded["id"], images["id"]);
+        assert_eq!(
+            recorded["parts"], images["blocks"],
+            "default-off content must match after previews are removed"
+        );
+    }
+    let cards_path = directory.join("owned-cards.jsonl");
+    let cards = [
+        json!({"type":"user","uuid":"start","message":{"content":"Change file"}}),
+        json!({"type":"assistant","uuid":"edit","parentUuid":"start","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"file.rs","old_string":"old","new_string":"new"}}]}}),
+        json!({"type":"user","uuid":"edit-result","parentUuid":"edit","message":{"content":[{"type":"tool_result","tool_use_id":"e","content":"changed"}]},"toolUseResult":{"filePath":"file.rs","structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":1,"lines":["-old","+new"]}]}}),
+        json!({"type":"assistant","uuid":"run","parentUuid":"edit-result","message":{"content":[{"type":"tool_use","id":"c","name":"Bash","input":{"command":"false"}}]}}),
+        json!({"type":"user","uuid":"run-result","parentUuid":"run","message":{"content":[{"type":"tool_result","tool_use_id":"c","content":"failed","is_error":true}]}}),
+    ];
+    fs::write(
+        &cards_path,
+        cards
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let projected = read(
+        app,
+        lease,
+        id,
+        ("claude", Some("conversation")),
+        &cards_path,
+        0,
+        None,
+    )
+    .await;
+    assert_eq!(projected["schemaVersion"], 2);
+    assert_eq!(projected["messages"][1]["parts"][0]["call"]["added"], 1);
+    assert_eq!(projected["messages"][1]["parts"][0]["call"]["removed"], 1);
     assert_eq!(
-        page, legacy,
-        "selected branch default-off equivalence must be exact"
+        projected["messages"][2]["parts"][0]["call"]["command"],
+        "false"
     );
+    assert_eq!(projected["messages"][2]["parts"][0]["status"], "error");
+    // Emulate the old CLI's unknown-command exit, while keeping transcript reads real.
+    let program = directory.join("bin/lazysh-agent");
+    let actual = fs::canonicalize(&program).unwrap();
+    fs::remove_file(&program).unwrap();
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = transcript-capabilities ]; then exit 2; fi\nexec {} \"$@\"\n",
+            quote(actual.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    let old = read(
+        app,
+        lease,
+        id,
+        ("claude", Some("conversation")),
+        &path,
+        0,
+        None,
+    )
+    .await;
+    assert_eq!(old["schemaVersion"], 1);
+    assert_eq!(old["messages"], page["messages"]);
+    let attempts = directory.join("transcript-attempts");
+    fs::write(&program, format!("#!/bin/sh\nif [ \"$1\" = transcript-capabilities ]; then printf '%s\\n' '{{\"schemaVersion\":1,\"conversationSchemas\":[1,2]}}'; exit 0; fi\nprintf x >> {}\nexit 1\n", quote(attempts.to_str().unwrap()))).unwrap();
+    let failure = agent_transcript(
+        lease.clone(),
+        app.state(),
+        id.into(),
+        "claude".into(),
+        path.to_str().unwrap().into(),
+        0,
+        Some("conversation".into()),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(failure.is_err());
+    assert_eq!(
+        fs::read(&attempts).unwrap(),
+        b"x",
+        "failed schema 2 read must not retry schema 1"
+    );
+    fs::remove_file(&program).unwrap();
+    std::os::unix::fs::symlink(actual, &program).unwrap();
     assert_eq!(fs::read(&path).unwrap(), source.as_bytes());
     lease.check().unwrap();
     assert_eq!(app.state::<AppState>().sessions.lock().await.len(), 1);

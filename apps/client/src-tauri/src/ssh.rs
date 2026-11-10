@@ -3100,6 +3100,16 @@ async fn transcript_result(
     lease: &AccessLease,
     state: &AppState,
     session_id: &str,
+    command: String,
+    transcript_session_id: Option<String>,
+) -> Result<serde_json::Value> {
+    let session = state.session(session_id).await?;
+    transcript_result_for_session(lease, &session, command, transcript_session_id).await
+}
+
+async fn transcript_result_for_session(
+    lease: &AccessLease,
+    session: &Session,
     mut command: String,
     transcript_session_id: Option<String>,
 ) -> Result<serde_json::Value> {
@@ -3112,10 +3122,67 @@ async fn transcript_result(
         }
         command.push_str(&format!(" --session-id={}", quote(&id)));
     }
-    let session = state.session(session_id).await?;
     Ok(serde_json::from_str(
-        &crate::companion::exec(&session, command, lease).await?,
+        &crate::companion::exec(session, command, lease).await?,
     )?)
+}
+
+fn transcript_schema(output: &str, agent: &str, herdr: bool) -> Result<u8> {
+    if output.trim() == crate::companion::TRANSCRIPT_CAPABILITIES_MISSING {
+        return Ok(1);
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Capabilities {
+        schema_version: u8,
+        conversation_schemas: Vec<u8>,
+        herdr_conversation_schemas: Option<Vec<u8>>,
+    }
+    let caps: Capabilities = serde_json::from_str(output)?;
+    if caps.schema_version != 1
+        || caps.conversation_schemas.len() > 16
+        || !caps.conversation_schemas.contains(&1)
+    {
+        return Err(SshError::new(
+            "invalid_output",
+            "Invalid transcript capabilities",
+        ));
+    }
+    let schemas = if herdr {
+        caps.herdr_conversation_schemas.as_deref().unwrap_or(&[1])
+    } else {
+        &caps.conversation_schemas
+    };
+    if schemas.len() > 16 || !schemas.contains(&1) {
+        return Err(SshError::new(
+            "invalid_output",
+            "Invalid transcript capabilities",
+        ));
+    }
+    Ok(if agent == "codex" && schemas.contains(&3) {
+        3
+    } else if schemas.contains(&2) {
+        2
+    } else {
+        1
+    })
+}
+
+pub(crate) async fn negotiated_transcript_schema(
+    session: &Session,
+    lease: &AccessLease,
+    agent: &str,
+    herdr: bool,
+) -> Result<u8> {
+    let Some(command) = crate::companion::transcript_capability_command(session, lease).await?
+    else {
+        return Ok(1);
+    };
+    transcript_schema(
+        &exec_for_access(session, command, lease).await?,
+        agent,
+        herdr,
+    )
 }
 
 #[tauri::command]
@@ -3159,7 +3226,7 @@ pub async fn agent_transcript(
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let command = transcript_request_command(
+            let mut command = transcript_request_command(
                 &agent,
                 &path,
                 offset,
@@ -3171,7 +3238,19 @@ pub async fn agent_transcript(
                     inline_images: inline_images.unwrap_or(false),
                 },
             )?;
-            transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
+            let session = state.session(&session_id).await?;
+            if matches!(agent.as_str(), "claude" | "codex")
+                && view.as_deref() == Some("conversation")
+                && !inline_images.unwrap_or(false)
+                && !checkpointed.unwrap_or(false)
+                && transcript_session_id.is_none()
+            {
+                let schema = negotiated_transcript_schema(&session, &lease, &agent, false).await?;
+                if schema > 1 {
+                    command.push_str(&format!(" --schema-version {schema}"));
+                }
+            }
+            transcript_result_for_session(&lease, &session, command, transcript_session_id).await
         })
         .await
 }
@@ -3915,6 +3994,60 @@ mod tests {
             state.host("target").unwrap().jump_host_id.as_deref(),
             Some("jump")
         );
+    }
+
+    #[test]
+    fn transcript_capability_negotiation_is_strict_and_old_companions_fall_back() {
+        assert_eq!(
+            transcript_schema(
+                crate::companion::TRANSCRIPT_CAPABILITIES_MISSING,
+                "codex",
+                false
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            transcript_schema(
+                r#"{"schemaVersion":1,"conversationSchemas":[1]}"#,
+                "claude",
+                false
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            transcript_schema(
+                r#"{"schemaVersion":1,"conversationSchemas":[1,2]}"#,
+                "claude",
+                false
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            transcript_schema(
+                r#"{"schemaVersion":1,"conversationSchemas":[1,2,3]}"#,
+                "codex",
+                false
+            )
+            .unwrap(),
+            3
+        );
+        let old = r#"{"schemaVersion":1,"conversationSchemas":[1,2,3]}"#;
+        let new = r#"{"schemaVersion":1,"conversationSchemas":[1,2,3],"herdrConversationSchemas":[1,2,3]}"#;
+        assert_eq!(transcript_schema(old, "codex", true).unwrap(), 1);
+        assert_eq!(transcript_schema(new, "claude", true).unwrap(), 2);
+        assert_eq!(transcript_schema(new, "codex", true).unwrap(), 3);
+        for invalid in [
+            "",
+            "unexpected error",
+            r#"{"schemaVersion":2,"conversationSchemas":[1,2]}"#,
+            r#"{"schemaVersion":1,"conversationSchemas":[2]}"#,
+            r#"{"schemaVersion":1,"conversationSchemas":[1,2],"extra":true}"#,
+        ] {
+            assert!(transcript_schema(invalid, "claude", false).is_err());
+        }
     }
 
     #[test]

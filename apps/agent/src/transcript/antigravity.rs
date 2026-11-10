@@ -214,5 +214,6 @@ pub(super) fn read_page(
         truncated: false,
         checkpoint: Some(format!("v1:{}:{:x}", bytes.len(), Sha256::digest(&bytes))),
         activity: None,
+        historical_activity: None,
     })
 }

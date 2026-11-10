@@ -512,3 +512,100 @@ it('admits Codex recorded command failures only in a reconstructed conversation'
   for(const view of ['record_stream',undefined])expect(()=>parseTranscript({...response,view})).toThrow('Invalid recorded tool error');
   for(const isError of ['false',null,0])expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{...response.messages[0].blocks[0],isError}]}]})).toThrow('Invalid recorded tool error');
 });
+
+it('renders schema 2 edit and command receipts from a companion page',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:100,hasMore:false,truncated:false,messages:[
+    {id:'prompt',rev:1,role:'user',source:'transcript',parts:[{type:'text',text:'Make a change'}]},
+    {id:'work',rev:2,role:'assistant',source:'transcript',parts:[
+      {type:'tool',name:'Edit',summary:'Edit',status:'ok',call:{kind:'edit',path:'file.rs',added:1,removed:1,hunks:['@@ -1 +1 @@\n-old\n+new'],created:false}},
+      {type:'tool',name:'Bash',summary:'Bash',status:'error',input:'{}',result:'failed output',call:{kind:'execute',command:'false',exitCode:1}},
+    ]},
+  ]});
+  openHostTranscript('conversation');
+  fireEvent.click(await screen.findByText(/file\.rs/));expect(screen.getByText(/\+new/)).toBeTruthy();
+  fireEvent.click(screen.getByText(/Bash · false · Failed/));expect(screen.getByText('Exit code: 1')).toBeTruthy();
+  expect(screen.getByText('failed output')).toBeTruthy();
+});
+
+it('retains a recorded Claude proposed plan beside its schema 2 receipt',async()=>{
+  const part={type:'tool',name:'ExitPlanMode',summary:'ExitPlanMode',status:'ok',input:'{}',result:'recorded',card:{kind:'proposed_plan',text:'## Fixture plan\n\n1. Review changes.'}};
+  const response={schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:10,hasMore:false,truncated:false,messages:[{id:'plan',rev:1,role:'assistant',source:'transcript',partial:true,parts:[part]}]};
+  for(const invalid of [{...part,name:'Bash'},{...part,card:{kind:'question',questions:[]}},{...part,call:{kind:'other'}}])expect(()=>parseTranscript({...response,messages:[{...response.messages[0],parts:[invalid]}]})).toThrow();
+  expect(()=>parseTranscript({...response,agent:'codex'})).toThrow();
+  vi.mocked(invoke).mockResolvedValueOnce(response);
+  openHostTranscript('conversation');
+  expect(await screen.findByRole('heading',{name:'Fixture plan'})).toBeTruthy();
+  expect(screen.getByText('Review changes.')).toBeTruthy();
+});
+
+it('shows an unmatched Claude proposed plan as partial activity without a status',async()=>{
+  const part={type:'text',text:'ExitPlanMode: {"plan":"## Await review"}',card:{kind:'proposed_plan',text:'## Await review'}};
+  const response={schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:10,hasMore:false,truncated:false,messages:[{id:'plan',rev:1,role:'assistant',source:'transcript',partial:true,parts:[part]}]};
+  expect(()=>parseTranscript({...response,messages:[{...response.messages[0],partial:false}]})).toThrow();
+  vi.mocked(invoke).mockResolvedValueOnce(response);
+  openHostTranscript('conversation');
+  expect(await screen.findByRole('heading',{name:'Await review'})).toBeTruthy();
+  expect(screen.getByText('Recorded details are incomplete.')).toBeTruthy();
+  expect(screen.queryByText(/Completed|Failed|Denied/)).toBeNull();
+  fireEvent.click(screen.getByText('ExitPlanMode'));
+  expect(screen.getByText(/ExitPlanMode: /)).toBeTruthy();
+});
+
+it('shows recorded choices for an unmatched Claude question without claiming an answer',async()=>{
+  const part={type:'text',text:'AskUserQuestion: {"questions":[]}',card:{kind:'question',questions:[{question:'Choose a layout',multiple:false,options:[{label:'List'},{label:'Grid'}]}]}};
+  const response={schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:10,hasMore:false,truncated:false,messages:[{id:'question',rev:1,role:'assistant',source:'transcript',partial:true,parts:[part]}]};
+  expect(()=>parseTranscript({...response,messages:[{...response.messages[0],parts:[{...part,text:'ExitPlanMode: {}'}]}]})).toThrow();
+  vi.mocked(invoke).mockResolvedValueOnce(response);
+  openHostTranscript('conversation');
+  expect(await screen.findByText('Choose a layout')).toBeTruthy();
+  expect(screen.getByText('List')).toBeTruthy();expect(screen.getByText('Grid')).toBeTruthy();
+  expect(screen.getByText(/Answer status is unavailable/)).toBeTruthy();
+  expect(screen.queryByText(/No answer is recorded yet/)).toBeNull();
+  expect(screen.getByRole('group',{name:'Choose a layout'})).toHaveProperty('disabled',true);
+});
+
+it('shows mixed recorded text and unmatched tool activity without making it a final answer',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:30,hasMore:false,truncated:false,messages:[
+    {id:'prompt',rev:0,role:'user',source:'transcript',parts:[{type:'text',text:'Question'}]},
+    {id:'partial',rev:10,role:'assistant',source:'transcript',partial:true,parts:[{type:'text',text:'Here is the answer'},{type:'text',text:'Bash: {"command":"sleep 10"}'}]},
+  ]});
+  const view=render(<ChatPanel sessionId="ssh1" timeline/>);
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/session.jsonl'}});
+  fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  const answer=await screen.findByText('Here is the answer');
+  const activity=answer.closest('details')!;
+  expect(activity.open).toBe(true);
+  expect(screen.getByText('Recorded details are incomplete.')).toBeTruthy();
+  expect(screen.getByText(/Bash: /)).toBeTruthy();
+  fireEvent.click(activity.querySelector('summary')!);
+  expect(activity.open).toBe(false);
+  view.rerender(<ChatPanel sessionId="ssh1" timeline/>);
+  expect(activity.open).toBe(false);
+});
+
+it.each([true,false])('keeps activity open=%s when a partial call completes on refresh',async expanded=>{
+  const header={schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:30,hasMore:false,truncated:false};
+  const prompt={id:'prompt',rev:0,role:'user',source:'transcript',parts:[{type:'text',text:'Question'}]};
+  vi.mocked(invoke).mockResolvedValueOnce({...header,messages:[prompt,{id:'call',rev:10,role:'assistant',source:'transcript',partial:true,parts:[{type:'text',text:'Bash: sleep 10'}]}]})
+    .mockResolvedValueOnce({...header,nextOffset:50,messages:[prompt,{id:'call',rev:20,role:'assistant',source:'transcript',parts:[{type:'tool',name:'Bash',summary:'Bash',status:'ok',input:'sleep 10',result:'done',call:{kind:'execute',command:'sleep 10'}}]}]});
+  render(<ChatPanel sessionId="ssh1" timeline/>);
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/session.jsonl'}});
+  fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  const activity=(await screen.findByText('Bash: sleep 10')).closest('details')!;
+  expect(activity.open).toBe(true);
+  if(!expanded) fireEvent.click(activity.querySelector('summary')!);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh new messages'}));
+  await screen.findByText(/Bash · sleep 10 · Completed/);
+  expect(activity.open).toBe(expanded);
+});
+
+it('shows schema 3 sub-agent events as historical records without live actions',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:3,agent:'codex',view:'active_branch',nextOffset:100,hasMore:false,truncated:false,messages:[{id:'prompt',rev:1,role:'user',source:'transcript',parts:[{type:'text',text:'Question'}]}],historicalActivity:{version:1,events:['started','completed','completed'],truncated:true}});
+  openHostTranscript('conversation','codex');
+  fireEvent.click(await screen.findByText('Recorded sub-agent events'));
+  expect(screen.getAllByText('Completed')).toHaveLength(2);
+  expect(screen.getByText('Earlier events are omitted.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:/approve|deny|stop/i})).toBeNull();
+});

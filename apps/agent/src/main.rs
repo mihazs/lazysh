@@ -13,6 +13,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Report supported transcript conversation schemas without reading a transcript.
+    TranscriptCapabilities,
     /// Print the exact retained third-party licenses and attribution notices.
     Licenses,
     /// Inspect or explicitly install this verified binary into its managed user namespace.
@@ -156,6 +158,8 @@ enum Command {
     },
     /// Read one uniquely identified provider session from its managed root.
     HerdrConversation {
+        #[arg(long, default_value_t = 1)]
+        schema_version: u8,
         #[arg(long, value_enum)]
         agent: lazysh_agent::transcript::TranscriptAgent,
         #[arg(long)]
@@ -177,6 +181,9 @@ enum Command {
         /// Admit bounded static PNG/JPEG previews (Grok/Codex Records or Claude user images).
         #[arg(long)]
         inline_images: bool,
+        /// Opt in to the experimental Claude or Codex conversation schema.
+        #[arg(long, default_value_t = 1)]
+        schema_version: u8,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -214,6 +221,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::TranscriptCapabilities => Some(serde_json::json!({
+            "schemaVersion": 1,
+            "conversationSchemas": [1, 2, 3],
+            "herdrConversationSchemas": [1, 2, 3],
+        })),
         Command::HerdrFocusPane { session, pane } => {
             Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
         }
@@ -358,14 +370,16 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::HerdrConversation {
+            schema_version,
             agent,
             session_id,
             limit,
         } => Some(
-            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation(
+            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation_schema(
                 agent,
                 &session_id,
                 limit,
+                schema_version,
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
@@ -375,11 +389,28 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             checkpoint,
             checkpointed,
             inline_images,
+            schema_version,
             session_id,
             offset,
             limit,
             view,
         } => {
+            if schema_version != 1
+                && (!matches!(schema_version, 2 | 3)
+                    || (schema_version == 3
+                        && !matches!(agent, lazysh_agent::transcript::TranscriptAgent::Codex))
+                    || !matches!(
+                        agent,
+                        lazysh_agent::transcript::TranscriptAgent::Claude
+                            | lazysh_agent::transcript::TranscriptAgent::Codex
+                    )
+                    || !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
+                    || inline_images
+                    || session_id.is_some()
+                    || checkpointed)
+            {
+                return Err(Error::InvalidArgument);
+            }
             if checkpointed
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
@@ -459,6 +490,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                                 session_id.as_deref().ok_or(Error::InvalidArgument)?,
                                 limit,
                             )?
+                        } else if schema_version == 3 {
+                            lazysh_agent::transcript::codex_conversation_v3(&path, limit)?
+                        } else if schema_version == 2 {
+                            if matches!(agent, lazysh_agent::transcript::TranscriptAgent::Codex) {
+                                lazysh_agent::transcript::codex_conversation_v2(&path, limit)?
+                            } else {
+                                lazysh_agent::transcript::claude_conversation_v2(&path, limit)?
+                            }
                         } else if inline_images {
                             lazysh_agent::transcript::claude_conversation_images(&path, limit)?
                         } else {

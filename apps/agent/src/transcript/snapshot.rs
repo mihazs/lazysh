@@ -88,5 +88,6 @@ pub(super) fn page(
         truncated: false,
         checkpoint: None,
         activity: None,
+        historical_activity: None,
     })
 }

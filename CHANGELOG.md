@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Show recent recorded Codex sub-agent events separately from conversation messages when the companion supports schema 3. These historical events do not claim an agent is currently running or finished; older events beyond the last 50 are omitted. Older companions retain their existing conversation schema.
+
+- Add an experimental companion transcript schema for Claude and Codex conversation snapshots. It preserves recorded command status and exit codes, projects completed Codex file changes and pairs Claude tool results before paging. The client now requests it for eligible remote conversations when the companion advertises support and shows recorded edit and command cards; older companions continue using schema 1. Unsupported tool details remain partial, and the companion CLI still defaults to schema 1.
+
 - Organize setup guides and service, transfer, theme and notification contracts into task, reference and explanation pages; existing documentation paths and section anchors remain available.
 - Toggle the current session between Terminal and Agent with Ctrl+Shift+Y (Cmd+Shift+Y on Apple keyboards). The shortcut is available from the terminal, the Agent draft and the session controls. No defaults change.
 - Detect live Claude Code and Codex agents from the attached Herdr server in Agent view, including hosts running stock Herdr 0.9.3. Select a live Herdr row to open its reported conversation or enter its exact pane; the conversation’s association with the pane is unverified, and selected conversations cannot stage input into another terminal; Agent view no longer asks you to choose transcript files. Finger swipes no longer become wheel or arrow input inside Herdr agent questions. A compatible guarded Herdr host scrolls its retained pane history directly; unsupported hosts report that history scrolling is unavailable. Ordinary mouse wheels are unchanged.

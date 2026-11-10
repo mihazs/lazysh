@@ -23,6 +23,16 @@ async function open(page:unknown,agent:'claude'|'codex'|'opencode'='claude',view
 }
 const entries=(card:HTMLElement)=>within(card).getAllByRole('listitem').map(item=>item.textContent);
 
+it.each(['', 'recorded tool result'])('does not infer a question answer from a successful schema 2 result %j',async result=>{
+  await open({schemaVersion:2,agent:'claude',view:'active_branch',nextOffset:100,hasMore:false,truncated:false,messages:[
+    {id:'q',rev:3,role:'assistant',source:'transcript',parts:[{type:'tool',name:'AskUserQuestion',summary:'AskUserQuestion',status:'ok',input:'{}',result,call:{kind:'question',questions:[{text:'Continue?',multiple:false,options:[{label:'Yes'}]}]}}]},
+  ]});
+  const question=screen.getByRole('region',{name:'Question'});
+  expect(within(question).getByRole('note').textContent).toContain('Answer status is unavailable.');
+  expect(within(question).queryByText('An answer is recorded.')).toBeNull();
+  expect(within(question).getByRole('button',{name:'Open terminal'})).toBeTruthy();
+});
+
 it('shows a waiting Claude question with its options and sends the user to the terminal',async()=>{
   const openTerminal=await open(pages.claudeWaiting);
   expect(screen.getByText('Agent is waiting for your answer')).toBeTruthy();

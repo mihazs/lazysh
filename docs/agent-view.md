@@ -138,6 +138,30 @@ opened, the client falls back to the existing 2 s page polling.
 
 The client validates every field strictly, as ChatPanel does for schema 1.
 
+The companion's experimental `transcript --view conversation --schema-version 2`
+is currently limited to Claude and Codex snapshots. Claude pairs results on the
+active branch before applying the page limit and projects recorded TodoWrite and
+AskUserQuestion and WebSearch inputs, recorded ExitPlanMode proposed plans, validated Edit/Write result patches, and uniquely matched
+completed Agent (or Task alias) results into typed calls. Asynchronous launches
+remain partial because their later state is unknown. Claude Bash records an explicit
+background launch when its uniquely matched result proves one; this does not report
+whether the process is still running. Codex preserves recorded command
+status and exit codes; multi-argument commands are shown as recorded JSON argument
+arrays rather than ambiguous shell text. It projects completed recorded file changes from validated
+unified hunks and new-file content. The MCP schema treats an omitted `isError` as
+success; this projection applies that default only to recorded text-only result
+blocks. Unknown edit formats
+and states remain partial.
+Calls without a source-proven status remain partial text.
+Other tool kinds, OpenCode schema 2, and watch generation continuity remain work
+in progress. Schema 1 remains the default.
+
+For remote Claude and Codex conversation reads without inline images, the client
+queries the companion's machine-readable `transcript-capabilities` command and
+requests schema 3 for Codex when advertised, otherwise schema 2 when advertised. Schema 3 adds an independently bounded version 1 historical-activity envelope: at most the latest 50 recorded sub-agent event kinds, with an omission flag. It contains no agent identifiers, does not change the message budget or revisions, and reports recorded events rather than current state. Earlier events cannot be paged, and nested per-agent rows remain unimplemented. Older companions keep schema 1; malformed
+capabilities and read failures are reported rather than silently retried. The Herdr-selected-session resolver negotiates its separately advertised schemas while retaining anchored source and session checks; older companions use schema 1. Non-Unix fallback still uses schema 1.
+This is full-snapshot polling, not watch or upsert continuity.
+
 ## UX
 
 ### Phone

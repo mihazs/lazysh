@@ -16,6 +16,7 @@ struct Turn {
     messages: Vec<Value>,
     items: HashMap<String, usize>,
     compacted: bool,
+    historical_activity: Vec<(u64, &'static str)>,
 }
 #[derive(Default)]
 struct Projection {
@@ -25,7 +26,11 @@ struct Projection {
 impl Projection {
     fn finish(&mut self) {
         if let Some(turn) = self.current.take() {
-            if turn.explicit || turn.compacted || !turn.messages.is_empty() {
+            if turn.explicit
+                || turn.compacted
+                || !turn.messages.is_empty()
+                || !turn.historical_activity.is_empty()
+            {
                 self.turns.push(turn);
             }
         }
@@ -99,6 +104,42 @@ fn required<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
         .as_str()
         .filter(|s| !s.is_empty() && s.len() <= 4096)
         .ok_or(Error::InvalidEvent)
+}
+// The source is argv, not shell text. JSON retains boundaries without choosing
+// a shell or losing spaces and metacharacters inside an argument.
+fn recorded_command(value: &Value) -> Option<String> {
+    let args = value.as_array().filter(|args| !args.is_empty())?;
+    if !args.iter().all(Value::is_string) {
+        return None;
+    }
+    if args.len() == 1 {
+        let arg = args[0].as_str()?;
+        if !arg.is_empty()
+            && arg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-./".contains(c))
+        {
+            return Some(arg.to_owned());
+        }
+    }
+    Some(value.to_string())
+}
+
+fn partial_command(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_owned();
+    }
+    let strings: Vec<_> = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if strings.is_empty() {
+        String::new()
+    } else {
+        json!(strings).to_string()
+    }
 }
 fn output_text(value: &Value) -> String {
     if let Some(text) = value.as_str() {
@@ -298,10 +339,22 @@ fn pending_question(payload: &Value, asked: &mut HashSet<String>) {
 }
 
 pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, limit, 1)
+}
+
+pub fn conversation_v2(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, limit, 2)
+}
+
+pub fn conversation_v3(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, limit, 3)
+}
+
+fn conversation_options(path: &Path, limit: u8, schema_version: u8) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project(codex_lineage::read(path)?, limit)
+    project(codex_lineage::read(path)?, limit, schema_version)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -310,17 +363,29 @@ pub(super) fn anchored(
     path: &Path,
     limit: u8,
     expected: &super::SourceSnapshot,
+    schema_version: u8,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project(codex_lineage::read_anchored(root, path, expected)?, limit)
+    project(
+        codex_lineage::read_anchored(root, path, expected)?,
+        limit,
+        schema_version,
+    )
 }
 
-fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage> {
+fn project(
+    history: codex_lineage::History,
+    limit: u8,
+    schema_version: u8,
+) -> Result<TranscriptPage> {
+    let schema_two = schema_version >= 2;
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
+    let mut commands = HashMap::new();
+    let mut rolled_back = HashSet::new();
     for record in &history.records {
         let value = &record.value;
         if value["type"] == "response_item" {
@@ -335,12 +400,25 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             continue;
         }
         let event = &value["payload"];
+        if schema_two && event["type"] == "exec_command_begin" {
+            if let Some(id) = event["call_id"].as_str() {
+                commands.insert(
+                    (
+                        event["turn_id"].as_str().unwrap_or("").to_owned(),
+                        id.to_owned(),
+                    ),
+                    event["command"].clone(),
+                );
+            }
+        }
         match required(event, "type")? {
             "task_started" | "turn_started" => {
                 activity = Some("working");
                 projection.finish();
+                let turn_id = required(event, "turn_id")?;
+                rolled_back.remove(turn_id);
                 projection.current = Some(Turn {
-                    id: required(event, "turn_id")?.to_owned(),
+                    id: turn_id.to_owned(),
                     explicit: true,
                     ..Turn::default()
                 });
@@ -366,12 +444,17 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             "thread_rolled_back" => {
                 let count = event["num_turns"].as_u64().ok_or(Error::InvalidEvent)?;
                 projection.finish();
-                projection.turns.truncate(
-                    projection
-                        .turns
-                        .len()
-                        .saturating_sub(usize::try_from(count).unwrap_or(usize::MAX)),
+                let keep = projection
+                    .turns
+                    .len()
+                    .saturating_sub(usize::try_from(count).unwrap_or(usize::MAX));
+                rolled_back.extend(
+                    projection.turns[keep..]
+                        .iter()
+                        .filter(|turn| !turn.id.is_empty())
+                        .map(|turn| turn.id.clone()),
                 );
+                projection.turns.truncate(keep);
                 continue;
             }
             "user_message"
@@ -384,6 +467,39 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             }
             _ => {}
         }
+        if schema_version == 3
+            && event["type"] == "item_completed"
+            && event["item"]["type"] == "SubAgentActivity"
+        {
+            if history.mode == "paginated" {
+                required(event, "turn_id")?;
+                if required(event, "thread_id")? != record.thread {
+                    return Err(Error::InvalidEvent);
+                }
+            }
+            let kind = match event["item"]["kind"].as_str() {
+                Some("started") => Some("started"),
+                Some("interacted") => Some("interacted"),
+                Some("completed") => Some("completed"),
+                Some("interrupted") => Some("interrupted"),
+                _ => None,
+            };
+            let turn_id = event["turn_id"].as_str().filter(|id| !id.is_empty());
+            if let Some(kind) = kind.filter(|_| !turn_id.is_some_and(|id| rolled_back.contains(id)))
+            {
+                projection
+                    .turn(turn_id)
+                    .historical_activity
+                    .push((record.position, kind));
+            }
+            continue;
+        }
+        let edit_event = schema_two
+            && matches!(
+                event["type"].as_str(),
+                Some("item_started" | "item_completed")
+            )
+            && event["item"]["type"] == "FileChange";
         let projected = if history.mode == "paginated" {
             if !matches!(
                 event["type"].as_str(),
@@ -395,7 +511,15 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             if required(event, "thread_id")? != record.thread {
                 return Err(Error::InvalidEvent);
             }
-            canonical(&event["item"], &value["timestamp"])?
+            if edit_event {
+                Some(super::conversation::codex_edits::project(
+                    &event["item"],
+                    record.position,
+                    event["type"] == "item_completed",
+                )?)
+            } else {
+                canonical(&event["item"], &value["timestamp"])?
+            }
         } else {
             // Legacy compatibility events own display text; response_item is
             // model context and can contain reinjection/private compaction data.
@@ -407,14 +531,71 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             {
                 continue;
             }
-            legacy(event, &record.key, &value["timestamp"])?
+            if edit_event {
+                Some(super::conversation::codex_edits::project(
+                    &event["item"],
+                    record.position,
+                    event["type"] == "item_completed",
+                )?)
+            } else {
+                legacy(event, &record.key, &value["timestamp"])?
+            }
         };
-        if let Some(message) = projected {
+        if let Some(mut message) = projected {
+            if schema_two && !edit_event {
+                let command_source = if event["item"]["type"] == "CommandExecution" {
+                    Some(&event["item"]["command"])
+                } else if matches!(
+                    event["type"].as_str(),
+                    Some("exec_command_begin" | "exec_command_end")
+                ) {
+                    Some(&event["command"])
+                } else {
+                    None
+                };
+                let command_source = command_source.map(|source| {
+                    if event["type"] != "exec_command_end" || !source.is_null() {
+                        return source;
+                    }
+                    event["call_id"]
+                        .as_str()
+                        .and_then(|id| {
+                            commands.get(&(
+                                event["turn_id"].as_str().unwrap_or("").to_owned(),
+                                id.to_owned(),
+                            ))
+                        })
+                        .unwrap_or(source)
+                });
+                let command = command_source.and_then(recorded_command);
+                if let Some(command) = &command {
+                    message["blocks"][0]["text"] = json!(command);
+                } else if let Some(source) = command_source {
+                    message["blocks"][0]["text"] = json!(partial_command(source));
+                }
+                message_size(&message)?;
+                super::conversation::tool_projection::codex(
+                    &mut message,
+                    event,
+                    record.position,
+                    command_source.is_none() || command.is_some(),
+                )?;
+            }
             let turn = event["turn_id"].as_str().filter(|id| !id.is_empty());
             projection.put(turn, message)?;
         }
     }
     projection.finish();
+    let mut events: Vec<_> = projection
+        .turns
+        .iter()
+        .flat_map(|turn| turn.historical_activity.iter().copied())
+        .collect();
+    events.sort_unstable_by_key(|(position, _)| *position);
+    let events_truncated = events.len() > 50;
+    if events_truncated {
+        events.drain(..events.len() - 50);
+    }
     let all = projection
         .turns
         .into_iter()
@@ -437,7 +618,7 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
     messages.reverse();
     history.verify()?;
     Ok(TranscriptPage {
-        schema_version: 1,
+        schema_version,
         view: "active_branch",
         agent: TranscriptAgent::Codex,
         messages,
@@ -450,5 +631,10 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             Some("working") if !asked.is_empty() => Some("waiting"),
             other => other,
         },
+        historical_activity: (schema_version == 3).then_some(super::HistoricalActivity {
+            version: 1,
+            events: events.into_iter().map(|(_, kind)| kind).collect(),
+            truncated: events_truncated,
+        }),
     })
 }

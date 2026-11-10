@@ -104,6 +104,7 @@ pub(super) struct Record {
     pub value: Value,
     pub key: String,
     pub thread: String,
+    pub position: u64,
 }
 pub(super) struct History {
     pub records: Vec<Record>,
@@ -471,6 +472,10 @@ fn load(
     if start.is_some_and(|start| previous.is_none_or(|last| last < start.saturating_sub(1))) {
         return Err(Error::InvalidEvent);
     }
+    let base = history
+        .records
+        .last()
+        .map_or(0, |record| record.position + 1);
     for (offset, value) in records {
         if start.is_some_and(|start| value["ordinal"].as_u64().is_some_and(|n| n < start)) {
             continue;
@@ -479,6 +484,7 @@ fn load(
             value,
             key: format!("{physical}:{offset}"),
             thread: thread.clone(),
+            position: base.checked_add(offset).ok_or(Error::InvalidEvent)?,
         });
         if history.records.len() > MAX_RECORDS {
             return Err(Error::InvalidArgument);

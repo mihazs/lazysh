@@ -9,12 +9,20 @@ use std::{
     path::Path,
 };
 
+mod claude_edits;
+pub(super) mod codex_edits;
+pub(super) mod tool_projection;
+
 pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, agent, limit, false)
+    conversation_options(path, agent, limit, false, false)
+}
+
+pub fn claude_conversation_v2(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, TranscriptAgent::Claude, limit, false, true)
 }
 
 pub fn claude_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, TranscriptAgent::Claude, limit, true)
+    conversation_options(path, TranscriptAgent::Claude, limit, true, false)
 }
 
 fn conversation_options(
@@ -22,6 +30,7 @@ fn conversation_options(
     agent: TranscriptAgent,
     limit: u8,
     inline_images: bool,
+    schema_two: bool,
 ) -> Result<TranscriptPage> {
     if matches!(agent, TranscriptAgent::Codex) {
         return super::codex_conversation::conversation(path, limit);
@@ -32,15 +41,15 @@ fn conversation_options(
     if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    project_claude(capture(path)?, limit, inline_images)
-}
-
-pub(super) fn project_claude(
-    bytes: Vec<u8>,
-    limit: u8,
-    inline_images: bool,
-) -> Result<TranscriptPage> {
-    project_claude_bounded(bytes, limit, inline_images, super::MAX_LINE, 10_000, None)
+    project_claude_bounded(
+        capture(path)?,
+        limit,
+        inline_images,
+        super::MAX_LINE,
+        10_000,
+        None,
+        schema_two,
+    )
 }
 
 pub(super) fn project_claude_bounded(
@@ -50,6 +59,7 @@ pub(super) fn project_claude_bounded(
     line_limit: u64,
     record_limit: usize,
     expected_session_id: Option<&str>,
+    schema_two: bool,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
@@ -131,12 +141,17 @@ pub(super) fn project_claude_bounded(
         .map(|(_, record)| record)
         .collect();
     let (chain, leaf) = active_chain(&records)?;
+    let results = if schema_two {
+        tool_projection::results(&records, &chain)?
+    } else {
+        HashMap::new()
+    };
     let activity = leaf.and_then(|leaf| activity(&records, leaf));
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
     let mut messages = Vec::new();
-    let mut output_bytes = 0;
+    let mut output_bytes = 0usize;
     let mut truncated = false;
     for index in chain.into_iter().rev() {
         let (position, record) = &records[index];
@@ -145,19 +160,62 @@ pub(super) fn project_claude_bounded(
         } else {
             normalize(record, agent, *position)
         };
-        if let Some(message) = message {
+        if let Some(mut message) = message {
+            super::message_size(&message)?;
+            if schema_two {
+                tool_projection::project(&mut message, *position, &results)?;
+            }
             let size = super::message_size(&message)?;
-            if messages.len() == usize::from(limit) || output_bytes + size > MAX_PAGE {
+            if messages.len() == usize::from(limit) {
                 truncated = true;
                 break;
             }
-            output_bytes += size;
+            let has_call = schema_two
+                && message["parts"]
+                    .as_array()
+                    .is_some_and(|parts| parts.iter().any(|part| part["_toolCallId"].is_string()));
+            let has_result = has_call
+                && messages.iter().any(|selected: &Value| {
+                    selected["parts"].as_array().is_some_and(|parts| {
+                        parts.iter().any(|part| part["_toolResultId"].is_string())
+                    })
+                });
+            if has_call && has_result {
+                // A call frees a slot only after it is selected. Keep private
+                // pairing markers until all earlier candidates are examined.
+                let mut candidate = messages.clone();
+                candidate.push(message.clone());
+                tool_projection::suppress_paired_results(&mut candidate, false);
+                let mut measured = candidate.clone();
+                tool_projection::suppress_paired_results(&mut measured, true);
+                let bytes = measured.iter().try_fold(0usize, |bytes, item| {
+                    bytes
+                        .checked_add(super::message_size(item)?)
+                        .ok_or(Error::InvalidEvent)
+                })?;
+                if bytes > MAX_PAGE {
+                    truncated = true;
+                    break;
+                }
+                messages = candidate;
+                output_bytes = bytes;
+                continue;
+            }
+            let next = output_bytes.checked_add(size).ok_or(Error::InvalidEvent)?;
+            if next > MAX_PAGE {
+                truncated = true;
+                break;
+            }
+            output_bytes = next;
             messages.push(message);
         }
     }
     messages.reverse();
+    if schema_two {
+        tool_projection::suppress_paired_results(&mut messages, true);
+    }
     Ok(TranscriptPage {
-        schema_version: 1,
+        schema_version: if schema_two { 2 } else { 1 },
         view: "active_branch",
         agent,
         messages,
@@ -167,6 +225,7 @@ pub(super) fn project_claude_bounded(
         truncated,
         checkpoint: None,
         activity,
+        historical_activity: None,
     })
 }
 

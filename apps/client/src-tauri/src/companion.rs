@@ -29,6 +29,22 @@ pub(crate) async fn command(
 }
 // Only a positively identified Unix shell classifies absent/older companions.
 pub(crate) const USAGE_COMPANION_REQUIRED: &str = "lazysh-account-usage-companion-required-v1";
+pub(crate) const TRANSCRIPT_CAPABILITIES_MISSING: &str =
+    "lazysh-transcript-capabilities-missing-v1";
+
+pub(crate) async fn transcript_capability_command(
+    session: &Session,
+    lease: &AccessLease,
+) -> Result<Option<String>> {
+    let Some(unix) = resolve::detect(session, lease).await? else {
+        return Ok(None);
+    };
+    let resolved = unix.command("lazysh-agent transcript-capabilities")?;
+    // This no-argument command returns 2 only when an older Clap CLI does not know it.
+    // All other failures remain errors; the transcript itself is never retried.
+    let script = format!("{resolved} 2>/dev/null; code=$?; if [ \"$code\" -eq 2 ]; then printf '%s\\n' {}; else exit \"$code\"; fi", ssh::quote(TRANSCRIPT_CAPABILITIES_MISSING));
+    Ok(Some(format!("sh -c {}", ssh::quote(&script))))
+}
 pub(crate) async fn account_usage_command(
     session: &Session,
     lease: &AccessLease,

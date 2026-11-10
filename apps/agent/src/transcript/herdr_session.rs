@@ -7,6 +7,21 @@ pub fn read_herdr_conversation(
     id: &str,
     limit: u8,
 ) -> Result<TranscriptPage> {
+    read_herdr_conversation_schema(agent, id, limit, 1)
+}
+
+pub fn read_herdr_conversation_schema(
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    schema: u8,
+) -> Result<TranscriptPage> {
+    if !matches!(
+        (agent, schema),
+        (TranscriptAgent::Claude, 1 | 2) | (TranscriptAgent::Codex, 1 | 2 | 3)
+    ) {
+        return Err(Error::InvalidArgument);
+    }
     let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
     if parsed.to_string() != id || !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
@@ -20,16 +35,27 @@ pub fn read_herdr_conversation(
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|path| path.join(fallback)))
         .ok_or(Error::InvalidArgument)?;
-    read_in(&home.join(child), agent, id, limit)
+    read_in_schema(&home.join(child), agent, id, limit, schema)
+}
+
+#[cfg(test)]
+fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<TranscriptPage> {
+    read_in_schema(root, agent, id, limit, 1)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_in(_: &Path, _: TranscriptAgent, _: &str, _: u8) -> Result<TranscriptPage> {
+fn read_in_schema(_: &Path, _: TranscriptAgent, _: &str, _: u8, _: u8) -> Result<TranscriptPage> {
     Err(Error::InvalidArgument)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<TranscriptPage> {
+fn read_in_schema(
+    root: &Path,
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+    schema: u8,
+) -> Result<TranscriptPage> {
     use crate::managed_directory::Directory;
     let home = if matches!(agent, TranscriptAgent::Codex) {
         if root.file_name().is_none_or(|name| name != "sessions") {
@@ -72,14 +98,16 @@ fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<T
                 4 * 1024 * 1024,
                 20_000,
                 Some(id),
+                schema == 2,
             )?
         }
         TranscriptAgent::Codex => {
-            let page = super::anchored_codex(
+            let page = super::codex_conversation::anchored(
                 home.as_ref().ok_or(Error::InvalidArgument)?,
                 &path,
                 limit,
                 &source,
+                schema,
             )?;
             if page.branch_id.as_deref() != Some(id) {
                 return Err(Error::InvalidEvent);
@@ -207,6 +235,43 @@ mod tests {
         fs::rename(home, alternate).unwrap();
         fs::rename(retired, home).unwrap();
         result
+    }
+
+    #[test]
+    fn selected_sessions_project_negotiated_schemas_without_exposing_private_ids() {
+        let (_temp, root, file) = claude_fixture(ID);
+        let user =
+            json!({"type":"user","uuid":"root","sessionId":ID,"message":{"content":"inspect"}});
+        let call = json!({"type":"assistant","uuid":"call","parentUuid":"root","sessionId":ID,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"printf hello"}}]}});
+        let result = json!({"type":"user","uuid":"result","parentUuid":"call","sessionId":ID,"message":{"content":[{"type":"tool_result","tool_use_id":"bash","content":"hello"}]}});
+        fs::write(&file, format!("{user}\n{call}\n{result}\n")).unwrap();
+        let old = read_in_schema(&root, TranscriptAgent::Claude, ID, 50, 1).unwrap();
+        let new = read_in_schema(&root, TranscriptAgent::Claude, ID, 50, 2).unwrap();
+        assert_eq!(old.schema_version, 1);
+        assert_eq!(new.schema_version, 2);
+        assert_eq!(
+            new.messages[1]["parts"][0]["call"]["command"],
+            "printf hello"
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("codex/sessions");
+        let date = root.join("2026/11/10");
+        fs::create_dir_all(&date).unwrap();
+        let path = date.join(format!("rollout-2026-11-10T00-00-00-{ID}.jsonl"));
+        let meta = json!({"type":"session_meta","payload":{"id":ID,"history_mode":"legacy"}});
+        let activity = json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"one","item":{"type":"SubAgentActivity","id":"item","kind":"completed","agent_thread_id":"PRIVATE"}}});
+        fs::write(&path, format!("{meta}\n{activity}\n")).unwrap();
+        let page = read_in_schema(&root, TranscriptAgent::Codex, ID, 50, 3).unwrap();
+        let value = serde_json::to_value(page).unwrap();
+        assert_eq!(value["historicalActivity"]["events"], json!(["completed"]));
+        assert!(!value.to_string().contains("PRIVATE"));
+        assert_eq!(
+            read_in_schema(&root, TranscriptAgent::Codex, ID, 50, 2)
+                .unwrap()
+                .schema_version,
+            2
+        );
     }
 
     #[test]

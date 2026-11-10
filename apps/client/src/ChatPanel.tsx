@@ -8,13 +8,15 @@ import {t, useUi} from './i18n/core';
 import {formatCountdown} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {ChatActivity,ChatCard,ChatMarkdown,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
 import RecordedImagePreview from './RecordedImagePreview';
+import AgentToolCard,{type AgentTool} from './AgentToolCard';
+import {schemaTwoPage} from './agentSchemaTwo';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 
 type Block = {
@@ -26,10 +28,13 @@ type Block = {
   isError?: boolean;
   imagePreview?: RecordedImage;
   card?: Card;
+  agentTool?: AgentTool;
+  unmatched?: boolean;
 };
 type Message = {
   id: string;
   role: "user" | "assistant" | "tool" | "record";
+  partial?: boolean;
   record?: { source: string; type: string; status: string; stepIndex?: number; exitCode?: number; errorCode?: number; truncatedFields: string[] };
   timestamp?: string;
   blocks: Block[];
@@ -46,12 +51,15 @@ type Page = {
   checkpoint?: string;
   branchId?: string;
   activity?: Activity;
+  historicalActivity?: {version:1;events:('started'|'interacted'|'completed'|'interrupted')[];truncated:boolean};
 };
 
 
 export function parseTranscript(value: unknown): Page {
   if (!value || typeof value !== "object")
     throw new LocalUiError('chatInvalidResponse');
+  const schemaTwo=[2,3].includes((value as {schemaVersion?:number}).schemaVersion ?? 0);
+  if (schemaTwo) value=schemaTwoPage(value);
   const page = value as Page;
   if (
     page.schemaVersion !== 1 ||
@@ -77,6 +85,7 @@ export function parseTranscript(value: unknown): Page {
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
   }
   for (const message of page.messages) {
+    if (message?.partial !== undefined && (!schemaTwo || typeof message.partial !== 'boolean')) throw new LocalUiError('chatInvalidMessage');
     if (
       !message ||
       typeof message.id !== "string" ||
@@ -96,6 +105,8 @@ export function parseTranscript(value: unknown): Page {
         throw new LocalUiError('chatInvalidRecordMetadata');
     } else if (message.record !== undefined) throw new LocalUiError('chatUnexpectedRecordMetadata');
     for (const block of message.blocks) {
+      if (!schemaTwo && block?.agentTool !== undefined) throw new LocalUiError('chatInvalidBlock');
+      if (block?.unmatched !== undefined && (!schemaTwo || block.unmatched !== true)) throw new LocalUiError('chatInvalidBlock');
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
           || ((page.agent==='claude' && ['record_stream','active_branch'].includes(page.view??'')
@@ -153,7 +164,7 @@ export function groupTurns(messages: Message[]): Turn[] {
   }
   for (const turn of turns) {
     const last = turn.activity.at(-1);
-    if (last?.role === 'assistant' && last.blocks.length > 0 && last.blocks.every(block => block.type === 'text' || block.type === 'thinking')) turn.answer = turn.activity.pop();
+    if (last?.role === 'assistant' && !last.partial && last.blocks.length > 0 && last.blocks.every(block => block.type === 'text' || block.type === 'thinking')) turn.answer = turn.activity.pop();
   }
   return turns;
 }
@@ -163,10 +174,11 @@ const editTools = new Set(['edit', 'multiedit', 'write', 'notebookedit', 'apply_
 /** The folded activity row: what the agent did ("Ran 3 commands · Made 2 edits · 1 failed · 1:12"). */
 export function activitySummary(turn: Turn): string {
   const blocks = turn.activity.flatMap(message => message.blocks);
-  const uses = blocks.filter(block => block.type === 'tool_use').map(block => block.name?.toLowerCase() ?? '');
-  const commands = uses.filter(name => commandTools.has(name)).length, edits = uses.filter(name => editTools.has(name)).length;
+  const uses = blocks.filter(block => block.type === 'tool_use');
+  const commands = uses.filter(block => block.agentTool ? block.agentTool.call?.kind === 'execute' : commandTools.has(block.name?.toLowerCase() ?? '')).length;
+  const edits = uses.filter(block => block.agentTool ? block.agentTool.call?.kind === 'edit' : editTools.has(block.name?.toLowerCase() ?? '')).length;
   // A call can fail on its use (status) and its result (isError); count it once.
-  const failed = new Set(blocks.flatMap((block, index) => block.isError === true || block.status === 'failed' ? [block.id ?? index] : [])).size;
+  const failed = new Set(blocks.flatMap((block, index) => block.isError === true || block.status === 'failed' || block.agentTool?.status === 'error' ? [block.id ?? index] : [])).size;
   const parts = [
     commands && t('agentTurnCommands', {count: commands}), edits && t('agentTurnEdits', {count: edits}),
     uses.length - commands - edits && t('agentTurnTools', {count: uses.length - commands - edits}), failed && t('agentTurnFailed', {count: failed}),
@@ -175,6 +187,17 @@ export function activitySummary(turn: Turn): string {
   const start = Date.parse(turn.prompt?.timestamp ?? ''), end = Date.parse([...turn.activity, turn.answer].map(message => message?.timestamp).filter(Boolean).at(-1) ?? '');
   if (end > start) parts.push(formatCountdown(end - start));
   return parts.join(' · ');
+}
+
+function TurnActivity({turn,children}:{turn:Turn;children:ReactNode}) {
+  const partial=turn.activity.some(message=>message.partial);
+  const [expanded,setExpanded]=useState(partial);
+  const previousPartial=useRef(partial);
+  useEffect(()=>{
+    if(partial && !previousPartial.current) setExpanded(true);
+    previousPartial.current=partial;
+  },[partial]);
+  return <details className="agent-turn-activity" open={expanded} onToggle={event=>setExpanded(event.currentTarget.open)}><summary>{activitySummary(turn)}</summary>{children}</details>;
 }
 
 /** A conversation the Agent view found for its pane from hook reports. */
@@ -233,6 +256,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activity, setActivity] = useState<Activity>();
+  const [historicalActivity,setHistoricalActivity]=useState<Page['historicalActivity']>();
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
@@ -304,7 +328,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setActivity(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setActivity(undefined); setHistoricalActivity(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -447,7 +471,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace) setActivity(page.activity);
+      if (replace) {setActivity(page.activity); setHistoricalActivity(page.historicalActivity);}
       setMessages((previous) => {
         const combined = replace
           ? page.messages
@@ -484,6 +508,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const renderMessage = (message: Message) => (
     <article key={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
+      {message.partial && <p className="muted">{t('agentToolPartial')}</p>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
         {t("chatRecordMetadata", {source:message.record.source, type:message.record.type, status:message.record.status})}
@@ -492,8 +517,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
       </p>}
       {message.blocks.map((block, index) => {
-        const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
-        return block.type === "text" ? (
+        const card = block.card && <ChatCard card={block.card} body={block.text} answered={block.agentTool || block.unmatched ? undefined : !!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
+        return block.agentTool ? (
+          <Fragment key={index}>{card}<AgentToolCard tool={block.agentTool}/></Fragment>
+        ) : block.type === "text" ? (
           <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
         ) : (
           <Fragment key={index}>{card}<details>
@@ -664,13 +691,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {!atLatest && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
       </div>}
       {conversation && sourceMatches && !bound && <ChatActivity activity={activity} />}
+      {conversation && sourceMatches && historicalActivity && historicalActivity.events.length>0 && <details><summary>{t('agentRecordedSubagentActivity')}</summary><ul>{historicalActivity.events.map((event,index)=><li key={index}>{t(({started:'agentRecordedStarted',interacted:'agentRecordedInteracted',completed:'agentRecordedCompleted',interrupted:'agentRecordedInterrupted'} as const)[event])}</li>)}</ul>{historicalActivity.truncated && <p>{t('agentRecordedTruncated')}</p>}</details>}
       <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
       }}>
         {timeline ? turns.map(turn => <section key={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.prompt && renderMessage(turn.prompt)}
-          {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
+          {turn.activity.length > 0 && <TurnActivity turn={turn}>{turn.activity.map(renderMessage)}</TurnActivity>}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : messages.map(renderMessage)}
       </div>

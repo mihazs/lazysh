@@ -116,7 +116,7 @@ export function ChatCard({card,body,answered,onOpenTerminal}:{card:Card;body?:st
       </ul> : <p>{t('chatQuestionFreeform')}</p>}
       {question.multiple && <p>{t('chatQuestionMultiple')}</p>}
     </fieldset>)}
-    <p role="note">{t(answered ? 'chatQuestionAnswered' : 'chatQuestionUnanswered')} {t('chatQuestionTerminal')}</p>
+    <p role="note">{t(answered === undefined ? 'chatQuestionAnswerUnknown' : answered ? 'chatQuestionAnswered' : 'chatQuestionUnanswered')} {t('chatQuestionTerminal')}</p>
     {onOpenTerminal && !answered && <button type="button" onClick={onOpenTerminal}>{t('chatOpenTerminal')}</button>}
   </section>;
 }

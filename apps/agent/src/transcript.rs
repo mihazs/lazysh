@@ -25,7 +25,7 @@ mod grok_checkpoint;
 mod grok_conversation;
 mod herdr_session;
 mod inline_image;
-pub use herdr_session::read_herdr_conversation;
+pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_schema};
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
@@ -35,19 +35,22 @@ pub use opencode_conversation::conversation as opencode_conversation;
 mod mutation_observer;
 mod snapshot;
 mod source_snapshot;
-pub use conversation::{claude_conversation_images, conversation};
+pub use codex_conversation::{
+    conversation_v2 as codex_conversation_v2, conversation_v3 as codex_conversation_v3,
+};
+pub use conversation::{claude_conversation_images, claude_conversation_v2, conversation};
 pub use database::read_database_page;
 pub use discovery::discover;
 pub(crate) use source_snapshot::SourceSnapshot;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn anchored_codex(
     root: &crate::managed_directory::Directory,
     path: &Path,
     limit: u8,
     expected: &SourceSnapshot,
 ) -> Result<TranscriptPage> {
-    codex_conversation::anchored(root, path, limit, expected)
+    codex_conversation::anchored(root, path, limit, expected, 1)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -160,6 +163,16 @@ pub struct TranscriptPage {
     /// Recorded turn state: working, waiting, idle or stopped. Absent is unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub historical_activity: Option<HistoricalActivity>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalActivity {
+    pub version: u8,
+    pub events: Vec<&'static str>,
+    pub truncated: bool,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -329,6 +342,7 @@ fn read_records(
         truncated: false,
         checkpoint: None,
         activity: None,
+        historical_activity: None,
     })
 }
 

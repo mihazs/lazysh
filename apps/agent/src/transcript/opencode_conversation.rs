@@ -215,6 +215,7 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         truncated,
         checkpoint: None,
         activity,
+        historical_activity: None,
     })
 }
 
@@ -580,6 +581,7 @@ pub(super) fn records(
         truncated: false,
         checkpoint: None,
         activity: None,
+        historical_activity: None,
     })
 }
 
