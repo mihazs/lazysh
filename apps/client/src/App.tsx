@@ -1701,6 +1701,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       shell.establish(connected.sessionId);
       owned.add(connected.sessionId);
       if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
+      if (intent.attached?.kind === 'herdr') {
+        const discovery = await invoke<{tools:MultiplexerTool[]}>('multiplexer_tree', {sessionId:shell.session.id});
+        if (!discovery.tools?.some(tool=>tool.kind==='herdr' && !tool.missing.includes('restore'))) throw new LocalUiError('muxLimitedHerdr');
+      }
       if (intent.auto || intent.et || intent.mosh) {
         const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
         child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',

@@ -2410,3 +2410,29 @@ it('does not renew revoked access to disconnect a locally failed Mosh display',a
   expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='revoked-display')).toHaveLength(0);
   expect(controller.close).toHaveBeenCalledOnce();
 });
+
+it('does not restore a Herdr session when its version lacks restore support', async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'herdr',name:'work'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['restore']}],sessions:[]}) : original(command,...args));
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  expect(await screen.findByText(/Only navigation is available/)).toBeTruthy();
+  expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'temporary-shell'});
+});
+
+it('restores a Herdr session when discovery confirms restore support', async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'herdr',name:'work'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'restored-herdr'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]}) : original(command,...args));
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','herdr','work',expect.any(Function)));
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+});

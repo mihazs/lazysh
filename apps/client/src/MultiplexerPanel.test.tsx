@@ -165,3 +165,12 @@ it('hides Herdr shortcuts that mutate layout when discovery marks it limited', a
   await screen.findByText('Herdr 0.8.2 (Limited)', {exact:false});
   expect(screen.queryByRole('region',{name:'herdr prefix shortcuts'})).toBeNull();
 });
+
+it('hides Herdr session creation for limited versions but keeps listed sessions', async () => {
+  const tools = [{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create','launch','rename','confirmedInput','restore']}];
+  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? {...tree,herdrAvailable:true,tools} : [{name:'work'}]);
+  render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button',{name:'List herdr sessions'}));
+  expect(await screen.findByRole('button',{name:'Attach herdr work'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Open/create herdr session'})).toBeNull();
+});
