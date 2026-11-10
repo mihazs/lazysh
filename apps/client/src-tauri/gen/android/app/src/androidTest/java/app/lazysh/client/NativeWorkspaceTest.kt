@@ -1628,7 +1628,13 @@ class NativeWorkspaceTest {
             if (offset == 0) break
             swipeWorkspaceToolPages(scenario, menu, offset > 0)
             val remaining = if (offset > 0) offset - 1 else offset + 1
-            awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled && $indicated", deadline = deadline)
+            awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled && $indicated", deadline = deadline,
+                observe = { timeout ->
+                    val value = evaluateIfPresent(scenario, "[$pageOffset,$settled,$indicated]", timeout)
+                    val parts = JSONArray(value)
+                    val observedOffset = parts.getInt(0).coerceIn(-4, 4)
+                    "offset=$observedOffset; expected=$remaining; settled=${parts.getBoolean(1)}; indicated=${parts.getBoolean(2)}"
+                })
         }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
