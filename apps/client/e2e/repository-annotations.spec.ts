@@ -11,6 +11,8 @@ test('diff-side notes retain their observed references and drafts until explicit
   await repo.getByRole('button',{name:'Unstaged diff',exact:true}).click();
   const table=repo.getByRole('table',{name:'Side by side diff',exact:true});
   await expect(table.getByText('before literal',{exact:true})).toBeVisible();
+  await repo.getByRole('button',{name:'Highlight syntax',exact:true}).click();
+  await expect(table.getByText('before literal',{exact:true})).toBeVisible();
   const calls=await page.evaluate(()=>window.repositoryNotesFixture.calls);
   await repo.getByRole('button',{name:'Comment on Before line 1',exact:true}).click();
   await repo.getByRole('button',{name:'Comment on After line 1',exact:true}).click();

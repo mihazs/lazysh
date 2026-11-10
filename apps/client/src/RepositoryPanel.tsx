@@ -8,6 +8,7 @@ import { api as nativeApi } from './bridge';
 import {fileErrorText, type FileErrorState} from './SessionTools';
 import {captureUiError, LocalUiError} from './i18n/localError';
 import CodePreview from './CodePreview';
+import DiffSyntax from './DiffSyntax';
 import {imageUrl, previewKind} from './mediaPreview';
 import {usePreferences} from './preferences';
 import {fontFamilyFor,useDeviceFonts} from './fonts';
@@ -33,7 +34,7 @@ function annotationLabel(note: Annotation) {
   if (!note.diff) return `${note.repository}/${note.file}:${note.line}`;
   return t('repoDiffReference', {path: annotationPath(note), stage: t(note.diff.staged ? 'repoStaged' : 'repoUnstaged'), side: t(note.diff.side === 'before' ? 'repoBefore' : 'repoAfter'), rename: note.diff.originalPath ? t('repoDiffRename', {from: note.diff.originalPath, to: note.file}) : ''});
 }
-type Line = { before?: number; after?: number; left?: string; right?: string; kind: 'context' | 'change' | 'hunk' };
+export type Line = { before?: number; after?: number; left?: string; right?: string; kind: 'context' | 'change' | 'hunk' };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
 const validText = (value: unknown, limit = 4096): value is string => typeof value === 'string' && value.length <= limit && !value.includes('\0');
@@ -263,7 +264,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         <div className="tool-bar"><label>{t('repoCommentLine')}<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>{t('repoAddComment')}</button></div>
         {markdown ? <ChatMarkdown text={content.text || ''} image={t('repoRemoteImage')} /> : <CodePreview path={selected} text={content.text || ''} />}
       </>)}
-      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffRows.map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{diffLineNumber('before', line.before)}</td><td><pre>{line.left}</pre></td><td>{diffLineNumber('after', line.after)}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
+      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><DiffSyntax path={diff.source.file} rows={diffRows}>{highlighted => <table className="repository-diff repository-code" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffRows.map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{diffLineNumber('before', line.before)}</td><td><pre>{highlighted?.left[i] ?? line.left}</pre></td><td>{diffLineNumber('after', line.after)}</td><td><pre>{highlighted?.right[i] ?? line.right}</pre></td></tr>)}</tbody></table>}</DiffSyntax></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>
     {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4><p className="agent-note">{t('repoSnapshotWarning')}</p>{annotations.map((note, index) => <label key={annotationKey(note)}>{annotationLabel(note)}<textarea maxLength={2000} value={note.text} onChange={event => changeNotes(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => changeNotes(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={stageNotes}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void copyNotes()}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
   </section>;
