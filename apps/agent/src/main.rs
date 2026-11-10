@@ -190,6 +190,13 @@ enum Command {
 #[derive(Subcommand)]
 enum SettingsCommand {
     Show,
+    StreamShow,
+    StreamUpdate {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        enabled: bool,
+    },
     Update {
         #[arg(long)]
         expected_revision: u64,
@@ -234,23 +241,38 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         )?),
         Command::Settings { command } => {
             let directory = lazysh_agent::state_directory()?;
-            let settings = match command {
-                SettingsCommand::Show => lazysh_agent::settings::read(&directory)?,
+            let value = match command {
+                SettingsCommand::Show => {
+                    serde_json::to_value(lazysh_agent::settings::read(&directory)?)
+                }
+                SettingsCommand::StreamShow => {
+                    serde_json::to_value(lazysh_agent::settings::read_stream(&directory)?)
+                }
+                SettingsCommand::StreamUpdate {
+                    expected_revision,
+                    enabled,
+                } => serde_json::to_value(lazysh_agent::settings::update_stream(
+                    &directory,
+                    expected_revision,
+                    enabled,
+                )?),
                 SettingsCommand::Update {
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                } => lazysh_agent::settings::update(
+                } => serde_json::to_value(lazysh_agent::settings::update(
                     &directory,
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                )?,
-            };
-            Some(serde_json::to_value(settings).map_err(|_| Error::InvalidEvent)?)
+                )?),
+            }
+            .map_err(|_| Error::InvalidEvent)?;
+            Some(value)
         }
+
         Command::Usage {
             agent,
             path,
@@ -270,6 +292,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Devices { command } => {
+            if matches!(
+                &command,
+                lazysh_agent::devices::DeviceCommand::Android {
+                    action: lazysh_agent::devices::android::AndroidAction::Stream,
+                    ..
+                } | lazysh_agent::devices::DeviceCommand::Ios {
+                    action: lazysh_agent::devices::idb::IosAction::Stream,
+                    ..
+                }
+            ) && !lazysh_agent::settings::read_stream(&lazysh_agent::state_directory()?)?.enabled
+            {
+                return Err(Error::Settings("DeviceStreamingDisabled"));
+            }
             if let lazysh_agent::devices::DeviceCommand::Android {
                 id,
                 action: lazysh_agent::devices::android::AndroidAction::Stream,

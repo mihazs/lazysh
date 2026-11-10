@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import CompanionSettingsPanel, { parseCompanionSettings } from "./CompanionSettingsPanel";
+vi.mock("./CompanionStreamSettings",()=>({default:()=>null}));
 vi.mock("@tauri-apps/api/core",async original=>({...await original<typeof import("@tauri-apps/api/core")>(),invoke:vi.fn()}));
 afterEach(()=>{cleanup();vi.clearAllMocks();});
 const settings={schemaVersion:1 as const,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};

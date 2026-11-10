@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Control new Android and iOS device preview streams independently in host companion settings. Existing streams continue until stopped, and device tools must also be enabled. Older companions cannot enforce the separate stream setting.
+
 - Organize setup guides and service, transfer, theme and notification contracts into task, reference and explanation pages; existing documentation paths and section anchors remain available.
 - Toggle the current session between Terminal and Agent with Ctrl+Shift+Y (Cmd+Shift+Y on Apple keyboards). The shortcut is available from the terminal, the Agent draft and the session controls. No defaults change.
 - Detect live Claude Code and Codex agents from the attached Herdr server in Agent view, including hosts running stock Herdr 0.9.3. Select a live Herdr row to open its reported conversation or enter its exact pane; the conversation’s association with the pane is unverified, and selected conversations cannot stage input into another terminal; Agent view no longer asks you to choose transcript files. Finger swipes no longer become wheel or arrow input inside Herdr agent questions. A compatible guarded Herdr host scrolls its retained pane history directly; unsupported hosts report that history scrolling is unavailable. Ordinary mouse wheels are unchanged.

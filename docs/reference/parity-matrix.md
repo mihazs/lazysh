@@ -367,7 +367,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Nested-agent suppression | missing | missing | No code. | #18. |
 | Unlocked-desktop notification suppression | missing | missing | No code in the relay or notification client. | #18. |
 | HTTP port scanning toggle | partial | partial | Per-panel probe and automatic controls (`apps/client/src/PreviewPanel.tsx:161-163`), not persisted and not a host setting. | Persisted host setting (#18). |
-| Simulator streaming toggle | partial | partial | One `deviceToolsEnabled` flag gates inventory, capture, streams and control (`settings.rs:28`). | Separate streaming toggle (#18). |
+| Simulator streaming toggle | implemented | implemented | Separate revisioned stream policy gates new Android and iOS streams in addition to the device-tools setting; running streams continue until stopped. Host settings and client component tests cover the policy. The owned OpenSSH board fixture exercises native settings, denied streaming and admitted screenshot/tap SDK dispatch with a fake SDK. | Reference behavior for already-running streams remains unverified; no real device runtime case. |
 | Independent settings with documented restart semantics | implemented | implemented | Three checkboxes with revision checks (`CompanionSettingsPanel.tsx:39-61`); apply to new operations without restart. Host tests `settings.rs:35,64,97`. | Client runtime. |
 
 ## Dictation

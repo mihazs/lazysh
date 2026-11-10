@@ -1,5 +1,5 @@
 use crate::{Error, Result};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -131,14 +131,18 @@ fn open(path: &Path, write: bool) -> Result<File> {
 }
 
 /// Absent settings return compatibility defaults without creating any file.
-pub fn read(directory: &Path) -> Result<Settings> {
+fn read_named<T: DeserializeOwned + Default>(
+    directory: &Path,
+    name: &str,
+    validate: impl FnOnce(&T) -> Result<()>,
+) -> Result<T> {
     if !directory_exists(directory)? {
-        return Ok(Settings::default());
+        return Ok(T::default());
     }
-    let path = directory.join("settings.json");
+    let path = directory.join(name);
     let file = match open(&path, false) {
         Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Settings::default())
+            return Ok(T::default())
         }
         result => result?,
     };
@@ -150,9 +154,41 @@ pub fn read(directory: &Path) -> Result<Settings> {
     if bytes.len() as u64 > MAX_CONFIG {
         return Err(Error::InvalidArgument);
     }
-    let settings: Settings = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
-    settings.validate()?;
+    let settings: T = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
+    validate(&settings)?;
     Ok(settings)
+}
+
+pub fn read(directory: &Path) -> Result<Settings> {
+    read_named(directory, "settings.json", Settings::validate)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamSettings {
+    pub schema_version: u8,
+    pub revision: u64,
+    pub enabled: bool,
+}
+impl Default for StreamSettings {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            revision: 0,
+            enabled: true,
+        }
+    }
+}
+impl StreamSettings {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != 1 || self.revision > MAX_REVISION {
+            return Err(Error::InvalidArgument);
+        }
+        Ok(())
+    }
+}
+pub fn read_stream(directory: &Path) -> Result<StreamSettings> {
+    read_named(directory, "stream-settings.json", StreamSettings::validate)
 }
 
 pub fn update(
@@ -162,6 +198,52 @@ pub fn update(
     usage: bool,
     devices: bool,
 ) -> Result<Settings> {
+    update_named(
+        directory,
+        "settings.json",
+        "settings.lock",
+        expected_revision,
+        read,
+        |revision| Settings {
+            schema_version: 1,
+            revision,
+            transcript_discovery_enabled: discovery,
+            recorded_usage_enabled: usage,
+            device_tools_enabled: devices,
+        },
+    )
+}
+
+pub fn update_stream(
+    directory: &Path,
+    expected_revision: u64,
+    enabled: bool,
+) -> Result<StreamSettings> {
+    update_named(
+        directory,
+        "stream-settings.json",
+        "stream-settings.lock",
+        expected_revision,
+        read_stream,
+        |revision| StreamSettings {
+            schema_version: 1,
+            revision,
+            enabled,
+        },
+    )
+}
+
+fn update_named<T: Serialize>(
+    directory: &Path,
+    name: &str,
+    lock_name: &str,
+    expected_revision: u64,
+    read: impl FnOnce(&Path) -> Result<T>,
+    create: impl FnOnce(u64) -> T,
+) -> Result<T>
+where
+    T: Revision,
+{
     if expected_revision >= MAX_REVISION {
         return Err(Error::InvalidArgument);
     }
@@ -169,7 +251,7 @@ pub fn update(
         lazysh_common::fs::private_directory(directory)?;
     }
     directory_exists(directory)?;
-    let path = directory.join("settings.lock");
+    let path = directory.join(lock_name);
     let lock = match options(true).create_new(true).open(&path) {
         Ok(file) => {
             private(&file.metadata()?, false)?;
@@ -182,25 +264,33 @@ pub fn update(
         .map_err(|_| Error::Settings("SettingsBusy"))?;
     let _lock = UpdateLock(lock);
     let current = read(directory)?;
-    if current.revision != expected_revision {
+    if current.revision() != expected_revision {
         return Err(Error::Settings("SettingsConflict"));
     }
-    let settings = Settings {
-        schema_version: 1,
-        revision: current.revision + 1,
-        transcript_discovery_enabled: discovery,
-        recorded_usage_enabled: usage,
-        device_tools_enabled: devices,
-    };
+    let settings = create(expected_revision + 1);
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
     serde_json::to_writer(temporary.as_file_mut(), &settings)
         .map_err(|_| Error::InvalidArgument)?;
     temporary.write_all(b"\n")?;
     temporary.as_file().sync_all()?;
     temporary
-        .persist(directory.join("settings.json"))
+        .persist(directory.join(name))
         .map_err(|error| Error::Io(error.error))?;
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     Ok(settings)
+}
+
+trait Revision {
+    fn revision(&self) -> u64;
+}
+impl Revision for Settings {
+    fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+impl Revision for StreamSettings {
+    fn revision(&self) -> u64 {
+        self.revision
+    }
 }

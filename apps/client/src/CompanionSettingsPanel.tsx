@@ -1,3 +1,4 @@
+import CompanionStreamSettings from './CompanionStreamSettings';
 import {t, useUi} from './i18n/core';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
@@ -20,13 +21,14 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<UiErrorCause | {refresh:UiErrorCause}>('');
   const [saved,setSaved]=useState(false);
+  const [streamRefresh,setStreamRefresh]=useState(0);
   const request=useRef(0);
   const loadedSource=useRef<string|undefined>(undefined);
   const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
   const owns=(current:number)=>current===request.current && scope.current.visible && scope.current.sessionId===sessionId;
   async function refresh() {
     if(!scope.current.visible || scope.current.sessionId!==sessionId)return;
-    const current=++request.current;setBusy(true);setError("");setSaved(false);
+    const current=++request.current;setBusy(true);setError("");setSaved(false);setStreamRefresh(value=>value+1);
     try { const value=parseCompanionSettings(await invoke("get_companion_settings",{sessionId})); if(owns(current)){loadedSource.current=sessionId;setSettings(value);setDraft(value);} }
     catch(error){if(owns(current)){loadedSource.current=undefined;setSettings(undefined);setDraft(undefined);setError(captureUiError(error));}}
     finally {if(owns(current))setBusy(false);}
@@ -62,6 +64,7 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
       <p>{t('companionDevicesHint')}</p>
       <button type="submit">{t('companionSave')}</button>
     </fieldset></form>}
+    {settings && <CompanionStreamSettings key={`${sessionId}:${streamRefresh}`} sessionId={sessionId} visible={visible}/>}
     {saved&&<p role="status">{t('companionSaved')}</p>}
     <p className="agent-note">{t('companionIndependent')}</p>
   </section>;

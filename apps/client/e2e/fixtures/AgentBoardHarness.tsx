@@ -7,6 +7,7 @@ import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inact
 export function mountAgentBoard(host?:{key:string;label:string}){
   const calls:{command:string;args:unknown}[]=[];
   let reports=[agentBoardRecord];
+  let streamSettings={schemaVersion:1,revision:0,enabled:true};
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic agent board authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
   acknowledgeAccessReady(accessSnapshot().epoch);
@@ -15,6 +16,7 @@ export function mountAgentBoard(host?:{key:string;label:string}){
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
     if(command==='agent_approvals')return {schemaVersion:1,requests:decided?[]:[approval]};
     if(command==='get_companion_settings')return companionSettings;
+    if(command==='companion_stream_settings'){const update=args as {expectedRevision?:number;enabled?:boolean};if(update.enabled!==undefined){if(update.expectedRevision!==streamSettings.revision)throw new Error('SettingsConflict');streamSettings={...streamSettings,revision:streamSettings.revision+1,enabled:update.enabled};}return streamSettings;}
     if(command==='update_companion_settings'){const {expectedRevision:_,...settings}=(args as {settings:typeof companionSettings & {expectedRevision:number}}).settings;return {...companionSettings,...settings,revision:8};}
     if(command==='resolve_agent_approval')return new Promise(resolve=>{finish=resolve;});
     if(command==='board_keep_awake_status')return inactiveBoardDisplay;

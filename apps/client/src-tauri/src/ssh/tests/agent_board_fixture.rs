@@ -11,7 +11,7 @@ pub(super) fn environment(directory: &Path) -> String {
     // A private HOME must not trigger zsh's interactive first-user setup.
     fs::write(directory.join(".zshrc"), b"").unwrap();
     assert!(!directory.to_str().unwrap().chars().any(char::is_whitespace));
-    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",directory.join("bin").display(),directory.display(),directory.join(".config").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
+    format!("SetEnv PATH={}:/usr/bin:/bin HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} ANDROID_HOME={} BASH_ENV=/dev/null ENV=/dev/null\n",directory.join("bin").display(),directory.display(),directory.join(".config").display(),directory.join("data").display(),directory.join("state").display(),directory.display(),directory.join("sdk").display())
 }
 
 type App = tauri::App<tauri::test::MockRuntime>;
@@ -179,6 +179,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     .unwrap();
     assert_eq!(installed["status"], "installed");
     let companion = PathBuf::from(installed["path"].as_str().unwrap());
+    verify_stream_settings(app, id, directory, &session, &companion).await;
     assert!(
         board(app, id).await.is_empty(),
         "a fresh host has no reports"
@@ -424,4 +425,78 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         events.values().all(|groups| groups == &json!([])),
         "managed removal leaves no companion hook: {settings}"
     );
+}
+
+async fn verify_stream_settings(
+    app: &App,
+    id: &str,
+    directory: &Path,
+    session: &Session,
+    companion: &Path,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let adb = directory.join("sdk/platform-tools/adb");
+    fs::create_dir_all(adb.parent().unwrap()).unwrap();
+    let log = directory.join("adb-calls");
+    fs::write(
+        &adb,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
+            quote(log.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&adb, fs::Permissions::from_mode(0o700)).unwrap();
+    let get = || {
+        crate::companion_settings::companion_stream_settings(
+            app.state(),
+            id.into(),
+            None,
+            None,
+            access_lease(),
+        )
+    };
+    let initial = serde_json::to_value(get().await.unwrap().into_inner().unwrap()).unwrap();
+    assert_eq!(
+        initial,
+        json!({"schemaVersion":1,"revision":0,"enabled":true})
+    );
+    let disabled = crate::companion_settings::companion_stream_settings(
+        app.state(),
+        id.into(),
+        Some(0),
+        Some(false),
+        access_lease(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(serde_json::to_value(disabled).unwrap()["enabled"], false);
+    let command = |args: &str| format!("{} {args}", quote(companion.to_str().unwrap()));
+    assert!(exec(
+        session,
+        &access_lease(),
+        command("devices android --id emulator-5554 stream")
+    )
+    .await
+    .is_err());
+    assert!(!log.exists(), "a disabled stream must not launch adb");
+    exec(
+        session,
+        &access_lease(),
+        command("devices tap --platform android --id emulator-5554 --x 1 --y 2"),
+    )
+    .await
+    .unwrap();
+    assert!(exec(
+        session,
+        &access_lease(),
+        command("devices screenshot --platform android --id emulator-5554")
+    )
+    .await
+    .is_err());
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("shell input tap 1 2"));
+    assert!(calls.contains("exec-out screencap -p"));
 }

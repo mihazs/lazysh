@@ -76,9 +76,61 @@ pub async fn update_companion_settings(
         })
         .await
 }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamSettings {
+    schema_version: u8,
+    revision: u64,
+    enabled: bool,
+}
+fn parse_stream(text: &str) -> Result<StreamSettings> {
+    if text.len() > 4096 {
+        return Err(SshError::new(
+            "companion_settings",
+            "Host stream settings exceed their limit",
+        ));
+    }
+    let value: StreamSettings = serde_json::from_str(text)?;
+    if value.schema_version != 1 || value.revision > 9_007_199_254_740_991 {
+        return Err(SshError::new(
+            "companion_settings",
+            "Unsupported host stream settings schema",
+        ));
+    }
+    Ok(value)
+}
+#[tauri::command]
+pub async fn companion_stream_settings(
+    state: State<'_, AppState>,
+    session_id: String,
+    expected_revision: Option<u64>,
+    enabled: Option<bool>,
+    access: AccessLease,
+) -> std::result::Result<Guarded<StreamSettings>, GuardedError<SshError>> {
+    access.run(async {
+        let command = match (expected_revision, enabled) {
+            (None, None) => "lazysh-agent settings stream-show".to_owned(),
+            (Some(revision), Some(enabled)) if revision < 9_007_199_254_740_991 => format!("lazysh-agent settings stream-update --expected-revision {revision} --enabled {enabled}"),
+            _ => return Err(SshError::new("companion_settings", "Invalid stream settings update")),
+        };
+        let session = state.session(&session_id).await?;
+        parse_stream(&crate::companion::exec(&session, command, &access).await?)
+    }).await
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stream_policy_requires_an_exact_bounded_response() {
+        assert!(parse_stream(r#"{"schemaVersion":1,"revision":0,"enabled":true}"#).is_ok());
+        for value in [
+            r#"{"schemaVersion":2,"revision":0,"enabled":true}"#,
+            r#"{"schemaVersion":1,"revision":0,"enabled":"true"}"#,
+            r#"{"schemaVersion":1,"revision":0,"enabled":true,"extra":1}"#,
+        ] {
+            assert!(parse_stream(value).is_err());
+        }
+    }
     #[test]
     fn settings_commands_only_format_typed_values_and_require_strict_responses() {
         let update = Update {

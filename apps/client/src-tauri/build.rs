@@ -167,6 +167,7 @@ fn main() {
         "companion_hook_discovery",
         "get_companion_settings",
         "update_companion_settings",
+        "companion_stream_settings",
         "agent_transcript",
         "agent_usage",
         "account_usage",

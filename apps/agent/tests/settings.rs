@@ -93,27 +93,33 @@ fn cli_updates_apply_all_explicit_flags_and_new_processes_observe_them() {
         settings
     );
 }
+fn concurrent_updates(state: &Path, update: fn(&Path) -> bool) -> usize {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let jobs = (0..2)
+        .map(|_| {
+            let state = state.to_owned();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                update(&state)
+            })
+        })
+        .collect::<Vec<_>>();
+    jobs.into_iter()
+        .map(|job| job.join().unwrap())
+        .filter(|ok| *ok)
+        .count()
+}
 #[test]
 fn simultaneous_clients_have_one_winner_without_lost_updates() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("state");
     settings::update(&state, 0, true, true, true).unwrap();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let jobs = (0..2)
-        .map(|_| {
-            let state = state.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                barrier.wait();
-                settings::update(&state, 1, false, false, false)
-            })
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        jobs.into_iter()
-            .map(|job| job.join().unwrap().is_ok())
-            .filter(|ok| *ok)
-            .count(),
+        concurrent_updates(&state, |state| settings::update(
+            state, 1, false, false, false
+        )
+        .is_ok()),
         1
     );
     assert_eq!(settings::read(&state).unwrap().revision, 2);
@@ -259,4 +265,102 @@ fn links_public_files_and_special_files_are_refused_without_changing_targets() {
     fs::set_permissions(&mutable, fs::Permissions::from_mode(0o777)).unwrap();
     assert!(settings::read(&mutable.join("missing")).is_err());
     assert!(settings::update(&mutable.join("new"), 0, true, true, true).is_err());
+}
+
+#[test]
+fn streaming_policy_is_independent_versioned_and_blocks_only_new_streams() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    let old = settings::update(&state, 0, true, true, true).unwrap();
+    let original = fs::read(state.join("settings.json")).unwrap();
+    assert!(settings::read_stream(&state).unwrap().enabled);
+    let policy = settings::update_stream(&state, 0, false).unwrap();
+    assert_eq!(policy.revision, 1);
+    assert!(settings::update_stream(&state, 0, true).is_err());
+    assert_eq!(settings::read(&state).unwrap(), old);
+    assert_eq!(fs::read(state.join("settings.json")).unwrap(), original);
+    for args in [
+        vec!["devices", "android", "--id", "emulator-5554", "stream"],
+        vec![
+            "devices", "ios", "--id", "test", "--socket", "/unused", "stream",
+        ],
+    ] {
+        let output = run(&state, &args);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("DeviceStreamingDisabled"));
+    }
+    let inventory = run(&state, &["devices", "list", "--platform", "android"]);
+    assert!(!String::from_utf8_lossy(&inventory.stderr).contains("DeviceStreamingDisabled"));
+    let shown: Value = serde_json::from_slice(&run(&state, &["settings", "show"]).stdout).unwrap();
+    assert!(shown.get("enabled").is_none());
+    let updated = run(
+        &state,
+        &[
+            "settings",
+            "stream-update",
+            "--expected-revision",
+            "1",
+            "--enabled",
+            "true",
+        ],
+    );
+    assert!(updated.status.success());
+    let value: Value = serde_json::from_slice(&updated.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({"schemaVersion":1,"revision":2,"enabled":true})
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&run(&state, &["settings", "stream-show"]).stdout).unwrap(),
+        value
+    );
+    assert!(!run(
+        &state,
+        &[
+            "settings",
+            "stream-update",
+            "--expected-revision",
+            "1",
+            "--enabled",
+            "false"
+        ]
+    )
+    .status
+    .success());
+}
+
+#[test]
+fn stream_policy_conflicts_and_invalid_storage_fail_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    settings::update_stream(&state, 0, true).unwrap();
+    assert_eq!(
+        concurrent_updates(&state, |state| settings::update_stream(state, 1, false)
+            .is_ok()),
+        1
+    );
+    assert_eq!(settings::read_stream(&state).unwrap().revision, 2);
+    fs::write(state.join("stream-settings.json"), b"{invalid").unwrap();
+    let output = run(
+        &state,
+        &["devices", "android", "--id", "emulator-5554", "stream"],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("InvalidArgument"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let path = state.join("stream-settings.json");
+        let target = directory.path().join("target");
+        fs::write(&target, b"keep").unwrap();
+        fs::remove_file(&path).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(!run(
+            &state,
+            &["devices", "android", "--id", "emulator-5554", "stream"]
+        )
+        .status
+        .success());
+        assert_eq!(fs::read(target).unwrap(), b"keep");
+    }
 }

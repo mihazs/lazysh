@@ -3,17 +3,19 @@
 | CLI operation | Contract |
 | --- | --- |
 | `settings show` | Reads the current response, including revision; no absent-state creation. |
+| `settings stream-show` / `settings stream-update` | Read or update the independent stream policy, with its own revision and explicit `--enabled` boolean. |
 | `settings update` | Requires `--expected-revision` and all three explicit boolean flags: `--transcript-discovery-enabled`, `--recorded-usage-enabled`, `--device-tools-enabled`. |
 
 | Setting | Commands affected |
 | --- | --- |
 | Transcript discovery | `lazysh-agent discover` metadata listing. Explicit `transcript --path ...` reads remain available. |
 | Recorded usage inspection | `lazysh-agent usage`, including recorded counters, Codex context metadata and provider windows. No background collector is enabled. |
+| Device streaming | New Android/iOS preview streams only; device tools must also be enabled. |
 | Device tools | All new `lazysh-agent devices` operations: inventory, probes, screenshots, Android/iOS streams, input and lifecycle controls. |
 
-All three default to enabled when no settings file exists, preserving existing behavior. Reads of absent settings do not create the state directory, database, lock or config file. A disabled command fails before reading the selected transcript or dispatching an SDK process. Malformed, unsupported or unsafe settings fail closed for these gated operations; they are not silently reset to defaults. Lifecycle ingestion/snapshots, approvals, explicit transcript reading and agent configuration fragments remain available.
+All four default to enabled when no settings file exists, preserving existing behavior. Reads of absent settings do not create the state directory, database, lock or config file. A disabled command fails before reading the selected transcript or dispatching an SDK process. Malformed, unsupported or unsafe settings fail closed for these gated operations; they are not silently reset to defaults. Lifecycle ingestion/snapshots, approvals, explicit transcript reading and agent configuration fragments remain available.
 
-Every successful update increments the revision exactly once. Native SSH APIs format only typed integer/boolean arguments and validate the bounded response; no arbitrary settings text is placed in a remote shell command.
+Every successful update increments its own revision exactly once. The stream policy is stored separately in `stream-settings.json` with `stream-settings.lock`, using the same private atomic update and validation rules. The existing settings file and v1 response do not change. Older companions do not enforce the separate stream policy; when downgrading, disable device tools in the original settings first if streaming must remain blocked. The app shows the streaming control as unavailable if the separate API cannot be read. Native SSH APIs format only typed integer/boolean arguments and validate the bounded response; no arbitrary settings text is placed in a remote shell command.
 
 Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. Port discovery and HTTP probing currently run through a separate native SSH implementation, so these switches do not affect them. There is no port-scan or nested-agent switch that lacks an enforcing implementation.
 
