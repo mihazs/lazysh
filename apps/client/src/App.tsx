@@ -2417,6 +2417,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "agent"}
                     quietActivation={quietTerminal === session.id}
+                    herdrNavigationOnly={!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')}
                     reportError={setError}
                     onBackChange={bindTerminalBack}
                     controlsTarget={terminalControlsTarget}

@@ -51,9 +51,10 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, quietActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice }: {
+export default function TerminalPane({ session, active, quietActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
   session: LiveSession;
   active: boolean;
+  herdrNavigationOnly?: boolean;
   /** Activated by a navigation switch rather than a typing request: touch input keeps the soft keyboard closed. */
   quietActivation?: boolean;
   reportError: (message: UiErrorCause) => void;
@@ -913,6 +914,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
   function runMultiplexer(action: MultiplexerAction) {
     if (!navigationReady()) return;
     if (!multiplexer || !session.attached) {reportError(new LocalUiError('terminalMultiplexerRequired')); return;}
+    if (multiplexer === 'herdr' && herdrNavigationOnly && action === 'zoomPane') {reportError(new LocalUiError('muxLimitedHerdr')); return;}
     if (multiplexer === 'zellij') {if (!zellijBusy.current) navigateZellij(session.attached.name, action); return;}
     const prefix = storedPrefix(multiplexer);
     if (!validPrefix(prefix)) {reportError(new LocalUiError('muxShortcutInvalid')); return;}
