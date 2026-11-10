@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.28.0
+
+### Minor Changes
+
+- 94b17c9: Switch a session between its terminal and a live Agent view, with Both side by side on wide desktop layouts; Codex hooks can report their conversation for automatic binding.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.28.0
+  - @lazysh/common@1.28.0
+  - @lazysh/display-idle@1.28.0
+  - @lazysh/et-transport@1.28.0
+  - @lazysh/mosh-transport@1.28.0
+
 ## 1.27.1
 
 ### Patch Changes
