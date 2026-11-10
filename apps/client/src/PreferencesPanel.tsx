@@ -158,10 +158,10 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
 </>},
 {id:"language",section:"general",title:t("preferencesCategoryLanguage"),value:t(languageLabels[preferences.uiLanguage]),content:<>
 
-    <fieldset className="language-picker" disabled={languageBusy}>
+    <fieldset className="language-picker" aria-disabled={languageBusy || undefined}>
       <legend>{t('language')}</legend>
       {(Object.entries(languageLabels) as [Preferences['uiLanguage'], typeof languageLabels[keyof typeof languageLabels]][]).map(([value, label]) =>
-        <label key={value}><input type="radio" name="ui-language" value={value} checked={preferences.uiLanguage===value} onChange={() => void languageAction(()=>nativeLocale.change(value,current))}/><span>{t(label)}</span></label>
+        <label key={value}><input type="radio" name="ui-language" value={value} checked={preferences.uiLanguage===value} aria-disabled={languageBusy || undefined} onClick={event=>{if(languageBusy)event.preventDefault();}} onKeyDown={event=>{if(languageBusy && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(event.key))event.preventDefault();}} onChange={() => {if(!languageBusy)void languageAction(()=>nativeLocale.change(value,current));}}/><span>{t(label)}</span></label>
       )}
     </fieldset>
 

@@ -25,7 +25,7 @@ it('reconciles the visible Preferences language error after a failed save and co
   render(<Settings/>);
   fireEvent.click(screen.getByRole('button',{name:t('preferencesCategoryLanguage')}));
   const language=await screen.findByRole<HTMLInputElement>('radio',{name:'Português (Brasil)'});
-  await waitFor(()=>expect(language.disabled).toBe(false));
+  await waitFor(()=>expect(language.getAttribute('aria-disabled')).toBeNull());
   fireEvent.click(language);
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('ui_locale_set',expect.anything()));
   await act(async()=>{rejectSave(new Error('Owned ambiguous acknowledgement'));});
