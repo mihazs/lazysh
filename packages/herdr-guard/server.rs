@@ -221,9 +221,10 @@ impl HeadlessServer {
         }
     }
 
-    pub(super) fn guard_api(&mut self, message: crate::api::ApiRequestMessage) {
+    pub(super) fn guard_api(&mut self, message: crate::api::ApiRequestMessage) -> bool {
         self.guard_expire();
         let mut publication: Option<Cancellation> = None;
+        let scroll = matches!(&message.request.method, Method::GuardScrollHistory(_));
         let outcome = match message.request.method {
             Method::GuardClaim(params) => {
                 publication = Some(params.cancellation.clone());
@@ -426,13 +427,14 @@ impl HeadlessServer {
                                 self.guard_finish(client, Err("guard_stale"));
                             }
                         }
-                        return;
+                        return false;
                     }
                     Err(code) => Err(code),
                 }
             }
             _ => Err("guard_unavailable"),
         };
+        let repaint = scroll && outcome.is_ok();
         if message
             .respond_to
             .send(response(message.request.id, outcome))
@@ -443,6 +445,7 @@ impl HeadlessServer {
             }
         }
         self.guard_expire();
+        repaint
     }
 
     pub(super) fn guard_commit(&mut self, client: u64, commit: Commit) {

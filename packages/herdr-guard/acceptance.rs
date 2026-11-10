@@ -567,9 +567,15 @@ fn owned_observation_and_history_keep_input_binding_and_reject_foreign_targets()
     .get("error")
     .is_some());
     assert_eq!(offset(), 0);
+    assert!(owner
+        .endpoint_request("integration.list", json!({}))
+        .get("error")
+        .is_none());
+    owner.painted = false;
     assert!(scroll(&owner.ownership, &target, x, y, -4)
         .get("error")
         .is_none());
+    owner.wait_view(None);
     assert_eq!(offset(), 4);
     assert!(scroll(&owner.ownership, &target, x, y, 4)
         .get("error")
