@@ -282,8 +282,18 @@ async fn render_mosh_until(
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER and FD-capable LAZYSH_TEST_HERDR"]
+#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER, FD-capable LAZYSH_TEST_HERDR, and LAZYSH_TEST_TMUX pointing to tmux 3.4"]
 async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure() {
+    let tmux = std::env::var_os("LAZYSH_TEST_TMUX")
+        .expect("LAZYSH_TEST_TMUX must point to the qualified tmux 3.4 renderer");
+    let version = Command::new(tmux)
+        .arg("-V")
+        .output()
+        .expect("cannot run qualified tmux renderer");
+    assert!(
+        version.status.success() && version.stdout == b"tmux 3.4\n",
+        "Mosh renderer fixture requires tmux 3.4"
+    );
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
     for (user_install, preseed) in [(false, false), (true, false), (false, true), (true, true)] {
         let fixture =
