@@ -158,3 +158,10 @@ it('lists discovered versions, explains each limited multiplexer and reports the
   ]);
   expect(onTools).toHaveBeenCalledExactlyOnceWith(tools);
 });
+
+it('hides Herdr shortcuts that mutate layout when discovery marks it limited', async () => {
+  vi.mocked(invoke).mockResolvedValue({...tree,herdrAvailable:true,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create','rename']}]});
+  render(<MuxPanel sessionId="ssh1" attached={{kind:'herdr',name:'work'}} onAttach={vi.fn()} />);
+  await screen.findByText('Herdr 0.8.2 (Limited)', {exact:false});
+  expect(screen.queryByRole('region',{name:'herdr prefix shortcuts'})).toBeNull();
+});
