@@ -52,6 +52,15 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
+| Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
+| Repository review limits | [Repository review](reference/repository-review.md) |
+| Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |
+| Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
+| Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |
+| Sharing service HTTP contract and verification boundary | [Sharing service](reference/sharing-service.md) |
+| Transcription API, quotas and resource bounds | [Transcription relay](reference/cloud-transcription.md) |
+| Theme rendering and QR processing bounds | [Theme rendering](reference/theme-rendering.md) · [Theme QR processing](reference/theme-qr.md) |
+| Relay delivery, revocation and verification limits | [Notification relay](reference/notification-relay.md) |
 | Inbox polling, retention and notification action limits | [Inbox monitoring](reference/inbox.md) |
 | Recorded token counters, context and provider-window freshness | [Recorded usage](usage.md) |
 | Explicit live account collectors and unsupported/unknown states | [AI account usage](ai-account-usage.md) |
@@ -84,4 +93,4 @@ Apple application distribution, physical Samsung/SwiftKey behavior, Rex beta com
 
 ## For contributors
 
-Use [Contributing](../CONTRIBUTING.md) for branches, checks and release policy; the [README checks](../README.md#checks) list existing task entrypoints. The tables above inventory the existing product and developer pages by their primary reader need. Some older feature pages still combine usage and contract details; the focused companion/configuration/connection pages are an incremental separation, not a claim that every historical document has been rewritten. Existing filenames and anchors remain supported.
+Use [Contributing](../CONTRIBUTING.md) for branches, checks and release policy; the [README checks](../README.md#checks) list existing task entrypoints. The tables above inventory the existing product and developer pages by their primary reader need. Some older feature pages still combine usage and contract details; the focused companion, connection, notification, transfer and service pages are an incremental separation, not a claim that every historical document has been rewritten. Existing filenames and anchors remain supported.
