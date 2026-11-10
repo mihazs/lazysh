@@ -30,3 +30,16 @@ it('does not reuse highlights after the diff changes and bounds work for large d
   rerender(show(diffLines('@@ -1 +1 @@\n-'+ 'x'.repeat(100001))));
   expect(screen.queryByRole('button',{name:'Highlight syntax'})).toBeNull();
 });
+
+it('uses each side’s language for renames and keeps unsupported sides plain',async()=>{
+  const rows=diffLines('@@ -1 +1 @@\n-const previous = 1;\n+def next_value():');
+  const show=(beforePath:string,path:string)=><DiffSyntax path={path} beforePath={beforePath} rows={rows}>{nodes=><><pre>{nodes?.left[1]??rows[1].left}</pre><pre>{nodes?.right[1]??rows[1].right}</pre></>}</DiffSyntax>;
+  const {container,rerender}=render(show('old.ts','new.py'));
+  fireEvent.click(screen.getByRole('button',{name:'Highlight syntax'}));
+  await waitFor(()=>expect(container.querySelectorAll('.hljs-keyword')).toHaveLength(2));
+  expect(container.querySelectorAll('pre')[0].textContent).toBe('const previous = 1;');
+  expect(container.querySelectorAll('pre')[1].textContent).toBe('def next_value():');
+  rerender(show('old.unknown','new.py'));
+  await waitFor(()=>expect(container.querySelectorAll('.hljs-keyword')).toHaveLength(1));
+  expect(container.querySelectorAll('pre')[0].textContent).toBe('const previous = 1;');
+});

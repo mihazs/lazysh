@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import RepositoryPanel, { diffLines, parseRepositoryStatus } from './RepositoryPanel';
 
@@ -116,4 +116,20 @@ it('pages stable history and browses directories without loading the complete re
   expect(await screen.findByRole('button', { name: /src\/app.ts/ })).toBeTruthy();
   expect(invoke).toHaveBeenLastCalledWith('repository_tree', { sessionId: 'ssh1', path: '/repo', revision: commits[0].oid, directory: 'src' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByRole('button', { name: 'Parent directory' })).toBeTruthy();
+});
+
+it('highlights renamed diff sides using their own file types',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='repository_status')return {path:'/repo',changes:[{path:'new.py',originalPath:'old.ts',index:'R',worktree:' '}]};
+    if(command==='repository_history')return [];
+    if(command==='repository_diff')return {binary:false,patch:'@@ -1 +1 @@\n-const previous = 1;\n+def next_value():'};
+    throw new Error(String(command));
+  });
+  const {container}=render(<RepositoryPanel sessionId="ssh1"/>);
+  fireEvent.click(screen.getByRole('button',{name:'Open repository'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Staged diff'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Highlight syntax'}));
+  await waitFor(()=>expect(container.querySelectorAll('.hljs-keyword')).toHaveLength(2));
+  const cells=container.querySelectorAll('tbody pre');
+  expect(cells[0].textContent).toBe('const previous = 1;');expect(cells[1].textContent).toBe('def next_value():');
 });

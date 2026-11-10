@@ -23,18 +23,21 @@ function splitNodes(nodes:SyntaxNode[]):{lines:ReactNode[][];text:string} {
   visit(nodes,[]);return {lines,text};
 }
 
-export default function DiffSyntax({path,rows,children}:{path:string;rows:Line[];children:(nodes:Highlighted|undefined)=>ReactNode}) {
+export default function DiffSyntax({path,beforePath=path,rows,children}:{path:string;beforePath?:string;rows:Line[];children:(nodes:Highlighted|undefined)=>ReactNode}) {
   const [enabled,setEnabled]=useState(false);
-  const [result,setResult]=useState<{path:string;rows:Line[];nodes:Highlighted}>();
-  const language=languages[path.split('.').at(-1)?.toLowerCase()??''];
+  const [result,setResult]=useState<{path:string;beforePath:string;rows:Line[];nodes:Highlighted}>();
+  const afterLanguage=languages[path.split('.').at(-1)?.toLowerCase()??''];
+  const beforeLanguage=languages[beforePath.split('.').at(-1)?.toLowerCase()??''];
   const size=rows.reduce((sum,row)=>sum+(row.left?.length??0)+(row.right?.length??0),0);
-  const available=!!language && size<=100000 && rows.length<=2000;
+  const available=!!(afterLanguage || beforeLanguage) && size<=100000 && rows.length<=2000;
   useEffect(()=>{
     let active=true;
     if(enabled && available)void import('lowlight').then(({createLowlight,common})=>{
-      const parser=createLowlight(common);if(!parser.registered(language))return;
+      const parser=createLowlight(common);
       const nodes:Highlighted={left:[],right:[]};
       for(const side of ['left','right'] as const) {
+        const language=side==='left'?beforeLanguage:afterLanguage;
+        if(!language || !parser.registered(language))continue;
         let group:number[]=[];
         // shortcut: syntax context starts at each hunk, use whole-file snapshots when available.
         const flush=()=>{
@@ -46,9 +49,9 @@ export default function DiffSyntax({path,rows,children}:{path:string;rows:Line[]
         };
         rows.forEach((row,index)=>{if(row.kind==='hunk')flush();else if(row[side]!==undefined)group.push(index);});flush();
       }
-      if(active)setResult({path,rows,nodes});
+      if(active)setResult({path,beforePath,rows,nodes});
     }).catch(()=>{ /* Plain text remains available. */ });
     return ()=>{active=false;};
-  },[enabled,available,language,path,rows]);
-  return <>{available && <button type="button" onClick={()=>setEnabled(!enabled)}>{t(enabled?'codePlain':'codeHighlight')}</button>}{children(enabled && result?.path===path && result.rows===rows?result.nodes:undefined)}</>;
+  },[enabled,available,afterLanguage,beforeLanguage,path,beforePath,rows]);
+  return <>{available && <button type="button" onClick={()=>setEnabled(!enabled)}>{t(enabled?'codePlain':'codeHighlight')}</button>}{children(enabled && result?.path===path && result.beforePath===beforePath && result.rows===rows?result.nodes:undefined)}</>;
 }
