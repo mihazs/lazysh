@@ -391,20 +391,33 @@ fn selected_agent(tree: &HerdrTree, pane: &str, terminal: &str, agent: &str, id:
         && matches[0].agent.as_deref() == Some(agent)
 }
 
-#[tauri::command]
-pub async fn agent_herdr_conversation(
-    state: State<'_, AppState>,
-    session_id: String,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HerdrConversationTarget {
     herdr_session: String,
     pane_id: String,
     terminal_id: String,
     agent: String,
     agent_session_id: String,
+}
+
+#[tauri::command]
+pub async fn agent_herdr_conversation(
+    state: State<'_, AppState>,
+    session_id: String,
+    target: HerdrConversationTarget,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<serde_json::Value> {
+    let HerdrConversationTarget {
+        herdr_session,
+        pane_id,
+        terminal_id,
+        agent,
+        agent_session_id,
+    } = target;
     access
         .run(async {
-            target(&pane_id, Some('p'))?;
+            self::target(&pane_id, Some('p'))?;
             text(&terminal_id, 256)?;
             if !matches!(agent.as_str(), "claude" | "codex")
                 || uuid::Uuid::parse_str(&agent_session_id)
@@ -538,6 +551,19 @@ pub async fn herdr_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_target_requires_exact_ipc_fields() {
+        let target = serde_json::json!({"herdrSession":"owned","paneId":"w1:p3","terminalId":"terminal-3","agent":"codex","agentSessionId":"id"});
+        assert!(serde_json::from_value::<HerdrConversationTarget>(target.clone()).is_ok());
+        let mut missing = target.clone();
+        missing.as_object_mut().unwrap().remove("terminalId");
+        assert!(serde_json::from_value::<HerdrConversationTarget>(missing).is_err());
+        let mut extra = target;
+        extra["unexpected"] = true.into();
+        assert!(serde_json::from_value::<HerdrConversationTarget>(extra).is_err());
+    }
+
     fn reported_snapshot() -> serde_json::Value {
         serde_json::json!({"result":{"type":"session_snapshot","snapshot":{
             "workspaces":[{"workspace_id":"w1","label":"Owned","focused":true,"agent_status":"working"}],

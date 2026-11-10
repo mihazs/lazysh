@@ -415,7 +415,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (!currentRequest(current)) return;
       }
       const page = parseTranscript(
-        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,agent:bound.agent,agentSessionId:bound.path,...bound.herdr}) : invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr}}) : invoke("agent_transcript", {
           sessionId,
           ...source,
           offset: cursor,

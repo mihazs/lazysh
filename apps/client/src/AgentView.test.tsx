@@ -148,7 +148,7 @@ it('opens a unique Herdr session through the revalidated host resolver without i
   fireEvent.click(screen.getByRole('button',{name:'Open conversation'}));await advance(0);
   expect(screen.getByText('Herdr reports this session. Its association with this pane is unverified.')).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
-  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}]);
+  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
   expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
   const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
   const draft=screen.getByRole('textbox',{name:'Draft for this terminal'});fireEvent.change(draft,{target:{value:'No target'}});
