@@ -20,14 +20,14 @@ it('persists the actual language selector and reacts to system changes only in s
   const languages=vi.spyOn(navigator,'languages','get').mockReturnValue(['en-GB']);
   const view=render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en-GB'));
-  fireEvent.change(screen.getByLabelText('App language'),{target:{value:'en'}});
+  fireEvent.click(screen.getByRole('radio',{name:'English'}));
   expect(getPreferences().uiLanguage).toBe('en');
   await waitFor(()=>expect(document.documentElement.lang).toBe('en'));
   languages.mockReturnValue(['en-AU']);window.dispatchEvent(new Event('languagechange'));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en'));
   view.unmount();render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  expect(screen.getByLabelText('App language')).toHaveProperty('value','en');
-  fireEvent.change(screen.getByLabelText('App language'),{target:{value:'system'}});
+  expect(screen.getByRole('radio',{name:'English'})).toHaveProperty('checked',true);
+  fireEvent.click(screen.getByRole('radio',{name:'System'}));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en-AU'));
   fireEvent.click(screen.getByText(t('preferencesCategoryReset')));
   fireEvent.click(screen.getByRole('button',{name:'Reset preferences'}));
@@ -37,11 +37,11 @@ it('persists the actual language selector and reacts to system changes only in s
 it.each([['pt-BR','Idioma do aplicativo','Preferências do terminal'],['es','Idioma de la aplicación','Preferencias del terminal']] as const)('persists explicit %s while a different system language changes',async(locale,label,title)=>{
   vi.spyOn(navigator,'languages','get').mockReturnValue(['en-GB']);
   const view=render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  fireEvent.change(screen.getByLabelText('App language'),{target:{value:locale}});
+  fireEvent.click(screen.getByRole('group',{name:'App language'}).querySelector(`input[value="${locale}"]`)!);
   await waitFor(()=>expect(document.documentElement.lang).toBe(locale));
   expect(screen.getByRole('region',{name:title})).toBeTruthy();
   window.dispatchEvent(new Event('languagechange'));
   view.unmount();render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  await waitFor(()=>expect(screen.getByLabelText(label)).toHaveProperty('value',locale));
+  await waitFor(()=>expect(screen.getByRole('group',{name:label}).querySelector(`input[value="${locale}"]`)).toHaveProperty('checked',true));
   expect(getPreferences().uiLanguage).toBe(locale);
 });

@@ -8,7 +8,7 @@ export async function openLocalizedApp(page: Page, locale: string) {
   await page.goto('/');
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Language');
-  await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale);
+  await page.getByRole('group',{name:'App language',exact:true}).locator(`input[value="${locale}"]`).check();
   await closePreferences(page);
   return external;
 }

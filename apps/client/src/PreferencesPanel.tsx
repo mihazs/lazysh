@@ -158,10 +158,12 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
 </>},
 {id:"language",section:"general",title:t("preferencesCategoryLanguage"),value:t(languageLabels[preferences.uiLanguage]),content:<>
 
-    <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
-      <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
-      <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
-    </select></label>
+    <fieldset className="language-picker" disabled={languageBusy}>
+      <legend>{t('language')}</legend>
+      {(Object.entries(languageLabels) as [Preferences['uiLanguage'], typeof languageLabels[keyof typeof languageLabels]][]).map(([value, label]) =>
+        <label key={value}><input type="radio" name="ui-language" value={value} checked={preferences.uiLanguage===value} onChange={() => void languageAction(()=>nativeLocale.change(value,current))}/><span>{t(label)}</span></label>
+      )}
+    </fieldset>
 
 </>},
 {id:"reset",section:"reset",tone:"danger",title:t("preferencesCategoryReset"),content:<>

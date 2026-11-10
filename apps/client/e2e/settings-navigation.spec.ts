@@ -176,3 +176,22 @@ test('cursor segments remain touchable and distinguish selection in forced color
   expect(await checked.evaluate(input => getComputedStyle(input.nextElementSibling!).outlineStyle)).not.toBe('none');
   expect(await picker.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
 });
+
+test('language choices are touchable and search focuses the selected radio',async({page})=>{
+  await page.setViewportSize({width:320,height:640});
+  const {dialog,search,results}=await openSearch(page);
+  await search.fill('App language');
+  await results.getByRole('button',{name:'App language',exact:true}).click();
+  const group=dialog.getByRole('group',{name:'App language',exact:true});
+  const selected=group.getByRole('radio',{name:'System',exact:true});
+  await expect(selected).toBeChecked();await expect(selected).toBeFocused();
+  for(const label of await group.locator('label').all())expect((await label.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.keyboard.press('ArrowDown');
+  await expect(group.getByRole('radio',{name:'English',exact:true})).toBeChecked();
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).uiLanguage)).toBe('en');
+  if((await page.viewportSize())!.width<=600)await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  await search.fill('App language');
+  await results.getByRole('button',{name:'App language',exact:true}).click();
+  await expect(group.getByRole('radio',{name:'English',exact:true})).toBeFocused();
+  expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+});

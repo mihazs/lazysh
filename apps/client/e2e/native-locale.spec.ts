@@ -28,12 +28,12 @@ test('native choice wins on cold load; explicit changes, reload and reset use na
   const preferences=async()=>workspaceControl(page,await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('appPreferences');}));
   await (await preferences()).click();
   await openPreferenceCategory(page,'Language');
-  await page.getByRole('combobox',{name:'Idioma do aplicativo',exact:true}).selectOption('es');
+  await page.getByRole('group',{name:'Idioma do aplicativo',exact:true}).locator('input[value="es"]').check();
   await expect(page.locator('html')).toHaveAttribute('lang','es');
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang','es');
   await (await preferences()).click();
   await openPreferenceCategory(page,'Language');
-  await expect(page.getByRole('combobox',{name:'Idioma de la aplicación',exact:true})).toHaveValue('es');
+  await expect(page.getByRole('group',{name:'Idioma de la aplicación',exact:true}).locator('input[value="es"]')).toBeChecked();
   await openPreferenceCategory(page,'Reset');
   await page.getByRole('button',{name:'Restablecer preferencias',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
