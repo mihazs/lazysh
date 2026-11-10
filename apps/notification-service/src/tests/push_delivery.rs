@@ -200,6 +200,10 @@ async fn encrypted_challenge_gates_delivery_and_opaque_endpoint_is_preserved() {
         .post("/v1/push/subscription", DEVICE, subscription.clone())
         .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        fixture.service.0.challenge_push_accepted.category(),
+        "accepted"
+    );
     assert!(response.get("nonce").is_none());
     assert!(response.get("endpoint").is_none());
     let (path, challenge) = fixture.message().await;
@@ -207,6 +211,17 @@ async fn encrypted_challenge_gates_delivery_and_opaque_endpoint_is_preserved() {
     assert_eq!(challenge["kind"], "challenge");
     assert_eq!(challenge["deviceId"], bootstrap["deviceId"]);
     assert_eq!(challenge["generation"], bootstrap["generation"]);
+    assert_ne!(
+        fixture
+            .post("/v1/push/subscription", DEVICE, serde_json::Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        fixture.service.0.challenge_push_accepted.category(),
+        "unknown"
+    );
     assert_eq!(
         fixture
             .post("/v1/push/subscription", DEVICE, subscription)
@@ -218,6 +233,10 @@ async fn encrypted_challenge_gates_delivery_and_opaque_endpoint_is_preserved() {
         fixture.message().await.1,
         challenge,
         "idempotent admission must reuse the encrypted challenge"
+    );
+    assert_eq!(
+        fixture.service.0.challenge_push_accepted.category(),
+        "unknown"
     );
     let wrong = serde_json::json!({"challengeId":challenge["challengeId"],"nonce":TARGET});
     assert_eq!(
@@ -443,6 +462,10 @@ async fn private_sink_proves_tls_pin_redirect_and_persisted_origin_fail_closed()
         )
         .await;
     assert_eq!(reply["pushServiceAccepted"], false);
+    assert_eq!(
+        fixture.service.0.challenge_push_accepted.category(),
+        "notAccepted"
+    );
     assert_eq!(fixture.message().await.0, "/up/redirect?cap=A%2fB");
     assert!(
         fixture.received.try_recv().is_err(),

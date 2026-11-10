@@ -249,6 +249,44 @@ struct Inner {
     changed: watch::Sender<u64>,
     wake: Notify,
     worker: AtomicBool,
+    #[cfg(test)]
+    challenge_push_accepted: Arc<ChallengePushObservation>,
+}
+// Only an unambiguous single completed push attempt gets a category. This
+// test-only receipt never stores a challenge, endpoint, response or credential.
+#[cfg(test)]
+#[derive(Default)]
+struct ChallengePushObservation(std::sync::atomic::AtomicU8);
+#[cfg(test)]
+impl ChallengePushObservation {
+    fn start(&self) {
+        let mut state = self.0.load(Ordering::SeqCst);
+        loop {
+            let next = if state == 0 { 1 } else { 4 };
+            match self
+                .0
+                .compare_exchange(state, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => break,
+                Err(current) => state = current,
+            }
+        }
+    }
+    fn finish(&self, accepted: bool) {
+        let _ = self.0.compare_exchange(
+            1,
+            if accepted { 3 } else { 2 },
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    fn category(&self) -> &'static str {
+        match self.0.load(Ordering::SeqCst) {
+            2 => "notAccepted",
+            3 => "accepted",
+            _ => "unknown",
+        }
+    }
 }
 impl Service {
     pub fn open(config: Config) -> Result<Self, String> {
@@ -275,6 +313,8 @@ impl Service {
             changed: watch::channel(0).0,
             wake: Notify::new(),
             worker: AtomicBool::new(false),
+            #[cfg(test)]
+            challenge_push_accepted: Arc::new(ChallengePushObservation::default()),
         })))
     }
     async fn db<T: Send + 'static>(

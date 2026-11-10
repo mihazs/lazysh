@@ -424,9 +424,9 @@ export function challengeStateObservation(text:string) {
 }
 export function challengeTrafficObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy relay after-failure[').length!==2)return;
-  const match=/Ntfy relay after-failure\[subscribeSeen=(true|false) subscribeOk=(true|false) confirmSeen=(true|false) confirmOk=(true|false)\]/.exec(text);
+  const match=/Ntfy relay after-failure\[subscribeSeen=(true|false) subscribeOk=(true|false) confirmSeen=(true|false) confirmOk=(true|false) pushServiceAccepted=(accepted|notAccepted|unknown)\]/.exec(text);
   if(!match)return;
-  return {subscribeSeen:match[1]==='true',subscribeOk:match[2]==='true',confirmSeen:match[3]==='true',confirmOk:match[4]==='true'};
+  return {subscribeSeen:match[1]==='true',subscribeOk:match[2]==='true',confirmSeen:match[3]==='true',confirmOk:match[4]==='true',pushServiceAccepted:match[5]};
 }
 export function eventObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;

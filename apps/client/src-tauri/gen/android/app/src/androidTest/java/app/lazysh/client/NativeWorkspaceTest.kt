@@ -4778,8 +4778,10 @@ class NativeWorkspaceTest {
                     check(bytes.size<=256)
                     val value=JSONObject(bytes.toString(Charsets.UTF_8))
                     val names=listOf("subscribeSeen","subscribeOk","confirmSeen","confirmOk")
-                    check(value.keys().asSequence().toSet()==names.toSet() && names.all {value.get(it) is Boolean})
-                    "Ntfy relay after-failure["+names.joinToString(" ") {"$it=${value.getBoolean(it)}"}+"]"
+                    check(value.keys().asSequence().toSet()==names.toSet()+"pushServiceAccepted" && names.all {value.get(it) is Boolean})
+                    val accepted=value.getString("pushServiceAccepted")
+                    check(accepted in setOf("accepted","notAccepted","unknown"))
+                    "Ntfy relay after-failure["+names.joinToString(" ") {"$it=${value.getBoolean(it)}"}+" pushServiceAccepted=$accepted]"
                 } finally {connection.disconnect()}
             }
             throw primary

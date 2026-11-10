@@ -213,6 +213,8 @@ async fn subscribe(
     headers: HeaderMap,
     body: Result<Json<Subscribe>, JsonRejection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    #[cfg(test)]
+    service.0.challenge_push_accepted.start();
     let config = config(&service)?;
     let body = input(body)?;
     if body.request_id.is_nil() {
@@ -255,6 +257,8 @@ async fn subscribe(
         .send()
         .await
         .is_ok_and(|response| response.status().is_success());
+    #[cfg(test)]
+    service.0.challenge_push_accepted.finish(accepted);
     Ok(Json(
         serde_json::json!({"challengeId":challenge,"pushServiceAccepted":accepted,"confirmed":false}),
     ))
