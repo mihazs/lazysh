@@ -538,7 +538,12 @@ fn owned_observation_and_history_keep_input_binding_and_reject_foreign_targets()
             .as_u64()
             .unwrap()
     };
+    let visible = || {
+        fixture.api("history", "pane.read", json!({"pane_id":pane,"source":"visible","lines":1000,"format":"text","strip_ansi":true}))["result"]["read"]["text"]
+            .as_str().expect("visible history text").to_owned()
+    };
     assert_eq!(offset(), 0);
+    assert!(visible().contains("history-159"));
     let mut wrong = target.clone();
     wrong["terminal"] = json!("wrong-terminal");
     assert!(scroll(&owner.ownership, &wrong, x, y, -4)
@@ -577,10 +582,25 @@ fn owned_observation_and_history_keep_input_binding_and_reject_foreign_targets()
         .is_none());
     owner.wait_view(None);
     assert_eq!(offset(), 4);
-    assert!(scroll(&owner.ownership, &target, x, y, 4)
+    assert!(
+        !visible().contains("history-159"),
+        "guarded scroll must change visible history"
+    );
+    assert_eq!(offset(), 4, "visible read did not change scroll offset");
+    assert!(scroll(&owner.ownership, &target, x, y, -13)
+        .get("error")
+        .is_none());
+    assert_eq!(offset(), 17);
+    assert!(!visible().contains("history-159"));
+    assert_eq!(offset(), 17, "visible read did not change scroll offset");
+    assert!(scroll(&owner.ownership, &target, x, y, 17)
         .get("error")
         .is_none());
     assert_eq!(offset(), 0);
+    assert!(
+        visible().contains("history-159"),
+        "return to bottom must restore the newest row"
+    );
     assert!(fs::read(fixture.base.join("history/history-bytes"))
         .unwrap()
         .is_empty());
