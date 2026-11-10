@@ -384,6 +384,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn cancelling_or_timing_out_a_read_kills_and_reaps_owned_processes() {
+        // The deadline starts only after the fixture has published both owned PIDs.
+        // Keep real process startup outside the measured virtual interval.
+        tokio::time::pause();
         for cancel in [true, false] {
             let directory = tempfile::tempdir().unwrap();
             let pid_file = directory.path().join("owned.pid");
@@ -391,7 +394,7 @@ mod tests {
             command
                 .args([
                     "-c",
-                    "sleep 120 & printf '%s %s' \"$$\" \"$!\" > \"$OWNED_USAGE_PID\"; wait",
+                    "sleep 0.2; sleep 120 & printf '%s %s' \"$$\" \"$!\" > \"$OWNED_USAGE_PID\"; wait",
                 ])
                 .env("OWNED_USAGE_PID", &pid_file);
             let deadline = if cancel {
@@ -412,12 +415,23 @@ mod tests {
                     }
                 }
                 assert!(std::time::Instant::now() < stop);
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                std::thread::sleep(Duration::from_millis(5));
+                tokio::task::yield_now().await;
             };
+            assert!(
+                !query.is_finished(),
+                "owned fixture exited before PID admission"
+            );
             if cancel {
                 query.abort();
                 let _ = query.await;
             } else {
+                tokio::time::advance(deadline - Duration::from_millis(1)).await;
+                assert!(
+                    !query.is_finished(),
+                    "owned fixture exited before the deadline"
+                );
+                tokio::time::advance(Duration::from_millis(1)).await;
                 assert!(query.await.unwrap().is_none());
             }
             loop {
