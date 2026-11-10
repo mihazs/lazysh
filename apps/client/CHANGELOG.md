@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.29.2
+
+### Patch Changes
+
+- 020ce44: Wait for a free SSH channel opening instead of failing extra preview connections, so discovery marks every HTTP listener and pages with many requests load through a forward.
+- @lazysh/account-usage@1.29.2
+  - @lazysh/common@1.29.2
+  - @lazysh/display-idle@1.29.2
+  - @lazysh/et-transport@1.29.2
+  - @lazysh/mosh-transport@1.29.2
+
 ## 1.29.1
 
 ### Patch Changes
