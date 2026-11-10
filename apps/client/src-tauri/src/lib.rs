@@ -199,6 +199,7 @@ pub fn run() {
                 approvals::resolve_agent_approval,
                 notifications::notify_agent_attention,
                 notifications::notification_test,
+                session_background::open_notification_settings,
                 voice::voice_models,
                 voice::catalog::voice_model_catalog,
                 voice::catalog::voice_download_model,

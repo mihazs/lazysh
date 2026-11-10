@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import NotificationPanel, { NotificationMonitor } from './NotificationPanel';
+import PreferencesPanel from './PreferencesPanel';
 import { getInbox, updateInbox } from './notificationStore';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
@@ -94,4 +95,25 @@ it('shows an explicit empty state with monitoring settings open when nothing has
   expect(screen.getByText('No agent events yet')).toBeTruthy();
   expect(screen.getByText('Monitoring and notifications').closest('details')?.open).toBe(true);
   expect(screen.getByRole('button', { name: 'Clear inbox' })).toHaveProperty('disabled', true);
+});
+
+
+it('opens Android notification settings after permission is denied', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Android');
+  vi.mocked(requestPermission).mockResolvedValue('denied');
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  render(<NotificationPanel sessions={sessions} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Enable system notifications' }));
+  await screen.findByText('Notification permission was not granted. The inbox remains available.');
+  fireEvent.click(screen.getByRole('button', { name: 'Open Android notification settings' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_notification_settings', undefined, expect.anything()));
+});
+
+it('offers Android notification recovery in application settings', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Android');
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  render(<PreferencesPanel />);
+  fireEvent.click(screen.getByRole('button', { name: 'Android notifications' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Android notification settings' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_notification_settings', undefined, expect.anything()));
 });

@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.net.Uri
+import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
@@ -122,6 +124,16 @@ class SessionBackgroundPlugin(private val owner: Activity) : Plugin(owner) {
             SessionBackgroundRuntime.update(owner.applicationContext, args.getLong("revision"), sessions, invoke)
             if (sessions > 0) requestNotificationPermission()
         } catch (_: Exception) { invoke.reject("background_execution_unavailable") }
+    }
+
+    @Command fun openNotificationSettings(invoke: Invoke) = owner.runOnUiThread {
+        try {
+            val intent = if (Build.VERSION.SDK_INT >= 26)
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, owner.packageName)
+            else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${owner.packageName}"))
+            owner.startActivity(intent)
+            invoke.resolve()
+        } catch (_: Exception) { invoke.reject("notification_settings_unavailable") }
     }
 
     override fun onResume(activity: AppCompatActivity) = SessionBackgroundRuntime.refresh()
