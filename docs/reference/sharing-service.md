@@ -23,6 +23,4 @@ The existing SFTP path provides private host transfer but cannot supply expiring
 
 Tests use temporary files, ephemeral loopback listeners and a test-only trusted TLS certificate. They cover upload/history/delete, MIME and metadata rejection, body and storage limits, expiry, orphan cleanup, process locking, cursor behavior, stream-lifetime limits, exact origin checks, redirects, native chunk ordering and cancellation. No user files are uploaded by these tests, and no public service is deployed. Camera permissions, real reverse-proxy operation, mobile network/lifecycle behavior and platform vault behavior still require their corresponding device/environment checks.
 
-Rollback is stopping the service and forgetting its client enrollment. Preserve the private data directory if existing unexpired links must continue working after restart; deleting it destroys those shared copies. The original SSH attachment path remains independent.
-
 For setup and usage, see [sharing](../sharing.md). Return to the [documentation map](../README.md).

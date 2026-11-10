@@ -38,3 +38,5 @@ See [http contract](reference/sharing-service.md#http-contract) for details.
 ## Design and verification boundary
 
 See [design and verification boundary](reference/sharing-service.md#design-and-verification-boundary) for details.
+
+Rollback is stopping the service and forgetting its client enrollment. Preserve the private data directory if existing unexpired links must continue working after restart; deleting it destroys those shared copies. The original SSH attachment path remains independent.

@@ -54,6 +54,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
+| Theme QR evidence and pending native acceptance | [Theme QR acceptance](theme-qr-acceptance.md) |
 | Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |
 | Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
 | Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |

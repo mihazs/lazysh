@@ -33,4 +33,6 @@ See [process and flow control](reference/local-terminal.md#process-and-flow-cont
 
 ## Verification
 
-See [verification](reference/local-terminal.md#verification) for details.
+Run `bunx turbo run test:local --filter=@lazysh/client`. This uncached task runs project-native Cargo tests with real processes. Linux tests cover executed UTF-8 input/output, `stty` resize, independent sessions, forged acknowledgment rejection, output-credit exhaustion/resumption, stalled-consumer cancellation, owned-process reaping, failed-spawn teardown and state-drop cleanup. A stopped window refuses new PTYs; registration checks the same shutdown flag again under the registry mutex.
+
+The macOS/Windows desktop CI jobs execute the task after building. Windows cases run a real ConPTY shell, send UTF-8, resize, test credit backpressure/cancellation, and query the owned PID after close. Unsupported environments fail with their actual startup diagnostic rather than reporting a passing PTY test. macOS/Windows runtime results remain pending until those CI jobs execute; compilation on Linux does not establish their behavior.

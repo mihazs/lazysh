@@ -184,7 +184,7 @@ above. Each event is a JSON `POST` with only these fields:
 fixed English sentences carry no prompt, project path, command, transcript, SSH
 credential or source capability. The stable receipt ID is still sent as
 `Idempotency-Key`; Apprise ignores it, so the relay's receipts and the bounded retry
-rules below are what prevent repeated delivery.
+[retry rules](reference/notification-relay.md#delivery-and-revocation-boundary) are what prevent repeated delivery.
 
 Receipts finish in a closed set of states. HTTP 200 is `accepted`. HTTP 424, which
 Apprise returns when one or more downstream services failed, is `partial` and is not
@@ -338,6 +338,8 @@ The command emits a bounded final JSON report only after owned networking/runtim
 ## Delivery and revocation boundary
 
 See [delivery and revocation boundary](reference/notification-relay.md#delivery-and-revocation-boundary) for details.
+
+To change a destination, stop the service, run `configure-destination` with the same private-file arguments as `serve`, then restart and explicitly enable delivery. When receipt capacity is reached, export/archive and start a new explicitly provisioned account. Do not delete individual database rows to free space or reuse old identities.
 
 ## Verification and limits
 

@@ -34,4 +34,4 @@ See [bounded work and cancellation](reference/theme-qr.md#bounded-work-and-cance
 
 ## Evidence and platform acceptance
 
-See [evidence and platform acceptance](reference/theme-qr.md#evidence-and-platform-acceptance) for details.
+See [evidence and platform acceptance](theme-qr-acceptance.md) for details.

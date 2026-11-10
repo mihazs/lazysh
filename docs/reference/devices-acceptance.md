@@ -20,6 +20,6 @@ establish the real SDK gate's result.
 The initial [API 36 emulator run](https://github.com/mihazs/lazysh/actions/runs/40268377280/job/121395629728)
 passed the exact case at source `cb9be42`: a 1080×1920 screen became a valid
 720×1280 JPEG. This is screenshot/discovery evidence for that owned emulator,
-separate from the synthetic interface checks below.
+separate from the synthetic interface checks in the [host devices guide](../devices.md#interface-language).
 
 For setup and usage, see [devices](../devices.md). Return to the [documentation map](../README.md).
