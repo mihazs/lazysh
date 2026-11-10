@@ -100,7 +100,7 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
 {id:"terminal",section:"terminal",title:t("preferencesCategoryTerminal"),value:`${t(cursorLabels[preferences.cursorStyle])} · ${t("settingsHistoryLinesValue",{value:formatNumber(preferences.scrollback)})}`,content:<>
 
     <h3 className="settings-group-title">{t("settingsGroupCursorAndHistory")}</h3>
-    <label>{t("preferencesCursor")}<select value={preferences.cursorStyle} onChange={e => update({cursorStyle: e.target.value as Preferences["cursorStyle"]})}>{(["bar", "block", "underline"] as const).map(value => <option key={value} value={value}>{t(cursorLabels[value])}</option>)}</select></label>
+    <fieldset className="cursor-picker"><legend>{t("preferencesCursor")}</legend><div>{(["bar", "block", "underline"] as const).map(value => <label key={value}><input type="radio" name="cursor-style" value={value} checked={preferences.cursorStyle === value} onChange={() => update({cursorStyle: value})} /><span>{t(cursorLabels[value])}</span></label>)}</div></fieldset>
     <label><input type="checkbox" checked={preferences.cursorBlink} onChange={e => update({cursorBlink: e.target.checked})} />{t("preferencesBlinkCursor")}</label>
     <label>{t("preferencesHistoryLines")}<input type="number" min={100} max={20000} step={100} value={preferences.scrollback} onChange={e => { if (e.target.value) update({scrollback: Number(e.target.value)}); }} /></label>
     <p>{t("preferencesReducingHistoryRemovesOlderLocalLines")}</p>

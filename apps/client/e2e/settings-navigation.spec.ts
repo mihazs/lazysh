@@ -46,7 +46,11 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   await expect(terminal.getByRole('heading',{name:'Terminal and accessibility',level:2})).toBeFocused();
   expect(await terminal.locator('h3.settings-group-title').allTextContents()).toEqual(['Cursor and history','Accessibility']);
   await page.screenshot({path:testInfo.outputPath('settings-terminal.png')});
-  await terminal.getByRole('combobox',{name:'Cursor',exact:true}).selectOption('block');
+  await terminal.getByRole('radio',{name:'block',exact:true}).check();
+  await expect(terminal.getByRole('radio',{name:'block',exact:true})).toBeChecked();
+  await terminal.getByRole('radio',{name:'block',exact:true}).press('ArrowRight');
+  await expect(terminal.getByRole('radio',{name:'underline',exact:true})).toBeChecked();
+  await terminal.getByRole('radio',{name:'block',exact:true}).check();
   await terminal.getByRole('spinbutton',{name:'History lines',exact:true}).fill('1200');
   if(testInfo.project.name==='phone') {
     await expect(index).toBeHidden();
@@ -73,6 +77,13 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   await index.getByRole('button',{name:'About lazysh',exact:true}).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('dialog',{name:'About lazysh',exact:true})).toBeVisible();
+});
+
+test('cursor search focuses the selected segmented option',async({page})=>{
+  const {dialog,search,results}=await openSearch(page);
+  await search.fill('Cursor');
+  await results.getByRole('button',{name:'Cursor',exact:true}).click();
+  await expect(dialog.getByRole('radio',{name:'bar',exact:true})).toBeFocused();
 });
 
 test('Preferences search finds settings inside sub-pages and opens the matching control',async({page},testInfo)=>{

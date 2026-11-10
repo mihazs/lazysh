@@ -78,7 +78,7 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
     const found=match && page ? settingNames(page).find(element=>ownText(element)===match) : undefined;
     if(found) {
       for(let owner=found.parentElement?.closest('details');owner;owner=owner.parentElement?.closest('details'))owner.open=true;
-      const control=found.matches('label') ? found.querySelector<HTMLElement>('input, select, textarea') : found.matches('summary, button') ? found as HTMLElement : null;
+      const control=found.matches('label') ? found.querySelector<HTMLElement>('input, select, textarea') : found.matches('legend') ? found.parentElement?.querySelector<HTMLElement>('input:checked') ?? found.parentElement?.querySelector<HTMLElement>('input') : found.matches('summary, button') ? found as HTMLElement : null;
       (control??page?.querySelector<HTMLElement>('h2'))?.focus({preventScroll:true});
       found.scrollIntoView?.({block:'center'});
       return;
