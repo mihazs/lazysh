@@ -1062,8 +1062,14 @@ jobs:
       - name: Exercise local sessions, files and Git review through the host context
         if: ${{ !cancelled() }}
         run: |
-          # A renamed case must not turn this step into a zero-test pass.
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep -c ': test$' | grep -Fx 4
+          # Verify the complete inventory so a renamed or missing case cannot silently pass.
+          actual=$(cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep ': test$' | LC_ALL=C sort)
+          printf '%s\n' \
+            'host::tests::local::local_exec_checks_revoked_lease_and_closed_session_before_spawn: test' \
+            'host::tests::local::local_exec_is_cancelled_by_closing_the_session: test' \
+            'host::tests::local::local_exec_over_its_deadline_times_out_and_reaps_the_child: test' \
+            'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
+            'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' | diff -u - <(printf '%s\n' "$actual")
           bunx turbo run test:local --filter=@lazysh/client
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
