@@ -403,8 +403,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
         if(history.status!=='available' || history.path!==bound.path) throw new LocalUiError('chatChanged');
       };
-      await validateReport();
-      if (!currentRequest(current)) return;
+      if (bound?.report) {
+        await validateReport();
+        if (!currentRequest(current)) return;
+      }
       const page = parseTranscript(
         await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,agent:bound.agent,agentSessionId:bound.path,...bound.herdr}) : invoke("agent_transcript", {
           sessionId,
@@ -414,8 +416,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         })),
       );
       if (!currentRequest(current)) return;
-      await validateReport();
-      if (!currentRequest(current)) return;
+      if (bound?.report) {
+        await validateReport();
+        if (!currentRequest(current)) return;
+      }
       if (!source.inlineImages && page.messages.some(message=>message.blocks.some(block=>block.imagePreview!==undefined)))
         throw new LocalUiError('chatImageInvalid');
       if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
