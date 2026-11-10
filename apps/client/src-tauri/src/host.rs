@@ -230,20 +230,41 @@ impl LocalHost {
         for name in INHERITED {
             command.env_remove(name);
         }
-        if let Some(path) = login_path().await {
+        lease
+            .check()
+            .map_err(|_| SshError::new("app_locked", "App access changed"))?;
+        let path = ssh::until_closed(lease, self.cancel.clone(), async { Ok(login_path().await) })
+            .await
+            .map_err(|error| {
+                if lease.check().is_err() {
+                    SshError::new("app_locked", "App access changed")
+                } else {
+                    error
+                }
+            })?;
+        if let Some(path) = path {
             command.env("PATH", path);
         }
         // Relative paths mean the home directory, as they do over SSH.
         if let Some(home) = crate::local::home_dir() {
             command.current_dir(home);
         }
-        let (mut child, _tree) =
-            lazysh_account_usage::spawn_owned(&mut command).map_err(|error| {
-                SshError::new(
-                    "remote_command_failed",
-                    format!("Could not start {program}: {error}"),
-                )
-            })?;
+        let (mut child, _tree) = lease
+            .with_current(|| {
+                // Hold the cancellation read guard until spawn completes, so close and
+                // lease revocation cannot pass the authority check before the child starts.
+                let cancelled = self.cancel.borrow();
+                if *cancelled {
+                    return Err(SshError::new("disconnected", "Session closed"));
+                }
+                lazysh_account_usage::spawn_owned(&mut command).map_err(|error| {
+                    SshError::new(
+                        "remote_command_failed",
+                        format!("Could not start {program}: {error}"),
+                    )
+                })
+            })
+            .map_err(|_| SshError::new("app_locked", "App access changed"))??;
         let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take())
         else {
             return Err(SshError::new(

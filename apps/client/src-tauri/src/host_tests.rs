@@ -284,6 +284,25 @@ mod local {
     }
 
     #[tokio::test]
+    async fn local_exec_checks_revoked_lease_and_closed_session_before_spawn() {
+        let (_temp, app, id, host) = resolved().await;
+        let authority = AccessState::disabled();
+        let stale = authority.lease(None).unwrap();
+        authority.replace_renderer().unwrap();
+        // If spawn is reached, this missing executable reports remote_command_failed.
+        let command = Cmd::new(&[], &["lazysh-test-nonexistent-executable"]);
+        let result = host
+            .exec(&stale, &command, Duration::from_secs(1), 1024)
+            .await;
+        assert_eq!(result.unwrap_err().kind(), "app_locked");
+        local_disconnect(app.state(), id).unwrap();
+        let result = host
+            .exec(&lease(), &command, Duration::from_secs(1), 1024)
+            .await;
+        assert_eq!(result.unwrap_err().kind(), "disconnected");
+    }
+
+    #[tokio::test]
     async fn local_exec_is_cancelled_by_closing_the_session() {
         let (_temp, app, id, host) = resolved().await;
         let access = lease();
