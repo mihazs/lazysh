@@ -2577,9 +2577,7 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
             (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
         """, observe = { remaining -> evaluate(scenario, """
-            (()=>{const screens=$screens;const text=screens.length===1?screens[0].textContent:'';
-              return JSON.stringify({screens:screens.length===0?'zero':screens.length===1?'one':'many',
-                old:screens.length===1&&/OLD[0-9]{3}/.test(text),newest:screens.length===1&&text.includes('NEW512')});})()
+            (()=>{$fingerScript;return JSON.stringify(ownedHerdrFailureMarkers($screens,window.visualViewport));})()
         """, remaining) })
         // A reader who lifts the finger in history and waits keeps scrolling with the next drag (#1040).
         Thread.sleep(1_500)

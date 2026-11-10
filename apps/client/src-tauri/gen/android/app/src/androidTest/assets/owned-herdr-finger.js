@@ -1,3 +1,28 @@
+function ownedHerdrFailureMarkers(screens, viewport) {
+  const count=screens.length===0?'zero':screens.length===1?'one':'many';
+  if(count!=='one')return {screens:count};
+  try {
+    const screen=screens[0],canvas=screen.closest('.terminal-canvas'),surface=screen.parentElement?.querySelector(':scope > .xterm-viewport');
+    const rows=Array.from(screen.querySelectorAll('.xterm-rows > div'));
+    if(!canvas || !surface || !viewport || rows.length>4096)return {screens:count,state:'unavailable'};
+    const bounds=[screen.getBoundingClientRect(),canvas.getBoundingClientRect(),surface.getBoundingClientRect(),
+      {left:viewport.offsetLeft,top:viewport.offsetTop,right:viewport.offsetLeft+viewport.width,bottom:viewport.offsetTop+viewport.height}];
+    if(bounds.some(r=>![r.left,r.top,r.right,r.bottom].every(Number.isFinite)))return {screens:count,state:'unavailable'};
+    const intersects=row=>{
+      const r=row.getBoundingClientRect();
+      if(![r.left,r.top,r.right,r.bottom].every(Number.isFinite))throw Error('geometry');
+      return Math.max(r.left,...bounds.map(b=>b.left))<Math.min(r.right,...bounds.map(b=>b.right)) &&
+        Math.max(r.top,...bounds.map(b=>b.top))<Math.min(r.bottom,...bounds.map(b=>b.bottom));
+    };
+    const marker=matches=>{
+      const found=rows.filter(row=>matches(row.textContent||'')),visible=found.filter(intersects).length;
+      const other=Array.from(screen.children).some(child=>!child.classList.contains('xterm-rows')&&matches(child.textContent||''));
+      return {rows:found.length===0?'none':visible===0?'clipped':visible===found.length?'intersecting':'mixed',other};
+    };
+    return {screens:count,state:'observed',old:marker(text=>/OLD[0-9]{3}/.test(text)),newest:marker(text=>text.includes('NEW512'))};
+  } catch {return {screens:count,state:'unavailable'};}
+}
+
 function ownedHerdrPublicRows(screen, canvas, document) {
   try {
     const elements=screen.querySelectorAll('.xterm-rows > div');

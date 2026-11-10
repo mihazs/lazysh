@@ -3,10 +3,26 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {herdrHistoryFailureStage,HerdrFixture,ownedHerdrContext} from './support/androidHerdr';
 
-async function oracle(name:'ownedVisibleHerdr'|'ownedLiveHerdrNavigation'|'ownedHerdrSwipeGeometry'|'ownedHerdrObserveFinger'='ownedVisibleHerdr') {
+async function oracle(name:'ownedVisibleHerdr'|'ownedLiveHerdrNavigation'|'ownedHerdrSwipeGeometry'|'ownedHerdrObserveFinger'|'ownedHerdrFailureMarkers'='ownedVisibleHerdr') {
   const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/'+(name.startsWith('ownedHerdr')?'owned-herdr-finger.js':'owned-visible-herdr.js')),'utf8');
   return new Function('getComputedStyle',`${source};return ${name};`)((node:{display:string;visibility?:string})=>({display:node.display,visibility:node.visibility??'visible'}));
 }
+test('history failure marker projection separates clipped rows and other descendants without retaining text',async()=>{
+  const observe=await oracle('ownedHerdrFailureMarkers');
+  const rect=(top:number,bottom:number)=>({left:0,right:100,top,bottom});
+  const row=(textContent:string,top:number,bottom:number)=>({textContent,getBoundingClientRect:()=>rect(top,bottom)});
+  const bounds={getBoundingClientRect:()=>rect(0,100)};
+  const screen={...bounds,closest:()=>bounds,parentElement:{querySelector:()=>bounds},
+    querySelectorAll:()=>[row('OLD500 private',0,20),row('NEW512 private',100,120)],
+    children:[{classList:{contains:()=>true},textContent:'OLD500 NEW512'},
+      {classList:{contains:()=>false},textContent:'NEW512 secret'}]};
+  const viewport={offsetLeft:0,offsetTop:0,width:100,height:100};
+  expect(observe([screen],viewport)).toEqual({screens:'one',state:'observed',
+    old:{rows:'intersecting',other:false},newest:{rows:'clipped',other:true}});
+  expect(observe([],viewport)).toEqual({screens:'zero'});
+  expect(observe([screen,screen],viewport)).toEqual({screens:'many'});
+  expect(observe([screen],null)).toEqual({screens:'one',state:'unavailable'});
+});
 function fixture() {
   const labels=['source','source / owned-guard','source / owned-guard / owned-guard'];
   const tabs=labels.map((textContent,index)=>({textContent,querySelector:():object|null=>null,getAttribute:()=>index===2?'true':'false'}));
