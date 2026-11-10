@@ -316,17 +316,17 @@ it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>
   expect(brand.textContent).not.toContain('l_');
 });
 
-it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
+it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux','limited'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
   const source=tmuxChatReaderSource(agent);
   mocks.api.connect.mockResolvedValue({sessionId:'plain-control'});mocks.api.attachTmux.mockResolvedValue({sessionId:'retained-display'});
   mocks.invoke.mockImplementation((command,args)=>{
-    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:kind==='limited'?[{kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']}]:[],sessions:[{id:'$1',name:'work',windows:[]}]});
     if(command==='agent_transcript')return Promise.resolve(tmuxChatReaderPage(agent));
     if(command==='tmux_chat')return tmuxChatReply(command,args);
     return Promise.resolve(false);
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  if(kind==='tmux'){
+  if(kind!=='plain'){
     await chooseWorkspaceTool(user,'Sessions');await user.click(await screen.findByRole('button',{name:'Attach work'}));
     await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
   }
@@ -334,15 +334,15 @@ it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>([
   if('transcriptSessionId' in source)await user.type(screen.getByLabelText('Transcript session ID'),source.transcriptSessionId);
   await user.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByRole('button',{name:t('chatRefreshMessages')});
-  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind==='tmux'?'retained-display':'plain-control',agent,path:source.path,offset:0,...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind!=='plain'?'retained-display':'plain-control',agent,path:source.path,offset:0,...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
   async function stage(text:string){
     const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
     try {await user.type(screen.getByLabelText('Draft for this terminal'),text);await user.click(screen.getByRole('button',{name:'Stage in terminal'}));}
     finally {window.removeEventListener('lazysh-prompt-draft',staged);}
-    expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:kind==='tmux'?'retained-display':'plain-control',text});
+    expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:kind!=='plain'?'retained-display':'plain-control',text});
   }
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);
-  if(kind==='plain'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();await stage('manual fallback');expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);return;}
+  if(kind!=='tmux'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();await stage('manual fallback');expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);return;}
   await user.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));const input=screen.getByRole('region',{name:t('chatTerminalTitle')});
   await within(input).findByText('Agent work');expect(within(input).getByText('dev@home.local')).toBeTruthy();expect(within(input).getByText('Home / work')).toBeTruthy();
   expect(mocks.invoke).toHaveBeenCalledWith('tmux_chat',{sessionId:'retained-display',action:{kind:'snapshot'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});

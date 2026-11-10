@@ -15,7 +15,7 @@ type Action =
   | { type: 'splitPane'; target: string; horizontal: boolean; directory: string };
 type Edit = { type: 'createWorkspace' | 'renameWorkspace' | 'createTab' | 'renameTab'; target?: string };
 
-export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: { sessionId: string; name: string; projectDirectory?: string }) {
+export default function HerdrPanel({ sessionId, name, projectDirectory = '.', navigationOnly = false }: { sessionId: string; name: string; projectDirectory?: string; navigationOnly?: boolean }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [tree, setTree] = useState<Tree | null>(null);
@@ -53,24 +53,24 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
   function begin(edit: Edit, initial = '') { setEdit(edit); setLabel(initial); }
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (!edit || !label.trim()) return;
+    if (navigationOnly || !edit || !label.trim()) return;
     if (edit.type === 'createWorkspace') void run({ type: 'createWorkspace', label, directory });
     else if (edit.type === 'createTab') void run({ type: 'createTab', workspace: edit.target!, label, directory });
     else void run({ type: edit.type, target: edit.target!, label });
   }
   return <section aria-label={t('herdrTitle',{name})}>
-    <div className="tool-bar"><h3>Herdr: {name}</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}>{t('herdrRefresh')}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWorkspace' })}>{t('herdrNewWorkspace')}</button></div>
+    <div className="tool-bar"><h3>Herdr: {name}</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}>{t('herdrRefresh')}</button>{!navigationOnly && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWorkspace' })}>{t('herdrNewWorkspace')}</button>}</div>
     {busy && <p role="status">{t('herdrReading')}</p>}{error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}
-    {edit && <form onSubmit={submit}><label>{t('herdrLabel')}<input autoFocus value={label} maxLength={200} required disabled={busy} onChange={e => setLabel(e.target.value)} /></label>
+    {!navigationOnly && edit && <form onSubmit={submit}><label>{t('herdrLabel')}<input autoFocus value={label} maxLength={200} required disabled={busy} onChange={e => setLabel(e.target.value)} /></label>
       {(edit.type === 'createWorkspace' || edit.type === 'createTab') && <label>{t('herdrDirectory')}<input value={directory} maxLength={4096} required disabled={busy} onChange={e => setDirectory(e.target.value)} /></label>}
       <button className="subtle-button" disabled={busy || !label.trim()} type="submit">{t('herdrSave')}</button><button className="subtle-button" disabled={busy} type="button" onClick={() => setEdit(null)}>{t('appCancel')}</button></form>}
     {tree?.workspaces.map(workspace => <details key={workspace.workspace_id} open><summary>{workspace.label} · {workspace.agent_status}{workspace.focused ? ` · ${t('herdrFocused')}` : ''}</summary>
-      <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'focusWorkspace', target: workspace.workspace_id })}>{t('herdrFocus',{id:workspace.workspace_id})}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameWorkspace', target: workspace.workspace_id }, workspace.label)}>{t('herdrRenameWorkspace')}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createTab', target: workspace.workspace_id })}>{t('herdrNewTab')}</button></div>
+      <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'focusWorkspace', target: workspace.workspace_id })}>{t('herdrFocus',{id:workspace.workspace_id})}</button>{!navigationOnly && <><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameWorkspace', target: workspace.workspace_id }, workspace.label)}>{t('herdrRenameWorkspace')}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createTab', target: workspace.workspace_id })}>{t('herdrNewTab')}</button></>}</div>
       {tree.tabs.filter(tab => tab.workspace_id === workspace.workspace_id).map(tab => <details key={tab.tab_id} open><summary>{formatNumber(tab.number)}: {tab.label} · {tab.agent_status}{tab.focused ? ` · ${t('herdrFocused')}` : ''}</summary>
-        <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'focusTab', target: tab.tab_id })}>{t('herdrFocus',{id:tab.tab_id})}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameTab', target: tab.tab_id }, tab.label)}>{t('herdrRenameTab')}</button></div>
+        <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'focusTab', target: tab.tab_id })}>{t('herdrFocus',{id:tab.tab_id})}</button>{!navigationOnly && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameTab', target: tab.tab_id }, tab.label)}>{t('herdrRenameTab')}</button>}</div>
         {tree.panes.filter(pane => pane.tab_id === tab.tab_id).map(pane => <div className="mux-row" key={pane.pane_id}><div><strong>{pane.pane_id} · {pane.agent_status}{pane.focused ? ` · ${t('herdrFocused')}` : ''}</strong><small>{pane.cwd}</small></div>
-          <button className="subtle-button" disabled={busy || pane.agent_status === 'unknown'} onClick={() => void run({ type: 'focusAgent', target: pane.pane_id })}>{t('herdrFocusAgent',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.pane_id })}>{t('muxZoom',{id:pane.pane_id})}</button>
-          <button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, true)}>{t('herdrSplitRight',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, false)}>{t('herdrSplitDown',{id:pane.pane_id})}</button>
+          <button className="subtle-button" disabled={busy || pane.agent_status === 'unknown'} onClick={() => void run({ type: 'focusAgent', target: pane.pane_id })}>{t('herdrFocusAgent',{id:pane.pane_id})}</button>{!navigationOnly && <><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.pane_id })}>{t('muxZoom',{id:pane.pane_id})}</button>
+          <button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, true)}>{t('herdrSplitRight',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, false)}>{t('herdrSplitDown',{id:pane.pane_id})}</button></>}
         </div>)}
       </details>)}
     </details>)}

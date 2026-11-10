@@ -149,7 +149,7 @@ export function MuxPanel({ sessionId, onAttach, attached, requested, onTools }: 
         {persistent[kind]?.length === 0 && <p>{t('muxNoSessions',{kind})}</p>}
         {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>{t('muxAttachKind',{kind,name:session.name})}</button>{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>{t('muxBrowseHerdr',{name:session.name})}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>{t('muxControlZellij',{name:session.name})}</button>)}</div>)}
       </div>)}{!requested && <p>{t('muxPersistentHint')}</p>}</div>}
-    {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} />}
+    {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} navigationOnly={tree?.tools?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')} />}
     {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} />}
     {edit && <form onSubmit={submit} aria-label={t('muxDetails')}><label>{t('appName')}<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
       {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>{t('muxDirectory')}<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}
