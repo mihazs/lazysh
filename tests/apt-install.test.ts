@@ -12,8 +12,8 @@ afterAll(() => Promise.all(temporary.map(path => rm(path, { recursive: true, for
 const config = 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::ftp::Timeout "30";\nAcquire::Retries "5";\n';
 const oneLine = 'deb http://azure.archive.ubuntu.com/ubuntu/ jammy main\ndeb http://security.ubuntu.com/ubuntu jammy-security main\n';
 const deb822 = 'Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe\n';
-const mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\n';
-const archived = (text: string) => text.replaceAll('azure.archive.ubuntu.com', 'archive.ubuntu.com');
+const mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://archive.ubuntu.com/ubuntu/\tpriority:3\n';
+const archived = (text: string) => text.replaceAll('azure.archive.ubuntu.com', 'archive.ubuntu.com').replaceAll('http://archive.ubuntu.com', 'https://archive.ubuntu.com');
 
 /**
  * A fake root whose apt-get records each call, refuses to run before the bounded network

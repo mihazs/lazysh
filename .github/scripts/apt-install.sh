@@ -3,7 +3,7 @@
 # Install apt packages without letting a stalled mirror hang the job. It writes network
 # timeouts and retries for every later apt run, bounds `apt-get update` and
 # `apt-get install -y` with `timeout`, and on a failure or timeout switches the hosted
-# runner's azure.archive.ubuntu.com mirror to archive.ubuntu.com and tries once more.
+# runner's Azure mirror to HTTPS archive.ubuntu.com and tries once more.
 # With no packages it only refreshes the package lists; with --no-update and no packages it
 # only writes the network configuration. LAZYSH_APT_ROOT relocates /etc/apt for tests.
 set -u
@@ -25,7 +25,7 @@ install() { bounded "$install_seconds" apt-get install -y "$@"; }
 fallback() {
   printf '::warning::%s failed or timed out; retrying against archive.ubuntu.com\n' "$1"
   for file in "$etc/sources.list" "$etc/apt-mirrors.txt" "$etc"/sources.list.d/*.list "$etc"/sources.list.d/*.sources; do
-    if [ -f "$file" ]; then sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' "$file" || return; fi
+    if [ -f "$file" ]; then sed -i -e 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' -e 's#http://archive\.ubuntu\.com/#https://archive.ubuntu.com/#g' "$file" || return; fi
   done
 }
 
