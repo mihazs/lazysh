@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.29.1
+
+### Patch Changes
+
+- 0b0f52e: Detect attached Herdr agents in Agent view and keep finger scrolling separate from agent question input.
+- @lazysh/account-usage@1.29.1
+  - @lazysh/common@1.29.1
+  - @lazysh/display-idle@1.29.1
+  - @lazysh/et-transport@1.29.1
+  - @lazysh/mosh-transport@1.29.1
+
 ## 1.29.0
 
 ### Minor Changes
