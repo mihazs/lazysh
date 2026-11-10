@@ -29,3 +29,19 @@ test('explicit periodic discovery updates listeners while the existing page and 
   expect(args).toEqual(Array.from({length: stopped}, () => ({sessionId:'fixture-session',allowPorts:null,probeHttp:false})));
   expect(await page.evaluate(() => window.previewPeriodic.calls.some(row => row.command === 'start_preview'))).toBe(false);
 });
+
+test('discovery retains a valid port filter across reloads', async ({page}) => {
+  await routePreviewPage(page);
+  const mount = () => page.evaluate(async () => { const {mountPreviewHarness} = await import('/e2e/fixtures/PreviewHarness.tsx'); window.previewPeriodic = mountPreviewHarness(); });
+  await page.goto('/');
+  await mount();
+  const filter = page.getByLabel('Discover ports');
+  await filter.fill('3000, 4000-4002');
+  await page.getByRole('button', {name: 'Discover listeners'}).click();
+  await expect.poll(() => page.evaluate(() => window.previewPeriodic.calls.filter(row => row.command === 'discover_preview_ports').map(row => row.args))).toEqual([{sessionId:'fixture-session',allowPorts:[3000,4000,4001,4002],probeHttp:false}]);
+  await page.reload();
+  await mount();
+  await expect(filter).toHaveValue('3000, 4000-4002');
+  await page.getByRole('button', {name: 'Discover listeners'}).click();
+  await expect.poll(() => page.evaluate(() => window.previewPeriodic.calls.filter(row => row.command === 'discover_preview_ports').map(row => row.args))).toEqual([{sessionId:'fixture-session',allowPorts:[3000,4000,4001,4002],probeHttp:false}]);
+});
