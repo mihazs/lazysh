@@ -97,11 +97,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium
       # Playwright runs its own apt-get; bound it and refresh the lists past a stalled mirror first.
-      - run: sudo sh .github/scripts/apt-install.sh
+      - run: sudo sh .github/scripts/apt-install.sh tmux
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
-      - run: bun run test:e2e
+      - name: Run browser tests including real tmux clipboard
+        run: |
+          tmux -V
+          script --version
+          bun run test:e2e
 
   agent:
     runs-on: ubuntu-24.04
