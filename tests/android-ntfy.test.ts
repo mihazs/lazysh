@@ -52,11 +52,12 @@ test('controlled clock admits only an entire positive interval within the declar
   expect(controlledNtfyClockReadback('101000',clockPoint(NaN),after)).toBe('hostDiscontinuity');
 });
 
-function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean}={}) {
+function controlledClockFixture(options:{auto?:boolean;autoReply?:string;readback?:string;unchanged?:boolean;occupied?:boolean;unsupported?:boolean;restoreFails?:boolean;ignoreRestore?:boolean;identityLostAfterSet?:boolean;failAt?:number}={}) {
   const commands:string[][]=[],events:string[]=[];let auto=options.auto??true,set:number|undefined,index=0;
   const points=[clockPoint(100000),clockPoint(100010,10000000n),clockPoint(100020,20000000n)].map(point=>({...point,after:point.after+100n}));
   const clock=new OwnedNtfyClock(async args=>{
     commands.push(args);events.push(args.join(' '));
+    if(commands.length===options.failAt)throw new Error('private failing command');
     if(args[1]==='pm')return options.occupied?'package:app.lazysh.client\n':'';
     if(args[1]==='date')return options.readback??String(options.unchanged?100015:set!+15)+'\n';
     if(args[2]==='alarm'){if(options.unsupported)throw new Error('private unsupported token');set=Number(args[4]);return '';}
@@ -86,6 +87,19 @@ test('one fixed clock setup restores the exact original boolean only after absen
     expect(JSON.stringify(f.clock.observation())).not.toMatch(/101000|private|token|epoch|boot|hash/);
     await expect(f.clock.restore(async()=>{})).rejects.toThrow('cannot be repeated');
   }
+});
+
+test('clock failure receipts retain the finite failed step across restoration without command data',async()=>{
+  for(const [failAt,step] of [[1,'packagesBefore'],[4,'readAutoTime'],[5,'disableAutoTime'],[6,'disableAutoTime'],[7,'setTime'],[8,'readTime'],[9,'packagesAfter']] as const){
+    const f=controlledClockFixture({failAt});await expect(f.clock.prepare()).rejects.toThrow();
+    expect(f.clock.observation().step).toBe(step);
+    await f.clock.restore(async()=>{});
+    expect(f.clock.observation().step).toBe(step);
+    expect(JSON.stringify(f.clock.observation())).not.toMatch(/private|command|101000|token/);
+  }
+  const complete=controlledClockFixture();await complete.clock.prepare();
+  expect(complete.clock.observation().step).toBe('complete');
+  await complete.clock.restore(async()=>{});
 });
 
 test('unsupported or unchanged clock never passes on set-time success and never retries',async()=>{

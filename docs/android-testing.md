@@ -33,7 +33,11 @@ prove later drift or exact UTC synchronization; a real native pass is still
 required. This controlled positive-offset fixture does not qualify arbitrary user
 clocks, automatic-time operation, near-expiry delivery, performance or physical
 Samsung behavior. Exported receipts contain only closed setup/readback/restoration
-states and declared bounds, never raw timestamps or command output.
+states, the closed name of the setup step that last started (`packagesBefore`, `readAutoTime`,
+`disableAutoTime`, `setTime`, `readTime`, `packagesAfter`, or `complete` after verified setup) and declared
+bounds, never raw timestamps or command output. A failed setup keeps the step it stopped in through
+restoration, so a recurrence of a pre-readback failure names which operation to investigate; the
+step names that operation, not its cause.
 
 Cleanup first stops owned children/reverses and removes fixture packages, then
 independently verifies package/state absence before restoring and reading back the

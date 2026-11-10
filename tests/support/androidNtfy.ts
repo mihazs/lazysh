@@ -159,6 +159,7 @@ export class OwnedNtfyClock {
   private attempted=false;
   private restoreAttempted=false;
   private state:'notStarted'|'preparing'|'verified'='notStarted';
+  private step:'notStarted'|'packagesBefore'|'readAutoTime'|'disableAutoTime'|'setTime'|'readTime'|'packagesAfter'|'complete'='notStarted';
   private readback:ControlledClockReadback='notRead';
   private restoration:'notRequired'|'pending'|'restored'|'blocked'|'failed'='notRequired';
   constructor(private readonly command:(args:string[])=>Promise<string>,private readonly check:()=>Promise<void>,private readonly sample=sampleNtfyHostClock) {}
@@ -182,10 +183,14 @@ export class OwnedNtfyClock {
   async prepare() {
     if(this.attempted)throw new Error('Owned ntfy controlled clock cannot be repeated');
     this.attempted=true;this.state='preparing';
+    this.step='packagesBefore';
     await this.check();await absentNtfyPackages(args=>this.request(args));
+    this.step='readAutoTime';
     this.original=await this.autoTime();
     this.restoreNeeded=true;this.restoration='pending'; // A lost update acknowledgement still needs restoration.
+    this.step='disableAutoTime';
     await this.setAutoTime(false);
+    this.step='setTime';
     await this.check();
     const at=this.sample();
     if(!validNtfyClockPoint(at)||at.wall>8_639_999_999_998_999)throw new Error('Owned ntfy host clock invalid');
@@ -193,13 +198,15 @@ export class OwnedNtfyClock {
     try{if(await this.call(['shell','cmd','alarm','set-time',String(at.wall+1000)])!=='')throw new Error('Owned ntfy clock update unrecognized');}
     finally{await this.check();}
     await this.check();
+    this.step='readTime';
     const before=this.sample();
     let raw:string,after:NtfyClockPoint;
     try{raw=await this.call(['shell','date','+%s%3N']);}
     finally{after=this.sample();await this.check();}
     this.readback=controlledNtfyClockReadback(raw,before,after,at);
     if(this.readback!=='verified')throw new Error('Owned ntfy controlled clock readback not admitted');
-    await absentNtfyPackages(args=>this.request(args));this.state='verified';
+    this.step='packagesAfter';
+    await absentNtfyPackages(args=>this.request(args));this.state='verified';this.step='complete';
   }
   async restore(teardown:()=>Promise<void>) {
     if(!this.restoreNeeded)return;
@@ -210,7 +217,7 @@ export class OwnedNtfyClock {
     this.restoration='failed';
     await this.setAutoTime(this.original!);this.restoration='restored';
   }
-  observation() {return {state:this.state,readback:this.readback,restoration:this.restoration,declaredState:'strictlyPositiveAtMostTwoSeconds',maxReadbackUncertaintyMs:250} as const;}
+  observation() {return {state:this.state,step:this.step,readback:this.readback,restoration:this.restoration,declaredState:'strictlyPositiveAtMostTwoSeconds',maxReadbackUncertaintyMs:250} as const;}
 }
 type NtfyClockOwner={server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof emulatorContinuity>>};
 export function sameNtfyClockOwner(before:NtfyClockOwner,after:NtfyClockOwner) {
