@@ -282,10 +282,15 @@ export class HerdrFixture {
     let stage:'history-read'|'focus-read'='history-read';
     try {
       const {offset,max,rows,oldRows,newTail}=await this.history();
+      // Each sample obtains pane.get before pane.read. The second get brackets
+      // the first read, but matching offsets alone do not prove quiescence.
+      const after=await this.history();
+      const offsetStability=after.offset===offset && after.max===max && after.rows===rows?'same':'changed';
+      const markerSummaryStability=after.oldRows===oldRows && after.newTail===newTail?'same':'changed';
       stage='focus-read';
       const focused=JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id;
       if(typeof focused!=='string'||!focused||focused.length>128||/[\x00-\x1f\x7f-\x9f]/.test(focused))return {scope,state:'unavailable',stage};
-      return {scope,state:'available',offset,max,rows,oldRows,newTail,
+      return {scope,state:'available',offset,max,rows,oldRows,newTail,offsetStability,markerSummaryStability,
         focusHistory:focused===this.historyPane?.paneId,focusOriginal:focused===this.agent?.paneId};
     } catch(error) {return {scope,state:'unavailable',stage:stage==='focus-read'?stage:herdrHistoryFailureStage(error)};}
   }

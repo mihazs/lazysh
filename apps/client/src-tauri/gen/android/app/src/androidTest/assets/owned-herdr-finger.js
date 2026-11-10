@@ -17,7 +17,9 @@ function ownedHerdrFailureMarkers(screens, viewport) {
     const marker=matches=>{
       const found=rows.filter(row=>matches(row.textContent||'')),visible=found.filter(intersects).length;
       const other=Array.from(screen.children).some(child=>!child.classList.contains('xterm-rows')&&matches(child.textContent||''));
-      return {rows:found.length===0?'none':visible===0?'clipped':visible===found.length?'intersecting':'mixed',other};
+      const position=found.length===0?'none':found.length>1?'multiple':
+        rows.indexOf(found[0])<rows.length/3?'top':rows.indexOf(found[0])<rows.length*2/3?'middle':'bottom';
+      return {rows:found.length===0?'none':visible===0?'clipped':visible===found.length?'intersecting':'mixed',position,other};
     };
     return {screens:count,state:'observed',old:marker(text=>/OLD[0-9]{3}/.test(text)),newest:marker(text=>text.includes('NEW512'))};
   } catch {return {screens:count,state:'unavailable'};}
