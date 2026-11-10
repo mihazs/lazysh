@@ -74,6 +74,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Question | Explanation |
 | --- | --- |
 | Why does saved connection information differ from live work? | [Session lifetime](explanation/session-lifetime.md) |
+| Why does public sharing use a separate service? | [Sharing design](explanation/sharing.md) |
 | Why does local inbox monitoring not provide background push? | [Notification delivery](explanation/notification-delivery.md) |
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
 

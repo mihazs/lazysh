@@ -21,8 +21,8 @@ does **not** roll back bytes already accepted by the server. A partial or comple
 new remote file may remain, and no remote pathname is unlinked on cancellation.
 An absent receipt means unknown or already settled, not verified remote stop or
 completion. Late results cannot publish success, refresh the file browser or
-stage a prompt after cancellation, unmount or access revocation. Check the remote
-directory explicitly when deciding whether a remaining file should be kept.
+stage a prompt after cancellation, unmount or access revocation. The
+[attachment guide](../attachments.md#cancellation-and-limits) describes the follow-up.
 
 The transport observes cancellation independently of the SFTP library's outgoing
 queue, including a blocked initial handshake or write. Reader and writer tasks

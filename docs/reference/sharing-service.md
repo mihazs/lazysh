@@ -19,7 +19,7 @@ The server bounds active application requests to four, streaming downloads to fo
 
 ## Design and verification boundary
 
-The existing SFTP path provides private host transfer but cannot supply expiring public URLs. An external vendor account would introduce an unspecified provider and credentials. The chosen standalone, single-owner Rust service provides the requested explicit sharing boundary while reusing SQLite and native Cargo testing. Axum/Hyper handle HTTP framing; no new HTTP parser or custom runner is introduced.
+The [sharing design](../explanation/sharing.md) explains the service boundary.
 
 Tests use temporary files, ephemeral loopback listeners and a test-only trusted TLS certificate. They cover upload/history/delete, MIME and metadata rejection, body and storage limits, expiry, orphan cleanup, process locking, cursor behavior, stream-lifetime limits, exact origin checks, redirects, native chunk ordering and cancellation. No user files are uploaded by these tests, and no public service is deployed. Camera permissions, real reverse-proxy operation, mobile network/lifecycle behavior and platform vault behavior still require their corresponding device/environment checks.
 

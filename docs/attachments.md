@@ -67,7 +67,7 @@ camera permissions and physical device behavior require separate acceptance.
 
 ## Cancellation and limits
 
-See [cancellation and limits](reference/attachments.md#cancellation-and-limits) for details.
+See [cancellation and limits](reference/attachments.md#cancellation-and-limits) for details. Check the remote directory explicitly when deciding whether a remaining file should be kept.
 
 ## Remote destination paths
 

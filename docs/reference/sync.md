@@ -7,7 +7,7 @@
 
 Each category has a separate age-encrypted resource. Disabling a category stops its fetch/upload operations; it does not delete an existing remote resource. Only the enrolled OS credential store holds the WebDAV password and recovery secret. Decrypted credential previews remain in native memory and expire after ten minutes; they are never returned to the webview. Intentional recovery-key display is the exception.
 
-Biometric unlock is device-local and is excluded from both categories. New imported hosts start with it disabled; enable it locally after the device capability check. An existing local biometric policy is preserved. Export reads credentials through the source host's current native protection before stripping that policy from portable metadata; importing into an existing protected host must pass its current native authentication and never falls back to an unprotected write.
+Biometric unlock is device-local and is excluded from both categories. New imported hosts start with it disabled; local enablement follows a device capability check. An existing local biometric policy is preserved. Export reads credentials through the source host's current native protection before stripping that policy from portable metadata; importing into an existing protected host must pass its current native authentication and never falls back to an unprotected write.
 
 ## Review, merge and conflict behavior
 
@@ -19,7 +19,7 @@ Uploads preserve profiles and credential records found only in the remote snapsh
 
 OS vault and host-file updates cannot be one transaction. If credential storage fails after profiles were added, the error says that metadata may have been imported. Existing credentials are preserved, and retrying starts with another review. Failed cleanup keeps the saved-credential marker so remaining partial vault data can be removed explicitly through **Forget credentials**. An item reported as already present is never deleted by a failed import. No compensating deletion removes user profiles.
 
-Deleting a remote resource externally is detected as a changed baseline. The app does not silently recreate or erase it. To initialize an intentionally empty destination, disconnect/re-enroll with the saved recovery secret, review the target folder and upload explicitly.
+Deleting a remote resource externally is detected as a changed baseline. The app does not silently recreate or erase it. Initializing an intentionally empty destination requires re-enrollment with the saved recovery secret, target review and an explicit upload; see [sync setup](../sync.md#configure-and-enroll-devices).
 
 ## Cryptography and checks
 

@@ -13,6 +13,8 @@ Recovery keys use the `LAZYSH-SYNC-V1-` prefix followed by 64 lowercase hexadeci
 
 Updating toggles on the same endpoint with an empty recovery field retains the enrolled secret. An empty app-password field retains the existing password only for the same endpoint/account. Changing the endpoint requires explicit recovery-key entry. Disconnect first to create a fresh group and generate a new key.
 
+After importing a host, enable biometric unlock locally only after its device capability check. To initialize an intentionally empty destination, disconnect and re-enroll with the saved recovery secret, review the target folder, and upload explicitly.
+
 ## Independent data categories
 
 See [independent data categories](reference/sync.md#independent-data-categories) for details.
