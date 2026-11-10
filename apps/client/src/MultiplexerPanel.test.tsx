@@ -175,3 +175,10 @@ it('hides Herdr session creation for limited versions but keeps listed sessions'
   expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Open/create herdr session'})).toBeNull();
 });
+
+it('explains why a requested limited Herdr session cannot be attached', async () => {
+  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create']}]}:[{name:'work'}]);
+  render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={vi.fn()}/>);
+  expect(await screen.findByText('Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
+});
