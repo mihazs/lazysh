@@ -618,6 +618,7 @@ const translations = {
   muxDetected: ["detectado", "detectado"],
   muxSupported: ["Compatível", "Compatible"],
   muxLimited: ["Limitado", "Limitado"],
+  muxVersionUnknown: ["Algumas ações do multiplexador ficam indisponíveis até verificar a versão. Abra Sessões para tentar novamente.", "Algunas acciones del multiplexor no están disponibles hasta comprobar la versión. Abre Sesiones para volver a intentarlo."],
   muxLimitedTmux: ["Ir para e a entrada do Chat exigem tmux 3.4 ou mais recente.", "Ir a y la entrada del Chat requieren tmux 3.4 o posterior."],
   muxLimitedZellij: ["A árvore de áreas de trabalho, fechar, redimensionar e iniciar agentes exigem Zellij 0.45.1.", "El árbol de espacios de trabajo, cerrar, redimensionar e iniciar agentes requieren Zellij 0.45.1."],
   muxLimitedHerdr: ["Somente a navegação está disponível. O suporte completo exige Herdr 0.9.3 a 0.9.5.", "Solo la navegación está disponible. El soporte completo requiere Herdr 0.9.3 a 0.9.5."],

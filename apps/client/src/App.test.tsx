@@ -316,11 +316,12 @@ it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>
   expect(brand.textContent).not.toContain('l_');
 });
 
-it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux','limited'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
+it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux','limited','unknown'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
   const source=tmuxChatReaderSource(agent);
   mocks.api.connect.mockResolvedValue({sessionId:'plain-control'});mocks.api.attachTmux.mockResolvedValue({sessionId:'retained-display'});
   mocks.invoke.mockImplementation((command,args)=>{
-    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:kind==='limited'?[{kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']}]:[],sessions:[{id:'$1',name:'work',windows:[]}]});
+    if(command==='multiplexer_tree' && kind==='unknown' && args?.sessionId==='retained-display')return Promise.reject(new Error('discovery unavailable'));
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[kind==='limited'?{kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']}:{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'work',windows:[]}]});
     if(command==='agent_transcript')return Promise.resolve(tmuxChatReaderPage(agent));
     if(command==='tmux_chat')return tmuxChatReply(command,args);
     return Promise.resolve(false);
@@ -1076,7 +1077,7 @@ describe("connection flow", () => {
 
   it.each([['exact\u00a0native name', undefined], ['exact\u00a0native name', "世界 '$(touch NO);"], [null, undefined]])('jumps inside the display and preserves restoration identity %s on server %s', async (restoreName, tmuxServer) => {
     mocks.api.connect.mockResolvedValue({sessionId:'source'});
-    mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'work',windows:[]}]});
     mocks.api.attachTmux.mockResolvedValue({sessionId:'display'});
     const snapshot={generation:'native-only-generation',current:{sessionId:'$1',windowId:'@1'},sessions:[
       {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
@@ -2230,7 +2231,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
 it('keeps late picker cleanup scoped while a new source is busy, then admits queued CLI intent once the wide picker is idle',async()=>{
   enableHostLaunch({...host,defaultMultiplexer:{kind:'tmux',name:'work'}});mocks.hostLaunchReceipt=null;
   const original=mocks.invoke.getMockImplementation()!;
-  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree'?Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'other',windows:[]}]}):original(command,...args));
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree'?Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'other',windows:[]}]}):original(command,...args));
   mocks.api.connect.mockResolvedValue({sessionId:'nav-control'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'nav-display-a'});
   mocks.api.attachTmux.mockResolvedValue({sessionId:'nav-display-b'});

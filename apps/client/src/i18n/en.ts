@@ -590,6 +590,7 @@ export const english = {
   muxDetected: "detected",
   muxSupported: "Supported",
   muxLimited: "Limited",
+  muxVersionUnknown: "Some multiplexer actions are unavailable until the version is checked. Open Sessions to retry.",
   muxLimitedTmux: "Jump To and Chat input need tmux 3.4 or newer.",
   muxLimitedZellij: "The workspace tree, close, resize and agent launch need Zellij 0.45.1.",
   muxLimitedHerdr: "Only navigation is available. Full support needs Herdr 0.9.3 to 0.9.5.",

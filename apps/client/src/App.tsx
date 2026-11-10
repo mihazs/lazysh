@@ -309,7 +309,7 @@ const views = () => [
 /** Confirmed input is offered only for native tmux and guarded Herdr terminals. */
 function terminalInputFor(session:LiveSession, tools?:MultiplexerTool[]) {
   const kind=session.attached?.kind;
-  return native && (kind==='tmux' || kind==='herdr') && !tools?.some(tool=>tool.kind===kind && tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
+  return native && (kind==='tmux' || kind==='herdr') && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
 }
 function focusableWithin(container:HTMLElement|null) {
   return Array.from(
@@ -1215,7 +1215,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
-  // Last discovered tool versions per host; a version without Jump To hides it on that host.
+  // Capabilities belong to the connection that performed discovery.
   const [muxTools, setMuxTools] = useState<Record<string, MultiplexerTool[]>>({});
   const [deleting, setDeleting] = useState<Host | null>(null);
   const [error, setError] = useState<UiErrorCause>("");
@@ -1438,6 +1438,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else sessionConnected(fresh);
   }
   const active = sessions.find((session) => session.id === activeId);
+  useEffect(()=>{
+    if(!native || !active?.connected || active.local)return;
+    let current=true;
+    const sessionId=active.id;
+    const tmuxServer=active.attached?.kind==='tmux' ? active.attached.tmuxServer : undefined;
+    void invoke<{tools?:MultiplexerTool[]}>('multiplexer_tree',{sessionId,...(tmuxServer && tmuxServer!=='default'?{tmuxServer}:{})}).then(tree=>{
+      if(current && lease.current() && Array.isArray(tree?.tools))setMuxTools(value=>({...value,[sessionId]:tree.tools!}));
+    }).catch(()=>{});
+    return()=>{current=false;};
+  },[active?.id,active?.connected,active?.local,invoke,lease]);
   const activeSessionView = active ? sessionViewOf(active) : 'terminal';
   useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
   // A closed session's id never comes back.
@@ -1488,7 +1498,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
-  const jumpSupported=!muxTools[active?.hostId ?? '']?.some(tool=>tool.kind==='tmux' && tool.missing.includes('jump'));
+  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind==='tmux' && !tool.missing.includes('jump'));
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
@@ -2203,8 +2213,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
-        <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>
-        {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={muxTools[active.hostId]?.some(tool=>tool.kind==='herdr' && tool.support==='degraded')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+        <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{remoteActive && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
+        {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
@@ -2416,7 +2426,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <AgentView key={session.id} sessionId={session.id} shown={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "terminal"}
-                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} terminalInput={terminalInputFor(session,muxTools[session.hostId])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
+                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} terminalInput={terminalInputFor(session,muxTools[session.id])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} />
                 ))}
                 {active.connected && view === "usage" && (
@@ -2432,7 +2442,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     shown={view === "chat"}
                     onOpenTerminal={() => setView("terminal")}
                     reportedHistory={reportedHistory?.sessionId===active.id ? reportedHistory : undefined}
-                    terminalInput={terminalInputFor(active,muxTools[active.hostId])}
+                    terminalInput={terminalInputFor(active,muxTools[active.id])}
                   />
                 )}
                 {active.connected && !active.local && view === "preview" && (
@@ -2460,7 +2470,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     sessionId={active.id}
                     attached={active.attached}
                     requested={muxLaunch?.sessionId===active.id ? muxLaunch : undefined}
-                    onTools={tools=>{const hostId=active.hostId;setMuxTools(value=>({...value,[hostId]:tools}));}}
+                    onTools={tools=>{const sessionId=active.id;setMuxTools(value=>({...value,[sessionId]:tools}));}}
                     onAttach={(name, kind, server) => attachTmux(active, name, kind, server,
                       muxLaunch?.sessionId===active.id ? muxLaunch.lease : lease)}
                   />
