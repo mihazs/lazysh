@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {StrictMode} from 'react';
+import {StrictMode,useState} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
@@ -537,6 +537,8 @@ describe('live Herdr discovery',()=>{
     const search=browser.getByRole('searchbox');
     fireEvent.change(search,{target:{value:'finished'}});
     expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy();
+    expect(done).toHaveProperty('disabled',true);
+    fireEvent.click(done);
     fireEvent.change(search,{target:{value:''}});
     expect(browser.queryByRole('button',{name:/^finished/})).toBeNull();
     fireEvent.click(done);
@@ -545,6 +547,26 @@ describe('live Herdr discovery',()=>{
     await waitFor(()=>expect(vi.mocked(invoke).mock.calls.length).toBeGreaterThan(reads));
     await waitFor(()=>expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy());
     expect(done.getAttribute('aria-expanded')).toBe('true');
+  });
+  it('retains status choices across session remounts without sharing them between sessions or servers',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},{name:'other'}]:tree);
+    function Harness() {
+      const groups=useState<Set<string>>(()=>new Set());
+      const [target,setTarget]=useState(['one','default']);
+      return <><button onClick={()=>setTarget(['one','default'])}>one default</button><button onClick={()=>setTarget(['two','default'])}>two default</button><button onClick={()=>setTarget(['one','other'])}>one other</button><HerdrNavigation key={target.join('/')} sessionId={target[0]} herdrSession={target[1]} hostLabel="Owned host" mode="agents" visible statusGroups={groups} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/></>;
+    }
+    render(<Harness/>);
+    const working=async()=>within(await screen.findByRole('region',{name:t('herdrAgentWorking')})).getByRole('button',{name:`${t('herdrAgentWorking')} · 1`});
+    fireEvent.click(await working());
+    expect(screen.queryByRole('button',{name:/^builder/})).toBeNull();
+    for(const target of ['two default','one other']) {
+      fireEvent.click(screen.getByRole('button',{name:target}));
+      expect((await working()).getAttribute('aria-expanded')).toBe('true');
+    }
+    fireEvent.click(screen.getByRole('button',{name:'one default'}));
+    expect((await working()).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button',{name:/^builder/})).toBeNull();
   });
   it.each(['hide','mode','unmount'] as const)('revokes a pending navigation action after %s without stealing focus or closing its replacement',async change=>{
     const {invoke}=await import('@tauri-apps/api/core');
