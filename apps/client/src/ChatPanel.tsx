@@ -3,7 +3,7 @@ import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react
 import './ChatPanel.css';
 import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
-import type {ReportedHistorySource} from './AgentPanel';
+import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import {formatCountdown} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
@@ -178,11 +178,11 @@ export function activitySummary(turn: Turn): string {
 }
 
 /** A conversation the Agent view found for its pane from hook reports. */
-export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string}>;
+export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string}}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,initialAgent,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;initialAgent?:BoundConversation['agent'];timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -200,7 +200,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const messageList = useRef<HTMLDivElement>(null);
   const atLatestRef = useRef(true);
   const [atLatest, setAtLatest] = useState(true);
-  const [agent, setAgent] = useState<string>(bound?.agent ?? initialAgent ?? "claude");
+  const [agent, setAgent] = useState<string>(bound?.agent ?? "claude");
   const [path, setPath] = useState(bound?.path ?? initialReported?.path ?? "");
   const [view, setView] = useState(bound ? "conversation" : "records");
   const [inlineImages,setInlineImages]=useState(false);
@@ -225,11 +225,11 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     inlineImages?: boolean;
   }>();
   const terminalSource=useMemo<TerminalSource|undefined>(()=>{
-    if(!opened)return;
+    if(!opened || bound?.herdr || (bound && (opened.path!==bound.path || opened.agent!==bound.agent)))return;
     const source={agent:opened.agent,path:opened.path,view:opened.view??'records',inlineImages:!!opened.inlineImages,
       ...(['hermes','opencode'].includes(opened.agent)?{transcriptSessionId:opened.transcriptSessionId}:{})};
     return validTerminalSource(source)?Object.freeze(source):undefined;
-  },[opened]);
+  },[opened,bound]);
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activity, setActivity] = useState<Activity>();
@@ -292,6 +292,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const selectedPath=reportedMatches || path===bound?.path?path:path.trim();
   const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (!['hermes','opencode'].includes(agent) || transcriptSessionId===opened.transcriptSessionId) && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
   const canFollow = followable && sourceMatches;
+  useLayoutEffect(() => {
+    if (!shown) request.current++;
+    if (bound && (path !== bound.path || agent !== bound.agent)) {
+      request.current++; setFollowing(false); followRef.current = false;
+      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined);
+      setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
+    }
+  }, [shown, bound, path, agent]);
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
@@ -386,14 +394,28 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     try {
       const replace = reset || source.view === "conversation";
       const cursor = replace ? 0 : offset;
+      const validateReport = async () => {
+        if (!bound?.report) return;
+        const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
+        if (!currentRequest(current)) return;
+        const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
+        if(matches.length!==1 || matches[0].agent!==bound.report.agent || matches[0].state==='done') throw new LocalUiError('chatChanged');
+        const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
+        if(history.status!=='available' || history.path!==bound.path) throw new LocalUiError('chatChanged');
+      };
+      await validateReport();
+      if (!currentRequest(current)) return;
       const page = parseTranscript(
-        await invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,agent:bound.agent,agentSessionId:bound.path,...bound.herdr}) : invoke("agent_transcript", {
           sessionId,
           ...source,
           offset: cursor,
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
-        }),
+        })),
       );
+      if (!currentRequest(current)) return;
+      await validateReport();
+      if (!currentRequest(current)) return;
       if (!source.inlineImages && page.messages.some(message=>message.blocks.some(block=>block.imagePreview!==undefined)))
         throw new LocalUiError('chatImageInvalid');
       if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
@@ -436,7 +458,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     }
   }
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
-  useEffect(() => {if (bound && !opened && !error) void read(true);}, [bound, opened, error, completed]);
+  useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
   const turns = useMemo(() => timeline ? groupTurns(messages) : [], [timeline, messages]);
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
@@ -493,6 +515,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   </div>;
   return (
     <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
+      {bound?.herdr && <p className="security-note">{t("agentsHerdrSessionNotice")}</p>}
       {!bound && <>
       <h3>{t("chatTitle")}</h3>
       <p>

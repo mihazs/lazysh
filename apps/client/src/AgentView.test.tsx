@@ -38,6 +38,9 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     await advance(0);
     const header=screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
     expect(within(header).getByText(label)).toBeTruthy();expect(within(header).getByText('Working')).toBeTruthy();
+    const sessions=within(header).getByRole('button',{name:'Reported agent sessions'});
+    expect(sessions.getAttribute('aria-expanded')).toBe('false');fireEvent.click(sessions);
+    expect(screen.getByRole('region',{name:'Reported agent sessions'})).toBeTruthy();fireEvent.click(sessions);
     expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0}]);
     const turns=screen.getAllByRole('region',{name:'Turn'});
     expect(turns).toHaveLength(1);
@@ -66,7 +69,7 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
   });
 });
 
-it('shows the fallback with Show terminal and Choose transcript when no hook report names this pane',async()=>{
+it('shows the fallback without a transcript picker when no hook report names this pane',async()=>{
   host('codex',[row('Codex','%9')],'available',[[]]);
   const showTerminal=vi.fn();
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={showTerminal}/>);
@@ -74,9 +77,7 @@ it('shows the fallback with Show terminal and Choose transcript when no hook rep
   expect(screen.getByText('No agent conversation for this terminal.')).toBeTruthy();
   expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
   fireEvent.click(screen.getByRole('button',{name:'Show terminal'}));expect(showTerminal).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button',{name:'Choose transcript'}));
-  expect(screen.getByLabelText('Transcript path')).toBeTruthy();
-  expect(screen.getByText('You chose this transcript. It is not proven to belong to the agent in this terminal.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Choose transcript'})).toBeNull();
 });
 
 it('labels a detected agent without a reported conversation as partial and never reads a transcript',async()=>{
@@ -107,7 +108,7 @@ it('does not bind history reported for another tmux pane',async()=>{
   expect(calls('agent_transcript')).toEqual([]);
 });
 
-it('shows Herdr agents without reading a conversation until the user chooses one',async()=>{
+it('enters the exact selected Herdr pane without reading a conversation',async()=>{
   const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'shared'}};
   const other={...first,agent:'claude',name:'other',pane_id:'w2E:pA',terminal_id:'term-two'};
   const duplicate={...first,name:'duplicate',pane_id:'w2E:pB',terminal_id:'term-three'};
@@ -117,23 +118,46 @@ it('shows Herdr agents without reading a conversation until the user chooses one
     if(command==='herdr_tree')return tree;
     throw new Error('Companion unavailable');
   });
-  const view=render(<AgentView sessionId="ssh" shown={false} tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  const enter=vi.fn(async()=>{});
+  const view=render(<AgentView sessionId="ssh" shown={false} tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
   await advance(5000);expect(invoke).not.toHaveBeenCalled();
-  view.rerender(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  view.rerender(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText('builder')).toBeTruthy();expect(screen.getByText('other')).toBeTruthy();
   expect(screen.getByLabelText('Herdr server')).toHaveProperty('disabled',true);
   expect(screen.queryByText('No agent conversation for this terminal.')).toBeNull();
   expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
-  fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Choose transcript'}));
-  expect(screen.getByLabelText('Agent')).toHaveProperty('value','codex');
-  expect(screen.getByText('You chose this transcript. It is not proven to belong to the agent in this terminal.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Open conversation'})).toBeNull();
+  fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
+  expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
+  expect(calls('agent_transcript')).toEqual([]);
+});
+
+it('opens a unique Herdr session through the revalidated host resolver without input authority',async()=>{
+  const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'session-one'}};
+  let available=true;
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='multiplexer_sessions')return [{name:'owned'}];
+    if(command==='herdr_tree')return {...herdrNavigationTree,agents:[first]};
+    if(command==='agent_herdr_conversation'){if(!available)throw new Error('Session unavailable');return page('codex',turn('Prompt','Verified answer'));}
+    throw new Error('unavailable');
+  });
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(calls('agent_herdr_conversation')).toEqual([]);
+  fireEvent.click(screen.getByRole('button',{name:'Open conversation'}));await advance(0);
+  expect(screen.getByText('Herdr reports this session. Its association with this pane is unverified.')).toBeTruthy();
+  expect(screen.getByText('Verified answer')).toBeTruthy();
+  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}]);
+  expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+  available=false;await advance(2000);expect(calls('agent_herdr_conversation')).toHaveLength(2);
+  expect(screen.getByRole('alert').textContent).toContain('Session unavailable');
   expect(calls('agent_transcript')).toEqual([]);
 });
 
 it('hides Herdr metadata and prevents selection when access is revoked',async()=>{
   vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'owned'}]:herdrNavigationTree);
-  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={vi.fn()} onShowTerminal={()=>{}}/>);
   await advance(0);expect(screen.getByText('builder')).toBeTruthy();
   act(()=>access(true));
   expect(screen.queryByText('builder')).toBeNull();
@@ -141,14 +165,98 @@ it('hides Herdr metadata and prevents selection when access is revoked',async()=
   expect(calls('agent_transcript')).toEqual([]);
 });
 
-it('offers only the fallback for terminals without pane identity and reads nothing while hidden',async()=>{
+it('lists reported sessions without pane identity and reads nothing while hidden',async()=>{
   host('codex',[row('Codex','%3')],'available',[[]]);
   const view=render(<AgentView sessionId="ssh" shown={false} tmux onShowTerminal={()=>{}}/>);
   await advance(10_000);expect(invoke).not.toHaveBeenCalled();
   view.rerender(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText('No agent conversation for this terminal.')).toBeTruthy();
-  expect(invoke).not.toHaveBeenCalled();
+  expect(calls('agent_snapshot')).toHaveLength(1);
+  expect(calls('agent_transcript')).toEqual([]);
+});
+
+it('opens only the explicitly selected uniquely reported session and gives it no input authority',async()=>{
+  host('codex',[row('Codex',null)],'available',[turn('First prompt','First answer')]);
+  render(<AgentView sessionId="ssh" shown tmux={false} terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(calls('agent_transcript')).toEqual([]);
+  fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
+  expect(screen.getByText('First answer')).toBeTruthy();
+  expect(screen.queryByLabelText('Transcript path')).toBeNull();
+  expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+});
+
+it.each(['gone','done','changed'] as const)('suspends a selected report when it is %s and keeps its draft',async change=>{
+  const rows=[row('Codex',null)];
+  host('codex',rows,'available',[turn('First prompt','First answer'),turn('Stale prompt','Stale answer')]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let changed=false;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>changed && change==='changed' && command==='agent_reported_history'
+    ? Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/different',reportedAt:'2026-11-09T10:00:00Z',paneId:null}) : fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
+  await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Keep this draft'}});
+  changed=true;if(change==='gone')rows.splice(0);if(change==='done')rows[0].state='done';
+  await advance(2000);
+  expect(calls('agent_transcript')).toHaveLength(1);expect(screen.queryByText('Stale answer')).toBeNull();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
+  expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+});
+
+it('discards a selected transcript response if its report disappears during the read',async()=>{
+  const rows=[row('Codex',null)];host('codex',rows,'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'
+    ? new Promise(resolve=>{finish=resolve;}) : fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
+  await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
+  rows.splice(0);await act(async()=>finish(page('codex',turn('Late prompt','Late answer'))));
+  expect(screen.queryByText('Late answer')).toBeNull();expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+});
+
+it('does not open a session with ambiguous IDs or missing history',async()=>{
+  host('codex',[row('Codex',null),{...row('Claude Code',null),sessionId:'Codex-session'}],'available',[[]]);
+  const view=render(<AgentView sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
+  await advance(0);expect(screen.queryByRole('region',{name:'Reported agent sessions'})).toBeNull();
+  host('codex',[row('Codex',null)],'missing',[[]]);
+  view.rerender(<AgentView key="other" sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
+  await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
+  expect(screen.getByText(/This session's conversation is unavailable/)).toBeTruthy();
+  expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByLabelText('Transcript path')).toBeNull();
+});
+
+it('drops a pending session choice when the view is hidden',async()=>{
+  host('codex',[row('Codex',null)],'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let resolve!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?new Promise(done=>{resolve=done;}):fallback(command,args,options));
+  const props={sessionId:'ssh',tmux:false,onShowTerminal:()=>{}};
+  const view=render(<AgentView {...props} shown/>);await advance(0);
+  fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));
+  view.rerender(<AgentView {...props} shown={false}/>);
+  await act(async()=>resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:null}));
+  expect(calls('agent_transcript')).toEqual([]);
+  view.rerender(<AgentView {...props} shown/>);await advance(0);
+  expect(screen.getByRole('button',{name:/Codex · \/work/})).toHaveProperty('disabled',false);
+});
+
+it('does not let a late reported-history lookup replace a newer Herdr choice',async()=>{
+  const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'session-one'}};
+  let resolve!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[row('Codex',null)]};
+    if(command==='agent_reported_history')return new Promise(done=>{resolve=done;});
+    if(command==='multiplexer_sessions')return [{name:'owned'}];
+    if(command==='herdr_tree')return {...herdrNavigationTree,agents:[first]};
+    if(command==='agent_herdr_conversation')return page('codex',turn('Prompt','Herdr answer'));
+    throw new Error('Unexpected command');
+  });
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);await advance(0);
+  fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));
+  fireEvent.click(screen.getByRole('button',{name:'Open conversation'}));await advance(0);
+  await act(async()=>resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:null}));
+  expect(screen.getByText('Herdr answer')).toBeTruthy();expect(calls('agent_transcript')).toEqual([]);
 });
 
 it('binds on the next poll once a conversation missing at first is reported',async()=>{
@@ -160,7 +268,45 @@ it('binds on the next poll once a conversation missing at first is reported',asy
   expect(screen.queryByText(/^Codex reports its state here/)).toBeNull();
   expect(within(screen.getByRole('region',{name:'Turn'})).getByText('First answer')).toBeTruthy();
   expect(calls('agent_reported_history')).toHaveLength(2);
-  // An available conversation is not asked for again.
+  // An available report is checked again because it can expire.
   await advance(5000);
-  expect(calls('agent_reported_history')).toHaveLength(2);
+  expect(calls('agent_reported_history')).toHaveLength(3);
+});
+
+it('suspends a stale tmux binding and restores its draft when history returns',async()=>{
+  const next='/home/owner/new.jsonl';
+  host('codex',[row('Codex','%3')],'available',[turn('First prompt','First answer')]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let lookups=0,reads=0;
+  let finishOld!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='agent_transcript' && ++reads===2)return new Promise(resolve=>{finishOld=resolve;});
+    if(command!=='agent_reported_history')return fallback(command,args,options);
+    lookups++;
+    return Promise.resolve(lookups===2?{schemaVersion:1,sessionId:'Codex-session',status:'missing'}:
+      {schemaVersion:1,sessionId:'Codex-session',status:'available',path:lookups===1?'/home/owner/codex 世界.jsonl':next,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'});
+  });
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Keep this draft'}});
+  await advance(5000);
+  expect(screen.getByText(/^Codex reports its state here, but its conversation is not available/)).toBeTruthy();
+  expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+  await act(async()=>finishOld(page('codex',turn('Stale prompt','Stale answer'))));
+  const count=calls('agent_transcript').length;await advance(2000);expect(calls('agent_transcript')).toHaveLength(count);
+  await advance(3000);await advance(0);
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
+  expect(screen.queryByText('Stale answer')).toBeNull();
+  expect(calls('agent_transcript').at(-1)).toMatchObject({sessionId:'ssh',agent:'codex',path:next});
+  expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+});
+
+it('suspends tmux input if the pane snapshot fails after binding',async()=>{
+  host('codex',[row('Codex','%3')],'available',[turn('First prompt','First answer')]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let snapshots=0;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='tmux_chat' && ++snapshots===2?Promise.reject(new Error('offline')):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);expect(screen.getByRole('region',{name:'Terminal input'})).toBeTruthy();
+  await advance(5000);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+  const count=calls('agent_transcript').length;await advance(2000);expect(calls('agent_transcript')).toHaveLength(count);
 });

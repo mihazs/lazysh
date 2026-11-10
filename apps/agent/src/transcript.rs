@@ -21,7 +21,9 @@ mod event_adapters;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
+mod herdr_session;
 mod inline_image;
+pub use herdr_session::read_herdr_conversation;
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
@@ -35,6 +37,59 @@ pub use conversation::{claude_conversation_images, conversation};
 pub use database::read_database_page;
 pub use discovery::discover;
 pub(crate) use source_snapshot::SourceSnapshot;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn anchored_codex(
+    root: &crate::managed_directory::Directory,
+    path: &Path,
+    limit: u8,
+    expected: &SourceSnapshot,
+) -> Result<TranscriptPage> {
+    codex_conversation::anchored(root, path, limit, expected)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn anchored_capture(
+    directory: &crate::managed_directory::Directory,
+    leaf: &str,
+) -> Result<Vec<u8>> {
+    conversation::capture_with_limit(
+        || {
+            let file = directory.open_file(leaf, libc::O_RDONLY)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() {
+                return Err(Error::InvalidArgument);
+            }
+            check_owner(&metadata)?;
+            Ok(file)
+        },
+        64 * 1024 * 1024,
+    )
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod anchored_tests {
+    use super::*;
+    #[test]
+    fn parent_swap_cannot_redirect_a_pinned_transcript_read() {
+        let home = tempfile::tempdir().unwrap();
+        let base = home.path().canonicalize().unwrap();
+        let original = base.join("session");
+        let outside = base.join("outside");
+        std::fs::create_dir(&original).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(original.join("history.jsonl"), b"original\n").unwrap();
+        std::fs::write(outside.join("history.jsonl"), b"outside\n").unwrap();
+        let pinned = crate::managed_directory::Directory::profile(&original).unwrap();
+        std::fs::rename(&original, base.join("retired")).unwrap();
+        std::os::unix::fs::symlink(&outside, &original).unwrap();
+        assert_eq!(
+            anchored_capture(&pinned, "history.jsonl").unwrap(),
+            b"original\n"
+        );
+        assert!(pinned.check().is_err());
+    }
+}
 
 const MAX_LINE: u64 = 256 * 1024;
 const MAX_SCAN: u64 = 4 * 1024 * 1024;
@@ -290,9 +345,12 @@ pub(crate) fn seek_record(file: &mut File, offset: u64, length: u64) -> Result<(
     Ok(())
 }
 fn read_record_line(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+    read_record_line_bounded(reader, MAX_LINE)
+}
+fn read_record_line_bounded(reader: &mut impl BufRead, maximum: u64) -> Result<Vec<u8>> {
     let mut line = Vec::new();
-    reader.take(MAX_LINE + 1).read_until(b'\n', &mut line)?;
-    if line.len() as u64 > MAX_LINE {
+    reader.take(maximum + 1).read_until(b'\n', &mut line)?;
+    if line.len() as u64 > maximum {
         return Err(Error::InvalidEvent);
     }
     Ok(line)

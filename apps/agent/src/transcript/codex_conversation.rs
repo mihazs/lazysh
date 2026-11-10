@@ -301,7 +301,23 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    let history = codex_lineage::read(path)?;
+    project(codex_lineage::read(path)?, limit)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn anchored(
+    root: &crate::managed_directory::Directory,
+    path: &Path,
+    limit: u8,
+    expected: &super::SourceSnapshot,
+) -> Result<TranscriptPage> {
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    project(codex_lineage::read_anchored(root, path, expected)?, limit)
+}
+
+fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage> {
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();

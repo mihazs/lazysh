@@ -239,6 +239,7 @@ pub fn run() {
                 tmux_jump::chat::tmux_chat,
                 herdr_guard::herdr_chat,
                 herdr::herdr_tree,
+                herdr::agent_herdr_conversation,
                 herdr::herdr_action,
                 herdr_create::herdr_workspace_plan,
                 herdr_create::herdr_workspace_create,

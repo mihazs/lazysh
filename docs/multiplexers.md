@@ -140,9 +140,10 @@ server per refresh and does not grant terminal input or approval authority.
 ### Create workspaces, worktrees and agents
 
 Agent view lists live agents from the attached Herdr server, including stock
-0.9.3. These are server-wide reports; they do not prove which transcript belongs
-to this display. **Choose transcript** opens the explicit manual picker for
-Claude Code or Codex.
+0.9.3. Select a running Claude Code or Codex session to open the conversation matching its reported session ID, or enter its exact
+Herdr pane. Herdr reports can be stale and do not prove that conversation belongs
+to the pane. Selecting a session does not grant terminal input authority. Conversation reading requires
+the matching updated lazysh companion on the host.
 
 Finger swipes inside Herdr request retained pane history without sending wheel
 events or arrow keys to its program. This needs the optional guarded host's

@@ -32,34 +32,89 @@ fn conversation_options(
     if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    let bytes = capture(path)?;
+    project_claude(capture(path)?, limit, inline_images)
+}
+
+pub(super) fn project_claude(
+    bytes: Vec<u8>,
+    limit: u8,
+    inline_images: bool,
+) -> Result<TranscriptPage> {
+    project_claude_bounded(bytes, limit, inline_images, super::MAX_LINE, 10_000, None)
+}
+
+pub(super) fn project_claude_bounded(
+    bytes: Vec<u8>,
+    limit: u8,
+    inline_images: bool,
+    line_limit: u64,
+    record_limit: usize,
+    expected_session_id: Option<&str>,
+) -> Result<TranscriptPage> {
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    let agent = TranscriptAgent::Claude;
     let size = bytes.len() as u64;
     let mut reader = Cursor::new(&bytes);
     let mut records = Vec::new();
+    let mut session_seen = false;
     let mut offset = 0;
     while offset < size {
-        let line = super::read_record_line(&mut reader)?;
+        let line = super::read_record_line_bounded(&mut reader, line_limit)?;
         let bytes = line.len();
         if line.last() != Some(&b'\n') {
             break;
         }
         if !line.iter().all(u8::is_ascii_whitespace) {
-            let record: Value = serde_json::from_slice(&line).map_err(|_| Error::InvalidEvent)?;
+            let mut record: Value =
+                serde_json::from_slice(&line).map_err(|_| Error::InvalidEvent)?;
             if !record.is_object() {
                 return Err(Error::InvalidEvent);
+            }
+            if let (Some(expected), Some(value)) = (expected_session_id, record.get("sessionId")) {
+                if value.as_str() != Some(expected) {
+                    return Err(Error::InvalidEvent);
+                }
+                session_seen = true;
             }
             if matches!(
                 record["type"].as_str(),
                 Some("user" | "assistant" | "progress" | "system" | "attachment")
             ) && record["uuid"].is_string()
             {
+                if expected_session_id.is_some()
+                    && !matches!(record["type"].as_str(), Some("user" | "assistant"))
+                {
+                    record
+                        .as_object_mut()
+                        .ok_or(Error::InvalidEvent)?
+                        .retain(|key, _| {
+                            matches!(
+                                key.as_str(),
+                                "type"
+                                    | "uuid"
+                                    | "parentUuid"
+                                    | "subtype"
+                                    | "isSidechain"
+                                    | "isMeta"
+                                    | "teamName"
+                                    | "agentId"
+                                    | "sourceToolAssistantUUID"
+                                    | "timestamp"
+                            )
+                        });
+                }
                 records.push((offset, record));
-                if records.len() > 10_000 {
+                if records.len() > record_limit {
                     return Err(Error::InvalidArgument);
                 }
             }
         }
         offset += bytes as u64;
+    }
+    if expected_session_id.is_some() && !session_seen {
+        return Err(Error::InvalidEvent);
     }
     drop(bytes);
     let latest: HashMap<String, usize> = records
@@ -118,18 +173,27 @@ fn conversation_options(
 // Observe one initial prefix, allowing append-only growth without pausing Follow.
 // Changed metadata requires one exact prefix comparison, never a capture retry.
 pub(super) fn capture(path: &Path) -> Result<Vec<u8>> {
-    let mut file = open_transcript(path)?;
+    capture_with(|| open_transcript(path))
+}
+
+pub(super) fn capture_with(open: impl Fn() -> Result<File>) -> Result<Vec<u8>> {
+    capture_with_limit(open, lazysh_common::record_checkpoint::MAX_SNAPSHOT)
+}
+
+pub(super) fn capture_with_limit(open: impl Fn() -> Result<File>, maximum: u64) -> Result<Vec<u8>> {
+    let mut file = open()?;
     let before = super::SourceSnapshot::capture(&file)?;
-    drop(selected_source(path, &file, &before)?);
+    drop(selected_with(&open, &file, &before)?);
     #[cfg(test)]
     let source = super::mutation_observer::ObservedRead(&mut file);
     #[cfg(not(test))]
     let source = &mut file;
-    let bytes = super::snapshot::read_bytes(&mut BufReader::new(source), before.len())?;
+    let bytes =
+        super::snapshot::read_bytes_bounded(&mut BufReader::new(source), before.len(), maximum)?;
     if bytes.len() as u64 != before.len() {
         return Err(Error::InvalidEvent);
     }
-    let mut selected = selected_source(path, &file, &before)?;
+    let mut selected = selected_with(&open, &file, &before)?;
     let after = file.metadata()?;
     let selected_metadata = selected.metadata()?;
     if after.len() != before.len()
@@ -138,8 +202,8 @@ pub(super) fn capture(path: &Path) -> Result<Vec<u8>> {
         || selected_metadata.modified()? != before.modified()?
     {
         compare_prefix(&mut selected, &bytes)?;
-        selected_source(path, &selected, &before)?;
-        selected_source(path, &file, &before)?;
+        selected_with(&open, &selected, &before)?;
+        selected_with(&open, &file, &before)?;
     }
     Ok(bytes)
 }
@@ -165,25 +229,25 @@ fn compare_prefix(selected: &mut File, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn verify_captured(
-    path: &Path,
+pub(super) fn verify_captured_with(
+    open: &impl Fn() -> Result<File>,
     before: &super::SourceSnapshot,
     bytes: &[u8],
 ) -> Result<()> {
-    let source = open_transcript(path)?;
-    let mut selected = selected_source(path, &source, before)?;
+    let source = open()?;
+    let mut selected = selected_with(open, &source, before)?;
     compare_prefix(&mut selected, bytes)?;
-    selected_source(path, &selected, before)?;
-    selected_source(path, &source, before)?;
+    selected_with(open, &selected, before)?;
+    selected_with(open, &source, before)?;
     Ok(())
 }
 
-pub(super) fn selected_source(
-    path: &Path,
+fn selected_with(
+    open: &impl Fn() -> Result<File>,
     file: &File,
     before: &super::SourceSnapshot,
 ) -> Result<File> {
-    let selected = open_transcript(path)?;
+    let selected = open()?;
     for source in [file, &selected] {
         before.same_file(source)?;
         let after = source.metadata()?;

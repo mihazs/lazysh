@@ -122,6 +122,23 @@ impl Directory {
         let file = self.open_file(basename, libc::O_RDONLY | libc::O_DIRECTORY)?;
         Self::from_file(file, self.path.join(basename), private_leaf, false)
     }
+    // Some integration tests import this module without transcript readers.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn child_or_self(&self, relative: &Path) -> Result<Self> {
+        let mut current = Self::from_file(
+            self.file.try_clone()?,
+            self.path.clone(),
+            self.private,
+            self.root_leaf,
+        )?;
+        for part in relative.components() {
+            let Component::Normal(name) = part else {
+                return Err(denied("InstallUnsafeNamespace"));
+            };
+            current = current.child(name.to_str().ok_or(Error::InvalidArgument)?, false)?;
+        }
+        Ok(current)
+    }
     pub(crate) fn open_file(&self, basename: &str, flags: i32) -> io::Result<File> {
         let basename = name(OsStr::new(basename))?;
         // SAFETY: retained descriptor and a checked single component; never follows a link or FIFO.
