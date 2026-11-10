@@ -2,7 +2,7 @@ import AttachmentPanel from './AttachmentPanel';
 import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
-import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
+import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import {formatCountdown} from './relativeTime';
@@ -178,11 +178,11 @@ export function activitySummary(turn: Turn): string {
 }
 
 /** A conversation the Agent view found for its pane from hook reports. */
-export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string}}>;
+export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,allowStage=true,onBoundInvalid }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;allowStage?:boolean;onBoundInvalid?:()=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -396,12 +396,19 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       const cursor = replace ? 0 : offset;
       const validateReport = async () => {
         if (!bound?.report) return;
-        const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
-        if (!currentRequest(current)) return;
-        const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
-        if(matches.length!==1 || matches[0].agent!==bound.report.agent || matches[0].state==='done') throw new LocalUiError('chatChanged');
-        const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
-        if(history.status!=='available' || history.path!==bound.path) throw new LocalUiError('chatChanged');
+        try {
+          if(bound.report.paneId) {
+            const snapshot=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}}));
+            if (!currentRequest(current)) return;
+            if(snapshot.destination.paneId!==bound.report.paneId) throw new LocalUiError('chatChanged');
+          }
+          const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
+          if (!currentRequest(current)) return;
+          const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
+          if(matches.length!==1 || matches[0].agent!==bound.report.agent || (bound.report.paneId && (matches[0].paneId!==bound.report.paneId || reports.filter(row=>row.paneId===bound.report!.paneId).length!==1))) throw new LocalUiError('chatChanged');
+          const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
+          if(history.status!=='available' || history.path!==bound.path || (bound.report.paneId && history.paneId!==bound.report.paneId)) throw new LocalUiError('chatChanged');
+        } catch(error) {if(currentRequest(current))onBoundInvalid?.();throw error;}
       };
       if (bound?.report) {
         await validateReport();
@@ -467,7 +474,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
-    if (composing.current || !draft.trim()) return;
+    if (!allowStage || composing.current || !draft.trim()) return;
     if (draft.length > 65536) { setDraftStatus("chatDraftTooLong"); return; }
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
@@ -515,7 +522,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const draftTools = <div className="chat-draft-tools">
     {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
     <button ref={attachmentButton} type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>toggleAttachment(!attachmentOpen)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
-    <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>
+    {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
     <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
@@ -686,7 +693,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         </div>}
         <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
           <textarea id={draftId} rows={bound && !draft ? 1 : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
-          <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button><button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button></div>
+          <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button>{allowStage && <button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>}</div>
           {shown && terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
             key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput} notes={!bound || draftHelpOpen}
             access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}

@@ -5,7 +5,6 @@ import HerdrAgentsPanel from './HerdrAgentsPanel';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, reportedTones} from './AgentStatus';
-import {formatCountdown, useNow} from './relativeTime';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {t, useUi} from './i18n/core';
@@ -33,7 +32,6 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
   const request=useRef(0);
   const active=useRef({sessionId,shown});active.current={sessionId,shown};
   const retained = useRef<{id:string;conversation:BoundConversation} | undefined>(undefined);
-  const [turnStart, setTurnStart] = useState<string>();
   useEffect(() => {
     if (!shown) {setSelecting(false);return;}
     let alive = true, flight = false;
@@ -43,7 +41,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
       try {
         const reports = parseSnapshot(await invoke('agent_snapshot', {sessionId}));
         if (!alive || !access.current()) return;
-        setSessions(reports.filter(row=>row.state!=='done' && !!conversationAgents[row.agent] && reports.filter(other=>other.sessionId===row.sessionId).length===1));
+        setSessions(reports.filter(row=>!!conversationAgents[row.agent] && reports.filter(other=>other.sessionId===row.sessionId).length===1));
         // Pane identity is the evidence: only TMUX_PANE ties a hook report to this terminal.
         const pane = tmux ? parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId : undefined;
         const matching = pane === undefined ? [] : reports.filter(row => row.paneId === pane);
@@ -53,11 +51,11 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
         if (row && agent) {
           try {
             const history = parseReportedHistory(await invoke('agent_reported_history', {sessionId, agentSessionId: row.sessionId}), row.sessionId);
-            if (history.status === 'available' && history.paneId === pane) conversation=Object.freeze({agent, path: history.path});
+            if (history.status === 'available' && history.paneId === pane) conversation=Object.freeze({agent, path: history.path,report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
           } catch { /* A detected agent remains visible when its history is unavailable. */ }
         }
         if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
-          : {kind: 'bound', row, conversation: previous.kind === 'bound' && previous.conversation.path === conversation.path && previous.conversation.agent === conversation.agent ? previous.conversation : conversation});
+          : {kind: 'bound', row, conversation: previous.kind === 'bound' && previous.conversation.path === conversation.path && previous.conversation.agent === conversation.agent && previous.conversation.report?.sessionId === conversation.report?.sessionId && previous.conversation.report?.paneId === conversation.report?.paneId ? previous.conversation : conversation});
       } catch {
         if (alive && access.current()) {setSessions([]);setBinding({kind:'none'});}
       } finally { flight = false; }
@@ -76,7 +74,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
       const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
       const matches=reports.filter(row=>row.sessionId===chosen.sessionId);
       if(!owns())return;
-      if(history.status!=='available' || matches.length!==1 || matches[0].agent!==chosen.agent || matches[0].state==='done') {setUnavailable(true);return;}
+      if(history.status!=='available' || matches.length!==1 || matches[0].agent!==chosen.agent) {setUnavailable(true);return;}
       setSelected({row:matches[0],conversation:Object.freeze({agent:conversationAgents[chosen.agent],path:history.path,report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
     } catch {if(owns())setUnavailable(true);}
     finally {if(owns())setSelecting(false);}
@@ -86,16 +84,12 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
   const reader=!!conversation;
   if (!selected && binding.kind==='bound') retained.current={id:binding.row.sessionId,conversation:binding.conversation};
   const kept=selected?.conversation ?? retained.current?.conversation;
-  // Elapsed time of the running turn, from its prompt in the conversation.
-  const started = !selected && binding.kind === 'bound' && row?.state !== 'done' && turnStart ? Date.parse(turnStart) : NaN;
-  const now = useNow(1000, shown && Number.isFinite(started));
   return <section className="agent-view" hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
       {row ? <>
         <StatusRing tone={reportedTones[row.state]} />
         <strong>{row.agent}</strong>
-        <span>{t(reportedStateNames[row.state])}</span>
-        {Number.isFinite(started) && <time dateTime={turnStart} title={t('agentViewElapsed')}>{formatCountdown(now - started)}</time>}
+        <span>{t('agentViewLastReportedState', {state:t(reportedStateNames[row.state])})}</span>
       </> : <strong>{t('agentViewTitle')}</strong>}
       {!selected && reader && <button type="button" className="icon-button" aria-label={t('agentViewSessions')} title={t('agentViewSessions')} aria-expanded={choosing} onClick={()=>setChoosing(value=>!value)}><List size={18} aria-hidden="true"/></button>}
       <button type="button" className="subtle-button" onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true" />{t('agentViewTerminal')}</button>
@@ -107,12 +101,13 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
       </div>
     </div>}
-    {!selected && (!reader || choosing) && access.current() && sessions.length>0 && <section aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>{sessions.map(session=><button type="button" key={session.sessionId} disabled={selecting} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {t(reportedStateNames[session.state])} · {session.sessionId}</button>)}</section>}
+    {!selected && (!reader || choosing) && access.current() && sessions.length>0 && <section aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>{sessions.map(session=><button type="button" key={session.sessionId} disabled={selecting} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {t('agentViewLastReportedState', {state:t(reportedStateNames[session.state])})} · {session.sessionId}</button>)}</section>}
     {unavailable && <p role="status">{t('agentViewSessionUnavailable')}</p>}
     {herdrSession && !selected && (!reader || choosing) && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} onEnterHerdr={onEnterHerdr} onChooseSession={(agent,id,server,paneId,terminalId)=>{request.current++;setSelecting(false);setUnavailable(false);setSelected({conversation:Object.freeze({agent,path:id,herdr:{herdrSession:server,paneId,terminalId}})});}} />}
     {selected && <button type="button" onClick={()=>{request.current++;setSelected(undefined);setChoosing(true);setUnavailable(false);}}>{t('agentViewBackSessions')}</button>}
-    {reader && (!terminalInput || selected) && <p className="agent-view-note">{t('agentViewStageOnly')}</p>}
+    {reader && selected && <p className="agent-view-note">{t('agentViewSelectedNoStage')}</p>}
+    {reader && !selected && !terminalInput && <p className="agent-view-note">{t('agentViewStageOnly')}</p>}
     {kept && <ChatPanel key={selected ? JSON.stringify(selected.conversation) : retained.current?.id} sessionId={sessionId} shown={shown && reader}
-      bound={kept} timeline onTurnStart={setTurnStart} onOpenTerminal={onShowTerminal} terminalInput={!selected && reader ? terminalInput : undefined} />}
+      bound={kept} allowStage={!selected} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} terminalInput={!selected && reader ? terminalInput : undefined} />}
   </section>;
 }
