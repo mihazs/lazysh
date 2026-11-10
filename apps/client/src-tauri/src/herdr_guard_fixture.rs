@@ -220,7 +220,7 @@ impl OwnedMoshRenderer {
         assert!(child.wait().unwrap().success());
         assert!(self
             .command()
-            .args(["paste-buffer", "-d", "-t", "owned:0.0"])
+            .args(["paste-buffer", "-dr", "-t", "owned:0.0"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -285,7 +285,7 @@ async fn render_mosh_until(
 #[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER and FD-capable LAZYSH_TEST_HERDR"]
 async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure() {
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
-    for user_install in [false, true] {
+    for (user_install, preseed) in [(false, false), (true, false), (false, true), (true, true)] {
         let fixture =
             Fixture::with_mosh_mode_and_user_install(Some(&binary), true, user_install).await;
         owned_herdr_shell_config(&fixture);
@@ -296,7 +296,7 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         };
         let name = "owned-mosh-guard";
         servers.start(name).await;
-        servers
+        let workspace = servers
             .json(
                 name,
                 &[
@@ -309,6 +309,38 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
                 ],
             )
             .await;
+        let capture = fixture.dir.path().join("mosh-guard-input");
+        let pid = fixture.dir.path().join("mosh-guard-pid");
+        let seeded = if preseed {
+            let workspace_id = workspace["result"]["workspace"]["workspace_id"]
+                .as_str()
+                .unwrap();
+            let tab = servers
+                .json(
+                    name,
+                    &[
+                        "tab",
+                        "create",
+                        "--workspace",
+                        workspace_id,
+                        "--cwd",
+                        fixture.dir.path().to_str().unwrap(),
+                        "--label",
+                        "OWNED_SCROLL",
+                        "--no-focus",
+                    ],
+                )
+                .await;
+            let tab_id = tab["result"]["tab"]["tab_id"].as_str().unwrap().to_owned();
+            let pane = tab["result"]["root_pane"]["pane_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let pid = install_capture(&servers, name, &pane, &capture, &pid, true).await;
+            Some((tab_id, pane, pid))
+        } else {
+            None
+        };
         let (app, state) = herdr_native_app(&fixture);
         let (_authority, lease) = unlocked_authority();
         let (source, _) = herdr_echo_source(&fixture, &state, &lease).await;
@@ -346,9 +378,11 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
                 .unwrap()["available"],
             true
         );
+        if let Some((tab, _, _)) = &seeded {
+            let focused = servers.json(name, &["tab", "focus", tab]).await;
+            assert!(focused.get("error").is_none());
+        }
         let source = context("mosh-owned");
-        let capture = fixture.dir.path().join("mosh-guard-input");
-        let pid = fixture.dir.path().join("mosh-guard-pid");
         let inspected = guard(
             &app,
             &lease,
@@ -358,9 +392,18 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
         .await
         .unwrap();
         let pane = inspected["destination"]["pane"].as_str().unwrap();
-        let original_pid = install_capture(&servers, name, pane, &capture, &pid, true).await;
+        let original_pid = if let Some((_, expected_pane, pid)) = &seeded {
+            assert_eq!(pane, expected_pane);
+            *pid
+        } else {
+            install_capture(&servers, name, pane, &capture, &pid, true).await
+        };
         render_mosh_until(&app, &child.session_id, &mut events, &renderer, true).await;
         captured(&capture, b"").await;
+        // Allow the focused pre-existing tab's resize and repaint to settle before observation.
+        if preseed {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
         let destination = timeout(Duration::from_secs(15), async {
             loop {
                 if let Ok(reply) = guard(&app, &lease, &child, json!({"kind":"observe"})).await {
