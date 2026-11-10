@@ -152,3 +152,27 @@ test('Preferences search reveals every result chosen in turn and Back clears it 
   await back();
   await expect(dialog).toHaveCount(0);
 });
+
+test('cursor segments remain touchable and distinguish selection in forced colors', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.emulateMedia({ forcedColors: 'active' });
+  const { dialog } = await openSearch(page);
+  await dialog.getByRole('button', { name: 'Terminal and accessibility', exact: true }).click();
+  const picker = dialog.getByRole('group', { name: 'Cursor', exact: true });
+  const segments = picker.locator('label');
+  await expect(segments).toHaveCount(3);
+  for (const label of await segments.all()) {
+    expect((await label.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  const checked = picker.getByRole('radio', { name: 'bar', exact: true });
+  await expect(checked).toBeChecked();
+  const borders = await segments.evaluateAll(labels => labels.map(label =>
+    parseFloat(getComputedStyle(label.querySelector('span')!).borderTopWidth),
+  ));
+  expect(borders[0]).toBeGreaterThan(borders[1]);
+  await dialog.locator('[data-settings-page="terminal"] h2').focus();
+  await page.keyboard.press('Tab');
+  await expect(checked).toBeFocused();
+  expect(await checked.evaluate(input => getComputedStyle(input.nextElementSibling!).outlineStyle)).not.toBe('none');
+  expect(await picker.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+});

@@ -580,6 +580,10 @@ input[type="search"] {
 .preferences-content [data-settings-page] .cursor-picker > div { display: flex; gap: 4px; }
 .preferences-content [data-settings-page] .cursor-picker label { flex: 1; min-width: 0; cursor: pointer; }
 .preferences-content [data-settings-page] .cursor-picker input { position: absolute; opacity: 0; }
-.preferences-content [data-settings-page] .cursor-picker span { display: block; padding: 10px 4px; border-radius: 999px; text-align: center; overflow-wrap: anywhere; background: var(--theme-control); border: 1px solid transparent; }
+.preferences-content [data-settings-page] .cursor-picker span { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 4px; border-radius: 999px; text-align: center; overflow-wrap: anywhere; background: var(--theme-control); border: 1px solid transparent; }
 .preferences-content [data-settings-page] .cursor-picker input:checked + span { background: var(--theme-hover); border-color: var(--accent); }
 .preferences-content [data-settings-page] .cursor-picker input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (forced-colors: active) {
+  .preferences-content [data-settings-page] .cursor-picker input:checked + span { border: 3px solid Highlight; }
+  .preferences-content [data-settings-page] .cursor-picker input:focus-visible + span { outline-color: Highlight; }
+}
