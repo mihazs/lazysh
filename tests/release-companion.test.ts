@@ -99,6 +99,7 @@ test('quota consumer graphs and native desktop CI select the existing Rust owner
   expect(linux.env.LAZYSH_TEST_AGENT_BIN).toBe('${{ github.workspace }}/target/release/lazysh-agent');
   const cases = linux.run.match(/cases=\(([^)]*)\)/)[1].trim().split(/\s+/);
   expect(cases).toContain('ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers');
+  expect(cases).toContain('ssh::tests::openssh_recorded_images_preserve_bytes_and_default_off');
   expect(linux.run).toContain('--list --ignored --exact');
 }, 30_000);
 test('candidate CLI refuses a publication directory and non-main staging fails before touching output', () => owned(async root => {
