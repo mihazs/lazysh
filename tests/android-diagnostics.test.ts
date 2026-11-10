@@ -203,6 +203,7 @@ test('Android and Linux share the guarded official Mosh producer before emulator
 });
 
 for(const {taskName,keys,values,required} of [
+  {taskName:'test:multiplexers',keys:['LAZYSH_TEST_AGENT_BIN'],values:['/owned/current-source/lazysh-agent'],required:['LAZYSH_TEST_AGENT_BIN']},
   {taskName:'test:android-ssh',keys:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'],values:['1','/owned/pinned/mosh-server','true','github-hosted'],required:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER']},
   {taskName:'test:native-gui',keys:['LAZYSH_NATIVE_GUI_SECRET_SERVICE'],values:['/owned/pinned/gnome-keyring-daemon'],required:['LAZYSH_NATIVE_GUI_SECRET_SERVICE']},
 ])test(`actual Turbo ${taskName} forwards admitted native fixture environment and filters unrelated values`,async()=>{
