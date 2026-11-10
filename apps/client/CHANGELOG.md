@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.28.1
+
+### Patch Changes
+
+- 0958675: Pin the Parakeet model archive the publisher re-uploaded on 2026-11-07, verify all four extracted files, and report a replaced archive clearly.
+- @lazysh/account-usage@1.28.1
+  - @lazysh/common@1.28.1
+  - @lazysh/display-idle@1.28.1
+  - @lazysh/et-transport@1.28.1
+  - @lazysh/mosh-transport@1.28.1
+
 ## 1.28.0
 
 ### Minor Changes

@@ -1,5 +1,12 @@
 # @lazysh/parakeet-runtime
 
+## 1.28.1
+
+### Patch Changes
+
+- 0958675: Pin the Parakeet model archive the publisher re-uploaded on 2026-11-07, verify all four extracted files, and report a replaced archive clearly.
+- @lazysh/common@1.28.1
+
 ## 1.28.0
 
 ### Patch Changes
