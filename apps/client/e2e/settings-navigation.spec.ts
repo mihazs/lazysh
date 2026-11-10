@@ -162,7 +162,7 @@ test('cursor segments remain touchable and distinguish selection in forced color
   const segments = picker.locator('label');
   await expect(segments).toHaveCount(3);
   for (const label of await segments.all()) {
-    expect((await label.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect.poll(async () => (await label.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   }
   const checked = picker.getByRole('radio', { name: 'bar', exact: true });
   await expect(checked).toBeChecked();
