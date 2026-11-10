@@ -32,4 +32,4 @@ fallback() {
 if [ -n "$refresh" ] && ! update; then fallback 'apt-get update' && update || exit; fi
 [ "$#" -gt 0 ] || exit 0
 install "$@" && exit 0
-fallback 'apt-get install' && update && install "$@"
+fallback 'apt-get install' && update && bounded "$install_seconds" dpkg --configure -a && install "$@"

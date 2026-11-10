@@ -31,6 +31,7 @@ async function aptRoot() {
   await writeFile(join(etc, 'sources.list.d', 'ubuntu.sources'), deb822);
   await writeFile(join(etc, 'apt-mirrors.txt'), mirrors);
   await writeFile(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
+  await writeFile(join(bin, 'dpkg'), '#!/bin/sh\necho "dpkg $*" >> "$CALLS"\n[ "$APT_BEHAVIOUR" != stall-dpkg ] || sleep 60\n[ "$APT_BEHAVIOUR" != fail-dpkg ]\n', { mode: 0o700 });
   await writeFile(join(bin, 'apt-get'), `#!/bin/sh
 [ -f "$LAZYSH_APT_ROOT/etc/apt/apt.conf.d/99lazysh-bounded-network" ] || { echo unbounded >> "$CALLS"; exit 97; }
 echo "$*" >> "$CALLS"
@@ -38,7 +39,7 @@ case $APT_BEHAVIOUR:$1 in
   hang:*) if grep -qr azure "$LAZYSH_APT_ROOT/etc/apt"; then sleep 60; fi ;;
   stall:*) sleep 60 ;;
   fail:* | fail-install:install) exit 100 ;;
-  fail-install-once:install) [ "$(grep -c '^install' "$CALLS")" -gt 1 ] || exit 100 ;;
+  fail-install-once:install | fail-dpkg:install | stall-dpkg:install) [ "$(grep -c '^install' "$CALLS")" -gt 1 ] || exit 100 ;;
 esac
 `, { mode: 0o700 });
   const read = (path: string) => readFile(join(etc, path), 'utf8').catch(() => undefined);
@@ -72,7 +73,7 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
 
   test('a failed install switches mirrors, refreshes the lists and installs once more', async () => {
     const result = await install(['strace'], 'fail-install-once');
-    expect(result).toMatchObject({ exit: 0, calls: ['update', 'install -y strace', 'update', 'install -y strace'] });
+    expect(result).toMatchObject({ exit: 0, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace'] });
     expect(result.sources).toEqual([archived(oneLine), archived(deb822), archived(mirrors)]);
   });
 
@@ -81,7 +82,17 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
   });
 
   test('exhausted install retries fail the step', async () => {
-    expect(await install(['strace'], 'fail-install')).toMatchObject({ exit: 100, calls: ['update', 'install -y strace', 'update', 'install -y strace'] });
+    expect(await install(['strace'], 'fail-install')).toMatchObject({ exit: 100, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace'] });
+  });
+
+  test('failed dpkg recovery stops before retrying install', async () => {
+    expect(await install(['strace'], 'fail-dpkg')).toMatchObject({ exit: 1, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a'] });
+  });
+
+  test('stalled dpkg recovery is bounded and stops before retrying install', async () => {
+    const result = await install(['strace'], 'stall-dpkg');
+    expect(result).toMatchObject({ exit: 124, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a'] });
+    expect(result.seconds).toBeLessThan(20);
   });
 
   test('a mirror that stalls every attempt fails the step within its bound instead of hanging', async () => {
