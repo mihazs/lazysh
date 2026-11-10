@@ -384,8 +384,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn cancelling_or_timing_out_a_read_kills_and_reaps_owned_processes() {
-        // The deadline starts only after the fixture has published both owned PIDs.
-        // Keep real process startup outside the measured virtual interval.
+        // Freeze the deadline while real process startup publishes both owned PIDs;
+        // production still starts its timeout when the process is spawned.
         tokio::time::pause();
         for cancel in [true, false] {
             let directory = tempfile::tempdir().unwrap();
@@ -431,7 +431,17 @@ mod tests {
                     !query.is_finished(),
                     "owned fixture exited before the deadline"
                 );
-                tokio::time::advance(Duration::from_millis(1)).await;
+                // Tokio's timer wheel rounds wakeups to millisecond boundaries.
+                tokio::time::advance(Duration::from_millis(2)).await;
+                let completion_stop = std::time::Instant::now() + Duration::from_secs(2);
+                while !query.is_finished() && std::time::Instant::now() < completion_stop {
+                    std::thread::sleep(Duration::from_millis(5));
+                    tokio::task::yield_now().await;
+                }
+                assert!(
+                    query.is_finished(),
+                    "owned fixture did not time out at the deadline"
+                );
                 assert!(query.await.unwrap().is_none());
             }
             loop {
