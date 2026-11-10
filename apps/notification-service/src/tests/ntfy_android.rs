@@ -61,10 +61,12 @@ struct ChallengeTraffic {
 fn challenge_observation(
     nonce: String,
     traffic: Arc<ChallengeTraffic>,
+    push_accepted: Arc<ChallengePushObservation>,
 ) -> axum::routing::MethodRouter {
     post(move |headers: HeaderMap| {
         let nonce = nonce.clone();
         let traffic = traffic.clone();
+        let push_accepted = push_accepted.clone();
         async move {
             if !fixture_authorized(&headers, &nonce) {
                 return StatusCode::UNAUTHORIZED.into_response();
@@ -72,6 +74,7 @@ fn challenge_observation(
             axum::Json(serde_json::json!({
                 "subscribeSeen": traffic.subscribe_seen.load(Ordering::SeqCst),
                 "subscribeOk": traffic.subscribe_ok.load(Ordering::SeqCst),
+                "pushServiceAccepted": push_accepted.category(),
                 "confirmSeen": traffic.confirm_seen.load(Ordering::SeqCst),
                 "confirmOk": traffic.confirm_ok.load(Ordering::SeqCst),
             }))
@@ -82,9 +85,20 @@ fn challenge_observation(
 
 #[tokio::test]
 async fn challenge_observation_is_owned_and_contains_only_closed_flags() {
+    let overlapping = ChallengePushObservation::default();
+    overlapping.start();
+    assert_eq!(overlapping.category(), "unknown");
+    overlapping.start();
+    overlapping.finish(true);
+    overlapping.finish(false);
+    assert_eq!(overlapping.category(), "unknown");
     let traffic = Arc::new(ChallengeTraffic::default());
     traffic.subscribe_seen.store(true, Ordering::SeqCst);
-    let app = Router::new().route("/observe", challenge_observation("owned".into(), traffic));
+    let accepted = Arc::new(ChallengePushObservation::default());
+    let app = Router::new().route(
+        "/observe",
+        challenge_observation("owned".into(), traffic, accepted.clone()),
+    );
     for (nonce, expected) in [
         ("wrong", StatusCode::UNAUTHORIZED),
         ("owned", StatusCode::OK),
@@ -107,10 +121,38 @@ async fn challenge_observation_is_owned_and_contains_only_closed_flags() {
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
                 serde_json::json!({
-                    "subscribeSeen": true, "subscribeOk": false, "confirmSeen": false, "confirmOk": false
+                    "subscribeSeen": true, "subscribeOk": false, "pushServiceAccepted": "unknown", "confirmSeen": false, "confirmOk": false
                 })
             );
         }
+    }
+    for (completions, expected) in [
+        (vec![false], "notAccepted"),
+        (vec![true], "accepted"),
+        (vec![true, false], "unknown"),
+    ] {
+        accepted.0.store(0, Ordering::SeqCst);
+        for completion in completions {
+            accepted.start();
+            accepted.finish(completion);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/observe")
+                    .header("X-Lazysh-Fixture", "owned")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), 256).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["pushServiceAccepted"],
+            expected
+        );
     }
 }
 
@@ -472,7 +514,11 @@ async fn real_ntfy_android_encrypted_challenge() {
     let control = Router::new()
         .route(
             "/__fixture/challenge-observation",
-            challenge_observation(nonce.clone(), challenge_traffic.clone()),
+            challenge_observation(
+                nonce.clone(),
+                challenge_traffic.clone(),
+                service.0.challenge_push_accepted.clone(),
+            ),
         )
         .route(
             "/__fixture/background",

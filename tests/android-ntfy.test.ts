@@ -382,9 +382,10 @@ test('challenge failure state retains only closed phases and a nullable busy fla
 });
 
 test('challenge relay snapshot retains only bounded flags after failure',()=>{
-  const sample='Ntfy relay after-failure[subscribeSeen=true subscribeOk=true confirmSeen=false confirmOk=false]';
-  expect(challengeTrafficObservation('private '+sample+' private')).toEqual({subscribeSeen:true,subscribeOk:true,confirmSeen:false,confirmOk:false});
-  for(const bad of [sample+sample,sample.replace('confirmSeen=false','confirmSeen=private'),sample.replace('confirmOk=false','confirmOk=false endpoint=private'),sample+'x'.repeat(256*1024)])expect(challengeTrafficObservation(bad)).toBeUndefined();
+  const sample='Ntfy relay after-failure[subscribeSeen=true subscribeOk=true confirmSeen=false confirmOk=false pushServiceAccepted=unknown]';
+  expect(challengeTrafficObservation('private '+sample+' private')).toEqual({subscribeSeen:true,subscribeOk:true,confirmSeen:false,confirmOk:false,pushServiceAccepted:'unknown'});
+  for(const accepted of ['accepted','notAccepted','unknown'])expect(challengeTrafficObservation(sample.replace('pushServiceAccepted=unknown',`pushServiceAccepted=${accepted}`))?.pushServiceAccepted).toBe(accepted);
+  for(const bad of [sample+sample,sample.replace('confirmSeen=false','confirmSeen=private'),sample.replace('confirmOk=false','confirmOk=false endpoint=private'),sample.replace('pushServiceAccepted=unknown','pushServiceAccepted=private'),sample+'x'.repeat(256*1024)])expect(challengeTrafficObservation(bad)).toBeUndefined();
   expect(challengeTrafficObservation('snapshot unavailable')).toBeUndefined();
 });
 
