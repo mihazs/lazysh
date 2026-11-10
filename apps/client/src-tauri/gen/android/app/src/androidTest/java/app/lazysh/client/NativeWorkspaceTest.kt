@@ -2169,21 +2169,21 @@ class NativeWorkspaceTest {
             // Espresso's ordinary native center tap is admitted only when the
             // current document proves that center belongs to its original xterm.
             onView(isAssignableFrom(WebView::class.java)).perform(click())
-            // mosh-server shrinks from the top, dropping the bottom rows where the newest output
-            // and the cursor are. The keyboard covers them instead: the remote screen keeps its
-            // rows and the pane pans, so the cursor row and the newest output stay on screen.
-            fun kept(state: JSONObject) = state.getInt("rows") == baseline.getInt("rows") && state.optInt("cursorRow", -1) == baseline.getInt("cursorRow") &&
-                state.getBoolean("cursorShown") && (!baseline.getBoolean("newestShown") || state.getBoolean("newestShown"))
-            awaitPhase("keyboard-hold", true) { kept(it) && it.getBoolean("panned") }
+            // The remote application redraws at the smaller keyboard-sized terminal.
+            val reduced = awaitPhase("keyboard-resize", true) {
+                it.getInt("rows") < baseline.getInt("rows") && it.getBoolean("cursorShown") && !it.getBoolean("panned")
+            }
             device.pressBack()
-            val expanded = awaitPhase("keyboard-release", false) { kept(it) && !it.getBoolean("panned") }
+            val expanded = awaitPhase("keyboard-release", false) {
+                it.getInt("rows") > reduced.getInt("rows") && it.getInt("rows") == baseline.getInt("rows") && it.getBoolean("cursorShown")
+            }
             button("Compose")
             // The sheet covers the output and pauses fitting: the soft keyboard it raises must
             // leave the original terminal rows, and so the remote Mosh size, unchanged.
             awaitPhase("compose-cover", true, covered = true) { it.getInt("domRows") == expanded.getInt("rows") }
             button("Close composer")
-            // Closing refits to the current viewport; a keyboard that stays up still keeps the remote rows.
-            awaitPhase("compose-refit", null) { it.getInt("rows") == expanded.getInt("rows") && it.getBoolean("cursorShown") }
+            // Closing refits to the current viewport, including the keyboard if it remains open.
+            awaitPhase("compose-refit", null) { it.getInt("rows") <= expanded.getInt("rows") && it.getBoolean("cursorShown") }
             if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) device.pressBack()
             val portrait = awaitPhase("portrait", false, dismissKeyboard = true) { true }
             scenario.onActivity { it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
@@ -2192,7 +2192,7 @@ class NativeWorkspaceTest {
             awaitPhase("orientation-grow", false) { activity.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT && it.getInt("rows") > landscape.getInt("rows") }
             // The same append-only receiver's existing final exact chat ledger
             // excludes extra passive bytes posthoc; this is not a per-phase read.
-            println("lazysh Mosh resize: keyboardKeptCursorRow=true newestAtBaseline=${baseline.getBoolean("newestShown")} ordinaryAosp=true receiverLedger=pending-host-final")
+            println("lazysh Mosh resize: keyboardResized=true newestAtBaseline=${baseline.getBoolean("newestShown")} ordinaryAosp=true receiverLedger=pending-host-final")
         } catch (failure: Throwable) { primary = failure; throw failure }
         finally {
             var cleanup: Throwable? = null
@@ -3378,11 +3378,8 @@ class NativeWorkspaceTest {
                 "window[$key]?.token===$token && window[$key].terminal===document.querySelector('.terminal-canvas') && window[$key].terminal.isConnected && document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
             val fresh = UUID.randomUUID().toString().replace("-", "")
             val response = "BG_${fresh}_RESUMED"
-            // Send reopens the soft keyboard. mosh-server shrinks its screen from the top, so a
-            // keyboard-sized resize would drop a response printed just before it on the bottom
-            // rows; the keyboard keeps the remote rows instead, and the response stays where it
-            // is printed. Dash also reports the waited writer as "[1] + Done (<its whole
-            // command>)" before its next prompt; `jobs` consumes that notice first.
+            // Dash reports the waited writer as "[1] + Done (<its whole command>)"
+            // before its next prompt; `jobs` consumes that notice first.
             val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; jobs >/dev/null 2>&1; if ! test -f $directory/background-expired; then " +
                 record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }

@@ -18,7 +18,6 @@ import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, va
 import type {UnappliedTerminalEdit} from "./terminalIme";
 import { keepViewportScrolls, modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
-import { fitMoshKeyboard, moshKeyboardPan, type KeyboardHold } from "./moshKeyboard";
 import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
@@ -71,9 +70,22 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const noGuardedHistory = useRef<string | undefined>(undefined);
   const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const fit = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const viewport = window.visualViewport, element = pane.current;
+    if (!viewport || !element || !active) return;
+    let frame = 0, inset = 0;
+    const update = () => {
+      const covered = viewport.scale === 1 ? Math.max(0, Math.round(element.getBoundingClientRect().bottom + inset - viewport.offsetTop - viewport.height)) : 0;
+      if (covered !== inset) {inset = covered; element.style.marginBottom = covered ? `${covered}px` : '';}
+    };
+    const schedule = () => {cancelAnimationFrame(frame); frame = requestAnimationFrame(update);};
+    update(); viewport.addEventListener('resize', schedule); viewport.addEventListener('scroll', schedule); window.addEventListener('resize', schedule);
+    return () => {cancelAnimationFrame(frame); viewport.removeEventListener('resize', schedule); viewport.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule); element.style.marginBottom = '';};
+  }, [active]);
   const activeRef = useRef(active);
   const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
@@ -734,18 +746,6 @@ export default function TerminalPane({ session, active, quietActivation = false,
     };
     element.addEventListener("scroll", clamped, true);
     const scrolls = keepViewportScrolls(terminal, element);
-    // Held soft-keyboard rows keep the canonical Mosh screen taller than the pane.
-    let keyboard: KeyboardHold | null = null, desired: {cols: number; rows: number} | undefined, measured: {width: number; height: number} | undefined;
-    let visibleHeight = 0;
-    const pan = () => {
-      if (!screen) return;
-      const buffer = terminal.buffer.active, height = Number.parseFloat(screen.style.height);
-      const offset = keyboard ? moshKeyboardPan({rows: terminal.rows, rowHeight: height / terminal.rows, visible: visibleHeight, cursorRow: buffer.baseY + buffer.cursorY - buffer.viewportY}) : 0;
-      const transform = offset > 0 ? `translateY(${-offset}px)` : "";
-      if (screen.style.transform !== transform) screen.style.transform = transform;
-    };
-    // Output, scrolling and canonical resizes all render, so each one re-pans.
-    const panned = session.moshResize ? terminal.onRender(pan) : undefined;
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
       const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
@@ -761,11 +761,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       if (session.moshResize) {
         const proposed = session.connected ? addon.proposeDimensions() : undefined;
         if (proposed) {
-          const size = {width: window.innerWidth, height: window.innerHeight};
-          const next = fitMoshKeyboard({proposed, desired: desired ?? {cols: terminal.cols, rows: terminal.rows}, hold: keyboard,
-            touch: window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches === false, window: size, previous: measured});
-          keyboard = next.hold; measured = size; desired = next.request;
-          try {session.moshResize.requestSize(next.request.cols, next.request.rows);}
+          try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
           catch {reportError(t('appUnavailableInThisAppBuild'));}
         }
       } else {
@@ -782,8 +778,6 @@ export default function TerminalPane({ session, active, quietActivation = false,
       }
       syncTerminalViewport(terminal);
       if (viewport) viewportHeight = viewport.clientHeight;
-      visibleHeight = element.clientHeight;
-      pan();
     };
     fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);
@@ -799,7 +793,6 @@ export default function TerminalPane({ session, active, quietActivation = false,
       element.removeEventListener("scroll", clamped, true); scrolls();
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
       resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
-      panned?.dispose(); if (screen) screen.style.transform = "";
       terminal.attachCustomKeyEventHandler(() => true);
       fit.current = null;
     };
@@ -1120,7 +1113,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
   </div>;
-  return <div className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {quiet.current = false;}}>
+  return <div ref={pane} className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {quiet.current = false;}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
