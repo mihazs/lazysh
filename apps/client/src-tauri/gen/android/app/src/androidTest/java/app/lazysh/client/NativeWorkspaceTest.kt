@@ -2574,15 +2574,15 @@ class NativeWorkspaceTest {
         }
         assertEquals("Both completed short-drag groups must advance remote history", 2, completedProgress)
         val swiped = nativeFingerGesture(false, shortRow).getInt("row")
+        // A reader who lifts the finger in history and waits keeps scrolling with the next drag (#1040).
+        Thread.sleep(1_500)
+        fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        nativeFingerGesture(false, swiped)
         awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
             (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
         """, observe = { remaining -> evaluate(scenario, """
             (()=>{$fingerScript;return JSON.stringify(ownedHerdrFailureMarkers($screens,window.visualViewport));})()
         """, remaining) })
-        // A reader who lifts the finger in history and waits keeps scrolling with the next drag (#1040).
-        Thread.sleep(1_500)
-        fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        nativeFingerGesture(false, swiped)
         focusTab(originalTab)
         if (!alreadyAttached) {
             val question = """(()=>{const screens=$screens;const text=screens.length===1?screens[0].textContent:'';

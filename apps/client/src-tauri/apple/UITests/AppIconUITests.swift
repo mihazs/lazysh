@@ -219,6 +219,7 @@ final class AppIconUITests: XCTestCase {
   private func awaitIcon(_ value: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
     let current = app.webViews.staticTexts["Current icon: " + value].firstMatch
     var observed = Set<IconConfirmationOwner>()
+    var dismissed = false
     let timing = IconWaitTiming(start: DispatchTime.now().uptimeNanoseconds, expected: value)
     let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       for (name, owner) in [(IconConfirmationOwner.springboard, springboard), (.app, app)] {
@@ -233,12 +234,20 @@ final class AppIconUITests: XCTestCase {
           }
           if timing.measure(name, .hittability, { ok.isHittable }, result: { $0 }) {
             timing.measure(name, .tap, { ok.tap() })
+            dismissed = true
+            return true
           }
         }
       }
       return timing.measure(.app, .readback, { current.exists }, result: { $0 })
     }, object: nil)
-    let result = XCTWaiter.wait(for: [completed], timeout: 20)
+    var result = XCTWaiter.wait(for: [completed], timeout: 20)
+    if result == .completed && dismissed {
+      let readback = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+        timing.measure(.app, .readback, { current.exists }, result: { $0 })
+      }, object: nil)
+      result = XCTWaiter.wait(for: [readback], timeout: 20)
+    }
     // Reuse existing observations; never add an accessibility query to time one.
     if let record = timing.report() { print("LAZYSH_ICON_WAIT " + record) }
     let attachment = XCTAttachment(screenshot: app.screenshot())
