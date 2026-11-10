@@ -2222,6 +2222,7 @@ class NativeWorkspaceTest {
         val before = observedShortHistoryBaseline(511, true)
         assertFalse("An unchanged OLD511 is not progress", completedShortHistoryProgress(before, 511))
         assertTrue("Older rows can progress while the newest row remains visible", completedShortHistoryProgress(before, 508))
+        assertTrue("The observed Mosh redraw advanced from OLD506 to OLD498", completedShortHistoryProgress(506, 498))
         assertEquals(511, observedShortHistoryBaseline(511, false))
         assertEquals(512, observedShortHistoryBaseline(-1, true))
         assertTrue(completedShortHistoryProgress(observedShortHistoryBaseline(-1, true), 511))
@@ -2489,7 +2490,7 @@ class NativeWorkspaceTest {
                     samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
                     assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                     val row = sample.getInt("row")
-                    if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                    if (sample.getBoolean("held") && sample.getInt("moves") >= moves && completedShortHistoryProgress(before, row) && System.nanoTime() < fingerDeadline) return row
                     Thread.sleep(10)
                 }
             }
