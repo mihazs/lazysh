@@ -6,11 +6,10 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   getPreferences,
-  parsePreferences,
 } from "./preferences";
 
 type Scope = "settings" | "credentials";
-type SyncMessage = 'syncConfigured' | 'syncSettingsUploaded' | 'syncCredentialsUploaded' | 'syncDisconnected' | {hostsAdded:number;credentialsAdded:number};
+type SyncMessage = 'syncBaselineAcknowledged' | 'syncConfigured' | 'syncSettingsUploaded' | 'syncCredentialsUploaded' | 'syncDisconnected' | {hostsAdded:number;credentialsAdded:number};
 type Preview = {
   token: string;
   scope: Scope;
@@ -29,6 +28,7 @@ type Preview = {
   }[];
   conflicts: { id: string; reason: string }[];
   preferences?: unknown;
+  recoveryPending?: boolean;
 };
 export function parseSyncPreview(value: unknown): Preview {
   if (!value || typeof value !== "object")
@@ -37,6 +37,7 @@ export function parseSyncPreview(value: unknown): Preview {
   if (
     typeof preview.token !== "string" ||
     preview.token.length > 128 ||
+    (preview.recoveryPending !== undefined && typeof preview.recoveryPending !== "boolean") ||
     !["settings", "credentials"].includes(preview.scope) ||
     !Array.isArray(preview.hosts) ||
     preview.hosts.length > 1000 ||
@@ -361,6 +362,7 @@ export default function SyncPanel({
           <p>
             {t('syncReviewHint')}
           </p>
+          {preview.scope === 'settings' && <p>{t('syncNavigationOverwrite')}</p>}
           {preview.hosts.map((host) => (
             <article key={host.id}>
               <strong>{host.name}</strong>
@@ -386,6 +388,17 @@ export default function SyncPanel({
               {conflict.id}: {conflict.reason}
             </p>
           ))}
+          {preview.scope === 'settings' && preview.recoveryPending && <>
+            <p>{t('syncBaselineHelp')}</p>
+            <h4>{t('syncRemoteSettings')}</h4>
+            {preview.preferences && typeof preview.preferences === 'object' && !Array.isArray(preview.preferences)
+              ? <pre style={{whiteSpace: 'pre-wrap', overflowWrap: 'anywhere'}}>{JSON.stringify(preview.preferences, null, 2)}</pre>
+              : <p role="alert">{t('syncRemoteSettingsUnavailable')}</p>}
+            <button disabled={busy || !preview.preferences || typeof preview.preferences !== 'object' || Array.isArray(preview.preferences)} onClick={() => void run(async () => {
+              await invoke('sync_acknowledge', {token: preview.token});
+              if (alive.current) {setPreview(undefined); setMessage('syncBaselineAcknowledged');}
+            })}>{t('syncKeepLocal')}</button>
+          </>}
           <button disabled={busy} onClick={() => void run(apply)}>
             {t('syncApply')}
           </button>

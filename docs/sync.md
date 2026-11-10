@@ -23,6 +23,12 @@ See [independent data categories](reference/sync.md#independent-data-categories)
 
 See [review, merge and conflict behavior](reference/sync.md#review-merge-and-conflict-behavior) for details.
 
+If an upload is interrupted after writing part of the remote settings, preview the
+remote copy. When recovery is pending, **Keep local settings and acknowledge
+remote** records the reviewed remote baseline without importing its hosts or
+preferences. Local settings stay intact; retry the upload explicitly when ready.
+The retry can replace the reviewed remote copy.
+
 ## Disconnect, rotate and revoke
 
 Disconnect removes this device's sync enrollment and pending previews. It leaves local SSH profiles/credentials and remote ciphertext intact. It cannot revoke a lost device remotely.

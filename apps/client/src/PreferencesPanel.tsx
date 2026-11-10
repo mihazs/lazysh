@@ -8,6 +8,7 @@ import {useMountedAccess} from './access';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
+import {navigationBinding, type NavigationShortcut} from "./navigationBindings";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import { bodyGestureSlots, defaults, discreteGestureActions, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
@@ -44,6 +45,7 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
   useEffect(()=>{if(locale.phase==='ready')setLanguageError(undefined);},[locale.phase]);
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
+  const [navigationError, setNavigationError] = useState(false);
   const [chordLabel, setChordLabel] = useState("");
   async function fontAction(action: () => Promise<unknown>) {
     if (fontOperation.current || !current()) return;
@@ -135,6 +137,25 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
 
       <ToolbarKeysEditor preferences={preferences} update={update} />
 
+</>},
+{id:"navigationShortcuts",title:t("preferencesNavigationShortcuts"),parent:"input",content:<>
+      <p>{t("preferencesNavigationShortcutHelp")}</p>
+      {(["agents", "workspaces"] as const).map((view: NavigationShortcut) => {
+        const label = t(view === "agents" ? "appAgents" : "navigationWorkspaces");
+        const current = preferences.navigationShortcuts[view];
+        return <div key={view}>
+          <ChordBuilder key={current ?? 'off'} label={label} binding={current ?? ''} onSave={source => {
+            const binding = navigationBinding(source);
+            const other = preferences.navigationShortcuts[view === 'agents' ? 'workspaces' : 'agents'];
+            if (!binding || binding === other) {setNavigationError(true); return false;}
+            setNavigationError(false);
+            return update({navigationShortcuts: {...preferences.navigationShortcuts, [view]: binding}});
+          }} />
+          <button aria-label={t('preferencesDisableNavigationShortcut', {label})} disabled={current === null} onClick={() => {setNavigationError(false); update({navigationShortcuts: {...preferences.navigationShortcuts, [view]: null}});}}>{t('preferencesDisableShortcut')}</button>
+        </div>;
+      })}
+      {navigationError && <p role="alert">{t('preferencesInvalidNavigationShortcut')}</p>}
+      <button onClick={() => {setNavigationError(false); update({navigationShortcuts: {...defaults.navigationShortcuts}});}}>{t('preferencesResetNavigationShortcuts')}</button>
 </>},
 {id:"preferencesTextSnippets",title:t("preferencesTextSnippets"),parent:"input",value:count(preferences.snippets),content:<>
 

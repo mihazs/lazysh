@@ -1181,7 +1181,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
-  const {sessionLayout} = usePreferences();
+  const {sessionLayout, navigationShortcuts} = usePreferences();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);
@@ -1517,7 +1517,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return showNavigation(mode);
   }
   const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
-  useCapturedShortcut(navigationShortcut,toggleNavigation);
+  useCapturedShortcut(event => navigationShortcut(event, navigationShortcuts),toggleNavigation);
   useCapturedShortcut(agentViewShortcut,()=>{
     if(!active || !active.connected || active.local || view!=='terminal' || navigationCovered)return false;
     chooseSessionView(active,activeSessionView==='terminal'?'agent':'terminal');
@@ -2556,7 +2556,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {palette && (
         <Dialog title={t("paletteTitle")} close={closePalette}>
           <CommandPalette query={search} onQuery={setSearch} onDone={closePalette} note={native ? undefined : t("appOpenTheNativeAppToManageSSHHosts")}
-            commands={paletteCommands({native, hosts, sessions, activeId, tools: sessionViews, currentTool: view, navigationBusy: pendingMuxRequest,
+            commands={paletteCommands({native, hosts, sessions, activeId, tools: sessionViews, currentTool: view, navigationBusy: pendingMuxRequest, navigationShortcuts,
               local: {available: localCapability.available, busy: openingLocal, reason: localCapability.reason},
               run: {host: chooseHost, local: () => void openLocalTerminal(), addHost: () => setEditor("new"), session: chooseLiveSession,
                 tool: id => id === "agents" ? showNavigation("agents") : visitView(id as View), workspaces: () => showNavigation("workspaces"),

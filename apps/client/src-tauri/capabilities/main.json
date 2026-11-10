@@ -49,6 +49,7 @@
     "allow-sync-push",
     "allow-sync-preview",
     "allow-sync-apply",
+    "allow-sync-acknowledge",
     "allow-agent-approvals",
     "allow-resolve-agent-approval",
     "allow-notify-agent-attention",

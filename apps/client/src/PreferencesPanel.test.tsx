@@ -22,6 +22,25 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));expect(getPreferences().dismissKeyboardOnOverscroll).toBe(false);
     } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
   });
+  it('rebinds and disables desktop navigation, rejecting reserved and duplicate shortcuts', () => {
+    savePreferences({...defaults});
+    mountPreferences('Keyboard and gestures','Desktop navigation shortcuts');
+    const input = screen.getByLabelText('Agents chord');
+    fireEvent.change(input,{target:{value:'C-S-P'}});
+    fireEvent.click(screen.getByRole('button',{name:'Save Agents chord'}));
+    expect(screen.getByRole('alert').textContent).toContain('not reserved');
+    expect(getPreferences().navigationShortcuts.agents).toBe('C-S-A');
+    fireEvent.change(input,{target:{value:'C-S-W'}});
+    fireEvent.click(screen.getByRole('button',{name:'Save Agents chord'}));
+    expect(getPreferences().navigationShortcuts.agents).toBe('C-S-A');
+    fireEvent.change(input,{target:{value:'C-M-S-F5'}});
+    fireEvent.click(screen.getByRole('button',{name:'Save Agents chord'}));
+    expect(getPreferences().navigationShortcuts.agents).toBe('C-M-S-F5');
+    fireEvent.click(screen.getByRole('button',{name:'Disable Workspaces shortcut'}));
+    expect(getPreferences().navigationShortcuts.workspaces).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Reset navigation shortcuts'}));
+    expect(getPreferences().navigationShortcuts).toEqual(defaults.navigationShortcuts);
+  });
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});
     mountPreferences('Keyboard and gestures','Terminal touch gestures');

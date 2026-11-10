@@ -79,6 +79,7 @@ fn main() {
         "sync_push",
         "sync_preview",
         "sync_apply",
+        "sync_acknowledge",
         "agent_approvals",
         "resolve_agent_approval",
         "notify_agent_attention",

@@ -1,3 +1,4 @@
+import {defaultNavigationBindings, type NavigationBindings, type NavigationShortcut} from "./navigationBindings";
 import {useEffect, useRef} from "react";
 
 export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "closeSession" } | { action: "session"; index: number };
@@ -30,14 +31,33 @@ export function paletteShortcut(event: KeyboardEvent): boolean {
   return shiftedChord(event) === 'p';
 }
 
-export type NavigationShortcut = 'agents' | 'workspaces';
-/** The letter each Ctrl/Cmd+Shift navigation chord uses. */
-export const navigationShortcutKeys = {agents: 'A', workspaces: 'W'} as const satisfies Record<NavigationShortcut, string>;
+export type {NavigationShortcut} from './navigationBindings';
 
-/** Ctrl/Cmd+Shift+A toggles Agents and Ctrl/Cmd+Shift+W toggles Workspaces; the shell keeps the unshifted chords. */
-export function navigationShortcut(event: KeyboardEvent): NavigationShortcut | undefined {
-  const key = shiftedChord(event);
-  return (Object.keys(navigationShortcutKeys) as NavigationShortcut[]).find(view => navigationShortcutKeys[view].toLowerCase() === key);
+const optionKeys: Record<string, string> = {Backquote:'`~', Minus:'-_', Equal:'=+', BracketLeft:'[{', BracketRight:']}', Backslash:'\\|', Semicolon:';:', Quote:"'\"", Comma:',<', Period:'.>', Slash:'/?'};
+
+/** Match saved navigation shortcuts without changing the terminal chord parser. */
+export function navigationShortcut(event: KeyboardEvent, bindings: NavigationBindings = defaultNavigationBindings, apple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)): NavigationShortcut | undefined {
+  if (event.defaultPrevented || event.isComposing || event.repeat || event.getModifierState('AltGraph') || !appTarget(event.target)) return;
+  if (apple ? event.ctrlKey : event.metaKey) return;
+  const primary = apple ? event.metaKey : event.ctrlKey;
+  const digit = /^Digit([0-9])$/.exec(event.code)?.[1];
+  const fallback = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : digit ? digit + ')!@#$%^&*('[Number(digit)] : optionKeys[event.code];
+  const actualKey = event.altKey && !/^[\x20-\x7e]$/.test(event.key) && fallback ? fallback.length === 1 ? fallback : fallback[event.shiftKey ? 1 : 0] : event.key;
+  const key = ({ArrowLeft:'Left', ArrowRight:'Right', ArrowUp:'Up', ArrowDown:'Down', ' ':'Space', ',':'comma'} as Record<string,string>)[actualKey] ?? (actualKey.length === 1 ? actualKey.toUpperCase() : actualKey);
+  const implicitShift = /^[!-~]$/.test(actualKey) && !/^[a-z0-9]$/i.test(actualKey);
+  const binding = `${primary ? 'C-' : ''}${event.altKey ? 'M-' : ''}${event.shiftKey && !implicitShift ? 'S-' : ''}${key}`;
+  return (Object.keys(bindings) as NavigationShortcut[]).find(view => bindings[view] === binding);
+}
+
+export function navigationHint(binding: string | null, apple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)): ChordHint | undefined {
+  if (!binding) return;
+  const prefix = /^(?:(?:C|M|S)-)*/.exec(binding)![0];
+  const parts = prefix.split('-').filter(Boolean);
+  const key = binding.slice(prefix.length);
+  const labels = parts.map(part => part === 'C' ? (apple ? '⌘' : 'Ctrl') : part === 'M' ? (apple ? '⌥' : 'Alt') : (apple ? '⇧' : 'Shift'));
+  const aria = parts.map(part => part === 'C' ? (apple ? 'Meta' : 'Control') : part === 'M' ? 'Alt' : 'Shift');
+  const name = ({Left:'ArrowLeft',Right:'ArrowRight',Up:'ArrowUp',Down:'ArrowDown',Space:'Space',comma:','} as Record<string,string>)[key] ?? key;
+  return {label: [...labels,key === 'comma' ? ',' : key].join(apple ? '' : '+'), keys: [...aria,name].join('+')};
 }
 
 /** Ctrl/Cmd+Shift+Y toggles the session's Terminal and Agent views. */

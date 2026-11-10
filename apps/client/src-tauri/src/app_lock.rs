@@ -966,6 +966,36 @@ mod tests {
         )
         .is_ok());
     }
+    #[test]
+    fn sync_recovery_acl_rejects_other_windows_and_remote_origins() {
+        #[tauri::command]
+        fn sync_acknowledge() -> &'static str {
+            "admitted"
+        }
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![sync_acknowledge])
+            .build(tauri::generate_context!(test = true))
+            .unwrap();
+        let request = || fixture_request("sync_acknowledge", Default::default());
+        for (label, allowed) in [("main", true), ("other", false)] {
+            let window = tauri::WebviewWindowBuilder::new(
+                &app,
+                label,
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .build()
+            .unwrap();
+            assert_eq!(
+                tauri::test::get_ipc_response(&window, request()).is_ok(),
+                allowed
+            );
+        }
+        let main = app.get_webview_window("main").unwrap();
+        let mut remote = request();
+        remote.url = "https://untrusted.example/".parse().unwrap();
+        assert!(tauri::test::get_ipc_response(&main, remote).is_err());
+        assert!(!allowed_while_locked("sync_acknowledge"));
+    }
     #[tokio::test]
     async fn queued_configuration_never_freshens_its_proof_read_after_reunlock() {
         let state = AccessState::default();

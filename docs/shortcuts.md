@@ -1,5 +1,15 @@
 # Terminal shortcuts
 
+Desktop navigation defaults to Ctrl/Cmd+Shift+A for Agents and Ctrl/Cmd+Shift+W
+for Workspaces. In Preferences → Keyboard and gestures → Desktop navigation shortcuts,
+change either binding or disable it. The builder accepts a single key with Control
+(Command on Mac) or Alt, and optional Shift. For punctuation, enter the resulting
+character (for example `M-plus`); the keyboard layout determines whether Shift is
+needed. Option-composed keys on Mac use the physical US keyboard position when their
+result is not ASCII. Palette (Ctrl/Cmd+Shift+P), Agent view
+(Ctrl/Cmd+Shift+Y), and unshifted application shortcuts remain reserved. The command
+palette displays the saved bindings; resetting navigation shortcuts restores both defaults.
+
 On a phone, drag one finger vertically directly on the terminal to scroll. This
 uses the same handling as a mouse wheel: local history for an ordinary terminal,
 or the application's mouse/alternate-screen behavior for Herdr and similar tools.
@@ -194,17 +204,17 @@ actions. Real multiplexers and physical touch are separate acceptance gates.
 
 ## Open Agents and Workspaces
 
-Press **Ctrl+Shift+A** (Cmd+Shift+A on macOS) to open Agents and **Ctrl+Shift+W**
+By default, press **Ctrl+Shift+A** (Cmd+Shift+A on macOS) to open Agents and **Ctrl+Shift+W**
 (Cmd+Shift+W) to open Workspaces for the current connection. Press the same
 chord again to return to the terminal; on a wide screen the sidebar goes back to
-Connections. Both chords work from a focused terminal and never reach the shell,
+Connections. These default chords work from a focused terminal and never reach the shell,
 which keeps Ctrl+A and Ctrl+W. They do nothing while typing in another field or
 inside a dialog. The command palette shows them beside **Agents** and
 **Workspaces**, and screen readers announce them as the commands' keyboard
 shortcuts. Agents needs a connected remote session, so in the local terminal
 Ctrl+Shift+A stays an ordinary terminal keypress, the Agents toolbar key is
-disabled and an Agents gesture does nothing. The chords themselves are fixed;
-the gestures and toolbar keys below are configurable.
+disabled and an Agents gesture does nothing. Configure or disable the desktop chords
+in Preferences as described above; gestures and toolbar keys are configurable too.
 
 On a touch screen, a two-finger swipe up in a plain terminal opens Agents and a
 two-finger swipe down opens Workspaces. In tmux, Herdr and Zellij these swipes

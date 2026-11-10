@@ -1,3 +1,4 @@
+import {defaultNavigationBindings, parseNavigationBindings, type NavigationBindings} from './navigationBindings';
 import {LocalUiError} from './i18n/localError';
 import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
@@ -70,6 +71,7 @@ export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAw
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
+  navigationShortcuts: NavigationBindings;
   theme: keyof typeof themes | "custom";
   appTheme: keyof typeof themes | "custom";
   customThemeInfo?: ThemeInfo;
@@ -101,7 +103,7 @@ export type Preferences = {
   dismissKeyboardOnOverscroll: boolean;
 };
 export const defaults: Preferences = {
-  version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
+  version: 1, navigationShortcuts: {...defaultNavigationBindings}, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
@@ -150,6 +152,7 @@ export function parsePreferences(value: unknown): Preferences {
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   return {
     version: 1,
+    navigationShortcuts: parseNavigationBindings(p.navigationShortcuts),
     uiLanguage: isUiLanguage(p.uiLanguage) ? p.uiLanguage : "system",
     sessionLayout: p.sessionLayout === "cards" ? "cards" : "list",
     theme: customTheme && (p.customThemeInfo === undefined || p.theme === "custom") ? "custom" : typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,

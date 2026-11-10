@@ -194,6 +194,7 @@ pub fn run() {
                 sync::sync_push,
                 sync::sync_preview,
                 sync::sync_apply,
+                sync::sync_acknowledge,
                 approvals::agent_approvals,
                 approvals::resolve_agent_approval,
                 notifications::notify_agent_attention,

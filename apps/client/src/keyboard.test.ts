@@ -52,7 +52,7 @@ describe("hardware app shortcuts", () => {
     document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><input><div role="dialog"><button></button></div>';
     const press = (key: string, target: Element, options: KeyboardEventInit) => {
       let result: ReturnType<typeof navigationShortcut>;
-      target.addEventListener("keydown", e => {result = navigationShortcut(e as KeyboardEvent);}, {once: true});
+      target.addEventListener("keydown", e => {result = navigationShortcut(e as KeyboardEvent, undefined, options.metaKey === true);}, {once: true});
       target.dispatchEvent(new KeyboardEvent("keydown", {key, shiftKey: true, bubbles: true, cancelable: true, ...options}));
       return result;
     };
@@ -86,4 +86,55 @@ describe("hardware app shortcuts", () => {
     expect(shiftedChordHint("A", false)).toEqual({label: "Ctrl+Shift+A", keys: "Control+Shift+A"});
     expect(shiftedChordHint("W", true)).toEqual({label: "⌘⇧W", keys: "Meta+Shift+W"});
   });
+});
+
+it('matches configured navigation keys, rejects reserved keys, and exposes accessible hints', async () => {
+  const {navigationBinding, parseNavigationBindings} = await import('./navigationBindings');
+  const {navigationHint} = await import('./keyboard');
+  expect(navigationBinding('Ctrl+Alt+Shift+F5')).toBe('C-M-S-F5');
+  expect(parseNavigationBindings({agents:'M-comma',workspaces:null}).agents).toBe('M-comma');
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:',',altKey:true}),{agents:'M-comma',workspaces:null})).toBe('agents');
+  for (const value of ['C-S-P','C-S-Y','C-w','C-1','C-a C-b','text:hello','a','S-Tab','Enter']) expect(navigationBinding(value)).toBeUndefined();
+  expect(parseNavigationBindings({agents:'C-S-B',workspaces:'C-S-B'})).toEqual({agents:'C-S-A',workspaces:'C-S-W'});
+  const bindings = parseNavigationBindings({agents:'C-M-S-F5',workspaces:null});
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'F5',ctrlKey:true,altKey:true,shiftKey:true}),bindings)).toBe('agents');
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'W',ctrlKey:true,shiftKey:true}),bindings)).toBeUndefined();
+  expect(navigationHint(bindings.agents,false)).toEqual({label:'Ctrl+Alt+Shift+F5',keys:'Control+Alt+Shift+F5'});
+  expect(navigationHint(null)).toBeUndefined();
+});
+
+
+it('protects terminal typing, ordinary controls, platform modifiers, and AltGraph', async () => {
+  const {navigationBinding} = await import('./navigationBindings');
+  expect(navigationBinding('Tab')).toBeUndefined();
+  expect(navigationBinding('S-a')).toBeUndefined();
+  document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><input>';
+  const terminal = document.querySelector('textarea')!, input = document.querySelector('input')!;
+  const press = (target: Element, event: KeyboardEvent, apple: boolean) => {
+    let result: ReturnType<typeof navigationShortcut>;
+    target.addEventListener('keydown', e => {result = navigationShortcut(e as KeyboardEvent, undefined, apple);}, {once:true});
+    target.dispatchEvent(event);
+    return result;
+  };
+  const event = (options: KeyboardEventInit) => new KeyboardEvent('keydown',{key:'A',shiftKey:true,bubbles:true,...options});
+  expect(press(terminal,event({ctrlKey:true}),false)).toBe('agents');
+  expect(press(terminal,event({metaKey:true}),false)).toBeUndefined();
+  expect(press(terminal,event({ctrlKey:true}),true)).toBeUndefined();
+  expect(press(terminal,event({metaKey:true}),true)).toBe('agents');
+  expect(press(terminal,event({ctrlKey:true,metaKey:true}),true)).toBeUndefined();
+  expect(press(input,event({ctrlKey:true}),false)).toBeUndefined();
+  const altGraph = event({ctrlKey:true});
+  Object.defineProperty(altGraph,'getModifierState',{value:(key:string) => key === 'AltGraph'});
+  expect(press(terminal,altGraph,false)).toBeUndefined();
+});
+
+it('matches resulting punctuation and Option-composed physical letters', () => {
+  const plus = {agents:'M-+',workspaces:null};
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'+',code:'Equal',altKey:true,shiftKey:true}),plus,false)).toBe('agents');
+  const letter = {agents:'M-A',workspaces:null};
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'å',code:'KeyA',altKey:true}),letter,true)).toBe('agents');
+  const slash = {agents:'M-/',workspaces:null};
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'÷',code:'Slash',altKey:true}),slash,true)).toBe('agents');
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'⁄',code:'Digit1',altKey:true}),{agents:'M-1',workspaces:null},true)).toBe('agents');
+  expect(navigationShortcut(new KeyboardEvent('keydown',{key:'±',code:'Equal',altKey:true,shiftKey:true}),plus,true)).toBe('agents');
 });

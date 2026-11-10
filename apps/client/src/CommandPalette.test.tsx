@@ -73,3 +73,15 @@ it('runs a pointer-chosen option', async () => {
   expect(onDone).toHaveBeenCalledOnce();
   expect(commands[3].run).toHaveBeenCalledOnce();
 });
+
+it('renders the saved navigation hint and removes it when the shortcut is disabled', async () => {
+  const {paletteCommands} = await import('./paletteCommands');
+  const run = {host:vi.fn(),local:vi.fn(),addHost:vi.fn(),session:vi.fn(),tool:vi.fn(),workspaces:vi.fn(),switcher:vi.fn(),closeActive:vi.fn(),preferences:vi.fn(),push:vi.fn(),inbox:vi.fn(),sync:vi.fn(),sharing:vi.fn(),about:vi.fn()};
+  const context = {native:true,hosts:[],sessions:[{id:'1',name:'test',destination:'test',connected:true}],activeId:'1',tools:[{id:'agents',label:'Agents'}],navigationBusy:false,local:{available:true,busy:false,reason:''},run};
+  const commands = paletteCommands({...context,navigationShortcuts:{agents:'C-M-F5',workspaces:null}});
+  render(<Harness commands={commands} onDone={vi.fn()}/>);
+  const agents = screen.getByRole('option',{name:/Agents/});
+  expect(agents.getAttribute('aria-keyshortcuts')).toBe('Control+Alt+F5');
+  expect(agents.querySelector('kbd')?.textContent).toBe('Ctrl+Alt+F5');
+  expect(screen.getByRole('option',{name:/Workspaces/}).getAttribute('aria-keyshortcuts')).toBeNull();
+});

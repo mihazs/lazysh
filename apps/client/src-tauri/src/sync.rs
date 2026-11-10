@@ -22,6 +22,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, String>;
 const ACCOUNT: &str = "sync-enrollment-v1";
+const NAVIGATION_ACCOUNT: &str = "sync-navigation-state-v1";
+const NAVIGATION_FILE: &str = "lazysh-navigation-v1.age";
 const LIMIT: usize = 8 * 1024 * 1024;
 const WORK_FACTOR: u8 = 14;
 const RECOVERY_PREFIX: &str = "LAZYSH-SYNC-V1-";
@@ -124,6 +126,189 @@ impl Enrollment {
         }
     }
 }
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NavigationState {
+    identity: String,
+    etag: Option<String>,
+    revision: u64,
+    #[serde(default)]
+    pending_upload: bool,
+    #[serde(default)]
+    reviewed_baseline: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NavigationBundle {
+    version: u8,
+    revision: u64,
+    navigation_shortcuts: serde_json::Value,
+}
+fn check_upload_etag(actual: Option<&str>, expected: Option<&str>) -> Result<()> {
+    if actual != expected {
+        return Err("Remote sync changed. Fetch and review before pushing.".into());
+    }
+    Ok(())
+}
+fn recovery_requires_review(state: &NavigationState) -> bool {
+    state.pending_upload && !state.reviewed_baseline
+}
+fn check_recovery_retry(state: &NavigationState, has_shortcuts: bool) -> Result<()> {
+    if state.pending_upload && state.reviewed_baseline && !has_shortcuts {
+        return Err(
+            "Retry the settings upload with navigation shortcuts to complete recovery.".into(),
+        );
+    }
+    Ok(())
+}
+fn pending_upload_is_empty(
+    state: &NavigationState,
+    base_absent: bool,
+    base_tag_absent: bool,
+    navigation_absent: bool,
+) -> bool {
+    base_absent
+        && base_tag_absent
+        && state.revision == 0
+        && state.etag.is_none()
+        && navigation_absent
+}
+fn check_navigation_upload_access(
+    operation: &CredentialOperation,
+    access: &AccessLease,
+) -> Result<()> {
+    operation.check().map_err(|_| "Settings uploaded, but navigation upload was interrupted. Fetch and review before retrying.")?;
+    access.check().map_err(|_| "Settings uploaded, but navigation upload was interrupted. Fetch and review before retrying.")?;
+    Ok(())
+}
+fn navigation_identity(enrollment: &Enrollment) -> String {
+    use sha2::{Digest, Sha256};
+    let input = Zeroizing::new(
+        serde_json::to_vec(&(
+            &enrollment.config.endpoint,
+            &enrollment.config.username,
+            &enrollment.recovery_key,
+        ))
+        .expect("strings are serializable"),
+    );
+    format!("{:x}", Sha256::digest(&*input))
+}
+fn take_navigation_preferences(
+    preferences: &mut Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    preferences
+        .as_mut()
+        .and_then(|value| value.as_object_mut())
+        .and_then(|object| object.remove("navigationShortcuts"))
+}
+fn valid_navigation_binding(value: &str) -> bool {
+    if value.len() > 128 {
+        return false;
+    }
+    let mut key = value;
+    let ctrl = key.strip_prefix("C-").is_some_and(|rest| {
+        key = rest;
+        true
+    });
+    let alt = key.strip_prefix("M-").is_some_and(|rest| {
+        key = rest;
+        true
+    });
+    let shift = key.strip_prefix("S-").is_some_and(|rest| {
+        key = rest;
+        true
+    });
+    if !ctrl && !alt {
+        return false;
+    }
+    let named = matches!(
+        key,
+        "Enter"
+            | "Escape"
+            | "Tab"
+            | "Backspace"
+            | "Space"
+            | "Left"
+            | "Right"
+            | "Up"
+            | "Down"
+            | "Home"
+            | "End"
+            | "Insert"
+            | "Delete"
+            | "PageUp"
+            | "PageDown"
+            | "F1"
+            | "F2"
+            | "F3"
+            | "F4"
+            | "F5"
+            | "F6"
+            | "F7"
+            | "F8"
+            | "F9"
+            | "F10"
+            | "F11"
+            | "F12"
+    );
+    let single = key.len() == 1
+        && key.as_bytes()[0].is_ascii_graphic()
+        && !key.as_bytes()[0].is_ascii_lowercase();
+    if !named && !single && key != "comma" {
+        return false;
+    }
+    if !named && shift && !key.as_bytes()[0].is_ascii_uppercase() {
+        return false;
+    }
+    if !named
+        && ctrl
+        && !(key.len() == 1 && key.as_bytes()[0].is_ascii_uppercase())
+        && !matches!(key, "-" | "@" | "[" | "\\" | "]" | "^" | "_" | "?")
+    {
+        return false;
+    }
+    if ctrl
+        && !alt
+        && ((shift && matches!(key, "P" | "Y")) || (!shift && matches!(key, "K" | "O" | "N" | "W")))
+    {
+        return false;
+    }
+    true
+}
+fn validate_navigation(bundle: &NavigationBundle) -> Result<()> {
+    let object = bundle
+        .navigation_shortcuts
+        .as_object()
+        .ok_or("Invalid navigation shortcuts")?;
+    let agents = object.get("agents").ok_or("Invalid navigation shortcuts")?;
+    let workspaces = object
+        .get("workspaces")
+        .ok_or("Invalid navigation shortcuts")?;
+    if bundle.version != 1
+        || bundle.revision == 0
+        || object.len() != 2
+        || [agents, workspaces]
+            .iter()
+            .any(|value| !value.is_null() && !value.as_str().is_some_and(valid_navigation_binding))
+        || (!agents.is_null() && agents == workspaces)
+    {
+        return Err("Invalid navigation shortcuts".into());
+    }
+    Ok(())
+}
+fn check_navigation_revision(remote: Option<u64>, previous: u64) -> Result<()> {
+    if remote.map_or(previous != 0, |revision| revision < previous) {
+        return Err("Navigation sync rollback detected. Local data was preserved.".into());
+    }
+    Ok(())
+}
+fn decrypt_navigation(key: &str, bytes: &[u8]) -> Result<NavigationBundle> {
+    let plaintext = decrypt_bytes(key, bytes)?;
+    let bundle =
+        serde_json::from_slice(&plaintext).map_err(|_| "Invalid navigation sync snapshot")?;
+    validate_navigation(&bundle)?;
+    Ok(bundle)
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -190,6 +375,8 @@ pub struct Preview {
     scope: Scope,
     hosts: Vec<PreviewHost>,
     conflicts: Vec<Conflict>,
+    #[serde(rename = "recoveryPending")]
+    recovery_pending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     preferences: Option<serde_json::Value>,
 }
@@ -201,6 +388,7 @@ struct Pending {
     additions: Vec<Host>,
     credential_ids: HashSet<String>,
     enroll_pins: Vec<Host>,
+    navigation: Option<(NavigationBundle, String)>,
 }
 #[derive(Default)]
 pub struct SyncState {
@@ -279,19 +467,17 @@ impl Remote {
             .map_err(|_| "Cannot initialize sync transport")?;
         Ok(Self { client, endpoint })
     }
-    fn url(&self, scope: Scope) -> Url {
-        self.endpoint
-            .join(scope.file())
-            .expect("fixed resource name")
+    fn url(&self, file: &str) -> Url {
+        self.endpoint.join(file).expect("fixed resource name")
     }
     async fn fetch(
         &self,
         enrollment: &Enrollment,
-        scope: Scope,
+        file: &str,
     ) -> Result<Option<(Vec<u8>, String)>> {
         let mut response = self
             .client
-            .get(self.url(scope))
+            .get(self.url(file))
             .basic_auth(&enrollment.config.username, Some(&enrollment.password))
             .header("Cache-Control", "no-store")
             .send()
@@ -332,7 +518,7 @@ impl Remote {
     async fn put(
         &self,
         enrollment: &Enrollment,
-        scope: Scope,
+        file: &str,
         ciphertext: Vec<u8>,
         expected: Option<&str>,
     ) -> Result<Option<String>> {
@@ -341,7 +527,7 @@ impl Remote {
         }
         let request = self
             .client
-            .put(self.url(scope))
+            .put(self.url(file))
             .basic_auth(&enrollment.config.username, Some(&enrollment.password))
             .header("Content-Type", "application/octet-stream")
             .header("Cache-Control", "no-store")
@@ -353,7 +539,7 @@ impl Remote {
         let response = request
             .send()
             .await
-            .map_err(|_| "Cannot upload encrypted sync data")?;
+            .map_err(|_| "Sync upload outcome is unknown. Fetch and review before retrying.")?;
         if response.status() == StatusCode::PRECONDITION_FAILED {
             return Err("Remote sync changed. Fetch and review it before pushing.".into());
         }
@@ -368,6 +554,7 @@ impl Remote {
             .get(ETAG)
             .map(|v| etag(v.to_str().map_err(|_| "Invalid WebDAV ETag")?))
             .transpose()
+            .map_err(|_| "Upload may have succeeded, but the server supplied an invalid ETag. Fetch and review before retrying.".into())
     }
 }
 async fn load(app: &AppHandle) -> Result<Option<Enrollment>> {
@@ -413,6 +600,51 @@ async fn save_for_operation(
     enrollment_write(guard, move || {
         app.vault()
             .set_protected_for(ACCOUNT, &value, false, &operation)
+    })
+    .await
+}
+async fn load_navigation(
+    app: &AppHandle,
+    enrollment: &Enrollment,
+    operation: CredentialOperation,
+) -> Result<NavigationState> {
+    let identity = navigation_identity(enrollment);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        operation.check()?;
+        let state: Option<NavigationState> = app
+            .vault()
+            .get_protected_for(NAVIGATION_ACCOUNT, false, &operation)?
+            .map(|value| {
+                serde_json::from_str(&Zeroizing::new(value))
+                    .map_err(|_| "Invalid navigation sync state")
+            })
+            .transpose()?;
+        operation.check()?;
+        Ok(state
+            .filter(|state| state.identity == identity)
+            .unwrap_or(NavigationState {
+                identity,
+                ..Default::default()
+            }))
+    })
+    .await
+    .map_err(|_| "Cannot read navigation sync state")?
+}
+async fn save_navigation(
+    app: &AppHandle,
+    state: &NavigationState,
+    operation: CredentialOperation,
+    guard: Arc<OwnedMutexGuard<()>>,
+) -> Result<()> {
+    operation.check()?;
+    let value = Zeroizing::new(
+        serde_json::to_string(state).map_err(|_| "Cannot encode navigation sync state")?,
+    );
+    let app = app.clone();
+    enrollment_write(guard, move || {
+        app.vault()
+            .set_protected_for(NAVIGATION_ACCOUNT, &value, false, &operation)
     })
     .await
 }
@@ -641,6 +873,9 @@ fn encrypt(key: &str, bundle: &Bundle) -> Result<Vec<u8>> {
     if bytes.len() > LIMIT - 4096 {
         return Err("Sync snapshot exceeds the size limit".into());
     }
+    encrypt_bytes(key, &bytes)
+}
+fn encrypt_bytes(key: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     // A shared-secret age recipient also authenticates key possession; public-key age does not.
     let mut recipient =
         age::scrypt::Recipient::new(age::secrecy::SecretString::from(recovery(key)?.to_string()));
@@ -653,7 +888,7 @@ fn encrypt(key: &str, bundle: &Bundle) -> Result<Vec<u8>> {
         .wrap_output(&mut encrypted)
         .map_err(|_| "Cannot encrypt sync snapshot")?;
     writer
-        .write_all(&bytes)
+        .write_all(bytes)
         .map_err(|_| "Cannot encrypt sync snapshot")?;
     writer
         .finish()
@@ -661,6 +896,13 @@ fn encrypt(key: &str, bundle: &Bundle) -> Result<Vec<u8>> {
     Ok(encrypted)
 }
 fn decrypt(key: &str, bytes: &[u8], scope: Scope) -> Result<Bundle> {
+    let plaintext = decrypt_bytes(key, bytes)?;
+    let bundle: Bundle =
+        serde_json::from_slice(&plaintext).map_err(|_| "Invalid encrypted sync snapshot")?;
+    validate_bundle(&bundle, scope)?;
+    Ok(bundle)
+}
+fn decrypt_bytes(key: &str, bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     if bytes.len() > LIMIT {
         return Err("Encrypted sync data exceeds 8 MiB".into());
     }
@@ -679,10 +921,7 @@ fn decrypt(key: &str, bytes: &[u8], scope: Scope) -> Result<Bundle> {
     if plaintext.len() > LIMIT {
         return Err("Decrypted snapshot exceeds the size limit".into());
     }
-    let bundle: Bundle =
-        serde_json::from_slice(&plaintext).map_err(|_| "Invalid encrypted sync snapshot")?;
-    validate_bundle(&bundle, scope)?;
-    Ok(bundle)
+    Ok(plaintext)
 }
 fn same_identity(a: &Host, b: &Host) -> bool {
     a.hostname == b.hostname
@@ -933,7 +1172,8 @@ pub async fn sync_forget(
             let commit_access = access.clone();
             enrollment_write(_guard.clone(), move || {
                 commit_access.check()?;
-                app.vault().delete(ACCOUNT)
+                app.vault().delete(ACCOUNT)?;
+                app.vault().delete(NAVIGATION_ACCOUNT)
             })
             .await?;
             state.pending.lock().await.clear();
@@ -962,12 +1202,45 @@ pub async fn sync_push(
             credential_operation.check()?;
             access.check()?;
             let remote = Remote::new(&enrollment.config.endpoint)?;
-            let current = remote.fetch(&enrollment, scope).await?;
-            if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
-                return Err(
-                    "Remote sync changed. Fetch and apply a reviewed merge before pushing.".into(),
-                );
+            let current = remote.fetch(&enrollment, scope.file()).await?;
+            check_upload_etag(current.as_ref().map(|(_, tag)| tag.as_str()), enrollment.etag(scope))?;
+            let mut preferences = preferences;
+            let navigation_shortcuts = if scope == Scope::Settings {
+                take_navigation_preferences(&mut preferences)
+            } else { None };
+            let mut navigation_state = if scope == Scope::Settings {
+                Some(load_navigation(&app, &enrollment, credential_operation.clone()).await?)
+            } else { None };
+            if let Some(saved) = navigation_state.as_mut() {
+                check_recovery_retry(saved, navigation_shortcuts.is_some())?;
+                if recovery_requires_review(saved) {
+                    let empty = pending_upload_is_empty(saved, current.is_none(), enrollment.etag(scope).is_none() && enrollment.revision(scope) == 0,
+                        remote.fetch(&enrollment, NAVIGATION_FILE).await?.is_none());
+                    if !empty { return Err("An earlier settings upload may have partially completed. Fetch and review before uploading again.".into()); }
+                    saved.pending_upload = false;
+                    save_navigation(&app, saved, credential_operation.clone(), _guard.clone()).await?;
+                }
             }
+            let navigation_upload = if let Some(navigation_shortcuts) = navigation_shortcuts {
+                let navigation_state = navigation_state.as_ref().expect("navigation state was loaded");
+                let current = remote.fetch(&enrollment, NAVIGATION_FILE).await?;
+                check_upload_etag(current.as_ref().map(|(_, tag)| tag.as_str()), navigation_state.etag.as_deref())?;
+                if current.is_none() && navigation_state.revision != 0 {
+                    return Err("Navigation sync rollback detected".into());
+                }
+                let key = enrollment.recovery()?;
+                let previous = navigation_state.revision;
+                Some(tauri::async_runtime::spawn_blocking(move || {
+                    if let Some((bytes, _)) = current {
+                        let existing = decrypt_navigation(&key, &bytes)?;
+                        if existing.revision != previous { return Err("Navigation sync revision changed. Fetch and review it first.".into()); }
+                    }
+                    let bundle = NavigationBundle { version: 1, revision: previous.checked_add(1).ok_or("Navigation sync revision is exhausted")?, navigation_shortcuts };
+                    validate_navigation(&bundle)?;
+                    let plaintext = Zeroizing::new(serde_json::to_vec(&bundle).map_err(|_| "Cannot encode navigation sync")?);
+                    encrypt_bytes(&key, &plaintext)
+                }).await.map_err(|_| "Cannot encrypt navigation sync")??)
+            } else { None };
             let mut snapshot = hosts
                 .sync_snapshot()
                 .map_err(|_| "Cannot read local hosts")?;
@@ -1051,12 +1324,37 @@ pub async fn sync_push(
             .map_err(|_| "Cannot encrypt sync snapshot")??;
             credential_operation.check()?;
             access.check()?;
+            if navigation_upload.is_some() {
+                let saved = navigation_state.as_mut().expect("settings navigation state was loaded");
+                saved.pending_upload = true;
+                saved.reviewed_baseline = false;
+                save_navigation(&app, saved, credential_operation.clone(), _guard.clone()).await?;
+            }
+            credential_operation.check()?;
+            access.check()?;
             let tag = remote
-                .put(&enrollment, scope, ciphertext, enrollment.etag(scope))
+                .put(&enrollment, scope.file(), ciphertext, enrollment.etag(scope))
                 .await?;
+            let missing_tag = tag.is_none();
             enrollment.set_etag(scope, tag);
             enrollment.set_revision(scope, previous_revision + 1);
-            save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
+            save_for_operation(&app, &enrollment, credential_operation.clone(), _guard.clone()).await
+                .map_err(|_| "Snapshot uploaded, but local sync state could not be saved. Fetch and review before retrying.")?;
+            if let Some(ciphertext) = navigation_upload {
+                if missing_tag { return Err("Settings uploaded without an ETag. Fetch and review before uploading navigation settings.".into()); }
+                let navigation_state = navigation_state.as_mut().expect("navigation state was loaded");
+                check_navigation_upload_access(&credential_operation, &access)?;
+                let tag = remote.put(&enrollment, NAVIGATION_FILE, ciphertext, navigation_state.etag.as_deref()).await
+                    .map_err(|_| "Settings uploaded, but navigation sync may not have completed. Fetch and review before retrying.")?;
+                let missing_tag = tag.is_none();
+                navigation_state.etag = tag;
+                navigation_state.revision += 1;
+                navigation_state.pending_upload = missing_tag;
+                navigation_state.reviewed_baseline = false;
+                save_navigation(&app, navigation_state, credential_operation, _guard.clone()).await
+                    .map_err(|_| "Navigation uploaded, but local sync state could not be saved. Fetch and review before retrying.")?;
+                if missing_tag { return Err("Navigation uploaded without an ETag. Fetch and review before uploading again.".into()); }
+            }
             Ok(Uploaded { uploaded: true })
         })
         .await
@@ -1076,16 +1374,56 @@ pub async fn sync_preview(
             ensure_enabled(&enrollment, scope)?;
             access.check()?;
             let (bytes, tag) = Remote::new(&enrollment.config.endpoint)?
-                .fetch(&enrollment, scope)
+                .fetch(&enrollment, scope.file())
                 .await?
                 .ok_or("No remote snapshot for this category")?;
             let key = enrollment.recovery()?;
-            let bundle = tauri::async_runtime::spawn_blocking(move || decrypt(&key, &bytes, scope))
-                .await
-                .map_err(|_| "Cannot decrypt sync snapshot")??;
+            let mut bundle =
+                tauri::async_runtime::spawn_blocking(move || decrypt(&key, &bytes, scope))
+                    .await
+                    .map_err(|_| "Cannot decrypt sync snapshot")??;
             if bundle.revision < enrollment.revision(scope) {
                 return Err("Remote sync rollback detected. Local data was preserved.".into());
             }
+            let mut recovery_pending = false;
+            let navigation = if scope == Scope::Settings {
+                let operation = app.vault().operation();
+                let nav_state = load_navigation(&app, &enrollment, operation).await?;
+                recovery_pending = nav_state.pending_upload;
+                match Remote::new(&enrollment.config.endpoint)?
+                    .fetch(&enrollment, NAVIGATION_FILE)
+                    .await?
+                {
+                    Some((bytes, tag)) => {
+                        let key = enrollment.recovery()?;
+                        let navigation = tauri::async_runtime::spawn_blocking(move || {
+                            decrypt_navigation(&key, &bytes)
+                        })
+                        .await
+                        .map_err(|_| "Cannot decrypt navigation sync")??;
+                        check_navigation_revision(Some(navigation.revision), nav_state.revision)?;
+                        if let Some(object) = bundle
+                            .preferences
+                            .as_mut()
+                            .and_then(|value| value.as_object_mut())
+                        {
+                            object.insert(
+                                "navigationShortcuts".into(),
+                                navigation.navigation_shortcuts.clone(),
+                            );
+                        } else {
+                            return Err("Navigation sync requires settings preferences".into());
+                        }
+                        Some((navigation, tag))
+                    }
+                    None => {
+                        check_navigation_revision(None, nav_state.revision)?;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let local = hosts
                 .sync_snapshot()
                 .map_err(|_| "Cannot read local hosts")?;
@@ -1106,6 +1444,7 @@ pub async fn sync_preview(
                 scope,
                 hosts: preview_hosts,
                 conflicts,
+                recovery_pending,
                 preferences: bundle.preferences.clone(),
             };
             let mut pending = state.pending.lock().await;
@@ -1123,6 +1462,7 @@ pub async fn sync_preview(
                         additions,
                         credential_ids,
                         enroll_pins,
+                        navigation,
                     },
                 );
             })?;
@@ -1133,6 +1473,114 @@ pub async fn sync_preview(
                 cache.lock().await.remove(&token);
             });
             Ok(preview)
+        })
+        .await
+}
+async fn verify_remote_pending(
+    remote: &Remote,
+    enrollment: &Enrollment,
+    pending: &Pending,
+    navigation: Option<&NavigationState>,
+) -> Result<()> {
+    let scope = pending.bundle.scope;
+    if pending.bundle.revision < enrollment.revision(scope) {
+        return Err("Remote sync rollback detected. Local data was preserved.".into());
+    }
+    let current = remote.fetch(enrollment, scope.file()).await?;
+    if current.as_ref().map(|(_, tag)| tag) != Some(&pending.etag) {
+        return Err("Remote sync changed. Fetch and review it again.".into());
+    }
+    if let Some(saved) = navigation {
+        let current = remote.fetch(enrollment, NAVIGATION_FILE).await?;
+        if current.as_ref().map(|(_, tag)| tag) != pending.navigation.as_ref().map(|(_, tag)| tag) {
+            return Err("Navigation sync changed. Fetch and review it again.".into());
+        }
+        check_navigation_revision(
+            pending
+                .navigation
+                .as_ref()
+                .map(|(bundle, _)| bundle.revision),
+            saved.revision,
+        )?;
+    }
+    Ok(())
+}
+async fn verify_pending(
+    app: &AppHandle,
+    enrollment: &Enrollment,
+    pending: &Pending,
+    operation: CredentialOperation,
+) -> Result<Option<NavigationState>> {
+    let saved = if pending.bundle.scope == Scope::Settings {
+        Some(load_navigation(app, enrollment, operation).await?)
+    } else {
+        None
+    };
+    verify_remote_pending(
+        &Remote::new(&enrollment.config.endpoint)?,
+        enrollment,
+        pending,
+        saved.as_ref(),
+    )
+    .await?;
+    Ok(saved)
+}
+async fn take_recovery_preview(state: &SyncState, token: &str) -> Result<Pending> {
+    let pending = state
+        .pending
+        .lock()
+        .await
+        .remove(token)
+        .ok_or("Fetch a new sync preview before acknowledging")?;
+    if pending.created.elapsed() > Duration::from_secs(600)
+        || pending.bundle.scope != Scope::Settings
+    {
+        return Err("Fetch a new settings sync preview before acknowledging".into());
+    }
+    Ok(pending)
+}
+fn acknowledge_baseline(
+    enrollment: &mut Enrollment,
+    navigation: &mut NavigationState,
+    pending: &Pending,
+) -> Result<()> {
+    if !navigation.pending_upload {
+        return Err("No interrupted settings upload to recover".into());
+    }
+    enrollment.set_etag(Scope::Settings, Some(pending.etag.clone()));
+    enrollment.set_revision(Scope::Settings, pending.bundle.revision);
+    if let Some((bundle, tag)) = &pending.navigation {
+        navigation.etag = Some(tag.clone());
+        navigation.revision = bundle.revision;
+    }
+    navigation.reviewed_baseline = true;
+    Ok(())
+}
+#[tauri::command]
+pub async fn sync_acknowledge(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, SyncState>,
+    token: String,
+) -> Protected<()> {
+    access
+        .run(async {
+            let operation = app.vault().operation();
+            let guard = Arc::new(state.operation.clone().lock_owned().await);
+            let pending = take_recovery_preview(&state, &token).await?;
+            let mut enrollment = load_for_operation(&app, operation.clone())
+                .await?
+                .ok_or("Configure encrypted sync first")?;
+            ensure_enabled(&enrollment, Scope::Settings)?;
+            let mut navigation = verify_pending(&app, &enrollment, &pending, operation.clone())
+                .await?
+                .ok_or("Invalid settings sync preview")?;
+            operation.check()?;
+            access.check()?;
+            acknowledge_baseline(&mut enrollment, &mut navigation, &pending)?;
+            save_for_operation(&app, &enrollment, operation.clone(), guard.clone()).await?;
+            save_navigation(&app, &navigation, operation, guard).await?;
+            Ok(())
         })
         .await
 }
@@ -1162,12 +1610,7 @@ pub async fn sync_apply(
         .ok_or("Configure encrypted sync first")?;
     ensure_enabled(&enrollment, scope)?;
             access.check()?;
-    let current = Remote::new(&enrollment.config.endpoint)?
-        .fetch(&enrollment, scope)
-        .await?;
-    if current.as_ref().map(|(_, tag)| tag) != Some(&pending.etag) {
-        return Err("Remote sync changed. Fetch and review it again.".into());
-    }
+    let mut navigation_state = verify_pending(&app, &enrollment, &pending, credential_operation.clone()).await?;
     let hosts_added = pending.additions.len();
     credential_operation.check()?;
             access.check()?;
@@ -1222,7 +1665,17 @@ pub async fn sync_apply(
     }
     enrollment.set_etag(scope, Some(pending.etag));
     enrollment.set_revision(scope, pending.bundle.revision);
-    save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
+    save_for_operation(&app, &enrollment, credential_operation.clone(), _guard.clone()).await?;
+    if let Some(nav_state) = navigation_state.as_mut() {
+        if let Some((navigation, tag)) = pending.navigation {
+            nav_state.etag = Some(tag);
+            nav_state.revision = navigation.revision;
+        }
+        nav_state.pending_upload = false;
+        nav_state.reviewed_baseline = false;
+        save_navigation(&app, nav_state, credential_operation, _guard.clone()).await
+            .map_err(|_| "Host metadata may have been imported, but navigation sync state could not be saved. Fetch and review again.")?;
+    }
     Ok(Applied {
         hosts_added,
         credentials_added,
@@ -1514,6 +1967,116 @@ mod tests {
         assert!(recovery(&generate_recovery()).is_ok());
     }
     #[test]
+    fn navigation_upload_revocation_keeps_recovery_marker() {
+        use tauri_plugin_lazysh_vault::{access::AccessState, CredentialOperations};
+        let authority = AccessState::default();
+        authority.initialize(true, true, String::new()).unwrap();
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        let nonce = authority.status().unwrap().nonce.unwrap();
+        let lease = authority.lease(Some(&nonce)).unwrap();
+        let operations = CredentialOperations::default();
+        let operation = operations.begin();
+        let state = NavigationState {
+            pending_upload: true,
+            ..Default::default()
+        };
+        let saved = serde_json::to_string(&state).unwrap();
+        assert!(check_navigation_upload_access(&operation, &lease).is_ok());
+        operations.cancel();
+        assert!(check_navigation_upload_access(&operation, &lease)
+            .unwrap_err()
+            .contains("Settings uploaded"));
+        let operation = operations.begin();
+        authority.lock().unwrap();
+        assert!(check_navigation_upload_access(&operation, &lease)
+            .unwrap_err()
+            .contains("Settings uploaded"));
+        let recovered: NavigationState = serde_json::from_str(&saved).unwrap();
+        assert!(recovered.pending_upload);
+        assert!(pending_upload_is_empty(&recovered, true, true, true));
+        assert!(!pending_upload_is_empty(&recovered, false, true, true));
+        assert!(!pending_upload_is_empty(&recovered, true, true, false));
+        assert!(!pending_upload_is_empty(&recovered, true, false, true));
+    }
+    #[test]
+    fn navigation_extension_is_encrypted_and_independent_of_v1() {
+        let key = generate_recovery();
+        let bundle = NavigationBundle {
+            version: 1,
+            revision: 1,
+            navigation_shortcuts: serde_json::json!({"agents": "C-S-A", "workspaces": null}),
+        };
+        validate_navigation(&bundle).unwrap();
+        let encrypted = encrypt_bytes(&key, &serde_json::to_vec(&bundle).unwrap()).unwrap();
+        assert!(!encrypted.windows(6).any(|window| window == b"C-S-A\""));
+        assert_eq!(
+            decrypt_navigation(&key, &encrypted)
+                .unwrap()
+                .navigation_shortcuts,
+            bundle.navigation_shortcuts
+        );
+        assert!(decrypt_navigation(&generate_recovery(), &encrypted).is_err());
+        assert!(decrypt(&key, &encrypted, Scope::Settings).is_err());
+        let mut invalid = bundle;
+        invalid.navigation_shortcuts["unexpected"] = serde_json::json!(true);
+        assert!(validate_navigation(&invalid).is_err());
+        assert!(validate_bundle(&settings(), Scope::Settings).is_ok());
+        let mut preferences = Some(
+            serde_json::json!({"version": 1, "navigationShortcuts": {"agents": "C-S-A", "workspaces": null}}),
+        );
+        assert_eq!(
+            take_navigation_preferences(&mut preferences),
+            Some(serde_json::json!({"agents": "C-S-A", "workspaces": null}))
+        );
+        let mut base = settings();
+        base.preferences = preferences;
+        let old_client_snapshot = encrypt(&key, &base).unwrap();
+        assert_eq!(
+            decrypt(&key, &old_client_snapshot, Scope::Settings)
+                .unwrap()
+                .preferences,
+            Some(serde_json::json!({"version": 1}))
+        );
+        assert!(check_navigation_revision(None, 0).is_ok());
+        assert!(check_navigation_revision(None, 1).is_err());
+        assert!(check_navigation_revision(Some(1), 2).is_err());
+        assert!(check_navigation_revision(Some(2), 2).is_ok());
+        for key in [
+            "C-S-A", "C-S-W", "M-comma", "C-M-S-F5", "M-1", "C--", "M-+", "M-A", "C-S-Tab",
+        ] {
+            assert!(valid_navigation_binding(key), "{key}");
+        }
+        for key in [
+            "C-S-P",
+            "C-S-Y",
+            "C-W",
+            "C-1",
+            "A",
+            "S-Tab",
+            "C-A C-B",
+            "C-a",
+            "M-S-comma",
+            "C-M-C-A",
+        ] {
+            assert!(!valid_navigation_binding(key), "{key}");
+        }
+        let duplicate = NavigationBundle {
+            version: 1,
+            revision: 1,
+            navigation_shortcuts: serde_json::json!({"agents":"C-S-A", "workspaces":"C-S-A"}),
+        };
+        assert!(validate_navigation(&duplicate).is_err());
+        let mut account = enrollment(&key);
+        let identity = navigation_identity(&account);
+        account.config.username = "other".into();
+        assert_ne!(navigation_identity(&account), identity);
+        account.config.username = "user".into();
+        account.recovery_key = generate_recovery().to_string();
+        assert_ne!(navigation_identity(&account), identity);
+    }
+    #[test]
     fn encrypted_files_require_shared_secret_and_reject_tampering_and_expensive_headers() {
         let key = generate_recovery();
         let mut original = settings();
@@ -1562,6 +2125,7 @@ mod tests {
             scope: Scope::Credentials,
             hosts,
             conflicts,
+            recovery_pending: false,
             preferences: None,
         };
         let json = serde_json::to_string(&preview).unwrap();
@@ -1695,6 +2259,62 @@ mod tests {
         assert!(merge_remote(old, Some(settings())).is_err());
     }
 
+    fn recovery_fixture(navigation: Option<(NavigationBundle, String)>) -> Pending {
+        Pending {
+            created: Instant::now(),
+            bundle: settings(),
+            etag: "\"1\"".into(),
+            local: Vec::new(),
+            additions: Vec::new(),
+            credential_ids: HashSet::new(),
+            enroll_pins: Vec::new(),
+            navigation,
+        }
+    }
+    async fn assert_stale_review(
+        remote: &Remote,
+        baseline: &Enrollment,
+        reviewed: &Pending,
+        navigation: &NavigationState,
+    ) {
+        assert!(
+            verify_remote_pending(remote, baseline, reviewed, Some(navigation))
+                .await
+                .is_err()
+        );
+    }
+    async fn accept_and_retry(
+        remote: &Remote,
+        account: &Enrollment,
+        baseline: &mut Enrollment,
+        navigation: &mut NavigationState,
+        reviewed: &Pending,
+        local: &[u8],
+    ) {
+        verify_remote_pending(remote, baseline, reviewed, Some(navigation))
+            .await
+            .unwrap();
+        acknowledge_baseline(baseline, navigation, reviewed).unwrap();
+        assert!(navigation.pending_upload && navigation.reviewed_baseline);
+        remote
+            .put(
+                account,
+                NAVIGATION_FILE,
+                local.to_vec(),
+                navigation.etag.as_deref(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            remote
+                .fetch(account, NAVIGATION_FILE)
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            local
+        );
+    }
     #[tokio::test]
     async fn webdav_fixture_enforces_cas_redirect_rejection_and_body_bounds() {
         use tokio::{
@@ -1704,8 +2324,8 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
         let fixture = tokio::spawn(async move {
-            let mut stored: Option<Vec<u8>> = None;
-            for _ in 0..8 {
+            let mut resources: HashMap<String, (Vec<u8>, u64)> = HashMap::new();
+            loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut data = Vec::new();
                 let end;
@@ -1736,7 +2356,20 @@ mod tests {
                     assert!(count > 0);
                     data.extend_from_slice(&chunk[..count]);
                 }
-                let (status, extra, body) = if headers.contains(" /redirect/") {
+                let path = headers
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_owned();
+                let stored = resources.get(&path);
+                let (status, extra, body) = if headers.starts_with("put ")
+                    && headers.contains(" /noetag/")
+                {
+                    ("204 No Content", String::new(), Vec::new())
+                } else if headers.contains(" /redirect/") {
                     (
                         "302 Found",
                         "Location: http://127.0.0.1:1/leak\r\n".to_owned(),
@@ -1746,16 +2379,25 @@ mod tests {
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nETag: \"one\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", LIMIT + 1).as_bytes()).await.unwrap();
                     continue;
                 } else if headers.starts_with("put ") {
-                    if (stored.is_some() && !headers.contains("if-match: \"one\""))
-                        || (stored.is_none() && !headers.contains("if-none-match: *"))
+                    let expected = stored.map(|(_, revision)| format!("if-match: \"{revision}\""));
+                    if expected
+                        .as_ref()
+                        .is_some_and(|tag| !headers.lines().any(|line| line == tag))
+                        || (stored.is_none()
+                            && !headers.lines().any(|line| line == "if-none-match: *"))
                     {
                         ("412 Precondition Failed", String::new(), Vec::new())
                     } else {
-                        stored = Some(data[end..end + length].to_vec());
-                        ("201 Created", "ETag: \"one\"\r\n".into(), Vec::new())
+                        let revision = stored.map_or(1, |(_, revision)| revision + 1);
+                        resources.insert(path, (data[end..end + length].to_vec(), revision));
+                        (
+                            "201 Created",
+                            format!("ETag: \"{revision}\"\r\n"),
+                            Vec::new(),
+                        )
                     }
-                } else if let Some(body) = &stored {
-                    ("200 OK", "ETag: \"one\"\r\n".into(), body.clone())
+                } else if let Some((body, revision)) = stored {
+                    ("200 OK", format!("ETag: \"{revision}\"\r\n"), body.clone())
                 } else {
                     ("404 Not Found", String::new(), Vec::new())
                 };
@@ -1766,59 +2408,232 @@ mod tests {
         // Only this fixture substitutes a loopback URL; production construction always calls endpoint().
         let mut remote = Remote::new("https://example.invalid/").unwrap();
         remote.endpoint = Url::parse(&format!("http://{address}/dav/")).unwrap();
-        let enrollment = enrollment(&generate_recovery());
+        let account = enrollment(&generate_recovery());
         assert!(remote
-            .fetch(&enrollment, Scope::Settings)
+            .fetch(&account, Scope::Settings.file())
             .await
             .unwrap()
             .is_none());
         assert_eq!(
             remote
                 .put(
-                    &enrollment,
-                    Scope::Settings,
+                    &account,
+                    Scope::Settings.file(),
                     b"ciphertext-only".to_vec(),
                     None
                 )
                 .await
                 .unwrap()
                 .as_deref(),
-            Some("\"one\"")
+            Some("\"1\"")
         );
         let (body, tag) = remote
-            .fetch(&enrollment, Scope::Settings)
+            .fetch(&account, Scope::Settings.file())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(body, b"ciphertext-only");
-        assert_eq!(tag, "\"one\"");
+        assert_eq!(tag, "\"1\"");
         assert!(remote
-            .put(&enrollment, Scope::Settings, b"stale".to_vec(), None)
+            .put(&account, Scope::Settings.file(), b"stale".to_vec(), None)
             .await
             .is_err());
         assert!(remote
             .put(
-                &enrollment,
-                Scope::Settings,
+                &account,
+                Scope::Settings.file(),
                 b"next".to_vec(),
-                Some("\"one\"")
+                Some("\"1\"")
             )
             .await
             .is_ok());
-        remote.endpoint = Url::parse(&format!("http://{address}/redirect/")).unwrap();
-        assert!(remote.fetch(&enrollment, Scope::Settings).await.is_err());
-        remote.endpoint = Url::parse(&format!("http://{address}/large/")).unwrap();
-        assert!(remote.fetch(&enrollment, Scope::Settings).await.is_err());
-        remote.endpoint = Url::parse(&format!("http://{address}/dav/")).unwrap();
+        assert!(remote
+            .fetch(&account, NAVIGATION_FILE)
+            .await
+            .unwrap()
+            .is_none());
+        remote
+            .put(&account, NAVIGATION_FILE, b"navigation".to_vec(), None)
+            .await
+            .unwrap();
+        assert!(remote
+            .put(&account, NAVIGATION_FILE, b"stale".to_vec(), None)
+            .await
+            .is_err());
         assert_eq!(
             remote
-                .fetch(&enrollment, Scope::Settings)
+                .fetch(&account, NAVIGATION_FILE)
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            b"navigation"
+        );
+        assert_eq!(
+            remote
+                .fetch(&account, Scope::Settings.file())
                 .await
                 .unwrap()
                 .unwrap()
                 .0,
             b"next"
         );
-        fixture.await.unwrap();
+        // Use the command's token, revalidation and acknowledgment decisions after a partial write.
+        let local_b = b"local-binding-b".to_vec();
+        let state = SyncState::default();
+        assert!(take_recovery_preview(&state, "missing").await.is_err());
+        let mut expired = recovery_fixture(None);
+        expired.created = Instant::now() - Duration::from_secs(601);
+        state.pending.lock().await.insert("expired".into(), expired);
+        assert!(take_recovery_preview(&state, "expired").await.is_err());
+        let old = NavigationBundle {
+            version: 1,
+            revision: 1,
+            navigation_shortcuts: serde_json::json!({"agents": "C-S-A", "workspaces": null}),
+        };
+        state.pending.lock().await.insert(
+            "review".into(),
+            recovery_fixture(Some((old, "\"1\"".into()))),
+        );
+        let mut reviewed = take_recovery_preview(&state, "review").await.unwrap();
+        assert!(take_recovery_preview(&state, "review").await.is_err());
+        let mut navigation = NavigationState {
+            pending_upload: true,
+            ..Default::default()
+        };
+        let mut baseline = enrollment(&generate_recovery());
+        reviewed.etag = "\"2\"".into();
+        assert_eq!(
+            remote
+                .put(
+                    &account,
+                    Scope::Settings.file(),
+                    b"next-concurrent".to_vec(),
+                    Some("\"2\"")
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("\"3\"")
+        );
+        assert_stale_review(&remote, &baseline, &reviewed, &navigation).await;
+        reviewed.etag = "\"3\"".into();
+        assert_eq!(
+            remote
+                .put(
+                    &account,
+                    NAVIGATION_FILE,
+                    b"remote-update".to_vec(),
+                    Some("\"1\"")
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("\"2\"")
+        );
+        assert_stale_review(&remote, &baseline, &reviewed, &navigation).await;
+        reviewed.navigation.as_mut().unwrap().1 = "\"2\"".into();
+        verify_remote_pending(&remote, &baseline, &reviewed, Some(&navigation))
+            .await
+            .unwrap();
+        acknowledge_baseline(&mut baseline, &mut navigation, &reviewed).unwrap();
+        assert!(navigation.pending_upload && navigation.reviewed_baseline);
+        assert!(check_recovery_retry(&navigation, false).is_err());
+        assert!(check_recovery_retry(&navigation, true).is_ok());
+        assert_eq!(local_b, b"local-binding-b");
+        // Another device changes the extension after acknowledgment but before the retry.
+        assert_eq!(
+            remote
+                .put(
+                    &account,
+                    NAVIGATION_FILE,
+                    b"later-update".to_vec(),
+                    Some("\"2\"")
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("\"3\"")
+        );
+        assert!(navigation.pending_upload && !recovery_requires_review(&navigation));
+        let current = remote
+            .fetch(&account, NAVIGATION_FILE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(check_upload_etag(Some(&current.1), navigation.etag.as_deref()).is_err());
+        assert_stale_review(&remote, &baseline, &reviewed, &navigation).await;
+        let new_remote = NavigationBundle {
+            version: 1,
+            revision: 1,
+            navigation_shortcuts: serde_json::json!({"agents": "C-S-W", "workspaces": null}),
+        };
+        let mut refreshed = recovery_fixture(Some((new_remote, "\"3\"".into())));
+        refreshed.etag = "\"3\"".into();
+        state
+            .pending
+            .lock()
+            .await
+            .insert("fresh-review".into(), refreshed);
+        let reviewed = take_recovery_preview(&state, "fresh-review").await.unwrap();
+        accept_and_retry(
+            &remote,
+            &account,
+            &mut baseline,
+            &mut navigation,
+            &reviewed,
+            &local_b,
+        )
+        .await;
+
+        // A missing extension can be acknowledged without substituting defaults for B.
+        remote.endpoint = Url::parse(&format!("http://{address}/missing/")).unwrap();
+        remote
+            .put(&account, Scope::Settings.file(), b"base".to_vec(), None)
+            .await
+            .unwrap();
+        let reviewed = recovery_fixture(None);
+        let mut navigation = NavigationState {
+            pending_upload: true,
+            ..Default::default()
+        };
+        let mut baseline = enrollment(&generate_recovery());
+        assert_eq!(local_b, b"local-binding-b");
+        accept_and_retry(
+            &remote,
+            &account,
+            &mut baseline,
+            &mut navigation,
+            &reviewed,
+            &local_b,
+        )
+        .await;
+        remote.endpoint = Url::parse(&format!("http://{address}/noetag/")).unwrap();
+        assert!(remote
+            .put(&account, NAVIGATION_FILE, b"accepted".to_vec(), None)
+            .await
+            .unwrap()
+            .is_none());
+        remote.endpoint = Url::parse(&format!("http://{address}/redirect/")).unwrap();
+        assert!(remote
+            .fetch(&account, Scope::Settings.file())
+            .await
+            .is_err());
+        remote.endpoint = Url::parse(&format!("http://{address}/large/")).unwrap();
+        assert!(remote
+            .fetch(&account, Scope::Settings.file())
+            .await
+            .is_err());
+        remote.endpoint = Url::parse(&format!("http://{address}/dav/")).unwrap();
+        assert_eq!(
+            remote
+                .fetch(&account, Scope::Settings.file())
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            b"next-concurrent"
+        );
+        fixture.abort();
     }
 }
