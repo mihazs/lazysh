@@ -2009,6 +2009,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     beforePublish?:()=>void,
     attached?:(session:LiveSession)=>void,
   ) {
+    if (kind === 'herdr' && !muxTools[source.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')) throw new LocalUiError('muxLimitedHerdr');
     const sourceApi=bindProtectedApi(nativeApi,owner);
     const pending = await prepareSession(
       source.hostId,

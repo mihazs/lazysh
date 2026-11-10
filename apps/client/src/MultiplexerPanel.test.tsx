@@ -34,7 +34,7 @@ it('offers actual recent host projects in the workspace launcher', async () => {
   expect(screen.queryByRole('region', { name: /prefix shortcuts/ })).toBeNull();
 });
 it('attaches the selected named Herdr server through the generic terminal contract', async () => {
-  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? { ...tree, herdrAvailable: true } : [{ name: 'builds' }]);
+  vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? { ...tree, herdrAvailable: true, tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}] } : [{ name: 'builds' }]);
   const attach = vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" onAttach={attach} />);
   fireEvent.click(await screen.findByRole('button', { name: 'List herdr sessions' }));
@@ -104,7 +104,7 @@ it.each(['default',"世界 '$(touch NO);"])('keeps requested tmux server %s lite
   await waitFor(()=>expect(attach).toHaveBeenCalledWith(...(server==='default'?['work']:['work','tmux',server])));
 });
 it('auto-reads only requested Herdr sessions and keeps attachment explicit',async()=>{
-  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,zellijAvailable:true}:[{name:'literal 世界'}]);
+  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_tree'?{...tree,herdrAvailable:true,zellijAvailable:true,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}]}:[{name:'literal 世界'}]);
   const attach=vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" requested={request({kind:'herdr'})} onAttach={attach}/>);
   const row=await screen.findByRole('button',{name:'Attach herdr literal 世界'});
@@ -171,6 +171,7 @@ it('hides Herdr session creation for limited versions but keeps listed sessions'
   vi.mocked(invoke).mockImplementation(async command => command === 'multiplexer_tree' ? {...tree,herdrAvailable:true,tools} : [{name:'work'}]);
   render(<MuxPanel sessionId="ssh1" onAttach={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button',{name:'List herdr sessions'}));
-  expect(await screen.findByRole('button',{name:'Attach herdr work'})).toBeTruthy();
+  expect(await screen.findByRole('button',{name:'Browse Herdr work'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Attach herdr work'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Open/create herdr session'})).toBeNull();
 });
