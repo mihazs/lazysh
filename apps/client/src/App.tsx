@@ -90,7 +90,7 @@ import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from 
 import { ConnectionRecovery, useNetworkOnline, type RecoveryOutcome } from "./connectionRecovery";
 import { ConnectionRecoveryBanner, NetworkOfflineNotice } from "./ConnectionBanner";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
-import {appShortcut, navigationShortcut, useCapturedShortcut, type NavigationShortcut} from './keyboard';
+import {agentViewShortcut, appShortcut, navigationShortcut, shiftedChordHint, useCapturedShortcut, type NavigationShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
@@ -1518,6 +1518,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const latestNavigationToggle=useRef(toggleNavigation);latestNavigationToggle.current=toggleNavigation;
   useCapturedShortcut(navigationShortcut,toggleNavigation);
+  useCapturedShortcut(agentViewShortcut,()=>{
+    if(!active || !active.connected || active.local || view!=='terminal' || navigationCovered)return false;
+    chooseSessionView(active,activeSessionView==='terminal'?'agent':'terminal');
+    return true;
+  });
   function showAgentSetup(source:LiveSession) {
     if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
       || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
@@ -2252,7 +2257,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=>{
                 const [label,Icon]=mode==='terminal'?[t('sessionViewTerminal'),TerminalSquare]:mode==='agent'?[t('sessionViewAgent'),Bot]:[t('sessionViewBoth'),Columns2];
                 // Narrow headers show only the icon, so the session title keeps its room.
-                return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} title={label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
+                return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} aria-keyshortcuts={mode==='agent' ? shiftedChordHint('Y').keys : undefined} title={mode==='agent' ? `${label} (${shiftedChordHint('Y').label})` : label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
               })}
             </div>}
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />

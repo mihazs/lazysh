@@ -111,6 +111,22 @@ test('switches the same tmux session between Terminal and Agent mid-turn without
   await expect(agent.getByText('Answered: Typed here',{exact:true})).toBeVisible({timeout:6000});
 });
 
+test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='phone','Hardware shortcut is covered on desktop.');
+  await open(page);
+  const before=await fixture(page);
+  await page.locator('.terminal-pane:visible .xterm').click();
+  await page.keyboard.press('Control+Shift+Y');
+  await expect(agentView(page).getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await agentView(page).getByRole('textbox',{name:'Draft for this terminal',exact:true}).fill('Keep this draft');
+  await page.keyboard.press('Control+Shift+Y');
+  await expect(page.locator('.terminal-pane:visible .xterm-rows')).toContainText('work scrollback 40');
+  const after=await fixture(page);
+  expect({attachments:after.attachments,stdin:after.stdin}).toEqual({attachments:before.attachments,stdin:before.stdin});
+  await page.keyboard.press('Control+Shift+Y');
+  await expect(agentView(page).getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveValue('Keep this draft');
+});
+
 test('remembers the chosen view per terminal across reopening, keeps new terminals on Terminal and explains a pane without an agent',async({page})=>{
   await open(page);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();

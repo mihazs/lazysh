@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { appShortcut, navigationShortcut, paletteShortcut, shiftedChordHint } from "./keyboard";
+import { agentViewShortcut, appShortcut, navigationShortcut, paletteShortcut, shiftedChordHint } from "./keyboard";
 afterEach(() => {document.body.innerHTML = "";});
 function shortcut(key: string, target: Element = document.body, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {key, ctrlKey: true, bubbles: true, cancelable: true, ...options});
@@ -66,6 +66,21 @@ describe("hardware app shortcuts", () => {
     for (const options of [{ctrlKey: true, shiftKey: false}, {ctrlKey: true, altKey: true}, {ctrlKey: true, repeat: true}, {ctrlKey: true, isComposing: true}, {}]) expect(press("A", terminal, options)).toBeUndefined();
     expect(press("P", terminal, {ctrlKey: true})).toBeUndefined();
     expect(shortcut("w", terminal)).toEqual({action: "closeSession"});
+  });
+  it("matches the Agent view toggle from the terminal and Agent draft, but not other editable controls", () => {
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea class="xterm-helper-textarea"></textarea></div><div class="agent-view"><div class="chat-draft"><textarea></textarea></div></div><input><div role="dialog"><button></button></div>';
+    const press = (target: Element, options: KeyboardEventInit) => {
+      let result = false;
+      target.addEventListener('keydown', e => {result = agentViewShortcut(e as KeyboardEvent);}, {once: true});
+      target.dispatchEvent(new KeyboardEvent('keydown', {key: 'Y', shiftKey: true, bubbles: true, ...options}));
+      return result;
+    };
+    expect(press(document.querySelector('textarea')!, {ctrlKey: true})).toBe(true);
+    expect(press(document.body, {metaKey: true})).toBe(true);
+    expect(press(document.querySelector('.chat-draft textarea')!, {ctrlKey: true})).toBe(true);
+    expect(press(document.querySelector('input')!, {ctrlKey: true})).toBe(false);
+    expect(press(document.querySelector('button')!, {ctrlKey: true})).toBe(false);
+    for (const options of [{ctrlKey: true, shiftKey: false}, {ctrlKey: true, repeat: true}, {ctrlKey: true, isComposing: true}, {ctrlKey: true, altKey: true}]) expect(press(document.body, options)).toBe(false);
   });
   it("labels Ctrl+Shift chords for the platform", () => {
     expect(shiftedChordHint("A", false)).toEqual({label: "Ctrl+Shift+A", keys: "Control+Shift+A"});

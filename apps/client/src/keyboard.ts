@@ -3,11 +3,11 @@ import {useEffect, useRef} from "react";
 export type AppShortcut = { action: "palette" | "switcher" | "newConnection" | "closeSession" } | { action: "session"; index: number };
 
 /** App shortcuts never act inside modal dialogs or editable controls, except the terminal's own input. */
-function appTarget(target: EventTarget | null): boolean {
+function appTarget(target: EventTarget | null, agentDraft = false): boolean {
   if (!(target instanceof Element)) return true;
   if (target.closest('[role="dialog"]')) return false;
   const terminalInput = target.matches('.xterm-helper-textarea') && target.closest('.terminal-canvas');
-  return !!terminalInput || !target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
+  return !!terminalInput || (agentDraft && target.matches('.chat-draft textarea') && !!target.closest('.agent-view')) || !target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
 }
 
 export function appShortcut(event: KeyboardEvent): AppShortcut | undefined {
@@ -20,9 +20,9 @@ export function appShortcut(event: KeyboardEvent): AppShortcut | undefined {
 }
 
 /** The lowercased key of a Ctrl/Cmd+Shift chord the app may take, including from a focused terminal. */
-function shiftedChord(event: KeyboardEvent): string | undefined {
+function shiftedChord(event: KeyboardEvent, agentDraft = false): string | undefined {
   if (event.defaultPrevented || event.isComposing || event.repeat || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
-  return appTarget(event.target) ? event.key.toLowerCase() : undefined;
+  return appTarget(event.target, agentDraft) ? event.key.toLowerCase() : undefined;
 }
 
 /** Ctrl/Cmd+Shift+P opens the command palette, including from a focused terminal, whose shell keeps Ctrl/Cmd+K. */
@@ -38,6 +38,11 @@ export const navigationShortcutKeys = {agents: 'A', workspaces: 'W'} as const sa
 export function navigationShortcut(event: KeyboardEvent): NavigationShortcut | undefined {
   const key = shiftedChord(event);
   return (Object.keys(navigationShortcutKeys) as NavigationShortcut[]).find(view => navigationShortcutKeys[view].toLowerCase() === key);
+}
+
+/** Ctrl/Cmd+Shift+Y toggles the session's Terminal and Agent views. */
+export function agentViewShortcut(event: KeyboardEvent): boolean {
+  return shiftedChord(event, true) === 'y';
 }
 
 /** A chord as shown to sighted users (`label`) and as `aria-keyshortcuts` announces it (`keys`). */
