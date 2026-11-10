@@ -267,6 +267,26 @@ test('slow Herdr switches keep the soft keyboard closed on wide touch layouts',a
   await herdrSwitchKeyboard(page,{touch:phone,drawer:false,replyDelay:400});
 });
 
+test('live group choice follows an adopted Herdr display',async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  const phone=testInfo.project.name==='phone';
+  await openConnectedAgents(page,phone);
+  await selectAgentSection(page,'live');
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  const idle=live.getByRole('button',{name:'Idle · 1',exact:true});
+  await expect(idle).toHaveAttribute('aria-expanded','true');
+  await idle.click();
+  await expect(idle).toHaveAttribute('aria-expanded','false');
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Workspaces',exact:true}).click();
+  await page.locator(nativeHerdrNavigationRow('codex-builder')).click();
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'live');
+  await expect(idle).toHaveAttribute('aria-expanded','false');
+  await expect(live.getByRole('button',{name:/^codex-builder/})).toHaveCount(0);
+});
+
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
   await openClockedNavigation(page);
   const phone=testInfo.project.name==='phone';

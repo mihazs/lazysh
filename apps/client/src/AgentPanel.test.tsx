@@ -553,8 +553,8 @@ describe('live Herdr discovery',()=>{
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},{name:'other'}]:tree);
     function Harness() {
       const groups=useState<Set<string>>(()=>new Set());
-      const [target,setTarget]=useState(['one','default']);
-      return <><button onClick={()=>setTarget(['one','default'])}>one default</button><button onClick={()=>setTarget(['two','default'])}>two default</button><button onClick={()=>setTarget(['one','other'])}>one other</button><HerdrNavigation key={target.join('/')} sessionId={target[0]} herdrSession={target[1]} hostLabel="Owned host" mode="agents" visible statusGroups={groups} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/></>;
+      const [target,setTarget]=useState(['one','default','host-one']);
+      return <><button onClick={()=>setTarget(['one','default','host-one'])}>one default</button><button onClick={()=>setTarget(['two','default','host-two'])}>two default</button><button onClick={()=>setTarget(['one','other','host-one'])}>one other</button><HerdrNavigation key={target.join('/')} sessionId={target[0]} herdrSession={target[1]} hostLabel="Owned host" mode="agents" visible statusHostId={target[2]} statusGroups={groups} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/></>;
     }
     render(<Harness/>);
     const working=async()=>within(await screen.findByRole('region',{name:t('herdrAgentWorking')})).getByRole('button',{name:`${t('herdrAgentWorking')} · 1`});

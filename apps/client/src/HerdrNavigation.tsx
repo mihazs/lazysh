@@ -17,13 +17,13 @@ export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
 const tones:Record<LiveAgent['agent_status'],StatusTone>={blocked:'attention',working:'working',done:'done',idle:'idle',unknown:'unknown'};
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,statusGroups}:{
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,statusGroups,statusHostId=sessionId}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
   onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
-  statusGroups?:[Set<string>,Dispatch<SetStateAction<Set<string>>>];
+  statusGroups?:[Set<string>,Dispatch<SetStateAction<Set<string>>>];statusHostId?:string;
 }) {
   useUi();
   useAccessSnapshot();
@@ -150,7 +150,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         })}</ul>}
         {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div className="herdr-status-groups">{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          const key=JSON.stringify([sessionId,data.server,status]),folded=!term && (status==='done'?!statusOverrides.has(key):statusOverrides.has(key)),heading=`${t(herdrStatusKeys[status])} · ${matching.length}`;
+          const key=JSON.stringify([statusHostId,data.server,status]),folded=!term && (status==='done'?!statusOverrides.has(key):statusOverrides.has(key)),heading=`${t(herdrStatusKeys[status])} · ${matching.length}`;
           return matching.length>0 && <section key={status} className="status-group" data-status={status} aria-label={t(herdrStatusKeys[status])}><h4 aria-label={heading}><button type="button" className="status-group-toggle" aria-label={heading} aria-expanded={!folded} disabled={!!term} onClick={()=>toggle(key,setStatusOverrides)}><span>{t(herdrStatusKeys[status])}</span><span className="status-group-count">{matching.length}</span><ChevronDown size={16} aria-hidden="true"/></button></h4>{!folded && <div className="status-group-rows">{matching.map(agent=><div className="herdr-agent-row" key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '),agent.name?agent.agent:null)}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</div>}</section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
