@@ -21,7 +21,13 @@ function ownedHerdrFailureMarkers(screens, viewport) {
         rows.indexOf(found[0])<rows.length/3?'top':rows.indexOf(found[0])<rows.length*2/3?'middle':'bottom';
       return {rows:found.length===0?'none':visible===0?'clipped':visible===found.length?'intersecting':'mixed',position,other};
     };
-    return {screens:count,state:'observed',old:marker(text=>/OLD[0-9]{3}/.test(text)),newest:marker(text=>text.includes('NEW512'))};
+    const oldNumbers=rows.flatMap(row=>{const match=/OLD([0-9]{3})/.exec(row.textContent||'');return match && Number(match[1])<=511?[Number(match[1])]:[];});
+    const bounded=value=>Number.isFinite(value)?Math.max(0,Math.min(65535,value)):null;
+    return {screens:count,state:'observed',old:marker(text=>/OLD[0-9]{3}/.test(text)),newest:marker(text=>text.includes('NEW512')),
+      synthetic:{oldMin:oldNumbers.length?Math.min(...oldNumbers):null,oldMax:oldNumbers.length?Math.max(...oldNumbers):null,
+        newestRow:rows.findIndex(row=>(row.textContent||'').includes('NEW512'))},
+      geometry:{rows:rows.length,screenHeight:bounded(bounds[0].bottom-bounds[0].top),
+        viewportHeight:bounded(surface.clientHeight),scrollHeight:bounded(surface.scrollHeight),scrollTop:bounded(surface.scrollTop)}};
   } catch {return {screens:count,state:'unavailable'};}
 }
 

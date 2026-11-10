@@ -274,23 +274,24 @@ export class HerdrFixture {
       throw new Error('Owned history observation invalid');
     await this.expectBytes(Buffer.alloc(0),join(this.ssh.directory,'scroll','received-bytes'),this.historyReceiver);
     const rows=read.text.split('\n').map((line:string)=>line.trim());
+    const old=rows.flatMap((line:string)=>{const match=/^OLD([0-9]{3})$/.exec(line);return match && Number(match[1])<=511?[Number(match[1])]:[];});
     return {offset:info.scroll.offset_from_bottom,max:info.scroll.max_offset_from_bottom,rows:info.scroll.viewport_rows,
-      oldRows:rows.filter((line:string)=>/^OLD[0-9]{3}$/.test(line)).length,newTail:rows.includes('NEW512')};
+      oldRows:rows.filter((line:string)=>/^OLD[0-9]{3}$/.test(line)).length,newTail:rows.includes('NEW512'),synthetic:{oldMin:old.length?Math.min(...old):null,oldMax:old.length?Math.max(...old):null,newestRow:rows.indexOf('NEW512')}};
   }
   async historyDiagnostic() {
     const scope='post-instrumentation-pre-host-stop';
     let stage:'history-read'|'focus-read'='history-read';
     try {
-      const {offset,max,rows,oldRows,newTail}=await this.history();
+      const {offset,max,rows,oldRows,newTail,synthetic}=await this.history();
       // Each sample obtains pane.get before pane.read. The second get brackets
       // the first read, but matching offsets alone do not prove quiescence.
       const after=await this.history();
       const offsetStability=after.offset===offset && after.max===max && after.rows===rows?'same':'changed';
-      const markerSummaryStability=after.oldRows===oldRows && after.newTail===newTail?'same':'changed';
+      const markerSummaryStability=after.oldRows===oldRows && after.newTail===newTail && JSON.stringify(after.synthetic)===JSON.stringify(synthetic)?'same':'changed';
       stage='focus-read';
       const focused=JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id;
       if(typeof focused!=='string'||!focused||focused.length>128||/[\x00-\x1f\x7f-\x9f]/.test(focused))return {scope,state:'unavailable',stage};
-      return {scope,state:'available',offset,max,rows,oldRows,newTail,offsetStability,markerSummaryStability,
+      return {scope,state:'available',offset,max,rows,oldRows,newTail,synthetic,offsetStability,markerSummaryStability,
         focusHistory:focused===this.historyPane?.paneId,focusOriginal:focused===this.agent?.paneId};
     } catch(error) {return {scope,state:'unavailable',stage:stage==='focus-read'?stage:herdrHistoryFailureStage(error)};}
   }

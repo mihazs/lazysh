@@ -18,7 +18,8 @@ test('history failure marker projection separates clipped rows and other descend
       {classList:{contains:()=>false},textContent:'NEW512 secret'}]};
   const viewport={offsetLeft:0,offsetTop:0,width:100,height:100};
   expect(observe([screen],viewport)).toEqual({screens:'one',state:'observed',
-    old:{rows:'intersecting',position:'top',other:false},newest:{rows:'clipped',position:'middle',other:true}});
+    old:{rows:'intersecting',position:'top',other:false},newest:{rows:'clipped',position:'middle',other:true},
+    synthetic:{oldMin:500,oldMax:500,newestRow:1},geometry:{rows:2,screenHeight:100,viewportHeight:null,scrollHeight:null,scrollTop:null}});
   expect(observe([],viewport)).toEqual({screens:'zero'});
   expect(observe([screen,screen],viewport)).toEqual({screens:'many'});
   expect(observe([screen],null)).toEqual({screens:'one',state:'unavailable'});
@@ -301,9 +302,9 @@ test('passive finger observer keeps exact touch identity while bounding wheel ob
 test('failure history projects only bounded owned readback and focus booleans and redacts observation errors',async()=>{
   const fixture=Object.create(HerdrFixture.prototype) as HerdrFixture;
   Object.assign(fixture,{historyPane:{paneId:'owned-history'},agent:{paneId:'owned-original'},
-    history:async(...args:unknown[])=>{expect(args).toEqual([]);return {offset:1,max:512,rows:30,oldRows:29,newTail:false,text:'private output'};},
+    history:async(...args:unknown[])=>{expect(args).toEqual([]);return {offset:1,max:512,rows:30,oldRows:29,newTail:false,synthetic:{oldMin:480,oldMax:508,newestRow:-1},text:'private output'};},
     run:async(args:string[])=>{expect(args).toEqual(['api','snapshot']);return JSON.stringify({result:{snapshot:{focused_pane_id:'owned-history',private:'secret'}}});}});
-  expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'available',offset:1,max:512,rows:30,oldRows:29,newTail:false,offsetStability:'same',markerSummaryStability:'same',focusHistory:true,focusOriginal:false});
+  expect(await fixture.historyDiagnostic()).toEqual({scope:'post-instrumentation-pre-host-stop',state:'available',offset:1,max:512,rows:30,oldRows:29,newTail:false,synthetic:{oldMin:480,oldMax:508,newestRow:-1},offsetStability:'same',markerSummaryStability:'same',focusHistory:true,focusOriginal:false});
   let calls=0;
   Object.assign(fixture,{history:async()=>({offset:++calls,max:512,rows:30,oldRows:calls===1?29:28,newTail:calls>1})});
   expect(await fixture.historyDiagnostic()).toMatchObject({offsetStability:'changed',markerSummaryStability:'changed'});
