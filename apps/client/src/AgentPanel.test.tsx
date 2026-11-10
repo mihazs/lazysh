@@ -525,6 +525,27 @@ describe('live Herdr discovery',()=>{
     expect(browser.getByRole('button',{name:/^builder/}).textContent).toBe(row.textContent);
     expect(vi.mocked(invoke).mock.calls).toHaveLength(reads);expect(navigate).not.toHaveBeenCalled();
   });
+  it('starts Done collapsed, preserves its choice on refresh, and reveals matches while searching',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const snapshot={...tree,panes:[...tree.panes,{...tree.panes[0],terminal_id:'term-done',pane_id:'w2E:pD',focused:false,agent_status:'done'}],agents:[...tree.agents,{...tree.agents[0],terminal_id:'term-done',pane_id:'w2E:pD',name:'finished',agent_status:'done'}]};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:snapshot);
+    render(<HerdrNavigation sessionId="done-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    const done=within(await browser.findByRole('region',{name:t('herdrAgentDone')})).getByRole('button');
+    expect(done.getAttribute('aria-expanded')).toBe('false');
+    expect(browser.getByRole('button',{name:/^builder/})).toBeTruthy();
+    const search=browser.getByRole('searchbox');
+    fireEvent.change(search,{target:{value:'finished'}});
+    expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy();
+    fireEvent.change(search,{target:{value:''}});
+    expect(browser.queryByRole('button',{name:/^finished/})).toBeNull();
+    fireEvent.click(done);
+    const reads=vi.mocked(invoke).mock.calls.length;
+    fireEvent.click(browser.getByRole('button',{name:t('herdrRefresh')}));
+    await waitFor(()=>expect(vi.mocked(invoke).mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(()=>expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy());
+    expect(done.getAttribute('aria-expanded')).toBe('true');
+  });
   it.each(['hide','mode','unmount'] as const)('revokes a pending navigation action after %s without stealing focus or closing its replacement',async change=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
