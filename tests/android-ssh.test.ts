@@ -2340,11 +2340,16 @@ test('the shared Mosh history asset observes rendered overflow with closed round
 });
 
 test('Mosh-only static startup paint fills numbered rows without input or a receiver protocol',async()=>{
-  const {ownedMoshResizePaint}=await import('./support/androidHerdr');
+  const {ownedMoshResizePaint,ownedHerdrStartupPaint}=await import('./support/androidHerdr');
   const paint=await new OwnedProcess('/bin/sh',['-c',ownedMoshResizePaint()]).finish('static owned Mosh paint',1000);
   expect(paint).toBe(Array.from({length:512},(_,i)=>`OWNED_MOSH_ROW_${String(i).padStart(3,'0')}`).join('\r\n'));
+  expect(ownedHerdrStartupPaint(true,false)).toBe(ownedMoshResizePaint());
+  expect(ownedHerdrStartupPaint(true,true)).toBe(ownedMoshResizePaint());
+  expect(ownedHerdrStartupPaint(false,true)).toBe('');
+  const question=await new OwnedProcess('/bin/sh',['-c',ownedHerdrStartupPaint(false,false)]).finish('static owned question paint',1000);
+  expect(question).toBe('\x1b[2J\x1b[HOWNED_QUESTION\n> OPTION_ONE\n  OPTION_TWO\n');
   const source=await readFile(join(import.meta.dir,'support/androidHerdr.ts'),'utf8');
-  expect(source).toContain("navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():''");
+  expect(source).toContain("navigation?'NAV_SOURCE_'+ssh.nonce:undefined,ownedHerdrStartupPaint(!!moshBinary,navigation)");
   const receiver=await readFile(join(import.meta.dir,'../apps/agent/examples/owned_terminal_receiver.rs'),'utf8');
   expect(receiver).toContain('output.write_all(part)?');expect(receiver).toContain('private_create_new().open');
   expect(source).toContain("expected.length+1");expect(source).toContain("received.equals(expected)");expect(source).toContain('receiverAlive(receiver)');
