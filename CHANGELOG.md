@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Highlight supported languages in side-by-side repository diff hunks, with plain text for large or unsupported files.
+
 - Organize setup guides and service, transfer, theme and notification contracts into task, reference and explanation pages; existing documentation paths and section anchors remain available.
 - Toggle the current session between Terminal and Agent with Ctrl+Shift+Y (Cmd+Shift+Y on Apple keyboards). The shortcut is available from the terminal, the Agent draft and the session controls. No defaults change.
 

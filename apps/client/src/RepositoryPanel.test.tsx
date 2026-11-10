@@ -117,3 +117,19 @@ it('pages stable history and browses directories without loading the complete re
   expect(invoke).toHaveBeenLastCalledWith('repository_tree', { sessionId: 'ssh1', path: '/repo', revision: commits[0].oid, directory: 'src' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByRole('button', { name: 'Parent directory' })).toBeTruthy();
 });
+
+it('highlights both sides of a hunk without executing diff content', async () => {
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === 'repository_status') return {path: '/repo', changes: [{path: 'new.ts', originalPath: 'old.js', index: 'R', worktree: ' '}]};
+    if (command === 'repository_history') return [{oid: hash, subject: 'initial'}];
+    if (command === 'repository_diff') return {binary: false, patch: '@@ -1,2 +1,2 @@\n-/* old\n-end */\n+/* new\n+<script>bad()</script> */'};
+    throw new Error(String(command));
+  });
+  const {container} = render(<RepositoryPanel sessionId="ssh1"/>);
+  fireEvent.click(screen.getByRole('button', {name: 'Open repository'}));
+  fireEvent.click(await screen.findByRole('button', {name: 'Staged diff'}));
+  const table = await screen.findByRole('table', {name: 'Side by side diff'});
+  await vi.waitFor(() => expect(table.querySelectorAll('.hljs-comment').length).toBeGreaterThan(2));
+  expect(table.textContent).toContain('<script>bad()</script> */');
+  expect(container.querySelector('script')).toBeNull();
+});

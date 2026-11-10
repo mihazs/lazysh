@@ -414,7 +414,7 @@ Adapter paths are under `apps/agent/src/transcript/` and tests under `apps/agent
 | Sub-behavior | Android | Desktop | Evidence | Missing / what would verify |
 | --- | --- | --- | --- | --- |
 | Staged, unstaged and untracked changes | implemented | implemented | `apps/client/src/RepositoryPanel.tsx:258-264`; `src-tauri/repository.rs:260-281`. Real local Git `repository.rs:488`; staged and unstaged diff over real OpenSSH in `test:openssh` (`NLR`). Untracked files are not covered over SSH. | Untracked status over SSH; green `NLR` on `main`. |
-| Per-file side-by-side highlighted hunks | partial | partial | Side-by-side table `RepositoryPanel.tsx:87-89,274`; `e2e/repository-annotations.spec.ts:6-12`. | Diff rows are not syntax-highlighted. |
+| Per-file side-by-side highlighted hunks | implemented | implemented | Side-by-side table with bounded per-side, per-hunk syntax highlighting (`RepositoryPanel.tsx`, `useDiffHighlight.ts`); `RepositoryPanel.test.tsx` covers multiline tokens and inert text. | Native runtime verification; syntax state before each hunk is unavailable. |
 | Binary-file listing | implemented | implemented | `RepositoryPanel.tsx:269,274`; `repository.rs:363`. | UI test for binary entries. |
 | Remembered file | implemented | implemented | sessionStorage `lazysh-review:{session}` (`RepositoryPanel.tsx:149,192`). Vitest only. | Reload test. |
 | Working tree and historical commits | implemented | implemented | `RepositoryPanel.tsx:145,239-250`; `repository.rs:295,325,386`. Mocked `e2e/file-review-locales.spec.ts:11`. | Native history and tree browsing over SSH. |
@@ -514,7 +514,7 @@ Every row that is not `verified` on Android or desktop, grouped and ordered by u
 | 19 | Desktop workspace: command palette native-runtime case; video, audio and PDF in Files; Markdown and media over real SSH | partial to implemented / partial to implemented | #993 (reopened by this re-audit) |
 | 20 | OpenSSH Files, previews and diff: every Android runtime case; desktop untracked status, listener discovery, history and tree browsing, binary and remembered-file tests, real thumbnails; Windows | implemented / implemented | #994; umbrella #10, #11 |
 | 21 | Attachments: the new private `/tmp` default destination (#1063, waiting for its first NL run on `main`), Android file chooser and inline-token attach, desktop camera and clipboard images, host clipboard handoff from non-macOS clients, PTY receipt of pasted paths. The Linux upload-recovery case is green (#935 closed) | implemented / implemented to partial | #512; umbrella #12 |
-| 22 | Diff review: syntax-highlighted hunks, CLI entry point | partial to missing / partial to missing | #10 |
+| 22 | Diff review: native verification of highlighted hunks, CLI entry point | implemented to missing / implemented to missing | #10 |
 | 23 | Element annotations in previews | partial / partial | #11 |
 | 24 | Dictation: Android Whisper, Parakeet on Android and Windows, cloud provider against the real service, non-English inference, native auto-send and model removal. Linux Whisper verified | missing to implemented / partial to implemented | #13, #345 |
 | 25 | Shareable uploads: Android runtime case, real-service thumbnails | implemented / implemented | #12 |
