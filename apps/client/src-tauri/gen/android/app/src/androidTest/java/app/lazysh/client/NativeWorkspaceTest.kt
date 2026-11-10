@@ -3845,6 +3845,31 @@ class NativeWorkspaceTest {
                     proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
+            val profile = companion.getString("profile")
+            require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/managed-hooks").matches(profile))
+            val hooks = "details.companion-install[aria-label='Agent hook setup']"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$hooks > summary"))
+                .perform(webScrollIntoView()).perform(webClick())
+            selectOwnedOption("$hooks select", "claude")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$hooks input"))
+                .perform(webScrollIntoView())
+            typeInto(scenario, "$hooks input", profile)
+            closeSoftKeyboard()
+            fun hookAction(label: String) {
+                awaitDocument(scenario, "hook action $label enabled", "Array.from(document.querySelectorAll(${JSONObject.quote("$hooks button")})).some(x=>x.textContent.trim()===${JSONObject.quote(label)}&&!x.disabled)")
+                val button = onWebView().withElement(findElement(Locator.XPATH,
+                    "//details[@aria-label='Agent hook setup']//button[normalize-space(.)='$label' and not(@disabled)]"))
+                button.perform(webScrollIntoView())
+                awaitDocument(scenario, "hook action $label visible", workspaceButtonVisible(hooks, label))
+                button.perform(webClick())
+            }
+            fun hookState(text: String) = "Array.from(document.querySelectorAll(${JSONObject.quote("$hooks [role=status]")})).some(x=>x.textContent===${JSONObject.quote(text)})"
+            hookAction("Inspect setup")
+            awaitDocument(scenario, "unconfigured managed hooks", hookState("Hooks need setup or repair."))
+            hookAction("Install or update hooks")
+            awaitDocument(scenario, "configured managed hooks", hookState("Hooks configured. Live reporting has not been verified."))
+            hookAction("Remove lazysh hooks")
+            awaitDocument(scenario, "removed managed hooks", hookState("Hooks need setup or repair."))
             awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
             onWebView().withElement(findElement(Locator.XPATH,
                 "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Connections']"))

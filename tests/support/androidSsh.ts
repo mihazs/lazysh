@@ -576,6 +576,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const missing=await fixture.client(true,'if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
       await missing.finish('no preinstalled Android companion fixture executable',5000);
       await lstat(managed).then(()=>{throw new Error('Owned companion destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw new Error('Owned companion absence could not be verified');});
+      const profile=join(fixture.directory,'managed-hooks');
+      await mkdir(profile,{mode:0o700});
+      await writeFile(join(profile,'settings.json'),JSON.stringify({theme:'dark',hooks:{Stop:[{hooks:[{type:'command',command:'echo owned-existing-hook'}]}]}}),{mode:0o600,flag:'wx'});
       console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
     }
     // The host allowlist key must match the concrete device port removed in cleanup.
@@ -590,7 +593,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed,profile:join(fixture.directory,'managed-hooks')}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
@@ -667,6 +670,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await moshWitness?.assertVerified();
     if(evidence) {
       await installedCompanion(fixture,evidence);
+      const settings=JSON.parse(await readFile(join(fixture.directory,'managed-hooks/settings.json'),'utf8'));
+      if(settings.theme!=='dark' || !isDeepStrictEqual(settings.hooks?.Stop,[{hooks:[{type:'command',command:'echo owned-existing-hook'}]}]) ||
+        Object.values(settings.hooks).some(groups=>!Array.isArray(groups) || groups.some(group=>JSON.stringify(group).includes('lazysh-agent'))))
+        throw new Error('Managed hook removal changed existing profile settings or left a lazysh hook');
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
