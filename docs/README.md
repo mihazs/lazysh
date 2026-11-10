@@ -52,6 +52,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
+| Inbox polling, retention and notification action limits | [Inbox monitoring](reference/inbox.md) |
 | Recorded token counters, context and provider-window freshness | [Recorded usage](usage.md) |
 | Explicit live account collectors and unsupported/unknown states | [AI account usage](ai-account-usage.md) |
 | Native local-speech models, inference and interop limits | [Voice native interop](voice-native-interop.md) |
@@ -63,6 +64,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Question | Explanation |
 | --- | --- |
 | Why does saved connection information differ from live work? | [Session lifetime](explanation/session-lifetime.md) |
+| Why does local inbox monitoring not provide background push? | [Notification delivery](explanation/notification-delivery.md) |
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
 
 ## Evidence and delivery
