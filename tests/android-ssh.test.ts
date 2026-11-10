@@ -7,7 +7,7 @@ import * as childProcess from 'node:child_process';
 import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
-import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
+import {reportOwnedSshPromptFailure,receiverProbeErrors,stopOwnedTree} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
@@ -126,6 +126,19 @@ test('teardown reporter whitelists closed fields and cannot throw over a primary
     warning.mockImplementation(()=>{throw new Error(secret);});
     await expect(reportOwnedTeardownFailure(child,'attach-stop')).resolves.toBeUndefined();
   } finally {diagnostic.mockRestore();warning.mockRestore();await child.stop();}
+});
+
+test('tree teardown reports the failing stage without replacing the primary error',async()=>{
+  const child=new OwnedProcess(process.execPath,['-e','process.exit(0)']);
+  await child.finish('owned observation fixture',1000);
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  const original=new Error('private fixture detail');
+  const admission=spyOn(child,'liveIdentity').mockRejectedValue(original);
+  try {
+    await expect(stopOwnedTree(child,'Herdr',true)).rejects.toBe(original);
+    expect(warning.mock.calls.map(([line])=>String(line))).toContain('Owned Herdr tree failure stage: root-admission');
+    expect(warning.mock.calls.flat().join(' ')).not.toContain(original.message);
+  } finally {admission.mockRestore();warning.mockRestore();await child.stop();}
 });
 
 test.each(['attach','fixture'] as const)('actual Herdr host %s cleanup block preserves body and cleanup error identities',async(stage)=>{

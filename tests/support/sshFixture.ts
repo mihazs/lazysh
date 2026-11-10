@@ -82,16 +82,22 @@ async function retireDescendants(parent:OwnedPid) {
 }
 export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'|'tmux'='SSH',cleanSupervisorExit=false) {
   let primary:unknown;
+  let stage:'root-admission'|'retire-descendants'|'root-validation'|'stop'='root-admission';
   try {
     const root=await daemon.liveIdentity();
     if(!root)throw new Error(`Owned ${label} root identity unavailable`);
+    stage='retire-descendants';
     await retireDescendants(root);
     // The explicit mount supervisor exits cleanly when its owned child is
     // retired. A root missing before retirement still fails the check above.
+    stage='root-validation';
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
-  try{await daemon.stop();}catch(error){primary??=error;}
-  if(primary) {await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;}
+  try{await daemon.stop();}catch(error){if(!primary){stage='stop';primary=error;}}
+  if(primary) {
+    try{console.error(`Owned ${label} tree failure stage: ${stage}`);}catch{/* Preserve the primary failure. */}
+    await reportOwnedTeardownFailure(daemon,label==='Herdr'?'herdr-stop':label==='tmux'?'tmux-stop':'ssh-stop');throw primary;
+  }
 }
 // Retire a namespaced tool server, prove its owned processes are gone, then stop SSH.
 export async function stopOwnedServer(ssh:SshFixture,server:OwnedProcess|undefined,label:'Herdr'|'tmux',survived:()=>Promise<boolean>) {
