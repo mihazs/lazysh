@@ -86,6 +86,9 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
     expect(await child.teardownDiagnostic()).toMatchObject({scope:'post-stop-sample',leaderExitObserved:true,closeObserved:false,streams:{stdout:{closed:false,destroyed:false}}});
     expect((await pending as Error).message).toBe('Owned fixture deadline: unsupported background escape');
     expect(warning).toHaveBeenCalledWith('Owned fixture cleanup failed after original failure');
+    const line=warning.mock.calls.map(([value])=>String(value)).find(value=>value.startsWith('Owned fixture deadline observation '));
+    expect(line).toBeDefined();
+    expect(JSON.parse(line!.slice('Owned fixture deadline observation '.length))).toMatchObject({leaderExitObserved:true,closeObserved:false,streams:{stdout:{closed:false,destroyed:false}}});
     // This negative fixture, not the foreground helper, owns the still-live child.
     expect(await start()).toBe(originalStart);
   } finally {

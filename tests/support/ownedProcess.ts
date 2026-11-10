@@ -55,6 +55,12 @@ export class OwnedProcess {
       leaderExitObserved:teardownFlag(this.child.exitCode!==null || this.child.signalCode!==null),closeObserved:teardownFlag(this.closeObserved),
       streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}};
   }
+  private reportDeadline() {
+    try {
+      console.error('Owned fixture deadline observation '+JSON.stringify({leaderExitObserved:this.child.exitCode!==null || this.child.signalCode!==null,
+        closeObserved:this.closeObserved,streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}}));
+    } catch {/* Diagnostics cannot replace the deadline failure. */}
+  }
   async liveIdentity() {
     const original=await this.original;
     if(!original || this.child.exitCode!==null || this.child.signalCode!==null)return;
@@ -72,7 +78,7 @@ export class OwnedProcess {
         force=setTimeout(()=>{void this.liveIdentity().then(current=>{if(current?.start===original.start)try{process.kill(-pid,'SIGKILL');}catch{}}).catch(()=>{});},1000);
       }
       await Promise.race([this.done,new Promise<never>((_,reject)=>{
-        deadline=setTimeout(()=>reject(new Error('Owned fixture process teardown deadline')),2000);
+        deadline=setTimeout(()=>{this.reportDeadline();reject(new Error('Owned fixture process teardown deadline'));},2000);
       })]);
     } finally {
       if(force)clearTimeout(force);if(deadline)clearTimeout(deadline);
