@@ -6,10 +6,11 @@ import {useAccessSnapshot} from './access';
 export {parseHerdrAgents} from './useHerdrNavigation';
 
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
-export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,onRestoreHostTools}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;onRestoreHostTools?:(restored:()=>void)=>void}) {
+export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,onRestoreHostTools,onChooseAgent}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;onRestoreHostTools?:(restored:()=>void)=>void;onChooseAgent?:(agent:'claude'|'codex')=>void}) {
   useUi();
   useAccessSnapshot();
-  const {data,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=useHerdrNavigation({sessionId,herdrSession,visible,reports});
+  const {data:loaded,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=useHerdrNavigation({sessionId,herdrSession,visible,reports});
+  const data=onChooseAgent && (!visible || !lease.current())?null:loaded;
   const references=reportedSessionCounts(data?.rows??[]);
   const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase())))??[];
   return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>
@@ -21,7 +22,7 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports
         <details className="herdr-server-setup" open={!data.loaded || !data.server || failure?.host===sessionId ? true : undefined}>
         <summary>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
         <p>{t('herdrAgentsHint')}</p>
-        <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy} onChange={event=>selectServer(event.target.value)}>
+        <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy || !!onChooseAgent} onChange={event=>selectServer(event.target.value)}>
           <option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}
         </select></label>
         <p>{t('herdrAgentsScope',{servers:formatNumber(data.servers.length)})}</p>
@@ -33,6 +34,7 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports
             return <article className="agent-card" key={JSON.stringify([sessionId,data.server,row.terminal_id,row.pane_id])}>
             <strong>{row.name??row.agent??row.pane_id}</strong>{row.name && row.agent && <p>{row.agent}</p>}
             <p>{t(herdrStatusKeys[row.agent_status])}</p>{row.cwd && <code>{row.cwd}</code>}
+            {onChooseAgent && (row.agent==='claude' || row.agent==='codex') && <button type="button" disabled={!visible || !lease.current()} onClick={()=>onChooseAgent(row.agent as 'claude'|'codex')}>{t('agentViewChooseTranscript')}</button>}
             {row.agent_session && <HerdrSessionDetails reference={row.agent_session} count={referenceCount} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}
             <small>{data.server} · {row.workspace_id} · {row.tab_id} · {row.pane_id}</small>
           </article>;})}</div>

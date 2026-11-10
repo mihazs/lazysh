@@ -2581,6 +2581,20 @@ class NativeWorkspaceTest {
         fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         nativeFingerGesture(false, swiped)
         focusTab(originalTab)
+        if (!alreadyAttached) {
+            val question = """(()=>{const screens=$screens;const text=screens.length===1?screens[0].textContent:'';
+                return text.includes('OWNED_QUESTION') && text.includes('> OPTION_ONE') && text.includes('OPTION_TWO');})()"""
+            awaitDocument(scenario, "owned agent question and selection", question)
+            awaitDocument(scenario, "owned agent terminal focus settled", """
+                (()=>{const screens=$screens;return screens.length===1 && screens[0].parentElement?.classList.contains('focus') &&
+                  screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+            """)
+            closeSoftKeyboard()
+            fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            nativeFingerGesture(true, 0)
+            assertEquals("Finger swipe preserves the agent question and selected option", "true", evaluate(scenario, question))
+            // The host's final exact receiver ledger also rejects any swipe-generated input bytes.
+        }
         println("lazysh Herdr finger scroll: five short native drags advanced history repeatedly, then two MOVE phases advanced before one UP, again after a pause in history; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")

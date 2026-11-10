@@ -52,6 +52,10 @@ pub enum Method {
     GuardCancelPreparation(crate::guarded_input::protocol::CancelPreparationParams),
     #[serde(rename = "lazysh.guard.revoke")]
     GuardRevoke(crate::guarded_input::protocol::RevokeParams),
+    #[serde(rename = "lazysh.guard.observe")]
+    GuardObserve(crate::guarded_input::protocol::ObserveParams),
+    #[serde(rename = "lazysh.guard.scroll_history")]
+    GuardScrollHistory(crate::guarded_input::protocol::ScrollHistoryParams),
     #[serde(rename = "lazysh.guard.prepare")]
     GuardPrepare(crate::guarded_input::protocol::PrepareParams),
     #[serde(rename = "lazysh.guard.input")]

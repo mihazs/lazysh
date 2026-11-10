@@ -44,7 +44,7 @@ impl Drop for Secret {
     }
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Target {
     workspace: String,
@@ -82,8 +82,8 @@ impl Target {
         }
     }
 }
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Destination {
     workspace: String,
     tab: String,
@@ -121,7 +121,14 @@ enum WireResult {
     Ok {},
     GuardClaimed { owner: Owner },
     GuardPrepared { guard: Prepared },
+    GuardObserved { guard: Observed },
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Observed {
+    target: Target,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Success {
@@ -543,6 +550,13 @@ pub(crate) async fn acquire(
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Status,
+    Observe {},
+    ScrollHistory {
+        destination: Destination,
+        x: u16,
+        y: u16,
+        lines: i16,
+    },
     #[serde(skip)]
     RetireForView,
     Prepare {
@@ -566,7 +580,27 @@ impl Action {
     fn validate(&self) -> WireOutcome<()> {
         let token = |value: &str| value.len() == 36 && uuid::Uuid::parse_str(value).is_ok();
         match self {
-            Self::Status | Self::RetireForView => Ok(()),
+            Self::Status | Self::Observe {} | Self::RetireForView => Ok(()),
+            Self::ScrollHistory {
+                destination,
+                x,
+                y,
+                lines,
+            } => {
+                let target = destination.target()?;
+                if *lines == 0
+                    || lines.unsigned_abs() > 200
+                    || u32::from(*x) < u32::from(target.viewport.x)
+                    || u32::from(*y) < u32::from(target.viewport.y)
+                    || u32::from(*x)
+                        >= u32::from(target.viewport.x) + u32::from(target.viewport.width)
+                    || u32::from(*y)
+                        >= u32::from(target.viewport.y) + u32::from(target.viewport.height)
+                {
+                    return Err(Fault::Invalid);
+                }
+                Ok(())
+            }
             Self::Prepare { source } => source.validate().map_err(|_| Fault::Invalid),
             Self::Confirm { candidate, source } if token(candidate) => {
                 source.validate().map_err(|_| Fault::Invalid)
@@ -592,6 +626,9 @@ impl Action {
     rename_all_fields = "camelCase"
 )]
 pub enum Reply {
+    Observed {
+        destination: Destination,
+    },
     Status {
         available: bool,
     },
@@ -632,6 +669,45 @@ struct Prepare<'a> {
     source: &'a str,
 }
 #[derive(Serialize)]
+struct Observe<'a> {
+    boot: &'a Secret,
+    ownership: &'a Secret,
+}
+#[derive(Serialize)]
+struct ScrollHistory<'a> {
+    boot: &'a Secret,
+    ownership: &'a Secret,
+    target: Target,
+    x: u16,
+    y: u16,
+    lines: i16,
+}
+
+impl Destination {
+    fn target(&self) -> WireOutcome<Target> {
+        let generation: u64 = self
+            .runtime_generation
+            .parse()
+            .map_err(|_| Fault::Invalid)?;
+        if generation.to_string() != self.runtime_generation {
+            return Err(Fault::Invalid);
+        }
+        let target = Target {
+            workspace: self.workspace.clone(),
+            tab: self.tab.clone(),
+            pane: self.pane.clone(),
+            terminal: self.terminal.clone(),
+            runtime_generation: generation,
+            viewport: self.viewport.clone(),
+        };
+        if !target.valid() {
+            return Err(Fault::Invalid);
+        }
+        Ok(target)
+    }
+}
+
+#[derive(Serialize)]
 struct Release<'a> {
     boot: &'a Secret,
     receipt: &'a Secret,
@@ -662,7 +738,7 @@ impl Control {
                 .bound
                 .as_ref()
                 .is_some_and(|bound| &bound.token == token),
-            Action::Status => false,
+            Action::Status | Action::Observe {} | Action::ScrollHistory { .. } => false,
         }
     }
     async fn prepare(
@@ -759,6 +835,59 @@ impl Control {
     ) -> WireOutcome<Reply> {
         match action {
             Action::Status => Ok(Reply::Status { available: true }),
+            Action::Observe {} => {
+                let params = Observe {
+                    boot: &self.startup.boot,
+                    ownership: &self.startup.ownership,
+                };
+                match rpc(
+                    &self.handle,
+                    &self.startup.name,
+                    lease,
+                    cancel,
+                    "lazysh.guard.observe",
+                    &params,
+                    reply,
+                )
+                .await?
+                {
+                    WireResult::GuardObserved { guard } if guard.target.valid() => {
+                        Ok(Reply::Observed {
+                            destination: guard.target.public(),
+                        })
+                    }
+                    _ => Err(Fault::Protocol),
+                }
+            }
+            Action::ScrollHistory {
+                destination,
+                x,
+                y,
+                lines,
+            } => {
+                let params = ScrollHistory {
+                    boot: &self.startup.boot,
+                    ownership: &self.startup.ownership,
+                    target: destination.target()?,
+                    x,
+                    y,
+                    lines,
+                };
+                match rpc(
+                    &self.handle,
+                    &self.startup.name,
+                    lease,
+                    cancel,
+                    "lazysh.guard.scroll_history",
+                    &params,
+                    reply,
+                )
+                .await?
+                {
+                    WireResult::Ok {} => Ok(Reply::Released),
+                    _ => Err(Fault::Protocol),
+                }
+            }
             Action::Prepare { source } => {
                 let bound = self.prepare(source, lease, cancel, reply).await?;
                 let response = Reply::Prepared {

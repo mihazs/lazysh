@@ -1,6 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
+import HerdrAgentsPanel from './HerdrAgentsPanel';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, reportedTones} from './AgentStatus';
@@ -14,14 +15,15 @@ type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: Agent
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, terminalInput, onShowTerminal}: {
-  sessionId: string; shown: boolean; tmux: boolean; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, tmux, herdrSession, terminalInput, onShowTerminal}: {
+  sessionId: string; shown: boolean; tmux: boolean; herdrSession?: string; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
 }) {
   useUi();
   const [access] = useState(captureAccess);
   const invoke = useMemo(() => bindProtectedInvoke(access), [access]);
   const [binding, setBinding] = useState<Binding>({kind: 'finding'});
   const [manual, setManual] = useState(false);
+  const [manualAgent, setManualAgent] = useState<BoundConversation['agent']>();
   // Available reported history per agent session id, so polling only re-reads the board.
   // A missing one is asked again on the next poll: the user may turn it on, or it may be reported later.
   const histories = useRef(new Map<string, BoundConversation>());
@@ -38,15 +40,17 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
         const row = pane === undefined ? undefined : parseSnapshot(await invoke('agent_snapshot', {sessionId})).find(row => row.paneId === pane);
         const agent = row && conversationAgents[row.agent];
         if (row && agent && !histories.current.has(row.sessionId)) {
-          const history = parseReportedHistory(await invoke('agent_reported_history', {sessionId, agentSessionId: row.sessionId}), row.sessionId);
-          if (history.status === 'available') histories.current.set(row.sessionId, Object.freeze({agent, path: history.path}));
+          try {
+            const history = parseReportedHistory(await invoke('agent_reported_history', {sessionId, agentSessionId: row.sessionId}), row.sessionId);
+            if (history.status === 'available' && history.paneId === pane) histories.current.set(row.sessionId, Object.freeze({agent, path: history.path}));
+          } catch { /* A detected agent remains visible when its history is unavailable. */ }
         }
         const conversation = row && histories.current.get(row.sessionId);
-        if (alive) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
+        if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
           : {kind: 'bound', row, conversation: previous.kind === 'bound' && previous.conversation.path === conversation.path && previous.conversation.agent === conversation.agent ? previous.conversation : conversation});
       } catch {
         // A failed read keeps what was found; with nothing found yet the fallback offers the terminal.
-        if (alive) setBinding(previous => previous.kind === 'finding' ? {kind: 'none'} : previous);
+        if (alive && access.current()) setBinding(previous => previous.kind === 'finding' ? {kind: 'none'} : previous);
       } finally { flight = false; }
     }
     void bind();
@@ -70,15 +74,16 @@ export default function AgentView({sessionId, shown, tmux, terminalInput, onShow
     </header>
     {binding.kind === 'finding' && !manual && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && binding.kind !== 'finding' && <div className="agent-view-fallback">
-      <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
+      {!herdrSession && <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>}
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
         <button type="button" onClick={() => setManual(true)}>{t('agentViewChooseTranscript')}</button>
       </div>
     </div>}
+    {herdrSession && !manual && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} onChooseAgent={agent=>{setManualAgent(agent);setManual(true);}} />}
     {manual && <p className="security-note">{t('agentViewManualNotice')}</p>}
     {reader && !terminalInput && <p className="agent-view-note">{t('agentViewStageOnly')}</p>}
     {reader && <ChatPanel key={manual ? 'manual' : JSON.stringify(binding.kind === 'bound' && binding.conversation)} sessionId={sessionId} shown={shown}
-      bound={!manual && binding.kind === 'bound' ? binding.conversation : undefined} timeline onTurnStart={setTurnStart} onOpenTerminal={onShowTerminal} terminalInput={terminalInput} />}
+      bound={!manual && binding.kind === 'bound' ? binding.conversation : undefined} initialAgent={manualAgent} timeline onTurnStart={setTurnStart} onOpenTerminal={onShowTerminal} terminalInput={terminalInput} />}
   </section>;
 }

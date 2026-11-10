@@ -182,7 +182,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,initialAgent,timeline=false,onTurnStart }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;initialAgent?:BoundConversation['agent'];timeline?:boolean;onTurnStart?:(timestamp?:string)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -200,7 +200,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const messageList = useRef<HTMLDivElement>(null);
   const atLatestRef = useRef(true);
   const [atLatest, setAtLatest] = useState(true);
-  const [agent, setAgent] = useState<string>(bound?.agent ?? "claude");
+  const [agent, setAgent] = useState<string>(bound?.agent ?? initialAgent ?? "claude");
   const [path, setPath] = useState(bound?.path ?? initialReported?.path ?? "");
   const [view, setView] = useState(bound ? "conversation" : "records");
   const [inlineImages,setInlineImages]=useState(false);

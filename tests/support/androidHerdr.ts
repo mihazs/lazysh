@@ -87,7 +87,7 @@ export class HerdrFixture {
       const snapshot=JSON.parse(await owned.run(['api','snapshot']));
       const pane=snapshot?.result?.snapshot?.focused_pane_id;
       if(typeof pane!=='string' || !pane || pane.length>128 || /[\x00-\x1f\x7f-\x9f]/.test(pane))throw new Error('Invalid owned receiver pane');
-      owned.receiver=await owned.startReceiver(pane,ssh.directory,navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():'');
+      owned.receiver=await owned.startReceiver(pane,ssh.directory,navigation?'NAV_SOURCE_'+ssh.nonce:undefined,moshBinary?ownedMoshResizePaint():navigation?'':"printf '\\033[2J\\033[HOWNED_QUESTION\\n> OPTION_ONE\\n  OPTION_TWO\\n'; ");
       // A custom hook report has no elapsed-time TTL. Seed only after the
       // original receiver is running; never heartbeat or mask its retirement.
       await owned.run(['pane','report-agent',pane,'--source','lazysh-owned-ui','--agent','codex','--state','unknown']);

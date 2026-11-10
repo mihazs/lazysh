@@ -38,6 +38,14 @@ impl HeadlessServer {
         &self,
         client_id: u64,
     ) -> Option<crate::guarded_input::protocol::Target> {
+        self.guard_display_target(client_id, false)
+    }
+
+    fn guard_display_target(
+        &self,
+        client_id: u64,
+        allow_history: bool,
+    ) -> Option<crate::guarded_input::protocol::Target> {
         use crate::guarded_input::protocol::{Target, Viewport};
         if self.shutting_down || self.handoff_in_progress {
             return None;
@@ -78,9 +86,10 @@ impl HeadlessServer {
             pane,
         )?;
         if runtime.synchronized_output_active()
-            || runtime
-                .scroll_metrics()
-                .is_some_and(|scroll| scroll.offset_from_bottom != 0)
+            || (!allow_history
+                && runtime
+                    .scroll_metrics()
+                    .is_some_and(|scroll| scroll.offset_from_bottom != 0))
         {
             return None;
         }
@@ -230,6 +239,67 @@ impl HeadlessServer {
                         )
                     })
                     .map(|owner| ResponseResult::GuardClaimed { owner })
+            }
+            Method::GuardObserve(params) => self
+                .guarded_input
+                .as_mut()
+                .ok_or("guard_unavailable")
+                .and_then(|registry| {
+                    registry.observed_client(&params.boot, &params.ownership, Instant::now())
+                })
+                .and_then(|client| self.guard_display_target(client, true).ok_or("guard_stale"))
+                .map(|target| ResponseResult::GuardObserved {
+                    guard: crate::guarded_input::protocol::ObservedReply { target },
+                }),
+            Method::GuardScrollHistory(params) => {
+                if !params.valid() || params.cancellation.cancelled() {
+                    Err("guard_invalid")
+                } else {
+                    self.guarded_input
+                        .as_mut()
+                        .ok_or("guard_unavailable")
+                        .and_then(|registry| {
+                            registry.observed_client(
+                                &params.boot,
+                                &params.ownership,
+                                Instant::now(),
+                            )
+                        })
+                        .and_then(|client| {
+                            let current = self
+                                .guard_display_target(client, true)
+                                .ok_or("guard_stale")?;
+                            if current != params.target {
+                                return Err("guard_stale");
+                            }
+                            let (workspace, tab) =
+                                self.app.parse_tab_id(&current.tab).ok_or("guard_stale")?;
+                            let pane = self
+                                .app
+                                .state
+                                .workspaces
+                                .get(workspace)
+                                .and_then(|workspace| workspace.tabs.get(tab))
+                                .ok_or("guard_stale")?
+                                .layout
+                                .focused();
+                            let runtime = self
+                                .app
+                                .state
+                                .runtime_for_pane_in_workspace(
+                                    &self.app.terminal_runtimes,
+                                    workspace,
+                                    pane,
+                                )
+                                .ok_or("guard_stale")?;
+                            if params.lines < 0 {
+                                runtime.scroll_up(usize::from(params.lines.unsigned_abs()));
+                            } else {
+                                runtime.scroll_down(usize::from(params.lines.unsigned_abs()));
+                            }
+                            Ok(ResponseResult::Ok {})
+                        })
+                }
             }
             Method::GuardPrepare(params) => {
                 publication = Some(params.cancellation.clone());

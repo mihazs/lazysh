@@ -210,6 +210,43 @@ macro_rules! guard_parameters {
     };
 }
 
+guard_parameters! { ObserveParams {
+    pub(crate) boot: Secret,
+    pub(crate) ownership: Secret,
+}}
+
+guard_parameters! { ScrollHistoryParams {
+    pub(crate) boot: Secret,
+    pub(crate) ownership: Secret,
+    pub(crate) target: Target,
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) lines: i16,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) cancellation: Cancellation,
+}}
+
+impl ScrollHistoryParams {
+    pub(crate) fn valid(&self) -> bool {
+        self.target.valid()
+            && self.lines != 0
+            && self.lines.unsigned_abs() <= 200
+            && u32::from(self.x) >= u32::from(self.target.viewport.x)
+            && u32::from(self.y) >= u32::from(self.target.viewport.y)
+            && u32::from(self.x)
+                < u32::from(self.target.viewport.x) + u32::from(self.target.viewport.width)
+            && u32::from(self.y)
+                < u32::from(self.target.viewport.y) + u32::from(self.target.viewport.height)
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedReply {
+    pub(crate) target: Target,
+}
+
 guard_parameters! { PrepareParams {
     pub(crate) boot: Secret,
     pub(crate) ownership: Secret,
@@ -304,6 +341,9 @@ macro_rules! redacted_debug {
 }
 redacted_debug!(
     PrepareParams,
+    ObserveParams,
+    ScrollHistoryParams,
+    ObservedReply,
     InputParams,
     ReleaseParams,
     PreparedReply,
@@ -323,5 +363,7 @@ pub(crate) fn is_guard_method(method: &crate::api::schema::Method) -> bool {
             | Method::GuardRelease(_)
             | Method::GuardCancelPreparation(_)
             | Method::GuardRevoke(_)
+            | Method::GuardObserve(_)
+            | Method::GuardScrollHistory(_)
     )
 }

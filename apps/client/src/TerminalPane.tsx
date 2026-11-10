@@ -1,12 +1,13 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
-import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
+import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
+import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
@@ -65,6 +66,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
+  const invoke = useProtectedInvoke();
   const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -366,6 +368,34 @@ export default function TerminalPane({ session, active, quietActivation = false,
   useEffect(() => {
     const element = container.current;
     if (!element || preferences.screenReader) return;
+    let alive = true;
+    let historyQueue: Promise<void> = Promise.resolve();
+    let historyGesture: {target?: unknown; failed: boolean; cancelled?: boolean} = {failed:false};
+    let historyTail: {gesture: typeof historyGesture; x:number; y:number; lines:number; started:boolean} | null = null;
+    const historyScroll = (x: number, y: number, lines: number) => {
+      const terminal = session.terminal, rect = terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect();
+      if (!rect || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0 || !terminal.cols || !terminal.rows) return;
+      const column = Math.floor((x - rect.left) * terminal.cols / rect.width), row = Math.floor((y - rect.top) * terminal.rows / rect.height);
+      if (column < 0 || row < 0 || column >= terminal.cols || row >= terminal.rows) return;
+      const gesture = historyGesture;
+      if (historyTail && !historyTail.started && historyTail.gesture === gesture && historyTail.x === column && historyTail.y === row
+        && Math.sign(historyTail.lines) === Math.sign(lines) && Math.abs(historyTail.lines + lines) <= 200) {historyTail.lines += lines; return;}
+      const batch = {gesture, x:column, y:row, lines, started:false};
+      historyTail = batch;
+      historyQueue = historyQueue.then(async () => {
+        batch.started = true;
+        if (historyTail === batch) historyTail = null;
+        if (!alive || !activeRef.current || !session.connected || !access.current() || gesture.failed || gesture.cancelled) return;
+        if (!gesture.target) {
+          gesture.target = await observeHerdrHistory(invoke, session.id);
+        }
+        if (!alive || !activeRef.current || !session.connected || !access.current() || gesture.cancelled) return;
+        await scrollHerdrHistory(invoke, session.id, gesture.target, batch.x, batch.y, batch.lines);
+      }).catch(() => {
+        if (!gesture.failed && !gesture.cancelled && alive && activeRef.current && access.current()) reportError(new LocalUiError('unavailable'));
+        gesture.failed = true;
+      });
+    };
     let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
     let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean; dismiss:InputOwner|null} | null = null;
     const safeDismiss=(owner:InputOwner|null)=>{
@@ -383,10 +413,11 @@ export default function TerminalPane({ session, active, quietActivation = false,
     let hold: {x: number; y: number; timer?: ReturnType<typeof setTimeout>; ready?: true} | null = null;
     let touched: TouchSelection | null = null;
     const release = () => {if (hold?.timer) clearTimeout(hold.timer); hold = null;};
-    const cancel = () => {scroll = null; remainder = null; release();};
+    const cancel = () => {historyGesture.cancelled = true; scroll = null; remainder = null; release();};
     const start = (event: TouchEvent) => {
       const point = event.touches.length === 1 ? event.touches[0] : undefined;
       if (!point) {cancel(); return;}
+      historyGesture = {failed:false};
       scroll = {x: point.clientX, y: point.clientY, lastY: point.clientY, pending: 0, direction: 0, mode: null, height: 0, active: false, dismiss:preferences.dismissKeyboardOnOverscroll&&Number.isFinite(point.clientX)&&Number.isFinite(point.clientY)&&safeDismiss(inputOwner.current)?inputOwner.current:null};
       release();
       const pending: NonNullable<typeof hold> = {x: point.clientX, y: point.clientY};
@@ -435,7 +466,8 @@ export default function TerminalPane({ session, active, quietActivation = false,
             const tracking = session.terminal.modes.mouseTrackingMode;
             const pixelWheel = tracking === 'none' || tracking === 'x10';
             const viewportScroll = pixelWheel && session.terminal.buffer.active.type !== 'alternate' && session.terminal.options.scrollback !== 0;
-            const route = `${tracking}:${viewportScroll}:${session.terminal.buffer.active.type}:${session.terminal.options.scrollback === 0}`;
+            const herdrHistory = multiplexer === 'herdr' && !viewportScroll;
+            const route = `${herdrHistory}:${tracking}:${viewportScroll}:${session.terminal.buffer.active.type}:${session.terminal.options.scrollback === 0}`;
             const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
             let count = 1, amount = deltaY, lines = 0;
             let mode: number = WheelEvent.DOM_DELTA_PIXEL;
@@ -454,7 +486,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
               scroll.pending += deltaY;
               // A coalesced native sample can span the viewport. Drain its full
               // travel now; a later move may never arrive before finger lift.
-              const limit = Math.min(256, Math.max(1, Math.ceil(window.innerHeight / height)));
+              const limit = Math.min(herdrHistory ? 200 : 256, Math.max(1, Math.ceil(window.innerHeight / height)));
               const rows = viewportScroll ? Math.round(scroll.pending / height) : Math.trunc(scroll.pending / height);
               count = Math.min(limit, Math.abs(rows));
               amount = Math.sign(rows); mode = WheelEvent.DOM_DELTA_LINE;
@@ -462,11 +494,13 @@ export default function TerminalPane({ session, active, quietActivation = false,
               // History scrolls synchronously: a wheel lands on the next scroll
               // event, after which streaming output could already have moved
               // a reader who was following the bottom row.
-              if (viewportScroll) {lines = amount * count; count = 0;}
+              if (herdrHistory) {if (count) historyScroll(scroll.x, scroll.y, amount * count); count = 0;}
+              else if (viewportScroll) {lines = amount * count; count = 0;}
               else if (pixelWheel) {
                 amount *= count * height; count = count ? 1 : 0; mode = WheelEvent.DOM_DELTA_PIXEL;
               }
             } else {scroll.pending = 0; remainder = null; scroll.mode = null; scroll.height = 0;}
+            if (herdrHistory) count = 0;
             for (let notch = 0; notch < count; notch++) session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
               // Keep the whole drag in its original pane, as with a stationary mouse wheel.
               bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY: amount, deltaMode: mode,
@@ -502,6 +536,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     element.addEventListener('touchcancel', cancel, {capture: true});
     element.addEventListener('contextmenu', menu, {capture: true});
     return () => {
+      alive = false;
       release();
       element.removeEventListener('contextmenu', menu, {capture: true});
       accessChanged();bufferChanged?.dispose();
@@ -512,7 +547,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       element.removeEventListener('touchend', end, {capture: true});
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
-  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.terminal, session.connected, preferences.bodyGestures]);
+  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.terminal, session.connected, preferences.bodyGestures, multiplexer, invoke, access, reportError]);
 
   // Pulling the session header down runs the short or long pull action on release.
   const [pull, setPull] = useState<PullDepth | null>(null);

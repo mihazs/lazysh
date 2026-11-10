@@ -61,6 +61,62 @@ fn target() -> Target {
 }
 
 #[test]
+fn observe_reply_requires_a_strict_target_and_preserves_generation() {
+    let value = json!({"id":"guard","result":{"type":"guard_observed","guard":{"target":{
+        "workspace":"w1","tab":"w1:t2","pane":"w1:p3","terminal":"term4",
+        "runtime_generation":u64::MAX,"viewport":{"x":0,"y":1,"width":80,"height":24}
+    }}}});
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let WireResult::GuardObserved { guard } = response(Some(0), &bytes, b"").unwrap() else {
+        panic!("expected observation")
+    };
+    assert!(guard.target.valid());
+    assert_eq!(
+        guard.target.public().runtime_generation,
+        u64::MAX.to_string()
+    );
+    let mut invalid = value;
+    invalid["result"]["guard"]["extra"] = json!(true);
+    assert!(matches!(
+        response(Some(0), &serde_json::to_vec(&invalid).unwrap(), b""),
+        Err(Fault::Protocol)
+    ));
+}
+
+#[test]
+fn history_scroll_rejects_invalid_generation_coordinates_and_lines() {
+    let destination = serde_json::to_value(target().public()).unwrap();
+    let action = |destination, x, y, lines| json!({"kind":"scroll_history","destination":destination,"x":x,"y":y,"lines":lines});
+    for (x, y, lines) in [(0, 1, 1), (79, 24, -200), (1, 2, 200)] {
+        let parsed: Action =
+            serde_json::from_value(action(destination.clone(), x, y, lines)).unwrap();
+        assert!(parsed.validate().is_ok());
+    }
+    for (x, y, lines) in [
+        (0, 0, 1),
+        (80, 1, 1),
+        (0, 25, 1),
+        (0, 1, 0),
+        (0, 1, 201),
+        (0, 1, -201),
+    ] {
+        let parsed: Action =
+            serde_json::from_value(action(destination.clone(), x, y, lines)).unwrap();
+        assert!(matches!(parsed.validate(), Err(Fault::Invalid)));
+    }
+    for generation in ["0", "01", "+1", "18446744073709551616"] {
+        let mut bad = destination.clone();
+        bad["runtimeGeneration"] = json!(generation);
+        let parsed: Action = serde_json::from_value(action(bad, 0, 1, 1)).unwrap();
+        assert!(matches!(parsed.validate(), Err(Fault::Invalid)));
+    }
+    let mut bad = action(destination, 0, 1, 1);
+    bad["extra"] = json!(true);
+    assert!(serde_json::from_value::<Action>(bad).is_err());
+    assert!(serde_json::from_value::<Action>(json!({"kind":"observe","extra":true})).is_err());
+}
+
+#[test]
 fn only_a_complete_first_frame_can_supply_private_authority() {
     let mut bytes = private_frame();
     for split in 0..bytes.len() {
@@ -229,6 +285,17 @@ async fn revoked_original_binding_lease_cannot_dispatch_through_a_fresh_call_lea
             confirmed: true,
         }),
     };
+    assert!(!control.affects_binding(&Action::Observe {}));
+    assert!(!control.affects_binding(&Action::ScrollHistory {
+        destination: target().public(),
+        x: 0,
+        y: 1,
+        lines: 1,
+    }));
+    assert!(control
+        .bound
+        .as_ref()
+        .is_some_and(|bound| bound.token == token && bound.confirmed));
     fixture.hold();
     let mut cancel = fixture.session.cancel.subscribe();
     let worker = tokio::spawn(async move {

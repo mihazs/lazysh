@@ -5,6 +5,7 @@ import {invoke} from '@tauri-apps/api/core';
 import AgentView from './AgentView';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {tmuxChatReply} from './test/tmuxChat';
+import {herdrNavigationTree} from './test/herdrNavigation';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -84,6 +85,59 @@ it('labels a detected agent without a reported conversation as partial and never
   await advance(0);
   expect(screen.getByText(/^Codex reports its state here, but its conversation is not available/)).toBeTruthy();
   expect(screen.getByText('Attention')).toBeTruthy();
+  expect(calls('agent_transcript')).toEqual([]);
+});
+
+it('keeps a detected tmux agent visible when its history lookup fails',async()=>{
+  host('codex',[row('Codex','%3')],'missing',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?Promise.reject(new Error('unavailable')):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(/^Codex reports its state here, but its conversation is not available/)).toBeTruthy();
+});
+
+it('does not bind history reported for another tmux pane',async()=>{
+  host('codex',[row('Codex','%3')],'missing',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_reported_history'?Promise.resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:'%4'}):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(/^Codex reports its state here, but its conversation is not available/)).toBeTruthy();
+  expect(calls('agent_transcript')).toEqual([]);
+});
+
+it('shows Herdr agents without reading a conversation until the user chooses one',async()=>{
+  const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'shared'}};
+  const other={...first,agent:'claude',name:'other',pane_id:'w2E:pA',terminal_id:'term-two'};
+  const duplicate={...first,name:'duplicate',pane_id:'w2E:pB',terminal_id:'term-three'};
+  const tree={...herdrNavigationTree,agents:[first,other,duplicate],panes:[...herdrNavigationTree.panes,{...herdrNavigationTree.panes[0],pane_id:other.pane_id,terminal_id:other.terminal_id},{...herdrNavigationTree.panes[0],pane_id:duplicate.pane_id,terminal_id:duplicate.terminal_id}]};
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='multiplexer_sessions')return [{name:'owned'}];
+    if(command==='herdr_tree')return tree;
+    throw new Error('Companion unavailable');
+  });
+  const view=render(<AgentView sessionId="ssh" shown={false} tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  await advance(5000);expect(invoke).not.toHaveBeenCalled();
+  view.rerender(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText('builder')).toBeTruthy();expect(screen.getByText('other')).toBeTruthy();
+  expect(screen.getByLabelText('Herdr server')).toHaveProperty('disabled',true);
+  expect(screen.queryByText('No agent conversation for this terminal.')).toBeNull();
+  expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
+  fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Choose transcript'}));
+  expect(screen.getByLabelText('Agent')).toHaveProperty('value','codex');
+  expect(screen.getByText('You chose this transcript. It is not proven to belong to the agent in this terminal.')).toBeTruthy();
+  expect(calls('agent_transcript')).toEqual([]);
+});
+
+it('hides Herdr metadata and prevents selection when access is revoked',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'owned'}]:herdrNavigationTree);
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);
+  await advance(0);expect(screen.getByText('builder')).toBeTruthy();
+  act(()=>access(true));
+  expect(screen.queryByText('builder')).toBeNull();
+  await advance(5000);
   expect(calls('agent_transcript')).toEqual([]);
 });
 

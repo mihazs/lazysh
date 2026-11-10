@@ -356,6 +356,17 @@ impl Registry {
         self.owner_by_credential(ownership, false)
     }
 
+    pub(crate) fn observed_client(
+        &mut self,
+        boot: &Secret,
+        ownership: &Secret,
+        now: Instant,
+    ) -> Outcome<u64> {
+        self.current_owner(boot, ownership, now)
+            .map(|(client, _)| client)
+            .ok_or("guard_stale")
+    }
+
     pub(crate) fn cancel_preparation(
         &mut self,
         boot: &Secret,
