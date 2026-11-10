@@ -51,7 +51,7 @@ fn prepare_fixture(
     let data_hashes: Vec<_> = (0..4)
         .map(|i| format!("{:x}", Sha256::digest(vec![i as u8; 8])))
         .collect();
-    let files = std::array::from_fn(|i| (FILES[i].0, 8, Some(data_hashes[i].as_str())));
+    let files = std::array::from_fn(|i| (FILES[i].0, 8, data_hashes[i].as_str()));
     let parent = private_directory();
     let bundle = prepare(
         Cursor::new(&bytes),

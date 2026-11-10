@@ -6,14 +6,14 @@ builds do not establish product support. Language detection is automatic: this
 runtime has no forced-language option.
 
 Select Parakeet and explicitly download its model. Viewing status or selecting
-the engine never downloads weights. The sole archive is 487,170,055 bytes, from
+the engine never downloads weights. The sole archive is 487,211,443 bytes, from
 the sherpa-onnx publisher, with the runtime's fixed SHA-256. No caller-selected
 URL, filesystem path, ONNX file, or checksum is accepted. Archive verification
 and extraction validate the pinned files before publishing without replacement.
 To download again, explicitly Remove then Download. Whisper's three-model and
 160 MiB limits remain unchanged.
 
-Allow **1,644,818,882 bytes** of peak disk space: the installed download, private
+Allow **1,644,999,670 bytes** of peak disk space: the installed download, private
 verification snapshot, and four extracted files can coexist. Disk-full errors
 fail explicitly. One private native cache lock prevents another app process from
 modifying live model storage. Startup cleanup requires that lock and removes only
@@ -42,7 +42,8 @@ the [runtime README](../packages/parakeet-runtime/README.md).
 
 Native Cargo tests hold synthetic workers across cancellation and lease changes,
 check process/cache ownership and exact-ID cleanup, and stream small local HTTP
-fixtures for truncation, oversize, hash mismatch, and body-wait cancellation.
+fixtures for truncation, oversize, hash mismatch, a mismatched Content-Length,
+an HTTP error status, and body-wait cancellation.
 An uncached real-manager acceptance task uses an explicitly supplied public model:
 
 ```sh

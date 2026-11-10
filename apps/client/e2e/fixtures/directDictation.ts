@@ -30,7 +30,7 @@ export async function dictationFixture(page:Page, parakeet=false){
         if(command==='local_disconnect' && window.dictationFixture.deferDisconnect)return new Promise<void>((_resolve,reject)=>{window.dictationFixture.failDisconnect=()=>reject(new Error('Fixture teardown failed'));});
         if(['local_resize','local_ack','local_disconnect','voice_cancel','voice_download_cancel'].includes(command))return;
         if(command==='voice_models')return [{id:'tiny.bin',bytes:1024}];
-        if(command==='voice_parakeet_status')return {available:parakeet,reason:'Synthetic browser IPC fixture; no native model is run.',installed:parakeet,ready:parakeet,busy:parakeetBusy,stage:parakeetCancelled&&parakeetBusy?'finishing':parakeetBusy?'transcribing':'idle',requestId:parakeetBusy?parakeetId:null,received:0,total:487170055};
+        if(command==='voice_parakeet_status')return {available:parakeet,reason:'Synthetic browser IPC fixture; no native model is run.',installed:parakeet,ready:parakeet,busy:parakeetBusy,stage:parakeetCancelled&&parakeetBusy?'finishing':parakeetBusy?'transcribing':'idle',requestId:parakeetBusy?parakeetId:null,received:0,total:487211443};
         if(command==='voice_parakeet_transcribe'){
           parakeetBusy=true;parakeetCancelled=false;parakeetId=args.requestId as string;
           return new Promise(resolve=>{window.dictationFixture.complete=text=>{parakeetBusy=false;resolve({requestId:parakeetId,text});};});

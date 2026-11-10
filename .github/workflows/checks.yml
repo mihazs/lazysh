@@ -982,11 +982,19 @@ jobs:
         run: |
           echo "$RUNNER_TEMP/lazysh-stock-herdr" >> "$GITHUB_PATH"
           tmux -V
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v0-rust-ubuntu-24.04-runtimes
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: bun install --frozen-lockfile
+      - name: Build the client test binaries once
+        run: cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --no-run
+      # After bun install and the build, so a replaced fixture fails only the voice suites.
       - name: Restore pinned public speech model fixtures
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lazysh-runtime-fixtures
-          key: lazysh-speech-fixtures-921e4cf8-59dfb9a4-5793d0fd
+          key: lazysh-speech-fixtures-921e4cf8-59dfb9a4-1495e91b
       - name: Download and verify pinned public speech model fixtures
         # Whisper weights: Hugging Face LFS digest of ggml-tiny.en.bin at the pinned revision.
         # Parakeet digest and size: packages/parakeet-runtime/src/bundle.rs.
@@ -998,22 +1006,22 @@ jobs:
             target="$LAZYSH_RUNTIME_FIXTURES/$1"
             if ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status 2>/dev/null; then
               rm -f "$target"
-              curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 900 --max-filesize "$4" "$2" -o "$target"
+              curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 900 --max-filesize "$4" "$2" -o "$target" || {
+                code=$?
+                # curl 63: the publisher serves more bytes than the pin.
+                [ "$code" != 63 ] || echo "::error::$1: $2 is larger than its pinned $4 bytes; the publisher replaced it, so update the pin"
+                exit "$code"
+              }
             fi
-            test "$(stat -c%s "$target")" -eq "$4"
-            printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict
+            if [ "$(stat -c%s "$target")" != "$4" ] || ! printf '%s  %s\n' "$3" "$target" | sha256sum --check --strict --status; then
+              echo "::error::$1: $2 no longer matches its pinned $4 bytes and SHA-256 $3; the publisher replaced it, so update the pin"
+              exit 1
+            fi
           }
           fixture ggml-tiny.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f 77704715
           fixture jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e 352078
-          fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf 487170055
+          fixture parakeet-v3-int8.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 487211443
           printf '%s\n' "LAZYSH_WHISPER_TEST_MODEL=$LAZYSH_RUNTIME_FIXTURES/ggml-tiny.en.bin" "LAZYSH_WHISPER_TEST_WAV=$LAZYSH_RUNTIME_FIXTURES/jfk.wav" "LAZYSH_PARAKEET_TEST_ARCHIVE=$LAZYSH_RUNTIME_FIXTURES/parakeet-v3-int8.tar.bz2" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v0-rust-ubuntu-24.04-runtimes
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: bun install --frozen-lockfile
-      - name: Build the client test binaries once
-        run: cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --no-run
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
         if: ${{ !cancelled() }}

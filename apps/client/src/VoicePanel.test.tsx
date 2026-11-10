@@ -309,7 +309,7 @@ it('keeps Whisper default and requires explicit fixed Parakeet download with bou
   await chooseParakeet();
   expect(screen.queryByLabelText('Language')).toBeNull();
   expect(screen.getByText(/automatic language detection/)).toBeTruthy();
-  expect(screen.getByText(/487,170,055 bytes/)).toBeTruthy();
+  expect(screen.getByText(/487,211,443 bytes/)).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith('voice_parakeet_install',expect.anything(),expect.anything());
   fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));
   const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_install')![1] as {requestId:string;events:{onmessage:(event:unknown)=>void}};

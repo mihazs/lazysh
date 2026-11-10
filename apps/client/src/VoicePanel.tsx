@@ -18,7 +18,7 @@ type ParakeetStatus = {
   stage: 'idle'|'downloading'|'preparing'|'loading'|'transcribing'|'removing'|'finishing';
   requestId: string|null; received: number; total: number;
 };
-const PARAKEET_BYTES = 487170055;
+const PARAKEET_BYTES = 487211443;
 function parakeetStatus(value: unknown): ParakeetStatus {
   const status = value as ParakeetStatus;
   if (!status || typeof status.available !== 'boolean' || typeof status.reason !== 'string' || status.reason.length > 1024
@@ -689,7 +689,7 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       ) : engine === 'parakeet' ? (
         <>
           <p>{t('voiceParakeetHint')}</p>
-          <p>{t('voiceParakeetWarning',{bytes:formatNumber(PARAKEET_BYTES),mib:formatNumber(PARAKEET_BYTES/1024/1024,{minimumFractionDigits:1,maximumFractionDigits:1}),diskBytes:formatNumber(1644818882),gib:formatNumber(1644818882/1024/1024/1024,{minimumFractionDigits:2,maximumFractionDigits:2})})}</p>
+          <p>{t('voiceParakeetWarning',{bytes:formatNumber(PARAKEET_BYTES),mib:formatNumber(PARAKEET_BYTES/1024/1024,{minimumFractionDigits:1,maximumFractionDigits:1}),diskBytes:formatNumber(1644999670),gib:formatNumber(1644999670/1024/1024/1024,{minimumFractionDigits:2,maximumFractionDigits:2})})}</p>
           <p>{parakeetReceived.current?parakeet.reason:t('voiceParakeetInitial')}</p>
           <p>{parakeet.installed ? (parakeet.ready ? t('voiceParakeetReady') : t('voiceParakeetInstalled')) : t('voiceParakeetNeedsModel')}</p>
           <button disabled={working || recording || !parakeet.available || parakeet.installed} onClick={() => void parakeetAsset(false)}>{t('voiceDownloadParakeet')}</button>

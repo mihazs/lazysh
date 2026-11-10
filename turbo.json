@@ -14,7 +14,7 @@
     "test:openssh": { "cache": false, "passThroughEnv": ["USER"] },
     "test:openssh-connections": { "cache": false, "passThroughEnv": ["LAZYSH_TEST_NSS_WRAPPER"] },
     "test:local": { "cache": false, "passThroughEnv": ["HOME", "USERPROFILE", "SHELL", "ComSpec", "COMSPEC", "SystemRoot", "SYSTEMROOT", "WINDIR"] },
-    "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH"] },
+    "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH", "LAZYSH_TEST_AGENT_BIN"] },
     "test:tmux": { "cache": false, "passThroughEnv": ["USER", "LAZYSH_TEST_TMUX"] },
     "test:voice": { "cache": false, "passThroughEnv": ["LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV"] },
     "test:mosh": { "cache": false, "passThroughEnv": ["USER"] },

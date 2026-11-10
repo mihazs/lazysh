@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::{ipc::Channel, State};
 
-pub const ARCHIVE_BYTES: u64 = 487_170_055;
+pub const ARCHIVE_BYTES: u64 = 487_211_443;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
