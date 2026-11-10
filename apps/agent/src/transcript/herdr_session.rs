@@ -111,10 +111,7 @@ fn find(
     agent: TranscriptAgent,
     id: &str,
 ) -> Result<PathBuf> {
-    use std::{
-        fs,
-        os::{fd::AsRawFd, unix::fs::MetadataExt},
-    };
+    use std::os::unix::fs::MetadataExt;
     let max_depth = if matches!(agent, TranscriptAgent::Claude) {
         1
     } else {
@@ -126,31 +123,25 @@ fn find(
     while let Some((relative, depth)) = pending.pop() {
         let directory = root.child_or_self(&relative)?;
         let before = directory.file.metadata()?;
-        #[cfg(target_os = "linux")]
-        let prefix = "/proc/self/fd";
-        #[cfg(target_os = "macos")]
-        let prefix = "/dev/fd";
-        for entry in fs::read_dir(format!("{prefix}/{}", directory.file.as_raw_fd()))? {
+        for entry in super::anchored_listing::Listing::new(&directory.file)? {
             examined += 1;
             if examined > 10_000 {
                 return Err(Error::InvalidArgument);
             }
             let entry = entry?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
+            let Some(name) = entry.name.to_str() else {
                 continue;
             };
-            let kind = entry.file_type()?;
             let matches = if matches!(agent, TranscriptAgent::Claude) {
                 name == format!("{id}.jsonl")
             } else {
                 name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl"))
             };
             if matches {
-                if !kind.is_file() || found.replace(directory.path.join(name)).is_some() {
+                if !entry.is_file || found.replace(directory.path.join(name)).is_some() {
                     return Err(Error::InvalidEvent);
                 }
-            } else if kind.is_dir() && depth < max_depth {
+            } else if entry.is_dir && depth < max_depth {
                 pending.push((relative.join(name), depth + 1));
             }
         }
@@ -184,7 +175,7 @@ mod tests {
 
     fn claude_fixture(id: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("projects");
+        let root = temp.path().canonicalize().unwrap().join("projects");
         let project = root.join("one");
         fs::create_dir_all(&project).unwrap();
         let file = project.join(format!("{id}.jsonl"));
@@ -194,9 +185,9 @@ mod tests {
     fn codex_roots() -> (PathBuf, PathBuf, PathBuf, tempfile::TempDir, &'static Path) {
         let temp = tempfile::tempdir().unwrap();
         (
-            temp.path().join("codex"),
-            temp.path().join("alternate"),
-            temp.path().join("retired"),
+            temp.path().canonicalize().unwrap().join("codex"),
+            temp.path().canonicalize().unwrap().join("alternate"),
+            temp.path().canonicalize().unwrap().join("retired"),
             temp,
             Path::new("sessions/2026/11/10"),
         )
@@ -242,7 +233,7 @@ mod tests {
     #[test]
     fn codex_checks_session_metadata_and_refuses_symlink_candidates() {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("codex");
+        let home = temp.path().canonicalize().unwrap().join("codex");
         let root = home.join("sessions");
         let date = root.join("2026/11/10");
         fs::create_dir_all(&date).unwrap();
@@ -255,14 +246,15 @@ mod tests {
         fs::write(&file, format!("{}\n{event}\n", meta(OTHER))).unwrap();
         assert!(read_in(&root, TranscriptAgent::Codex, ID, 50).is_err());
         fs::remove_file(&file).unwrap();
-        std::os::unix::fs::symlink(temp.path().join("outside"), &file).unwrap();
+        std::os::unix::fs::symlink(temp.path().canonicalize().unwrap().join("outside"), &file)
+            .unwrap();
         assert!(read_in(&root, TranscriptAgent::Codex, ID, 50).is_err());
     }
 
     #[test]
     fn selected_sessions_handle_large_unrelated_records_without_changing_default_limits() {
         let temp = tempfile::tempdir().unwrap();
-        let claude = temp.path().join("projects");
+        let claude = temp.path().canonicalize().unwrap().join("projects");
         let project = claude.join("one");
         fs::create_dir_all(&project).unwrap();
         let path = project.join(format!("{ID}.jsonl"));
@@ -296,7 +288,7 @@ mod tests {
             64 * 1024 * 1024
         )
         .is_err());
-        let codex = temp.path().join("codex/sessions");
+        let codex = temp.path().canonicalize().unwrap().join("codex/sessions");
         let date = codex.join("2026/11/10");
         fs::create_dir_all(&date).unwrap();
         let rollout = date.join(format!("rollout-2026-11-10T00-00-00-{ID}.jsonl"));
@@ -419,7 +411,7 @@ mod tests {
     #[test]
     fn incomplete_discovery_never_selects_a_candidate() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("projects");
+        let root = temp.path().canonicalize().unwrap().join("projects");
         fs::create_dir(&root).unwrap();
         let record =
             json!({"type":"user","uuid":"first","sessionId":ID,"message":{"content":"hello"}});

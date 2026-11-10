@@ -12,6 +12,13 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 const MAX_SOURCES: usize = 16;
 
+struct ListEntry {
+    name: std::ffi::OsString,
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+}
+
 enum SourceAccess {
     Path,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -54,19 +61,29 @@ impl SourceAccess {
             }
         }
     }
-    fn entries(&self, path: &Path) -> Result<std::fs::ReadDir> {
+    fn entries(&self, path: &Path) -> Result<Box<dyn Iterator<Item = std::io::Result<ListEntry>>>> {
         match self {
-            Self::Path => Ok(fs::read_dir(path)?),
+            Self::Path => Ok(Box::new(fs::read_dir(path)?.map(|entry| {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                Ok(ListEntry {
+                    name: entry.file_name(),
+                    is_dir: kind.is_dir(),
+                    is_file: kind.is_file(),
+                    is_symlink: kind.is_symlink(),
+                })
+            }))),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            Self::Anchored { .. } => {
-                use std::os::fd::AsRawFd;
-                let directory = self.directory(path)?;
-                #[cfg(target_os = "linux")]
-                let prefix = "/proc/self/fd";
-                #[cfg(target_os = "macos")]
-                let prefix = "/dev/fd";
-                Ok(fs::read_dir(format!("{prefix}/{}", directory.as_raw_fd()))?)
-            }
+            Self::Anchored { .. } => Ok(Box::new(
+                super::anchored_listing::Listing::new(&self.directory(path)?)?.map(|entry| {
+                    entry.map(|entry| ListEntry {
+                        name: entry.name,
+                        is_dir: entry.is_dir,
+                        is_file: entry.is_file,
+                        is_symlink: entry.is_symlink,
+                    })
+                }),
+            )),
         }
     }
     fn directory(&self, path: &Path) -> Result<std::fs::File> {
@@ -267,17 +284,16 @@ fn referenced(selected: &Path, id: &str, access: &SourceAccess) -> Result<PathBu
                 return Err(Error::InvalidArgument);
             }
             let entry = entry?;
-            let kind = entry.file_type()?;
-            if kind.is_symlink() {
+            if entry.is_symlink {
                 continue;
             }
-            let filename = entry.file_name();
+            let filename = entry.name;
             let logical_path = directory.join(&filename);
             let name = filename.to_string_lossy();
-            if kind.is_dir() && depth < 3 && name.bytes().all(|n| n.is_ascii_digit()) {
+            if entry.is_dir && depth < 3 && name.bytes().all(|n| n.is_ascii_digit()) {
                 directory_owned(&logical_path)?;
                 pending.push((logical_path, depth + 1));
-            } else if kind.is_file()
+            } else if entry.is_file
                 && name.starts_with("rollout-")
                 && name.ends_with(&format!("-{id}.jsonl"))
                 && found.replace(logical_path).is_some()

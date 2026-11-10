@@ -8,6 +8,8 @@ use std::{
     path::Path,
 };
 mod amp_json;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod anchored_listing;
 mod antigravity;
 mod atif;
 mod codex_conversation;
