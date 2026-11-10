@@ -459,10 +459,24 @@ impl Remote {
         Self::with_url(endpoint(value)?)
     }
     fn with_url(endpoint: Url) -> Result<Self> {
-        let client = Client::builder()
+        let builder = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(30));
+        // The isolated native acceptance binary trusts its owned loopback fixture CA.
+        #[cfg(feature = "sync-tls-acceptance")]
+        let builder = if endpoint.host_str() == Some("127.0.0.1") {
+            match std::env::var("LAZYSH_SYNC_TEST_CA") {
+                Ok(pem) => builder.add_root_certificate(
+                    reqwest::Certificate::from_pem(pem.as_bytes())
+                        .map_err(|_| "Invalid test CA")?,
+                ),
+                Err(_) => builder,
+            }
+        } else {
+            builder
+        };
+        let client = builder
             .build()
             .map_err(|_| "Cannot initialize sync transport")?;
         Ok(Self { client, endpoint })

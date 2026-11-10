@@ -1,6 +1,7 @@
 import {expect,it} from 'vitest';
 import {NativeGui} from './fixture';
-import {ownedSshGui,workspaceAction} from './sshUi';
+import {ownedSshGui} from './sshUi';
+import {setNavigationChord} from './navigationUi';
 
 const fixture=ownedSshGui();
 
@@ -10,16 +11,7 @@ it('persists a changed workspace shortcut and handles it through the native keyb
   await gui.secondary(['--dir',gui.directory]);
   await (await browser.$('.terminal-canvas .xterm-screen')).waitForDisplayed({timeout:20_000});
   gui.stage='navigation shortcut settings';
-  await workspaceAction(gui,'Preferences');
-  const dialog=await browser.$('[role="dialog"][aria-label="Preferences"]');await dialog.waitForDisplayed();
-  await (await dialog.$('button[data-settings-target="input"]')).click();
-  await (await dialog.$('button[data-settings-target="navigationShortcuts"]')).click();
-  const label=await dialog.$('label=Workspaces chord');
-  const input=await dialog.$(`[id=${JSON.stringify(await label.getAttribute('for'))}]`);
-  await input.setValue('C-M-W');
-  await (await dialog.$('button=Save Workspaces chord')).click();
-  await browser.keys('\uE00C');await browser.keys('\uE00C');await browser.keys('\uE00C');
-  await dialog.waitForDisplayed({reverse:true});
+  await setNavigationChord(gui,'C-M-W');
 
   gui.stage='navigation shortcut restart';
   await gui.killAndRelaunch();

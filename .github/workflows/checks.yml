@@ -514,6 +514,13 @@ jobs:
         run: |
           LAZYSH_TEST_SSH_USER_NAMESPACE=1 bwrap --unshare-user --unshare-net --dev-bind / / -- bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'
           bun run test:native-gui
+      - name: Exercise encrypted sync through the native GUI and owned TLS WebDAV
+        env:
+          LAZYSH_NATIVE_GUI_DRIVER: ${{ runner.temp }}/lazysh-native-driver/bin/tauri-driver
+        run: |
+          strings target/release/lazysh > "$RUNNER_TEMP/lazysh-release-strings"
+          ! grep -Fq LAZYSH_SYNC_TEST_CA "$RUNNER_TEMP/lazysh-release-strings"
+          bun run --cwd apps/client test:sync-native
       - name: Exercise actual native GUI installation from the public companion release
         timeout-minutes: 12
         env:
