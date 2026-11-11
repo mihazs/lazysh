@@ -124,6 +124,18 @@ async function publication(root: string, failure?: string, enabled = true) {
     if (path === `git/ref/tags/${next.tag}`) return Response.json({ ref: `refs/tags/${next.tag}`,
       object: { type: 'commit', sha: failure === 'tag' || failure === 'changed-tag' && tagReads++ > 0 ? 'b'.repeat(40) : identity.sha } });
     if (path === `releases/tags/${next.tag}`) return Response.json({}, { status: failure === 'existing' ? 200 : 404 });
+    if (path === `git/ref/heads/release-candidate/${identity.sha}`) return failure === 'no-reservation' ? Response.json({}, { status: 404 })
+      : Response.json({ ref: `refs/heads/release-candidate/${identity.sha}`, object: { type: 'commit',
+        sha: failure === 'moved-reservation' ? 'c'.repeat(40) : identity.sha } });
+    if (method === 'DELETE') {
+      if (failure === 'delete') throw new Error('network down');
+      return new Response(null, { status: 204 });
+    }
+    if (path === 'releases' && failure === 'refused') {
+      const refused = Response.json({ message: 'Resource not accessible by integration', token: 'PRIVATE_TOKEN' }, { status: 403 });
+      refused.headers.set('x-github-request-id', '5411:E21BD:26359A3');
+      return refused;
+    }
     if (path === 'releases') return Response.json({ id: 8, draft: true, tag_name: next.tag }, { status: 201 });
     if (method === 'UPLOAD') {
       if (failure === 'upload') return Response.json({}, { status: 500 });
@@ -205,7 +217,24 @@ test('publication uploads a complete digest-acknowledged draft before making it 
   const uploads = calls.filter(call => call.method === 'UPLOAD');
   expect(uploads).toHaveLength(releaseTargets.reduce((count, target) => count + artifactTargets[target].length, 4));
   expect(calls.find(call => call.path === 'releases')?.body).toMatchObject({ draft: true, target_commitish: identity.sha });
-  expect(calls.at(-1)).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false, make_latest: 'legacy' } });
+  expect(calls.find(call => call.method === 'PATCH')).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false, make_latest: 'legacy' } });
+  // Only after publication is the candidate's reservation branch removed.
+  expect(calls.at(-1)).toEqual({ path: `git/refs/heads/release-candidate/${identity.sha}`, method: 'DELETE', body: undefined });
+}));
+test.each(['no-reservation', 'moved-reservation', 'delete'])('a missing, moved or undeletable reservation never blocks or alters a published release: %s',
+  failure => fixture(async root => {
+    const { calls, result } = await publication(root, failure);
+    await result;
+    expect(calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
+    expect(calls.filter(call => call.method === 'DELETE')).toHaveLength(failure === 'delete' ? 1 : 0);
+  }));
+test('a refused draft names GitHub\'s reason and request without secrets, uploads nothing and is not retried', () => fixture(async root => {
+  const { calls, result } = await publication(root, 'refused');
+  const failure = await result.then(() => 'unexpected success', error => error.message);
+  expect(failure).toStartWith('Release publication: cannot create draft release (HTTP 403: Resource not accessible by integration; request 5411:E21BD:26359A3');
+  expect(failure).not.toContain('PRIVATE_TOKEN');
+  expect(calls.filter(call => call.path === 'releases')).toHaveLength(1);
+  expect(calls.some(call => ['UPLOAD', 'PATCH', 'DELETE'].includes(call.method))).toBe(false);
 }));
 test.each(['tag', 'changed-tag', 'existing', 'upload', 'digest', 'main'])(
   'uncertain or invalid release state cannot publish or overwrite: %s', failure => fixture(async root => {

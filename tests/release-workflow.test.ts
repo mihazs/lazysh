@@ -16,28 +16,31 @@ async function steps(entry: RunnerJob, row: Context) {
   return executedSteps(entry.job.steps, { ...entry.context, matrix: row, steps: { prepare: { outputs: { enabled: 'true' } } } });
 }
 
-test('a release push queues two runner entries on its critical path and ten runner slots', () => {
+test('a release push queues two runner entries on its critical path and eleven runner slots', () => {
   const slots = release.map(entry => [`${entry.file.split('/').pop()}#${entry.id}`, entry.rows.length, entry.queueEntry]);
   expect(slots.sort()).toEqual([
     ['companion-artifacts.yml#binary', 5, 1],
     ['release-artifacts.yml#android', 1, 1],
     ['release-artifacts.yml#desktop', 2, 1],
     ['release-tag.yml#publish', 1, 2],
+    ['release-tag.yml#reserve', 1, 1],
     ['release-tag.yml#source-build', 1, 1],
   ]);
   expect(Math.max(...release.map(entry => entry.queueEntry))).toBe(2);
-  expect(release.reduce((total, entry) => total + entry.rows.length, 0)).toBe(10);
+  expect(release.reduce((total, entry) => total + entry.rows.length, 0)).toBe(11);
 });
 
 test('publication waits for the admitted source build and every verified platform installation', async () => {
   const workflow = await document(tag);
   const publish = workflow.jobs.publish;
-  expect(publish.needs).toEqual(['source-build', 'artifacts']);
-  const passed = { 'source-build': { result: 'success', outputs: { enabled: 'true' } }, artifacts: { result: 'success' } };
+  expect(publish.needs).toEqual(['source-build', 'artifacts', 'reserve']);
+  const passed = { 'source-build': { result: 'success', outputs: { enabled: 'true' } }, artifacts: { result: 'success' },
+    reserve: { result: 'success' } };
   expect(evaluate(publish.if, { needs: passed })).toBe(true);
   for (const result of ['failure', 'cancelled', 'skipped']) {
     expect(evaluate(publish.if, { needs: { ...passed, 'source-build': { ...passed['source-build'], result } } })).toBe(false);
     expect(evaluate(publish.if, { needs: { ...passed, artifacts: { result } } })).toBe(false);
+    expect(evaluate(publish.if, { needs: { ...passed, reserve: { result } } })).toBe(false);
   }
   for (const enabled of ['false', '']) {
     expect(evaluate(publish.if, { needs: { ...passed, 'source-build': { result: 'success', outputs: { enabled } } } })).toBe(false);
@@ -51,16 +54,16 @@ test('publication waits for the admitted source build and every verified platfor
     .toEqual(releaseTargets.map(target => `release-${target}`).sort());
 });
 
-test('only the publication job can write, and only its tag and publish steps receive the token', async () => {
+test('only the reservation and publication jobs can write, and only their ref and publish steps receive the token', async () => {
   for (const file of [tag, '.github/workflows/release-artifacts.yml', '.github/workflows/companion-artifacts.yml']) {
     expect((await document(file)).permissions).toEqual({ contents: 'read' });
   }
   for (const entry of release) {
-    expect(entry.job.permissions).toEqual(entry.id === 'publish' ? { contents: 'write' } : undefined);
+    expect(entry.job.permissions).toEqual(['publish', 'reserve'].includes(entry.id) ? { contents: 'write' } : undefined);
   }
   for (const entry of release) for (const row of entry.rows) for (const { step } of await steps(entry, row)) {
     const token = Object.values(step.env ?? {}).some(value => String(value).includes('github.token'));
-    expect(token).toBe(entry.id === 'publish' && /release-(tag\.ts tag|publish\.ts)/.test(step.run ?? ''));
+    expect(token).toBe(['publish', 'reserve'].includes(entry.id) && /release-(tag\.ts (tag|reserve)|publish\.ts)/.test(step.run ?? ''));
   }
   const publish = (await steps(named('publish'), {})).map(({ step }) => step);
   const aggregate = publish.findIndex(step => step.run?.includes('release-artifacts.ts verify'));
@@ -69,6 +72,9 @@ test('only the publication job can write, and only its tag and publish steps rec
   expect(aggregate).toBeLessThan(tagged);
   expect(publish.slice(tagged).map(step => step.run)).toEqual(['bun .changeset/release-tag.ts tag',
     'bun .changeset/release-publish.ts "$RUNNER_TEMP/verified-release"']);
+  // The reservation job runs no build or third-party step: checkout, Bun and the one token step.
+  expect((await steps(named('reserve'), {})).map(({ step }) => step.run ?? step.uses))
+    .toEqual(['actions/checkout@v4', 'oven-sh/setup-bun@v2', 'bun .changeset/release-tag.ts reserve']);
 });
 
 test('release jobs bind the exact event source and restore dependency downloads without saving or restoring builds', async () => {

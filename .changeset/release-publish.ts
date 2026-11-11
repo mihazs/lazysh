@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { currentCandidate, releaseEnabled, requireCurrentRelease, type Candidate, type ReleasePolicy } from './release-tag';
+import { currentCandidate, describeFailure, releaseEnabled, requireCurrentRelease, reservationRef, type Candidate,
+  type ReleasePolicy } from './release-tag';
 import { digestFile, verifyAggregate } from './release-artifacts';
 
 type Request = (path: string, method: string, body?: unknown) => Promise<Response>;
@@ -24,7 +25,7 @@ export async function publishInstallationSet(next: Candidate, policy: ReleasePol
   const created = await request('releases', 'POST', { tag_name: next.tag, target_commitish: next.sha,
     name: `lazysh ${next.version}`, body: await Bun.file(join(directory, 'release-notes.md')).text(),
     draft: true, prerelease: false });
-  check(created.status === 201, 'cannot create draft release');
+  if (created.status !== 201) check(false, `cannot create draft release (${await describeFailure(created)})`);
   const release = await created.json() as any;
   check(Number.isSafeInteger(release.id) && release.id > 0 && release.draft === true && release.tag_name === next.tag,
     'unexpected draft identity');
@@ -32,7 +33,7 @@ export async function publishInstallationSet(next: Candidate, policy: ReleasePol
   // Never publish a partial set, replace bytes or silently repeat an uncertain call.
   for (const name of (await readdir(directory)).sort()) {
     const response = await request(`releases/${release.id}/assets?name=${encodeURIComponent(name)}`, 'UPLOAD', Bun.file(join(directory, name)));
-    check(response.status === 201, 'asset upload failed; draft retained');
+    if (response.status !== 201) check(false, `asset upload failed; draft retained (${await describeFailure(response)})`);
     const asset = await response.json() as any;
     check(asset.name === name && asset.state === 'uploaded'
       && asset.size === Bun.file(join(directory, name)).size
@@ -43,10 +44,16 @@ export async function publishInstallationSet(next: Candidate, policy: ReleasePol
   const finalTarget = finalTag.ok ? await finalTag.json() as any : null;
   check(finalTarget?.object?.type === 'commit' && finalTarget.object.sha === next.sha, 'tag changed; draft retained');
   const final = await request(`releases/${release.id}`, 'PATCH', { draft: false, make_latest: 'legacy' });
-  check(final.ok, 'publication outcome uncertain; inspect exact release before any further action');
+  if (!final.ok) check(false, `publication outcome uncertain; inspect exact release before any further action (${await describeFailure(final)})`);
   const published = await final.json() as any;
   check(published.id === release.id && published.draft === false && published.tag_name === next.tag,
     'publication acknowledgement mismatch');
+  // The reservation branch only let this job write refs; remove it unless something moved it.
+  // Published already, so a failed removal is left for an operator instead of failing the run.
+  try {
+    const held = await request(`git/ref/${reservationRef(next)}`, 'GET');
+    if (held.ok && (await held.json() as any).object?.sha === next.sha) await request(`git/refs/${reservationRef(next)}`, 'DELETE');
+  } catch { /* leave the reservation */ }
 }
 if (import.meta.main) {
   const directory = process.argv[2];
