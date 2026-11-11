@@ -5795,13 +5795,8 @@ class NativeWorkspaceTest {
                 added = true
             }
             onWebView().withElement(findElement(Locator.XPATH, selector)).perform(webScrollIntoView()).perform(webClick())
-            // The exact D-pad receiver bytes exclude the composer's default separate Enter.
+            // The exact D-pad receiver bytes exclude the composer's separate Enter: the receiver text goes through Insert, which never presses it.
             preferencesCategory(scenario, "input")
-            val sendEnter = "Array.from(document.querySelectorAll('[role=dialog] label')).find(x=>x.textContent.trim()==='Send Enter after pasting the draft')?.querySelector('input[type=checkbox]')"
-            val wanted = action != "Add"
-            if (evaluate(scenario, "$sendEnter?.checked===$wanted") != "true")
-                onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//label[normalize-space(.)='Send Enter after pasting the draft']/input[@type='checkbox']")).perform(webScrollIntoView()).perform(webClick())
-            awaitDocument(scenario, "composer Send Enter preference is $wanted", "$sendEnter?.checked===$wanted")
             raw.clickIcon("Close Preferences")
             awaitDocument(scenario, "owned D-pad preference dialog closed", "!document.querySelector('[role=dialog][aria-label=Preferences]')")
         }
@@ -6059,11 +6054,11 @@ class NativeWorkspaceTest {
         fun clickIcon(name: String) = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
             "button[aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
         fun proof(marker: String) = "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes(${JSONObject.quote(marker)})"
-        /** Send adds a separate Enter; with that preference off, Paste draft pastes only. */
+        /** Send adds a separate Enter; Insert puts the text on the input line without it. */
         fun send(command: String, enter: Boolean = true) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true") clickIcon("Compose")
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
-            closeSoftKeyboard(); clickIcon(if (enter) "Send" else "Paste draft"); closeSoftKeyboard()
+            closeSoftKeyboard(); clickIcon(if (enter) "Send" else "Insert"); closeSoftKeyboard()
             awaitDocument(scenario, "owned IME command terminal focused", "!Boolean(document.querySelector('.terminal-compose textarea')) && document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
         }
         fun start() {
