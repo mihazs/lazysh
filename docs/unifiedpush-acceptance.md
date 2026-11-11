@@ -36,10 +36,10 @@ AND_3.1.0 feature or enforces the application's VAPID key at registration.
 
 Run `bun run test:android-ntfy` only on the explicitly selected owned Linux/x86_64
 emulator. The original task builds the current FOSS native app and native Rust test
-fixture through Turbo/Cargo. CI retains that route and adds an independent Google
+fixture through moon/Cargo. CI retains that route and adds an independent Google
 variant of the same three native cases. The Google matrix job first builds the
 current Google emulator APK with `bun run build:android:emulator`, then invokes
-`LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy`.
+`LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy`.
 It deliberately avoids the root task's FOSS build dependency. Only `google` and
 `fdroid` are accepted; absent input preserves the FOSS route. The fixture-only CA
 requires the matching explicit distribution/provider project and only the original

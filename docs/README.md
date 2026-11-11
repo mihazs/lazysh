@@ -11,6 +11,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Your goal | Guide |
 | --- | --- |
 | Install or update a native app or companion | [Install and update](install-and-update.md) |
+| Run, inspect or add a build, check or test task | [Run tasks with moon](how-to/run-tasks-with-moon.md) |
 | Configure direct SSH, transports or saved workspace entry | [Connections](connections.md) |
 | Reach a private destination through one jump host | [Connect through a bastion](how-to/connect-through-bastion.md) |
 | Resume a host-side workspace | [Multiplexers](multiplexers.md) |
@@ -44,6 +45,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Information to look up | Reference |
 | --- | --- |
 | Desktop executable selectors, limits and receipt behavior | [Desktop launch arguments](reference/desktop-launch.md) |
+| moon projects, tags, task ids and the `bun run` aliases | [moon task reference](reference/moon-tasks.md) |
 | Per-platform reference-client parity status, evidence and gaps | [Parity matrix](reference/parity-matrix.md) |
 | Companion switches, defaults, revision conflicts and strict schema | [Companion settings](reference/companion-settings.md) |
 | Credential storage, identity binding and native resume-lock contracts | [Credentials](credentials.md) |

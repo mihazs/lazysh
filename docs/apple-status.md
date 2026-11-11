@@ -34,9 +34,9 @@ On macOS with Xcode and an installed iOS/watchOS simulator runtime:
 
 ```sh
 bun run build:ios
-bunx turbo run build:watchos --filter=@lazysh/apple-status
+bunx moon run apple-status:build-watchos
 export APPLE_STATUS_SIMULATOR_ID="$(xcrun simctl create lazysh-status-tests com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
-bunx turbo run test:apple-status --filter=@lazysh/apple-status
+bunx moon run apple-status:test-apple-status
 xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"
 ```
 

@@ -258,7 +258,7 @@ The `native-linux-runtimes` CI job runs this with Ubuntu's tmux, the same-run st
 The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
 
 ```sh
-bunx turbo run test:tmux --filter=@lazysh/client
+bunx moon run client-native:test-tmux
 ```
 
 `LAZYSH_TEST_TMUX` optionally selects a tmux binary. These native Cargo fixtures
@@ -328,7 +328,7 @@ runs compile it without executing it.
 
 The owned Cargo fixture
 `ssh::tmux_jump_fixture::real_tmux_jump_fresh_ssh_restores_same_durable_named_pane`
-is included in `bun run --cwd apps/client test:tmux`. It uses an isolated OpenSSH
+is included in `bunx moon run client-native:test-tmux`. It uses an isolated OpenSSH
 listener, ephemeral keys, private `TMUX_TMPDIR`, and two named servers with
 colliding session/window/pane IDs. It closes the original SSH transport, waits
 for native sessions and retained connection handles to retire, then uses a fresh

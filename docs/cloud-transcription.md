@@ -17,7 +17,7 @@ in the reference client's hosted service or a promise of any vendor subscription
 
 ## Run and enroll
 
-Build with `bunx turbo run build --filter=@lazysh/transcription-service` or
+Build with `bunx moon run transcription-service:build` or
 `cargo build --release -p lazysh-transcription --locked`. Generate an administrator
 token with `lazysh-transcription keygen`, saving its output in a private regular
 file. Save your provider key in another private regular file. Both must be owned

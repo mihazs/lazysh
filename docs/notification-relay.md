@@ -6,7 +6,7 @@ The separate [encrypted Web Push server mode](web-push-server.md) supports expli
 
 ## Run a private relay
 
-Build with `bunx turbo run build --filter=@lazysh/notification-service`. Run on a supported local Unix filesystem. Keep the state directory and all capability/configuration files owner-only. The listener is loopback HTTP only; place it behind your own HTTPS reverse proxy, preserving Authorization and limiting request bodies. Do not expose its HTTP port publicly. No deployment or external endpoint is configured automatically.
+Build with `bunx moon run notification-service:build`. Run on a supported local Unix filesystem. Keep the state directory and all capability/configuration files owner-only. The listener is loopback HTTP only; place it behind your own HTTPS reverse proxy, preserving Authorization and limiting request bodies. Do not expose its HTTP port publicly. No deployment or external endpoint is configured automatically.
 
 Create a private configuration directory, then generate **different** admin and destination capabilities into explicit new paths:
 

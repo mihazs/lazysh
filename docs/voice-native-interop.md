@@ -10,8 +10,8 @@ Run from the repository root with private local paths:
 export LAZYSH_WHISPER_TEST_MODEL=/private/cache/ggml-tiny.en.bin
 export LAZYSH_WHISPER_TEST_WAV=/private/cache/1272-128104-0000.wav
 export LAZYSH_PARAKEET_TEST_ARCHIVE=/private/cache/parakeet-v3-int8.tar.bz2
-bunx turbo run test:voice-interop --filter=@lazysh/client
-bunx turbo run test:voice-interop:release --filter=@lazysh/client
+bunx moon run client-native:test-voice-interop
+bunx moon run client-native:test-voice-interop-release
 ```
 
 Both tasks disable caching and require all three paths. Each process must exit successfully; a passing test-harness line followed by an abort is a failure. The initial experiment is Linux x86_64 only, with no inference acceptance claim for other architectures or platforms.

@@ -20,7 +20,7 @@ Record reviewed changes and their release impact together. Refs #215.
 - [ ] `git diff --check` passes
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes, or reviewer records why not applicable to version-only changes.
 - [ ] `cargo test --workspace --all-targets` passes, or reviewer records why not applicable to version-only changes.
-- [ ] Relevant Bun/Turbo frontend, browser, and native platform checks pass, or reviewer records their scope.
+- [ ] Relevant moon, Bun frontend, browser, and native platform checks pass, or reviewer records their scope.
 - [ ] Manual test: review generated versions/changelogs and migration notes; this review does not replace installer or device acceptance.
 
 ## Commit attribution

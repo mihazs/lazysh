@@ -37,7 +37,7 @@ cargo install --locked --version 2.1.0 tauri-driver --root /absolute/task-tools/
 LAZYSH_NATIVE_GUI_DRIVER=/absolute/task-tools/native-driver/bin/tauri-driver bun run test:native-gui
 ```
 
-`LAZYSH_NATIVE_GUI_WEBKIT_DRIVER` and `LAZYSH_NATIVE_GUI_XVFB` can select absolute verified tool paths when the distribution does not install `/usr/bin/WebKitWebDriver` or `/usr/bin/Xvfb`. The application path remains the newly built repository-owned `target/release/lazysh`. Turborepo keeps this acceptance uncached and builds the native application before executing it. Missing or unsupported dependencies fail this explicit task rather than yield a passing skip. The ordinary frontend suite never starts a GUI.
+`LAZYSH_NATIVE_GUI_WEBKIT_DRIVER` and `LAZYSH_NATIVE_GUI_XVFB` can select absolute verified tool paths when the distribution does not install `/usr/bin/WebKitWebDriver` or `/usr/bin/Xvfb`. The application path remains the newly built repository-owned `target/release/lazysh`. moon keeps this acceptance uncached and builds the native application before executing it. Missing or unsupported dependencies fail this explicit task rather than yield a passing skip. The ordinary frontend suite never starts a GUI.
 
 This is the [official direct-driver route](https://v2.tauri.app/develop/tests/webdriver/manual-setup/) integrated into the existing Vitest framework. Tauri's [CI guide](https://v2.tauri.app/develop/tests/webdriver/ci/) describes a fake Linux display; its [current overview](https://v2.tauri.app/develop/tests/webdriver/) recommends the WDIO service for new suites. This narrow integration uses WebdriverIO's remote client and existing framework lifecycle to keep display/bus/process ownership explicit.
 

@@ -781,7 +781,7 @@ Compaction references do not replace visible transcript history with a summary. 
 
 Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (`SOURCE_REV` `559751fdcec02d413e4c57c8832ab275e4f44980`), inspected 2026-10-25: the [disk envelope and fixtures](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L721), [actual JSONL writer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs#L634), and [xAI extension definitions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/notification.rs#L517). Its lockfile pins ACP 0.10.4 with schema 0.11.4. [Synthetic fixture provenance](../apps/agent/tests/fixtures/grok-acp/README.md) records checksums and type anchors. These source contracts do not prove equivalence to the previously inspected Grok 1.0.70 artifact or every installed release. No provider CLI, account data or real user transcript was executed/accessed. Full Grok conversation/runtime compatibility remains [issue #5](https://github.com/mihazs/lazysh/issues/5) work.
 
-Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx turbo run test --filter=@lazysh/agent`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
+Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx moon run agent:test-rust agent:test-hooks`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
 
 Companion distribution checks reuse the existing CLI, settings and WAL owners with
 `LAZYSH_TEST_COMPANION_BINARY` pointing only at an explicitly prepared absolute
@@ -793,7 +793,7 @@ checks create no publication receipt; trusted-main staging uses the existing
 release manifest and publication gates. This test-only override does not change
 the installed companion's configuration or behavior.
 
-`bun run test:storage` runs the agent library and `storage_wal` integration cases through an uncached Turbo task. The existing macOS/Windows native CI matrix executes this task, including each platform's actual temporary-volume admission, migration and crash/recovery checks. The separate Linux agent job retains the full package gate. Configuration of these jobs does not itself prove a native platform pass; inspect their actual results before merging a storage change.
+`bun run test:storage` runs the agent library and `storage_wal` integration cases through an uncached moon task. The existing macOS/Windows native CI matrix executes this task, including each platform's actual temporary-volume admission, migration and crash/recovery checks. The separate Linux agent job retains the full package gate. Configuration of these jobs does not itself prove a native platform pass; inspect their actual results before merging a storage change.
 
 
 ## Diagnose companion write contention

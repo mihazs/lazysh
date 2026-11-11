@@ -39,7 +39,7 @@ Tauri 2.12.5's iOS `Plugin` API exposes no APNs delegate callbacks. Its pinned T
 The native iOS unit-test scheme `LazyshPushTests` compiles the Foundation state model with XCTest. It exercises real-callback requirements, ephemeral tokens, pause/late-callback refusal, monotonic operation epochs, timeout isolation and rotation/failure. These state tests do not register with Apple or prove delegate delivery/signing. The Swift plugin's UIKit/Tauri compilation and simulator tests require macOS/Xcode; both are unexecuted locally in this Linux workspace. Signed-device registration and actual remote delivery remain acceptance work.
 
 ```sh
-APPLE_STATUS_SIMULATOR_ID=<dedicated-simulator-uuid> bunx turbo run test:apns --filter=@lazysh/push-registration
+APPLE_STATUS_SIMULATOR_ID=<dedicated-simulator-uuid> bunx moon run push-registration:test-apns
 ```
 
 ## Android FCM
