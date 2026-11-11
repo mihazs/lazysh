@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.32.0
+
+### Minor Changes
+
+- fc027c4: Make the terminal toolbar a compact, fixed grid of equal-width keys like other mobile SSH clients: no sliding pages, 32 px keys, a status bar that yields its height on a short phone window, and a More keys list for Find, Copy and saved snippets and chords. Changed default: two rows of nine keys with the arrows in an inverted T; saved layouts keep every key.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.32.0
+  - @lazysh/common@1.32.0
+  - @lazysh/display-idle@1.32.0
+  - @lazysh/et-transport@1.32.0
+  - @lazysh/mosh-transport@1.32.0
+
 ## 1.31.2
 
 ### Patch Changes
