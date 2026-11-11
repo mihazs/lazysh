@@ -126,9 +126,26 @@ jobs:
       initial: ${{ inputs.initial || false }}
     secrets: inherit
 
+  # A GITHUB_TOKEN may not write a ref or release for a commit whose workflow files match no branch
+  # tip, and the API reports that only as a bare 403. Main usually moves on to other workflow changes
+  # while the builds run, so a branch at the exact candidate is created now, while it is still main's
+  # tip, and `publish` removes it after publication (docs/release-tag-gate.md, Ref writes and workflow files).
+  reserve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - *checkout-candidate
+      - *release-bun
+      - name: Reserve the exact candidate commit as a branch tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun .changeset/release-tag.ts reserve
+
   publish:
-    needs: [source-build, artifacts]
-    if: needs.source-build.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success'
+    needs: [source-build, artifacts, reserve]
+    if: needs.source-build.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success' && needs.reserve.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
