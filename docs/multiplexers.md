@@ -91,6 +91,16 @@ tmux 3.2a lacks client loops and keeps ordinary terminal access without these
 advanced bindings. The client-loop capability was introduced in tmux 3.4; version
 strings alone never grant a binding.
 
+The Sessions panel shows each detected multiplexer's version with a **Supported**
+or **Limited** badge. Discovery reads `tmux -V`, `zellij --version` and
+`herdr --version`, none of which starts a server, and one table maps the version
+to what lazysh supports: tmux 3.4 or newer, Zellij 0.45.1 and Herdr 0.9.3 to
+0.9.5 are supported, and any other version is limited with a notice naming what
+it lacks. After a host reports tmux older than 3.4, Jump To is no longer offered
+for its tmux terminals. The badge is guidance; the client-loop check above still
+decides every binding. A host whose login shell is not POSIX `sh` (PowerShell or
+cmd on Windows OpenSSH) is reported as `unsupported_host_shell`.
+
 All application SSH session/direct-TCP channel openings retain ownership while awaiting SSH open
 confirmation, even if the caller locks or times out. Late confirmations are
 closed before PTY or command dispatch. At most four pending opens per verified

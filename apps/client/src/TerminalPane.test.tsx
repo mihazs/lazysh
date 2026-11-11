@@ -755,6 +755,16 @@ describe("terminal interactions", () => {
     expect(reportError).toHaveBeenCalledTimes(4);
     expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
+  it('refuses the Herdr zoom gesture when discovery allows navigation only', () => {
+    savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'zoomPane'}});
+    const reportError=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,terminal,attached:{kind:'herdr',name:'work'}} as unknown as LiveSession;
+    render(<TerminalPane session={session} active reportError={reportError} herdrNavigationOnly />);
+    swipeTwoLeft(screen.getByLabelText('Terminal for Host'));
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(reportError.mock.calls[0][0]).toMatchObject({key:'muxLimitedHerdr'});
+    expect(mocks.writeSequence).not.toHaveBeenCalled();
+  });
   it('discards old Zellij errors and starts after an access generation changes', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
     const {reject, reportError, canvas} = pendingZellijNavigation();

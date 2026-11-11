@@ -17,7 +17,7 @@ for(const mode of ['single','multiline','uncertain','herdr','herdr-uncertain','h
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
       if(command==='connect')return {sessionId:'control-session'};
-      if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:herdr,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]};
+      if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:herdr,zellijAvailable:false,tools:[{kind:herdr?'herdr':'tmux',version:herdr?'0.9.5':'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'work',windows:[]}]};
       if(command==='multiplexer_sessions')return [{name:'work'}];
       if(command==='attach_multiplexer')return {sessionId:'confirmed-display'};
       if(command==='attach_tmux')return {sessionId:'confirmed-display'};

@@ -54,7 +54,7 @@ async function open(page:Page) {
           {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
         ])};
       }
-      if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[]};
+      if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
       if(command==='apple_status_capability')return {available:false,reason:'Synthetic fixture.'};
       if(command.startsWith('plugin:event|') || ['resize','ack_output','disconnect','cancel_credential_auth'].includes(command))return;
       throw new Error(`Unexpected Agent view fixture command: ${command}`);

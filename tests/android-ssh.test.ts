@@ -992,7 +992,7 @@ test('Herdr discovery observation retains only closed state and capped counts',a
     .replaceAll("${'$'}",'$').replace('$childDisconnect',JSON.stringify("button[aria-label='Disconnect owned child']"));
   const observe=new Function('document',`return (${script.trim()});`);
   let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
-  let capability='tmux available · Herdr detected · Zellij missing';
+  let capability='tmux 3.4 (Supported) · Herdr 0.9.5 (Supported) · Zellij not installed';
   let endedText:string|undefined,childPresent=true,childSelected=false;
   const otherSelected={private:'another selected tab must not establish child ownership'};
   const child={closest:(selector:string)=>selector==='.session-tab'?{

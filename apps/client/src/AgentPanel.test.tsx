@@ -454,6 +454,11 @@ describe('live Herdr discovery',()=>{
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
     expect(browser.getByRole('heading',{name:t('herdrNavigationSpaces')})).toBeTruthy();
     expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
+    expect(browser.getByRole('button',{name:t('herdrCreateWorkspace')})).toBeTruthy();
+    view.rerender(<HerdrNavigation {...props} mode="spaces" navigationOnly/>);
+    expect(browser.queryByRole('button',{name:t('herdrCreateWorkspace')})).toBeNull();
+    expect(browser.queryByRole('button',{name:t('herdrSpaceActions',{name:'Work'})})).toBeNull();
+    view.rerender(<HerdrNavigation {...props} mode="spaces"/>);
     const spacesSetup=browser.getByRole('combobox',{name:t('herdrAgentsServer'),hidden:true}).closest('section')!;
     expect(spacesSetup.hidden).toBe(true);
     const focusConsequence=browser.getByLabelText(t('herdrSharedFocusShort'));

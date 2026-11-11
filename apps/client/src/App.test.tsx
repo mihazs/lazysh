@@ -316,17 +316,18 @@ it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>
   expect(brand.textContent).not.toContain('l_');
 });
 
-it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
+it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux','limited','unknown'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
   const source=tmuxChatReaderSource(agent);
   mocks.api.connect.mockResolvedValue({sessionId:'plain-control'});mocks.api.attachTmux.mockResolvedValue({sessionId:'retained-display'});
   mocks.invoke.mockImplementation((command,args)=>{
-    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    if(command==='multiplexer_tree' && kind==='unknown' && args?.sessionId==='retained-display')return Promise.reject(new Error('discovery unavailable'));
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[kind==='limited'?{kind:'tmux',version:'3.2a',support:'degraded',missing:['jump','confirmedInput']}:{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'work',windows:[]}]});
     if(command==='agent_transcript')return Promise.resolve(tmuxChatReaderPage(agent));
     if(command==='tmux_chat')return tmuxChatReply(command,args);
     return Promise.resolve(false);
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  if(kind==='tmux'){
+  if(kind!=='plain'){
     await chooseWorkspaceTool(user,'Sessions');await user.click(await screen.findByRole('button',{name:'Attach work'}));
     await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
   }
@@ -334,15 +335,15 @@ it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>([
   if('transcriptSessionId' in source)await user.type(screen.getByLabelText('Transcript session ID'),source.transcriptSessionId);
   await user.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByRole('button',{name:t('chatRefreshMessages')});
-  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind==='tmux'?'retained-display':'plain-control',agent,path:source.path,offset:0,...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind!=='plain'?'retained-display':'plain-control',agent,path:source.path,offset:0,...('transcriptSessionId' in source?{transcriptSessionId:source.transcriptSessionId}:{})},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
   async function stage(text:string){
     const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
     try {await user.type(screen.getByLabelText('Draft for this terminal'),text);await user.click(screen.getByRole('button',{name:'Stage in terminal'}));}
     finally {window.removeEventListener('lazysh-prompt-draft',staged);}
-    expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:kind==='tmux'?'retained-display':'plain-control',text});
+    expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:kind!=='plain'?'retained-display':'plain-control',text});
   }
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);
-  if(kind==='plain'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();await stage('manual fallback');expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);return;}
+  if(kind!=='tmux'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();await stage('manual fallback');expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);return;}
   await user.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));const input=screen.getByRole('region',{name:t('chatTerminalTitle')});
   await within(input).findByText('Agent work');expect(within(input).getByText('dev@home.local')).toBeTruthy();expect(within(input).getByText('Home / work')).toBeTruthy();
   expect(mocks.invoke).toHaveBeenCalledWith('tmux_chat',{sessionId:'retained-display',action:{kind:'snapshot'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
@@ -507,7 +508,7 @@ function enableHostLaunch(selected:Host=host, jump?:Host, mux:unknown=null) {
 function enableMuxLaunch(mux:DesktopMux,transport:TransportMode='ssh') {
   enableHostLaunch({...host,transport},undefined,mux);
   const invoke=mocks.invoke.getMockImplementation()!;
-  mocks.invoke.mockImplementation(async(command,...args)=>command==='multiplexer_tree'?{tmuxAvailable:true,herdrAvailable:true,zellijAvailable:true,sessions:[{id:'$1',name:'chosen',windows:[]}]}:command==='multiplexer_sessions'?[{name:'herd'}]:invoke(command,...args));
+  mocks.invoke.mockImplementation(async(command,...args)=>command==='multiplexer_tree'?{tmuxAvailable:true,herdrAvailable:true,zellijAvailable:true,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[{id:'$1',name:'chosen',windows:[]}]}:command==='multiplexer_sessions'?[{name:'herd'}]:invoke(command,...args));
   mocks.api.connect.mockResolvedValue({sessionId:'mux-control'});
   mocks.api.attachTmux.mockResolvedValue({sessionId:'mux-attached'});mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'mux-attached'});
 }
@@ -1076,7 +1077,7 @@ describe("connection flow", () => {
 
   it.each([['exact\u00a0native name', undefined], ['exact\u00a0native name', "世界 '$(touch NO);"], [null, undefined]])('jumps inside the display and preserves restoration identity %s on server %s', async (restoreName, tmuxServer) => {
     mocks.api.connect.mockResolvedValue({sessionId:'source'});
-    mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'work',windows:[]}]});
     mocks.api.attachTmux.mockResolvedValue({sessionId:'display'});
     const snapshot={generation:'native-only-generation',current:{sessionId:'$1',windowId:'@1'},sessions:[
       {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
@@ -2024,7 +2025,7 @@ it.each(['enter','stale-pane','hidden','locked','wrong-server'] as const)('enter
   }else expect(actions).toHaveLength(0);
   expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
 });
-it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','removed-on-host','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','removed-on-host','stale','unsupported','limited'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
   if(outcome==='unsupported')mocks.realAgents=true;
   const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported'||outcome==='removed-on-host';
   mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
@@ -2035,7 +2036,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
   if(outcome==='cancel-before-publication')mocks.api.attachMultiplexer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
   const original=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
-    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,sessions:[]});
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[outcome==='limited'?{kind:'herdr',version:'0.8.2',support:'degraded',missing:['create','restore']}:{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]});
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'named-work'}]);
     if(command==='herdr_tree'){
       if(++reads===1)return Promise.resolve(herdrNavigationTree);
@@ -2091,16 +2092,17 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
     expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
     expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
   }
+  else if(outcome==='limited')expect((await screen.findByRole('alert')).textContent).toContain(t('muxLimitedHerdr'));
   else if(outcome==='missing'||outcome==='removed-on-host')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
   else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_action',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',name:'named-work',action:{type:'focusPane',target:'w2E:pF'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
   const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_action');
-  expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
+  expect(sent).toHaveLength(outcome==='missing'||outcome==='limited'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
   if(outcome==='current-second-display'){expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-existing','herdr','named-work',expect.any(Function));expect(sent.every(([,args])=>(args as {sessionId:string}).sessionId==='navigation-adopted')).toBe(true);expect(mocks.api.adoptSession.mock.calls.map(([id])=>id)).toEqual(['navigation-existing','navigation-adopted']);expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true');}
-  else if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  else if(existing||outcome==='limited')expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
   else expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-source','herdr','named-work',expect.any(Function));
   expect(mocks.api.write).not.toHaveBeenCalled();
   if(outcome==='cancel-before-publication')expect(mocks.api.adoptSession).not.toHaveBeenCalledWith('navigation-adopted');
-  else if(!existing)expect(mocks.api.adoptSession.mock.calls.filter(([id])=>id==='navigation-adopted')).toHaveLength(1);
+  else if(!existing && outcome!=='limited')expect(mocks.api.adoptSession.mock.calls.filter(([id])=>id==='navigation-adopted')).toHaveLength(1);
 });
 it('shows a selected multiplexer preflight failure and closes its bootstrap without adopting a blank terminal',async()=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'zellij',name:'work'}}]);
@@ -2230,7 +2232,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
 it('keeps late picker cleanup scoped while a new source is busy, then admits queued CLI intent once the wide picker is idle',async()=>{
   enableHostLaunch({...host,defaultMultiplexer:{kind:'tmux',name:'work'}});mocks.hostLaunchReceipt=null;
   const original=mocks.invoke.getMockImplementation()!;
-  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree'?Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'other',windows:[]}]}):original(command,...args));
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree'?Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[{id:'$1',name:'other',windows:[]}]}):original(command,...args));
   mocks.api.connect.mockResolvedValue({sessionId:'nav-control'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'nav-display-a'});
   mocks.api.attachTmux.mockResolvedValue({sessionId:'nav-display-b'});
@@ -2408,4 +2410,30 @@ it('does not renew revoked access to disconnect a locally failed Mosh display',a
   await act(async()=>receive({type:'data',data:[9]}));
   expect(mocks.api.disconnect.mock.calls.filter(call=>call[0]==='revoked-display')).toHaveLength(0);
   expect(controller.close).toHaveBeenCalledOnce();
+});
+
+it('does not restore a Herdr session when its version lacks restore support', async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'herdr',name:'work'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.8.2',support:'degraded',missing:['restore']}],sessions:[]}) : original(command,...args));
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  expect(await screen.findByText(/Only navigation is available/)).toBeTruthy();
+  expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'temporary-shell'});
+});
+
+it('restores a Herdr session when discovery confirms restore support', async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(JSON.stringify([{hostId:'home',attached:{kind:'herdr',name:'work'}}]));
+  mocks.api.connect.mockResolvedValue({sessionId:'temporary-shell'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'restored-herdr'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree' ? Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]}) : original(command,...args));
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','herdr','work',expect.any(Function)));
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
 });

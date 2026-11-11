@@ -17,8 +17,8 @@ export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
 const tones:Record<LiveAgent['agent_status'],StatusTone>={blocked:'attention',working:'working',done:'done',idle:'idle',unknown:'unknown'};
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
-  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,navigationOnly=false}:{
+  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;navigationOnly?:boolean;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
@@ -127,15 +127,15 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       {data.server && <>
         <label><span className="sr-only">{t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')}</span><input type="search" placeholder={t(mode==='agents'?'herdrLiveSearch':'herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
-        {mode==='spaces' && tree && <HerdrWorkspaceCreate {...create}/>}
+        {mode==='spaces' && tree && !navigationOnly && <HerdrWorkspaceCreate {...create}/>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
           if(term && !match(workspace.label,workspace.workspace_id) && !tabs.some(tab=>match(tab.label,tab.tab_id) || tree.panes.some(pane=>pane.tab_id===tab.tab_id && match(pane.cwd,shownPath(pane.cwd),pane.pane_id,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.name,data.rows.find(agent=>agent.pane_id===pane.pane_id)?.agent))))return null;
           const key=JSON.stringify([data.server,workspace.workspace_id]),open=!!term || !collapsed.has(key);
           return <li key={workspace.workspace_id} className="herdr-space">
-            <div className="herdr-navigation-heading" onContextMenu={event=>{if(!working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
+            <div className="herdr-navigation-heading" onContextMenu={event=>{if(!navigationOnly && !working && workspaceDirectory(tree,workspace.workspace_id)){event.preventDefault();setSpaceMenu(workspace.workspace_id);}}}>
               {row({kind:'workspace',workspace:workspace.workspace_id},workspace.label,workspace.agent_status,t('herdrTabCount',{total:formatNumber(tabs.length),count:tabs.length}))}
-              <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>
+              {!navigationOnly && <HerdrSpaceActions {...create} tree={tree} workspace={workspace} open={spaceMenu===workspace.workspace_id} onOpenChange={value=>setSpaceMenu(value?workspace.workspace_id:undefined)}/>}
               {disclosure(key,workspace.label,open)}
             </div>
             {open && <ul>{tabs.map(tab=>{

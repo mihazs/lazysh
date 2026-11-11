@@ -25,6 +25,7 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
         if(command==='local_capability')return {available:false,reason:'SSH fixture only.'};
         if(command==='connect')return {sessionId:`ssh-${++connections}`};
         if(command==='attach_tmux'){window.tmuxJumpFixture.attachments.push(args);return {sessionId:'display'};}
+        if(command==='multiplexer_tree')return {tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}]};
         if(command==='tmux_jump_snapshot'){window.tmuxJumpFixture.reads++;return snapshot;}
         if(command==='tmux_jump'){
           window.tmuxJumpFixture.jumps.push(args);

@@ -70,9 +70,9 @@ One Rust table maps `(kind, version)` to capabilities. The frontend reads that r
 
 | Multiplexer | Version source | Full | Degraded | CI pins |
 | --- | --- | --- | --- | --- |
-| tmux | `tmux -V` | ≥ 3.4 | 3.2a–3.3: no Jump To or confirmed input | 3.2a (distribution), 3.4 and the newest release built from source with sha256 |
+| tmux | `tmux -V` | ≥ 3.4 | 3.2a–3.3: no Jump To or confirmed input | 3.2a (distribution), 3.4 (distribution and source) and 3.8, the newest release, built from source with sha256 |
 | Zellij | `zellij --version` | 0.45.1 | 0.44.x until verified: no tree, close, resize or run | 0.45.1 static musl asset with sha256 |
-| Herdr | `herdr --version`, API `schema_version` | 0.9.3–0.9.5, schema 1 | other versions: navigation only | 0.9.3, moving to 0.9.5 in [#1117](https://github.com/mihazs/lazysh/issues/1117) |
+| Herdr | `herdr --version`; API `schema_version` not yet checked → [#1159](https://github.com/mihazs/lazysh/issues/1159) | 0.9.3–0.9.5 | other versions: navigation only | 0.9.3, moving to 0.9.5 in [#1117](https://github.com/mihazs/lazysh/issues/1117) |
 | rmux | `rmux capabilities --json` (not `-V`, which prints rmux branding) | 0.10.x, wire 8 | wire mismatch: unsupported until the daemon restarts | 0.10.0 release tarball, sha256 `1bec11ef…c2696c5` |
 
 ### rmux as a tmux-family binary (#1140)
@@ -137,7 +137,7 @@ implemented without full evidence, *part* means partial.
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | no → #1146 | part → #1146 | no → #1146 |
 | Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
-| Version detection | no → #1139 | no → #1139 | no → #1139 | no → #1140 |
+| Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
 
 Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij;
 lazysh offers to recreate the session instead.

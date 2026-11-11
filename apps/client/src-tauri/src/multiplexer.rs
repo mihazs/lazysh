@@ -306,7 +306,83 @@ pub struct MultiplexerTree {
     tmux_available: bool,
     herdr_available: bool,
     zellij_available: bool,
+    tools: Vec<Tool>,
     sessions: Vec<MuxSession>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Support {
+    Full,
+    Degraded,
+}
+#[derive(Debug, Serialize)]
+pub struct Tool {
+    kind: MultiplexerKind,
+    version: Option<String>,
+    support: Support,
+    missing: &'static [&'static str],
+}
+
+fn numbers(value: &str) -> Option<Vec<u32>> {
+    value.split('.').map(|part| part.parse().ok()).collect()
+}
+/// The one table from `(kind, version line)` to support; untested versions stay degraded.
+fn tool(kind: MultiplexerKind, line: &str) -> Tool {
+    let (name, missing): (_, &'static [&'static str]) = match kind {
+        MultiplexerKind::Tmux => ("tmux", &["jump", "confirmedInput"]),
+        MultiplexerKind::Zellij => ("zellij", &["tree", "close", "resize", "launch"]),
+        MultiplexerKind::Herdr => (
+            "herdr",
+            &["create", "launch", "rename", "confirmedInput", "restore"],
+        ),
+    };
+    let version = line.trim().strip_prefix(name).map(str::trim);
+    let full = version.is_some_and(|version| match kind {
+        // `next-3.6` is a tmux development build; a letter suffix is a patch release.
+        MultiplexerKind::Tmux => numbers(
+            version
+                .strip_prefix("next-")
+                .unwrap_or(version)
+                .trim_end_matches(|c: char| c.is_ascii_lowercase()),
+        )
+        .is_some_and(|v| v.len() == 2 && (v[0], v[1]) >= (3, 4)),
+        MultiplexerKind::Zellij => numbers(version).is_some_and(|v| v == [0, 45, 1]),
+        MultiplexerKind::Herdr => numbers(version)
+            .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2])),
+    });
+    Tool {
+        kind,
+        version: version
+            .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control))
+            .map(str::to_owned),
+        support: if full {
+            Support::Full
+        } else {
+            Support::Degraded
+        },
+        missing: if full { &[] } else { missing },
+    }
+}
+// A Windows OpenSSH login shell (PowerShell or cmd) cannot parse the POSIX discovery script.
+fn host_shell(error: SshError) -> SshError {
+    let message = error.message();
+    if error.kind() == "remote_command_failed"
+        && [
+            "ParserError",
+            "Missing '(' after 'if'",
+            "is not recognized as",
+            "was unexpected at this time",
+        ]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        SshError::new(
+            "unsupported_host_shell",
+            "This host's login shell is not POSIX sh (for example PowerShell or cmd), so lazysh cannot read its multiplexers",
+        )
+    } else {
+        error
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct MuxSession {
@@ -366,26 +442,42 @@ fn name(value: &str) -> Result<()> {
 }
 fn discovery_command(server: &crate::tmux_server::TmuxServer, positive_unix: bool) -> String {
     let tmux = server.prefix();
-    let herdr = crate::herdr_path::select("if command -v herdr >/dev/null 2>&1; then printf 'herdr\\t1\\n'; else printf 'herdr\\t0\\n'; fi", positive_unix);
-    format!("if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\n'; else printf 'tmux\\t0\\n'; fi; {herdr}; if command -v zellij >/dev/null 2>&1; then printf 'zellij\\t1\\n'; else printf 'zellij\\t0\\n'; fi; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", quote(PANE_FORMAT))
+    // Version commands only print; none of them starts a server.
+    let probe = |tool: &str, version: &str| {
+        format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
+    };
+    let herdr = crate::herdr_path::select(&probe("herdr", "--version"), positive_unix);
+    format!("{}; {herdr}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), probe("zellij", "--version"), quote(PANE_FORMAT))
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
     let mut lines = output.lines();
-    let mut available = |tool| -> Result<bool> {
-        match lines.next() {
-            Some(line) if line == format!("{tool}\t1") => Ok(true),
-            Some(line) if line == format!("{tool}\t0") => Ok(false),
+    let mut tools = Vec::new();
+    let mut available = |kind: MultiplexerKind, name: &str| -> Result<bool> {
+        let line = lines.next().unwrap_or_default();
+        match line
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('\t'))
+        {
+            Some("0") => Ok(false),
+            Some(found) if found.starts_with("1\t") => {
+                tools.push(tool(kind, &found[2..]));
+                Ok(true)
+            }
             _ => Err(SshError::new(
                 "invalid_output",
                 "Invalid multiplexer discovery response",
             )),
         }
     };
+    let tmux_available = available(MultiplexerKind::Tmux, "tmux")?;
+    let herdr_available = available(MultiplexerKind::Herdr, "herdr")?;
+    let zellij_available = available(MultiplexerKind::Zellij, "zellij")?;
     let mut tree = MultiplexerTree {
-        tmux_available: available("tmux")?,
-        herdr_available: available("herdr")?,
-        zellij_available: available("zellij")?,
+        tmux_available,
+        herdr_available,
+        zellij_available,
+        tools,
         sessions: Vec::new(),
     };
     for (index, line) in lines.enumerate() {
@@ -597,7 +689,8 @@ pub async fn multiplexer_tree(
                 discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
                 &access,
             )
-            .await?;
+            .await
+            .map_err(host_shell)?;
             parse_tree(&output)
         })
         .await
@@ -707,14 +800,140 @@ mod tests {
     }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
-        let tree = parse_tree("tmux\t1\nherdr\t0\nzellij\t1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\n").unwrap();
+        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\n").unwrap();
         assert_eq!(tree.sessions[0].windows[0].panes.len(), 2);
         assert_eq!(tree.sessions[0].windows[0].panes[1].id, "%5");
-        assert!(parse_tree("tmux\t1\nherdr\t0\nzellij\t1\nmalformed\n").is_err());
+        assert!(parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nmalformed\n").is_err());
         assert!(parse_tree(
-            "tmux\t1\nherdr\t0\nzellij\t1\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\n"
+            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\n"
         )
         .is_err());
+    }
+    #[test]
+    fn real_version_outputs_map_to_support_levels() {
+        use MultiplexerKind::*;
+        for (kind, line, version, support) in [
+            (Tmux, "tmux 3.2a", Some("3.2a"), Support::Degraded),
+            (Tmux, "tmux 3.3a", Some("3.3a"), Support::Degraded),
+            (Tmux, "tmux 3.4", Some("3.4"), Support::Full),
+            (Tmux, "tmux 3.5a", Some("3.5a"), Support::Full),
+            (Tmux, "tmux next-3.6", Some("next-3.6"), Support::Full),
+            (Tmux, "garbage", None, Support::Degraded),
+            (Tmux, "", None, Support::Degraded),
+            (Zellij, "zellij 0.45.1", Some("0.45.1"), Support::Full),
+            (Zellij, "zellij 0.44.3", Some("0.44.3"), Support::Degraded),
+            (Zellij, "zellij 0.45.2", Some("0.45.2"), Support::Degraded),
+            (Herdr, "herdr 0.9.3", Some("0.9.3"), Support::Full),
+            (Herdr, "herdr 0.9.5", Some("0.9.5"), Support::Full),
+            (Herdr, "herdr 0.8.2", Some("0.8.2"), Support::Degraded),
+            (Herdr, "herdr \u{1b}[31m0.9.5", None, Support::Degraded),
+        ] {
+            let tool = tool(kind, line);
+            assert_eq!(
+                (tool.version.as_deref(), tool.support),
+                (version, support),
+                "{line}"
+            );
+            assert_eq!(tool.missing.is_empty(), support == Support::Full, "{line}");
+        }
+        assert_eq!(tool(Tmux, "tmux 3.2a").missing, ["jump", "confirmedInput"]);
+        let tree = parse_tree("tmux\t1\ttmux 3.2a\nherdr\t0\nzellij\t1\tzellij 0.45.1\n").unwrap();
+        assert_eq!(
+            serde_json::to_value(&tree).unwrap()["tools"],
+            serde_json::json!([
+                {"kind":"tmux","version":"3.2a","support":"degraded","missing":["jump","confirmedInput"]},
+                {"kind":"zellij","version":"0.45.1","support":"full","missing":[]}
+            ])
+        );
+        // The pre-version format is not accepted as a version-less success.
+        assert!(parse_tree("tmux\t1\nherdr\t0\nzellij\t0\n").is_err());
+    }
+    #[test]
+    fn non_posix_login_shells_are_reported_as_unsupported_host_shells() {
+        let powershell = "At line:1 char:3\r\n+ if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' ...\r\n+   ~\r\nMissing '(' after 'if' in if statement.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException\r\n    + FullyQualifiedErrorId : NoOpenParenthesisAfterIf";
+        let pwsh = "ParserError: \nLine |\n   1 |  if command -v tmux >/dev/null 2>&1; then printf 'tmux\\t1\\t%s\\n' \"$(tmux -V 2>/dev/null | head -n 1)\"; …\n     |    ~\n     | Missing '(' after 'if' in if statement.";
+        let cmd = "-v was unexpected at this time.";
+        for message in [powershell, pwsh, cmd] {
+            assert_eq!(
+                host_shell(SshError::new("remote_command_failed", message)).kind(),
+                "unsupported_host_shell"
+            );
+        }
+        for error in [
+            SshError::new("remote_command_failed", "sh: 1: tmux: Permission denied"),
+            SshError::new("timeout", "ParserError"),
+        ] {
+            let kind = error.kind();
+            assert_eq!(host_shell(error).kind(), kind);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn discovery_script_reports_installed_versions_without_starting_a_server() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        let tools = tempfile::tempdir().unwrap();
+        let calls = tools.path().join("calls");
+        for (name, body) in [
+            (
+                "tmux",
+                "case \"$*\" in -V) echo 'tmux 3.2a';; *has-session*) exit 1;; *) exit 9;; esac",
+            ),
+            ("zellij", "echo 'zellij 0.45.1'"),
+        ] {
+            let path = tools.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nprintf '%s %s\\n' {name} \"$*\" >> {}\n{body}\n",
+                    quote(calls.to_str().unwrap())
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        for name in ["sh", "head"] {
+            let real = Command::new("/bin/sh")
+                .args(["-c", &format!("command -v {name}")])
+                .output()
+                .unwrap();
+            std::os::unix::fs::symlink(
+                String::from_utf8(real.stdout).unwrap().trim(),
+                tools.path().join(name),
+            )
+            .unwrap();
+        }
+        let output = Command::new("/bin/sh")
+            .args([
+                "-c",
+                &discovery_command(&crate::tmux_server::TmuxServer::Default, false),
+            ])
+            .env_clear()
+            .env("PATH", tools.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let tree =
+            serde_json::to_value(parse_tree(&String::from_utf8(output.stdout).unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(
+            (
+                &tree["tmuxAvailable"],
+                &tree["herdrAvailable"],
+                &tree["zellijAvailable"]
+            ),
+            (
+                &serde_json::json!(true),
+                &serde_json::json!(false),
+                &serde_json::json!(true)
+            )
+        );
+        assert_eq!(tree["tools"][0]["version"], "3.2a");
+        assert_eq!(tree["tools"][0]["support"], "degraded");
+        assert_eq!(tree["tools"][1]["support"], "full");
+        assert_eq!(
+            std::fs::read_to_string(calls).unwrap(),
+            "tmux -V\nzellij --version\ntmux -u -L default has-session\n"
+        );
     }
     #[test]
     fn validates_targets_and_quotes_names_and_format_directories() {
@@ -763,7 +982,7 @@ mod tests {
         };
         let read_tree = || {
             let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
-            parse_tree(&format!("tmux\t1\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
+            parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
         };
         struct Server(std::path::PathBuf);
         impl Drop for Server {

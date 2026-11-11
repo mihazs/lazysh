@@ -48,3 +48,10 @@ it('explains a target closed on the host in the selected language instead of hos
   fireEvent.click(screen.getAllByRole('button', { name: /w2:p9/ })[0]);
   expect((await screen.findByRole('alert')).textContent).toBe('A conexão ou o destino selecionado mudou. Abra a navegação novamente.');
 });
+it('keeps navigation but hides mutating controls for a limited Herdr version', async () => {
+  vi.mocked(invoke).mockResolvedValue(reportedTree());
+  render(<HerdrPanel sessionId="ssh1" name="builds" navigationOnly />);
+  await screen.findByRole('button',{name:'Focus agent w2:p9'});
+  for(const name of ['New Herdr workspace','Rename Herdr workspace','New Herdr tab','Rename Herdr tab','Zoom w2:p9','Split w2:p9 right','Split w2:p9 down'])
+    expect(screen.queryByRole('button',{name})).toBeNull();
+});

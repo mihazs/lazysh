@@ -191,6 +191,7 @@ impl Remote {
     fn host(&self) -> Host {
         Host {
             default_multiplexer: None,
+            default_multiplexer_next: None,
             transport: None,
             mosh: None,
             et: None,
