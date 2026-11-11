@@ -11,7 +11,7 @@ import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixt
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1498,8 +1498,8 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
 
 test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
-  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
-  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`there\x7f\x7ftheowned-old-${nonce}`),Buffer.from('private-payload')];
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}`),Buffer.from('private-payload')];
   try {
     for(const bytes of samples) {
       await writeFile(path,bytes,{mode:0o600});let prefix=0;
@@ -1570,7 +1570,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','deniedNotification','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
   const logger=spyOn(console,'error').mockImplementation(()=>{}),reported:string[]=[];
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
@@ -1614,21 +1614,27 @@ test('native soft Enter observer filters foreign targets, settles after the Ente
 
 test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
   const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
-  const expected=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`);
+  const expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`);
   expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
   for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
-    Buffer.from(`there\x7f\x7ftheowned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
+    Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
     Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u`),
-    Buffer.from(`there\x7f\x7fthe\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
-    expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')])]) {
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')]),
+    // SwiftKey-shaped edits: a skipped Backspace after the toolbar key, a lost autocorrect erase, a lost or repeated word.
+    Buffer.from(expected.toString('latin1').replace('\x1b\x7f','\x1b'),'latin1'),Buffer.from(expected.toString('latin1').replace('\x7f\x7f\x7f\x7ftan','\x7f\x7ftan'),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('ten ','ten ten '),'latin1'),Buffer.from(expected.toString('latin1').replace('swipe ',''),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('owned ','own'),'latin1'),
+    Buffer.from(expected.toString('latin1').replace('web ','webweb '),'latin1'),Buffer.from(expected.toString('latin1').replace('web ','we'),'latin1')]) {
     expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
   }
   expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
   expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
-  let visible='';for(const byte of Buffer.from('there\x7f\x7fthe'))visible=byte===127?visible.slice(0,-1):visible+String.fromCharCode(byte);
-  expect(visible).toBe('thethe');
+  // Escape is a key, not text: the line a shell holds after these bytes is what the user typed, once and in order.
+  let visible='';for(const byte of Buffer.from(IME_TRANSACTION_WIRE))visible=byte===127?visible.slice(0,-1):byte===27?visible:visible+String.fromCharCode(byte);
+  expect(visible).toBe('thetheowned swipe tanweb ');
 });
 
 test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{

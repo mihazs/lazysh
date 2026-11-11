@@ -6355,7 +6355,12 @@ class NativeWorkspaceTest {
             finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
-            for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord")) {
+            // The last six are SwiftKey-shaped (predictive word, gesture word, Backspace inside the composing
+            // region, autocorrect by erase-and-commit, Backspace after a toolbar key ended ownership, and the
+            // letters-as-commits word with a composing-region rewrite that SwiftKey uses for a Chromium editor).
+            for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord",
+                    "predictWord", "swipeWord", "composingBackspace", "replacePrevious", "eraseOne", "webWord")) {
+                if (operation == "eraseOne") tapToolbar("esc")
                 terminalEditor()
                 val result = ime.call(operation)
                 assertTrue("Fixed native IME transaction accepted: $operation", result.getBoolean("accepted"))

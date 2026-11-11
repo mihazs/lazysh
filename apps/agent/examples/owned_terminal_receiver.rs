@@ -9,6 +9,15 @@ mod receiver {
         path::{Path, PathBuf},
     };
     const LIMIT: usize = 16 * 1024;
+    /// What the packaged IME fixture's transactions leave on the wire before the Shift+Enter keys: a
+    /// correction, an extension, an ASCII erase and a repeat, then a predictive word, a gesture word,
+    /// Backspace inside a composing word, an erase-and-commit autocorrect, Esc followed by a Backspace, and a
+    /// word typed as letter commits then rewritten through a composing region.
+    const IME_TRANSACTIONS: &str = concat!(
+        "there\x7f\x7fthe",
+        "owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f",
+        "web "
+    );
 
     struct RawMode {
         fd: i32,
@@ -91,7 +100,7 @@ mod receiver {
     ) -> io::Result<()> {
         let mut total = 0;
         let expected = nonce
-            .map(|nonce| format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
+            .map(|nonce| format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
         let mut observed = Vec::new();
         let mut acknowledged = false;
         let mut announced = [0; 4];
@@ -310,8 +319,8 @@ mod receiver {
         #[test]
         fn delivery_ack_requires_the_exact_written_wire_and_never_normalizes_extra_bytes() {
             let nonce = "0123456789abcdef0123456789abcdef";
-            let expected =
-                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}").into_bytes();
+            let expected = format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}")
+                .into_bytes();
             let ack = format!("IME_{nonce}_DELIVERED\r\n").into_bytes();
             let mut stored = Vec::new();
             let mut terminal = Vec::new();
@@ -329,8 +338,12 @@ mod receiver {
             for input in [
                 b"thethe".to_vec(),
                 [expected.as_slice(), b"extra"].concat(),
-                format!("there\x7f\x7fthe\x1b[13;2u\r\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
-                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-preedit-{nonce}owned-current-{nonce}").into_bytes(),
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-preedit-{nonce}owned-current-{nonce}").into_bytes(),
+                // A skipped Backspace after Esc, a lost autocorrect erase and the earlier wire without the new transactions.
+                format!("{}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}", IME_TRANSACTIONS.replace("\x1b\x7f", "\x1b")).into_bytes(),
+                format!("{}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}", IME_TRANSACTIONS.replace("\x7f\x7f\x7f\x7ftan", "\x7f\x7ftan")).into_bytes(),
+                format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}").into_bytes(),
             ] {
                 stored.clear();
                 terminal.clear();
@@ -442,7 +455,7 @@ mod receiver {
             }
             let nonce = "0123456789abcdef0123456789abcdef";
             let mut terminal = Vec::new();
-            let input = format!("there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
+            let input = format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
             assert!(copy_bounded(
                 &mut Cursor::new(input),
                 &mut Unflushed,
