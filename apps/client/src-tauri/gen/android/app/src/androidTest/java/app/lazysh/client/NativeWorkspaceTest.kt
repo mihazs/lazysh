@@ -5713,7 +5713,7 @@ class NativeWorkspaceTest {
         }
     }
 
-    /** Native taps send one key from the fixed key grid and one saved chord from the More list, which closes after the press. */
+    /** Native taps send one key from the keys page and one saved chord from the snippets page, which the page indicator selects without a swipe. */
     private fun verifyToolbarPages(scenario: ActivityScenario<MainActivity>, prompt: String, nonce: String) {
         val marker = "# PAGES_${nonce}_"
         /** The center of the one matching visible control, in WebView CSS pixels, after a hit test. */
@@ -5740,7 +5740,8 @@ class NativeWorkspaceTest {
         }
         val focused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
         val store = "lazysh.preferences.v1"
-        val more = "button[aria-label='More keys']"
+        val snippetsTab = ".terminal-keys-pager button[aria-label='Snippets page']"
+        val keysTab = ".terminal-keys-pager button[aria-label='Keys page']"
         evaluate(scenario, """
             (()=>{const key=${JSONObject.quote(store)},original=localStorage.getItem(key),value=JSON.parse(original||'{"version":1}');
               window.__lazyshOwnedToolbarPages={original};
@@ -5748,20 +5749,25 @@ class NativeWorkspaceTest {
               window.dispatchEvent(new StorageEvent('storage',{key}));return true;})()
         """)
         try {
-            awaitDocument(scenario, "owned toolbar is a fixed key grid with a More key and no page indicators",
-                "document.querySelectorAll('.terminal-keys .terminal-keys-row').length>=1 && !!document.querySelector(${JSONObject.quote(".terminal-keys $more")}) && !document.querySelector('.terminal-keys [role=tablist]')")
-            assertEquals("Terminal keeps input focus before the More list opens", "true", evaluate(scenario, focused))
-            tap(".terminal-keys $more")
-            awaitDocument(scenario, "native tap opens the More list", "!!document.querySelector('.terminal-keys-more')")
-            assertEquals("Opening the More list leaves terminal input focus in place", "true", evaluate(scenario, focused))
-            tap(".terminal-keys-more button", "Page mark")
-            awaitDocument(scenario, "More-list chord typed its literal text and closed the list",
-                "!document.querySelector('.terminal-keys-more') && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(marker)}))")
+            awaitDocument(scenario, "owned toolbar is a key grid with a page indicator whose Snippets page holds the saved chord",
+                "document.querySelectorAll('.terminal-keys .terminal-keys-row').length>=1 && !!document.querySelector(${JSONObject.quote(snippetsTab)})")
+            assertEquals("Terminal keeps input focus before the Snippets page opens", "true", evaluate(scenario, focused))
+            // The page indicator is a few CSS pixels tall, so the page is selected through its own click handler; the chord is then a native tap.
+            evaluate(scenario, "document.querySelector(${JSONObject.quote(snippetsTab)}).click()")
+            awaitDocument(scenario, "the Snippets page is selected and scrolled into view",
+                "document.querySelector(${JSONObject.quote(snippetsTab)}).getAttribute('aria-current')==='true' && Math.abs(document.querySelector('.terminal-keys-page[data-toolbar-page=snippets]').getBoundingClientRect().left-document.querySelector('.terminal-keys-pages').getBoundingClientRect().left)<2")
+            assertEquals("Opening the Snippets page leaves terminal input focus in place", "true", evaluate(scenario, focused))
+            tap(".terminal-keys-page[data-toolbar-page=snippets] button", "Page mark")
+            awaitDocument(scenario, "snippets-page chord typed its literal text",
+                "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(marker)}))")
+            evaluate(scenario, "document.querySelector(${JSONObject.quote(keysTab)}).click()")
+            awaitDocument(scenario, "the Keys page is selected and scrolled back into view",
+                "document.querySelector(${JSONObject.quote(keysTab)}).getAttribute('aria-current')==='true' && Math.abs(document.querySelector('.terminal-keys-page[data-toolbar-page=keys]').getBoundingClientRect().left-document.querySelector('.terminal-keys-pages').getBoundingClientRect().left)<2")
             closeSoftKeyboard()
             tap(".terminal-keys .terminal-keys-row button", "c")
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             val line = JSONObject.quote("${marker}c")
-            awaitDocument(scenario, "keys from the grid and the More list reached the remote shell in order",
+            awaitDocument(scenario, "keys from the grid and the Snippets page reached the remote shell in order",
                 "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>{const i=x.textContent.lastIndexOf($line);return i>=0&&x.textContent.lastIndexOf(${JSONObject.quote(prompt)})>i;})")
             closeSoftKeyboard()
         } finally {

@@ -715,7 +715,7 @@ for(const dismissKeyboardOnOverscroll of [false,true])test(`direct finger scroll
     return ['.terminal-canvas','.xterm-screen','.xterm-viewport','.xterm-helper-textarea'].map(selector=>{
       const element=selector==='.terminal-canvas'?canvas:canvas.querySelector(selector)!;
       const r=element.getBoundingClientRect();
-      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-1]]
+      const point=[[r.left+r.width/2,r.top+r.height/2],[r.left+1,r.top+1],[r.right-1,r.bottom-4]]
         .find(([x,y])=>{const hit=document.elementFromPoint(x,y);return hit===element||(selector==='.xterm-screen'&&!!hit&&element.contains(hit));});
       return {selector,point:point?{x:point[0],y:point[1]}:null};
     });

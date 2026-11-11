@@ -208,9 +208,9 @@ for(const system of [
 });
 
 for(const locale of [
-  {code:'en',compose:'Compose text',close:'Close composer',more:'More keys',find:'Find',search:'Search terminal history',next:'Next',match:'Match on line 1',consent:'Remote clipboard request',allow:'Allow this copy'},
-  {code:'pt-BR',compose:'Compor texto',close:'Fechar editor de texto',more:'Mais teclas',find:'Buscar',search:'Buscar no histórico do terminal',next:'Próxima',match:'Resultado na linha 1',consent:'Solicitação remota da área de transferência',allow:'Permitir esta cópia'},
-  {code:'es',compose:'Redactar texto',close:'Cerrar redactor',more:'Más teclas',find:'Buscar',search:'Buscar en el historial del terminal',next:'Siguiente',match:'Coincidencia en la línea 1',consent:'Solicitud remota del portapapeles',allow:'Permitir esta copia'},
+  {code:'en',compose:'Compose text',close:'Close composer',find:'Find',search:'Search terminal history',next:'Next',match:'Match on line 1',consent:'Remote clipboard request',allow:'Allow this copy'},
+  {code:'pt-BR',compose:'Compor texto',close:'Fechar editor de texto',find:'Buscar',search:'Buscar no histórico do terminal',next:'Próxima',match:'Resultado na linha 1',consent:'Solicitação remota da área de transferência',allow:'Permitir esta cópia'},
+  {code:'es',compose:'Redactar texto',close:'Cerrar redactor',find:'Buscar',search:'Buscar en el historial del terminal',next:'Siguiente',match:'Coincidencia en la línea 1',consent:'Solicitud remota del portapapeles',allow:'Permitir esta copia'},
 ] as const) test(`terminal-owned ${locale.code} controls retain live content, explicit consent and input bytes`,async({page})=>{
   await fixture(page);const {screen,canvas}=await connectedTerminal(page);
   await page.getByRole('button',{name:'ctrl',exact:true}).dblclick();
@@ -232,7 +232,6 @@ for(const locale of [
   // The composer covers output and, on touch layouts, the key row until it closes.
   await page.getByRole('button',{name:locale.close,exact:true}).click();
   await expect(localized).toHaveCount(0);
-  await page.getByRole('button',{name:locale.more,exact:true}).click();
   await page.getByRole('button',{name:locale.find,exact:true}).click();
   await page.getByRole('textbox',{name:locale.search,exact:true}).fill('RAW');
   await page.getByRole('button',{name:locale.next,exact:true}).click();await expect(page.getByText(locale.match,{exact:true})).toBeVisible();

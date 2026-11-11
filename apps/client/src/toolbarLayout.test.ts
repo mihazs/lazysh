@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarCells, toolbarColumns, toolbarStepSlot, visibleToolbarRows} from "./toolbarLayout";
+import {placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarColumns, toolbarStepSlot, visibleToolbarRows} from "./toolbarLayout";
 import type {ToolbarKey} from "./preferences";
 
 const rows: ToolbarKey[][] = [["esc", "ctrl", "tab"], ["left", "right"]];
@@ -34,15 +34,8 @@ describe("toolbar key layout", () => {
     expect(resizeToolbarRows([["esc"]], 3)).toEqual([["esc"], [], []]);
     expect(resizeToolbarRows([["esc"]], 9)).toHaveLength(3);
   });
-  it("closes the last row with the More key ahead of any arrows that end it, so the grid keeps its inverted T", () => {
-    expect(toolbarCells([["esc", "up"], ["shift", "left", "down", "right"]])).toEqual([["esc", "up"], ["shift", "more", "left", "down", "right"]]);
-    expect(toolbarCells([["esc", "tab"], ["ctrl", "left"], ["tab"]])).toEqual([["esc", "tab"], ["ctrl", "left"], ["tab", "more"]]);
-    // A row that is only arrows keeps them together and puts More after them.
-    expect(toolbarCells([["left", "right"]])).toEqual([["left", "right", "more"]]);
-    expect(toolbarCells([[]])).toEqual([["more"]]);
-  });
   it("gives every row the width of the longest one", () => {
-    expect(toolbarColumns([["esc", "tab", "up"], ["shift", "more", "left"], ["tab"]])).toBe(3);
+    expect(toolbarColumns([["esc", "tab", "up"], ["shift", "left"], ["tab"]])).toBe(3);
     expect(toolbarColumns([[]])).toBe(1);
   });
   it("collapses empty terminal rows but keeps one row for the trailing actions", () => {

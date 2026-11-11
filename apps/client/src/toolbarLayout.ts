@@ -51,21 +51,7 @@ export function visibleToolbarRows(rows: ToolbarRows, include: (key: ToolbarKey)
   return visible.length ? visible : [[]];
 }
 
-/** A drawn toolbar cell: a configured key, or the More key that opens Find, Copy and the saved snippets. */
-export type ToolbarCell = ToolbarKey | "more";
-const cursorKeys: readonly ToolbarCell[] = ["left", "up", "down", "right"];
-
-/** The rows to draw: the configured rows, with the More key closing the last one ahead of any cursor arrows that end it. */
-export function toolbarCells(rows: ToolbarRows): ToolbarCell[][] {
-  const cells: ToolbarCell[][] = rows.map(row => [...row]);
-  const last = cells[cells.length - 1];
-  let at = last.length;
-  while (at > 0 && cursorKeys.includes(last[at - 1])) at--;
-  last.splice(at === 0 ? last.length : at, 0, "more");
-  return cells;
-}
-
 /** Columns every row shares, so keys have one width. */
-export function toolbarColumns(cells: readonly (readonly ToolbarCell[])[]): number {
-  return Math.max(1, ...cells.map(row => row.length));
+export function toolbarColumns(rows: ToolbarRows): number {
+  return Math.max(1, ...rows.map(row => row.length));
 }

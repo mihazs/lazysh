@@ -17,14 +17,15 @@ export function toolbarKeyLabel(key: ToolbarKey): string {
 }
 /** Toolbar keys that open a navigation view instead of typing. */
 export const toolbarNavigationActions = {agents: "openAgents", workspaces: "openWorkspaces"} as const satisfies Partial<Record<ToolbarKey, GestureAction>>;
+/** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
+export const toolbarRowBreak = "row-break";
+export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
 /** Earlier default toolbars; a stored copy was never customized, so it moves to the current default. */
 const legacyToolbars: readonly (readonly string[])[] = [
   ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"],
   ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"],
+  ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "left", "down", "right"],
 ];
-/** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
-export const toolbarRowBreak = "row-break";
-export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
 export const maxToolbarRows = 3;
 /** Terminal toolbar key height in CSS pixels: below the minimum a key is too small to hit, above the maximum two rows crowd a phone's screen. */
 export const toolbarKeyHeights = {min: 28, max: 56, step: 2, default: 32} as const;
@@ -114,8 +115,8 @@ export const defaults: Preferences = {
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
-  // Two full rows of nine: the arrows form an inverted T under Home, Up and End, and the terminal's More key joins the second row ahead of them.
-  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "left", "down", "right"], snippets: [],
+  // Two full rows of nine: the arrows form an inverted T under Home, Up and End. Find, Copy and the saved snippets are on the pages after the keys.
+  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter", "left", "down", "right"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "auto", right: "auto", up: "auto", down: "auto"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none", pinch: "auto", pullShallow: "auto", pullDeep: "auto"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };

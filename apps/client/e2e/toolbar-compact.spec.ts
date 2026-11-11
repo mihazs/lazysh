@@ -1,6 +1,5 @@
 import {expect,test,type Locator,type Page,type TestInfo} from '@playwright/test';
 import {installLocalTerminal} from './fixtures/localTerminal';
-import {openMore,pressMore} from './fixtures/toolbarMore';
 
 const oldDefault=['esc','ctrl','meta','shift','tab','paste','attach','left','up','down','right','c','d'];
 
@@ -24,14 +23,14 @@ const names=(row:Locator)=>row.getByRole('button').evaluateAll(buttons=>buttons.
 const boxes=async(row:Locator)=>Promise.all((await row.getByRole('button').all()).map(async button=>(await button.boundingBox())!));
 const press=(page:Page,testInfo:TestInfo,key:Locator)=>testInfo.project.name==='phone'?key.tap():key.click();
 
-test('the default toolbar is two fixed rows of equal keys that show every key at once, with the arrows in an inverted T',async({page},testInfo)=>{
+test('the default toolbar is two fixed rows of equal keys that show every key of the keys page at once, with the arrows in an inverted T',async({page},testInfo)=>{
   const keys=await openToolbar(page,testInfo);
   const rows=keys.locator('.terminal-keys-row');
   await expect(rows).toHaveCount(2);
   expect(await names(rows.nth(0))).toEqual(['Toggle keyboard','Attach','esc','tab','paste','/','Home','Arrow up','End']);
-  expect(await names(rows.nth(1))).toEqual(['Shift','ctrl','Alt','c','d','More keys','Arrow left','Arrow down','Arrow right']);
-  // No pages, no page indicators and nothing to scroll: every key is on screen.
-  await expect(keys.getByRole('tablist')).toHaveCount(0);
+  expect(await names(rows.nth(1))).toEqual(['Shift','ctrl','Alt','c','d','enter','Arrow left','Arrow down','Arrow right']);
+  // The keys page is the first of the pages and nothing on it scrolls: every key is on screen.
+  await expect(keys.getByRole('group',{name:'Toolbar pages',exact:true}).locator('[aria-current]')).toHaveAccessibleName('Keys page');
   for(const row of await rows.all()){
     expect(await row.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
     for(const button of await row.getByRole('button').all())await expect(button).toBeInViewport({ratio:1});
@@ -44,44 +43,11 @@ test('the default toolbar is two fixed rows of equal keys that show every key at
   expect(first[0].height).toBeLessThanOrEqual(34);
   // Arrow keys form an inverted T: Up sits over Down, Home over Left and End over Right.
   for(const [above,below] of [[6,6],[7,7],[8,8]])expect(Math.abs(first[above].x-second[below].x)).toBeLessThanOrEqual(1);
-  // The whole toolbar is far shorter than two 44px rows with an indicator row.
-  expect((await keys.boundingBox())!.height).toBeLessThanOrEqual(80);
+  // The whole toolbar is a 1px border, two 32px rows, a 3px gap and the padding, page indicator included: the same 74px as before the pages.
+  expect((await keys.boundingBox())!.height).toBe(74);
   await page.screenshot({path:testInfo.outputPath('compact-toolbar.png')});
   for(const name of ['esc','Home','End','Arrow up','Arrow down','Arrow left','Arrow right'])await press(page,testInfo,keys.getByRole('button',{name,exact:true}));
   await expect.poll(()=>writes(page)).toEqual(['\x1b','\x1b[H','\x1b[F','\x1b[A','\x1b[B','\x1b[D','\x1b[C']);
-});
-
-test('Find, Copy and the saved snippets and chords stay reachable behind the More key',async({page},testInfo)=>{
-  const keys=await openToolbar(page,testInfo,{snippets:[{label:'Greet',text:'echo snippet'}],chords:[{label:'Mark',keys:'text:MORE_MARK'}]});
-  const more=keys.getByRole('button',{name:'More keys',exact:true});
-  await expect(more).toHaveAttribute('aria-expanded','false');
-  await expect(page.getByRole('group',{name:'More keys',exact:true})).toHaveCount(0);
-  const list=await openMore(page);
-  await expect(more).toHaveAttribute('aria-expanded','true');
-  await expect(list.getByRole('button')).toHaveText(['Find','Copy','Greet','Mark']);
-  await page.screenshot({path:testInfo.outputPath('compact-toolbar-more.png')});
-  // The list opens over the terminal, so the toolbar itself keeps its height.
-  expect((await keys.boundingBox())!.height).toBeLessThanOrEqual(80);
-  // Escape closes it for a keyboard user on the toolbar; in the terminal it stays the terminal's key.
-  await page.locator('.terminal-canvas .xterm-helper-textarea').focus();
-  await page.keyboard.press('Escape');
-  await expect(list).toBeVisible();
-  await more.focus();
-  await page.keyboard.press('Escape');
-  await expect(list).toHaveCount(0);
-  // A press outside the toolbar closes the list as well.
-  await openMore(page);
-  await page.locator('.terminal-canvas').dispatchEvent('pointerdown',{pointerId:7,pointerType:'mouse',button:0});
-  await expect(list).toHaveCount(0);
-  await pressMore(page,'Mark');
-  await expect.poll(()=>writes(page)).toEqual(['\x1b','MORE_MARK']);
-  await expect(list).toHaveCount(0);
-  await pressMore(page,'Greet');
-  await expect(page.locator('.terminal-compose textarea')).toHaveValue('echo snippet');
-  await expect(list).toHaveCount(0);
-  await page.getByRole('button',{name:'Close composer',exact:true}).click();
-  await pressMore(page,'Find');
-  await expect(page.locator('.terminal-search input')).toBeVisible();
 });
 
 test('a saved layout keeps every key: the old default moves to the new grid and a wide row scrolls instead of dropping keys',async({page},testInfo)=>{
@@ -94,7 +60,7 @@ test('a saved layout keeps every key: the old default moves to the new grid and 
   const row=keys.locator('.terminal-keys-row');
   await expect(row).toHaveCount(1);
   const all=await names(row);
-  expect(all).toEqual(expect.arrayContaining(['esc','tab','ctrl','Alt','Shift','enter','backspace','Home','End','PageUp','PageDown','Insert','Delete','F1','F6','More keys']));
+  expect(all).toEqual(expect.arrayContaining(['esc','tab','ctrl','Alt','Shift','enter','backspace','Home','End','PageUp','PageDown','Insert','Delete','F1','F6']));
   // On a phone the row is wider than the screen, so it scrolls; its last key is reachable either way.
   if(testInfo.project.name==='phone')expect(await row.evaluate(node=>node.scrollWidth>node.clientWidth)).toBe(true);
   const last=keys.getByRole('button',{name:'F6',exact:true});

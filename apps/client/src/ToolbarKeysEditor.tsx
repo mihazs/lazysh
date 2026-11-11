@@ -1,11 +1,11 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {createPortal} from "react-dom";
-import {Ellipsis, Plus, Trash2, X} from "lucide-react";
+import {Plus, Trash2, X} from "lucide-react";
 import {toolbarIcons} from "./toolbarIcons";
 import {t} from "./i18n/core";
 import {discreteGestureActions, maxToolbarRows, toolbarFromRows, toolbarKeyHeights, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarKeys, toolbarRows, type GestureAction, type Preferences, type ToolbarKey} from "./preferences";
 import GestureBindingField from "./GestureBindingField";
-import {findToolbarKey, placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarCells, toolbarStepSlot, type ToolbarRows, type ToolbarSlot, type ToolbarStep} from "./toolbarLayout";
+import {findToolbarKey, placeToolbarKey, removeToolbarKey, resizeToolbarRows, toolbarStepSlot, type ToolbarRows, type ToolbarSlot, type ToolbarStep} from "./toolbarLayout";
 import "./ToolbarKeysEditor.css";
 
 type Source = "row" | "palette";
@@ -287,8 +287,8 @@ export default function ToolbarKeysEditor({preferences, update}: {preferences: P
     <figure className="toolbar-preview">
       <figcaption>{t("preferencesToolbarPreview")}</figcaption>
       <div className="toolbar-preview-keys" aria-hidden="true" style={{"--terminal-key-height": `${keyHeight}px`} as CSSProperties}>
-        {toolbarCells(preview).map((row, index) => <div key={index} className="toolbar-preview-row" data-empty={!preview[index].length && index !== preview.length - 1 || undefined}>
-          {row.map(key => key === "more" ? <span key={key} className="toolbar-preview-fixed"><Ellipsis size={14} aria-hidden="true" /></span> : <span key={key} data-preview-key={key}>{terminalFace(key)}</span>)}
+        {preview.map((row, index) => <div key={index} className="toolbar-preview-row" data-empty={!row.length && index !== preview.length - 1 || undefined}>
+          {row.map(key => <span key={key} data-preview-key={key}>{terminalFace(key)}</span>)}
         </div>)}
       </div>
     </figure>
