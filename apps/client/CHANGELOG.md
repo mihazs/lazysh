@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.30.4
+
+### Patch Changes
+
+- a0b0603: Dismiss a boot-time system error dialog on the Android CI emulator before native acceptance starts, so the app window keeps focus.
+- @lazysh/account-usage@1.30.4
+  - @lazysh/common@1.30.4
+  - @lazysh/display-idle@1.30.4
+  - @lazysh/et-transport@1.30.4
+  - @lazysh/mosh-transport@1.30.4
+
 ## 1.30.3
 
 ### Patch Changes
