@@ -35,6 +35,7 @@ mod routing;
 mod session_background;
 mod sftp_stream;
 mod share;
+mod soft_keyboard;
 mod ssh;
 mod sync;
 mod terminal_input;
@@ -85,6 +86,7 @@ pub fn run() {
         .plugin(edge_gestures::init())
         .plugin(private_keyboard::init())
         .plugin(file_transfer::init())
+        .plugin(soft_keyboard::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -146,6 +148,7 @@ pub fn run() {
                 app_icons::app_icon_status,
                 app_icons::set_app_icon,
                 private_keyboard::terminal_private_keyboard,
+                soft_keyboard::soft_keyboard,
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,

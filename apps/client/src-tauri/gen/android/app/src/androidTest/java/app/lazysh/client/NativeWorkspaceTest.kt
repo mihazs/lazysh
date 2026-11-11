@@ -778,6 +778,51 @@ class NativeWorkspaceTest {
         }
     }
 
+    /**
+     * The soft-keyboard command's controller must bring Android's real keyboard up for the focused page input and
+     * take it down again, as Android itself reports it. The Rust command and the page's icon logic are covered elsewhere.
+     */
+    @Test fun softKeyboardControllerShowsAndHidesTheRealImeForAFocusedPageInput() {
+        val scenario = NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario, "soft keyboard workspace")
+        val probe = "lazysh-soft-keyboard-probe"
+        assertEquals("true", evaluate(scenario, """(()=>{const input=document.createElement('input');input.id='$probe';
+            input.style.cssText='position:fixed;top:0;left:0;width:200px;height:40px;z-index:2147483647';document.body.appendChild(input);return true})()"""))
+        fun imeVisible(): Boolean {
+            var visible = false
+            scenario.onActivity { visible = SoftKeyboard.visible(it.window) }
+            return visible
+        }
+        fun reached(expected: Boolean): Boolean {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+            while (imeVisible() != expected) {
+                if (System.nanoTime() >= deadline) return false
+                Thread.sleep(100)
+            }
+            return true
+        }
+        fun awaitIme(expected: Boolean, stage: String) =
+            assertTrue("The soft keyboard did not become ${if (expected) "visible" else "hidden"} after $stage", reached(expected))
+        try {
+            scenario.onActivity { activity ->
+                val web = requireNotNull(webView(activity.window.decorView))
+                if (!web.hasFocus()) assertTrue("Native WebView focus was denied", web.requestFocus())
+            }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "#$probe")).perform(webClick())
+            // Whether the tap itself raised the keyboard varies by emulator image; the controller must reach each state either way.
+            scenario.onActivity { SoftKeyboard.set(it.window, true) }
+            // An emulator image with a hardware keyboard and no on-screen one never shows an IME: nothing to verify there.
+            org.junit.Assume.assumeTrue("This device shows no on-screen keyboard", reached(true))
+            scenario.onActivity { SoftKeyboard.set(it.window, false) }
+            awaitIme(false, "the controller hid it")
+            scenario.onActivity { SoftKeyboard.set(it.window, true) }
+            awaitIme(true, "the controller showed it again")
+        } finally {
+            scenario.onActivity { SoftKeyboard.set(it.window, false) }
+            evaluate(scenario, "(()=>{document.getElementById('$probe')?.remove();return true})()")
+        }
+    }
+
     /** Reconnect pacing reads the WebView's network signal; it must follow Android connectivity both ways. */
     @Test fun webViewNetworkSignalFollowsAndroidConnectivity() {
         val scenario = NativeActivityFixture.scenario

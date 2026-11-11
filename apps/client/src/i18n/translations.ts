@@ -481,6 +481,8 @@ const translations = {
   bottomMenuHideToolbar: ["Ocultar barra de teclas", "Ocultar barra de teclas"],
   bottomMenuShowKeyboard: ["Mostrar teclado", "Mostrar teclado"],
   bottomMenuHideKeyboard: ["Ocultar teclado", "Ocultar teclado"],
+  terminalShowKeyboard: ["Mostrar teclado", "Mostrar teclado"],
+  terminalHideKeyboard: ["Ocultar teclado", "Ocultar teclado"],
   terminalAttach: ["Anexar", "Adjuntar"],
   terminalModifiersUnavailable: ["Modificadores virtuais indisponíveis nesta versão do terminal.", "Los modificadores virtuales no están disponibles en esta versión del terminal."],
   terminalControlLocked: ["Control está travado. Toque em ctrl para liberá-lo.", "Control está bloqueado. Toca ctrl para liberarlo."],
