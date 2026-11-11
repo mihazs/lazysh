@@ -1,14 +1,16 @@
 import {randomBytes,randomInt} from 'node:crypto';
-import {join,resolve} from 'node:path';
-import {OwnedProcess} from './androidSsh';
+import {dirname,join,resolve} from 'node:path';
+import {OwnedProcess,reportInstrumentationFailures} from './androidSsh';
 
 export type BiometricCommand=(stage:string,program:string,args:string[],milliseconds:number)=>Promise<string>;
 export type BiometricInstrumentation={finished:()=>boolean;result:Promise<unknown>;stop:()=>Promise<void>};
 export type BiometricSecrets={nonce:string;pin:string};
 const execute:BiometricCommand=(stage,program,args,milliseconds)=>new OwnedProcess(program,args).finish(stage,milliseconds);
-const instrument=(program:string,args:string[]):BiometricInstrumentation=>{
+export const instrument=(program:string,args:string[]):BiometricInstrumentation=>{
   const owned=new OwnedProcess(program,args);let finished=false;
-  const result=owned.finish('actual Android enrolled-fingerprint vault instrumentation',600_000).finally(()=>{finished=true;});
+  const result=owned.finish('actual Android enrolled-fingerprint vault instrumentation',600_000)
+    .catch(async error=>{await reportInstrumentationFailures(join(dirname(program),'app/build/outputs/androidTest-results/biometric-vault'));throw error;})
+    .finally(()=>{finished=true;});
   result.catch(()=>{});
   return {finished:()=>finished,result,stop:()=>owned.stop()};
 };

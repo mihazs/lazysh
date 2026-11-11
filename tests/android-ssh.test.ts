@@ -11,7 +11,7 @@ import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixt
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -669,6 +669,51 @@ test.each([
   expect(selected).toEqual(expected);
   expect(flags.unclassified).toBe(expected.length===0);
   expect(JSON.stringify(flags)).not.toContain('private-secret');
+});
+
+const junit=(...cases:string[])=>`<?xml version='1.0' encoding='UTF-8' ?>\n<testsuites tests="${cases.length}" failures="${cases.length}">\n  <testsuite name="app.lazysh.client.NativeWorkspaceTest">\n${cases.join('')}  </testsuite>\n</testsuites>\n`;
+const failedCase=(name:string,message:string,...frames:string[])=>`    <testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" time="1.0">\n      <failure>${message}\n${frames.map(frame=>`at ${frame}\n`).join('')}</failure>\n    </testcase>\n`;
+
+test('instrumentation failures name the failed case, its message and the first app frame from a JUnit file',()=>{
+  const xml=junit('    <testcase name="passes" classname="app.lazysh.client.NativeWorkspaceTest" time="1.0"/>\n',
+    failedCase('ownedSshDpadPanThroughRealUi','java.lang.AssertionError: Original trusted contact: receipt={&quot;trusted&quot;:false} &lt;ok&gt;','org.junit.Assert.fail(Assert.java:89)',
+      'app.lazysh.client.NativeWorkspaceTest.verifyPastBottomKeyboardDismiss$stroke$received(NativeWorkspaceTest.kt:5243)','app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)'));
+  expect(instrumentationFailures(xml)).toEqual([{test:'ownedSshDpadPanThroughRealUi',
+    failure:'java.lang.AssertionError: Original trusted contact: receipt={"trusted":false} <ok>',
+    at:'at app.lazysh.client.NativeWorkspaceTest.verifyPastBottomKeyboardDismiss$stroke$received(NativeWorkspaceTest.kt:5243)'}]);
+  // An error raised by a class-level @BeforeClass has no test name; its frame is still named.
+  expect(instrumentationFailures(junit(failedCase('null','java.lang.IllegalStateException: Fingerprint enrollment did not complete after 314 touches',
+    'app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)')))).toEqual([{test:'null',
+    failure:'java.lang.IllegalStateException: Fingerprint enrollment did not complete after 314 touches',
+    at:'at app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)'}]);
+});
+
+test('instrumentation failures are bounded, printable and mask nonces, and ignore text that is not a failed case',()=>{
+  const many=instrumentationFailures(junit(...Array.from({length:6},(_,index)=>failedCase(`case${index}`,`java.lang.AssertionError: ${'x'.repeat(900)}`))));
+  expect(many.map(item=>item.test)).toEqual(['case0','case1','case2','case3']);
+  expect(many.every(item=>item.failure.length===400)).toBe(true);
+  const masked=instrumentationFailures(junit(failedCase('masked',`java.lang.AssertionError: nonce ${'0123456789abcdef'.repeat(2)} \u001b[31mred\u0007`)))[0];
+  expect(masked.failure).toBe('java.lang.AssertionError: nonce <nonce> ?[31mred?');
+  expect(instrumentationFailures('private-secret\n<testcase name="skipped"><skipped/></testcase>\n')).toEqual([]);
+  expect(instrumentationFailures('')).toEqual([]);
+});
+
+test('the failure report reads every JUnit file below its results directory and never throws',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-junit-report-'));
+  const logged=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await reportInstrumentationFailures(join(directory,'absent'));
+    await reportInstrumentationFailures(directory);
+    expect(logged).not.toHaveBeenCalled();
+    const device=join(directory,'connected/debug/flavors/universal');
+    await mkdir(device,{recursive:true});
+    await writeFile(join(device,'TEST-device-_app-universal.xml'),junit(failedCase('ownedSshUi','java.lang.AssertionError: boom','app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)')));
+    await writeFile(join(device,'TEST-huge.xml'),junit(failedCase('oversized','x'.repeat(300_000))));
+    await writeFile(join(device,'notes.txt'),junit(failedCase('ignored','not a result file')));
+    await reportInstrumentationFailures(directory);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(logged).toHaveBeenCalledWith('Owned instrumentation failure '+JSON.stringify([{test:'ownedSshUi',failure:'java.lang.AssertionError: boom',at:'at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4005)'}]));
+  } finally {logged.mockRestore();await rm(directory,{recursive:true,force:true});}
 });
 
 const nonce='a'.repeat(32);
@@ -1522,11 +1567,11 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const end=source.indexOf('  } finally {\n    await moshWitness?.stop();',start);
   expect(start>0 && end>start).toBe(true);
   const body=source.slice(start+'  } catch(error) {'.length,end);
-  const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
+  const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
-  const logger=spyOn(console,'error').mockImplementation(()=>{});
+  const logger=spyOn(console,'error').mockImplementation(()=>{}),reported:string[]=[];
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
     for(const mode of ['available','missing','write-failure','observer-failure','non-ime']) {
@@ -1534,9 +1579,11 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
       const context={root,recorded:false,imeDirectory:mode==='missing'?join(directory,'absent'):imeDirectory,ime,fixture:{nonce,port:1},failure,mkdir,join,
         observeImeReceiverWire:async(path:string,value:string)=>{observations++;if(mode==='observer-failure')throw new Error('private-observer');return observeImeReceiverWire(path,value);},
         hostAdbServerIdentity:async()=>({}),packageExitInfo:async()=>({}),emulatorContinuity:async()=>({}),
-        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
+        timing:{gradleStartMs:0},gradleFailureClasses:()=>({}),reportInstrumentationFailures:async(results:string)=>{reported.push(results);},compareEmulatorContinuity:()=>({}),compareHostAdbServer:()=> 'same',
         writeFile:async(...args:Parameters<typeof writeFile>)=>{if(mode==='write-failure')throw new Error('private-receipt');return writeFile(...args);}};
       expect(await run(context).catch(error=>error)).toBe(failure);expect(observations).toBe(ime?1:0);
+      // The failing case is named from this mode's own results directory, before any observation that could itself fail.
+      expect(reported.splice(0)).toEqual([join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui')]);
       if(['write-failure','observer-failure'].includes(mode))continue;
       const receipt=JSON.parse(await readFile(join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',ime?'ssh-ime-ui':'ssh-ui','package-exit.json'),'utf8'));
       if(mode==='non-ime')expect(Object.hasOwn(receipt,'imeWire')).toBe(false);
