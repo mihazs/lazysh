@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.30.0
+
+### Minor Changes
+
+- f39e536: Show each detected multiplexer's version with a Supported or Limited badge, hide Jump To on tmux older than 3.4, import synced hosts whose default multiplexer kind is unknown, and report non-POSIX host shells explicitly.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.30.0
+  - @lazysh/common@1.30.0
+  - @lazysh/display-idle@1.30.0
+  - @lazysh/et-transport@1.30.0
+  - @lazysh/mosh-transport@1.30.0
+
 ## 1.29.3
 
 ### Patch Changes
