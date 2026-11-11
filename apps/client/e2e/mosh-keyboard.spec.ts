@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {historyLines,historyView,mountHistory,settle} from './fixtures/terminalHistory';
+import {openMoshApp} from './fixtures/moshApp';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
@@ -103,4 +104,39 @@ for(const mosh of [false,true])test(`${mosh?'Mosh':'SSH'}: a soft keyboard keeps
   for(const text of [newest,'TYPED_WITH_KEYBOARD'])expect(await shown(page,text)).toBe(true);
   expect(await page.locator('.terminal-canvas .xterm-screen').evaluate(node=>(node as HTMLElement).style.transform)).toBe('');
   expect(await page.evaluate(()=>window.ownedHistory.errors)).toEqual([]);
+});
+
+/** The agent screenshot: a prompt box whose bottom border is the last row, in the real workspace with its toolbar and, where shown, its status bar. */
+test('the actual workspace keeps an agent prompt box and its bottom border above the toolbar and inside the visible viewport',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Only a touch device opens a soft keyboard.');
+  // A responsive agent: transcript on top, then its prompt box ending on the last row.
+  let frame=0;
+  const screen=(cols:number,rows:number)=>{
+    const tail=['BOX_TOP',`PROMPT_LINE${'\u2588'}`,'BOX_BOTTOM'],id=++frame;
+    const lines=Array.from({length:rows-tail.length},(_,row)=>`TRANSCRIPT_${row}`).concat(tail);
+    return Array.from(Buffer.from(`\x1b]7777;lazysh-mosh;1;begin;${id};${cols};${rows}\x1b\\\x1b[r\x1b[0m\x1b[H\x1b[2J${lines.map(line=>line+'\x1b[K').join('\r\n')}\x1b[${rows-1};12H\x1b]7777;lazysh-mosh;1;end;${id}\x1b\\`));
+  };
+  await openMoshApp(page,'Mosh keyboard fixture',screen(40,12),screen);
+  await expect(page.locator('.terminal-canvas .xterm-screen')).toContainText('BOX_BOTTOM');
+  const view=()=>page.evaluate(()=>{
+    const rows=[...document.querySelectorAll('.terminal-canvas .xterm-rows > div')],bottom=(text:string)=>rows.find(row=>row.textContent?.includes(text))?.getBoundingClientRect().bottom??null;
+    const viewport=window.visualViewport!,sent=window.nativeMoshApp.resizes;
+    return {rows:rows.length,sent:sent.at(-1)?.rows,box:bottom('BOX_BOTTOM'),prompt:bottom('PROMPT_LINE'),
+      below:document.querySelector('.terminal-keys')?.getBoundingClientRect().top??viewport.offsetTop+viewport.height,footer:document.querySelector('.workspace-footer')!.getBoundingClientRect().bottom,visible:viewport.offsetTop+viewport.height};
+  });
+  const fits=(state:Awaited<ReturnType<typeof view>>)=>state.box!==null&&state.prompt!==null&&state.box<=state.below+0.5&&state.footer<=state.visible+0.5&&state.sent===state.rows;
+  await expect.poll(async()=>fits(await view())).toBe(true);
+  const before=await view(),size=page.viewportSize()!;
+  // The soft keyboard resizes the WebView, as Android's adjustResize does.
+  await page.setViewportSize({width:size.width,height:size.height-330});
+  await expect.poll(async()=>(await view()).rows).toBeLessThan(before.rows);
+  await expect.poll(async()=>fits(await view())).toBe(true);
+  // Hiding the toolbar gives its rows to the terminal, and the remote is told.
+  const covered=await view();
+  await page.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
+  await expect.poll(async()=>(await view()).rows).toBeGreaterThan(covered.rows);
+  await expect.poll(async()=>fits(await view())).toBe(true);
+  await page.setViewportSize(size);
+  await expect.poll(async()=>(await view()).rows).toBeGreaterThan(before.rows);
+  await expect.poll(async()=>fits(await view())).toBe(true);
 });

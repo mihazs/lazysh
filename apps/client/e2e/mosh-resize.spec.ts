@@ -1,5 +1,6 @@
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
+import {openMoshApp} from './fixtures/moshApp';
 import type {Terminal} from '@xterm/xterm';
 import {readFileSync} from 'node:fs';
 import type {MoshResizeController} from '../src/moshResize';
@@ -203,31 +204,7 @@ test('a fresh protected Pane subscriber receives its first same-size measurement
 
 
 test('actual App installs Mosh framing before early output and fits only remote intent across viewport and Compose changes',async({page})=>{
-  await installNativeBridge(page,Object.assign({reason:'Synthetic Mosh rendering fixture',generation:'1'},{supported:true,enabled:true,nonce:'b'.repeat(64)}));
-  await page.addInitScript(first=>{
-    const state={resizes:[] as {cols:number;rows:number}[],writes:[] as string[],acknowledged:0,emit:(_bytes:number[])=>{},closed:()=>{}};
-    Object.assign(window,{nativeMoshApp:state});
-    window.nativeFixtureInvoke=async(command,args)=>{
-      if(command==='list_hosts')return [{id:'mosh-host',name:'Mosh frame fixture',hostname:'fixture.invalid',username:'owned',port:22,transport:'mosh'}];
-      if(command==='local_capability')return {available:false,reason:'Synthetic browser fixture'};
-      if(command==='transport_capabilities')return {mosh:true,et:false};
-      if(command==='has_credentials')return false;
-      if(command==='connect')return {sessionId:'ssh-control'};
-      if(command==='connect_mosh'){
-        const channel=args.events as {onmessage:(event:unknown)=>void};
-        state.emit=bytes=>channel.onmessage({type:'data',data:bytes});state.closed=()=>channel.onmessage({type:'closed'});
-        state.emit(first);return {sessionId:'mosh-child'};
-      }
-      if(command==='resize'){if(args.sessionId==='mosh-child')state.resizes.push({cols:Number(args.cols),rows:Number(args.rows)});return;}
-      if(command==='ack_output'){if(args.sessionId==='mosh-child')state.acknowledged+=Number(args.bytes);return;}
-      if(command==='write_stdin'){if(args.sessionId==='mosh-child')state.writes.push(String(args.data));return;}
-      if(['disconnect','cancel_credential_auth'].includes(command))return;
-      if(command.startsWith('plugin:event|'))return 1;
-      throw new Error('Unexpected synthetic Mosh fixture command');
-    };
-  },bytes(captured.frames[0].bytesHex));
-  await page.goto('/');if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();await page.getByRole('button',{name:'Connect to Mosh frame fixture',exact:true}).click();
-  await page.getByLabel('Password',{exact:true}).fill('synthetic-only');await page.getByRole('button',{name:'Connect',exact:true}).click();
+  await openMoshApp(page,'Mosh frame fixture',bytes(captured.frames[0].bytesHex));
   const rows=page.locator('.terminal-canvas .xterm-rows > div');
   await expect(rows).toHaveCount(12);await expect(page.locator('.xterm-screen')).toContainText('OWNED_ROW_11');
   const state=()=>page.evaluate(()=>Reflect.get(window,'nativeMoshApp') as {resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number});
