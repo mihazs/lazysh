@@ -4,7 +4,7 @@ import { checkPasteSize, readClipboardText, useClipboardPlatform } from './devic
 import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { FitAddon } from "@xterm/addon-fit";
+import { TerminalFitAddon } from "./terminalFit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Ellipsis, Keyboard, KeyboardOff, Lock, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
@@ -654,7 +654,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     const element = container.current;
     if (!element) return;
     const terminal = session.terminal;
-    const addon = new FitAddon();
+    const addon = new TerminalFitAddon();
     terminal.loadAddon(addon);
     const links = new WebLinksAddon((_event, uri) => {
       const url = terminalWebUrl(uri);
