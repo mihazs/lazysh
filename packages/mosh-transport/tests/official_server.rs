@@ -1063,14 +1063,31 @@ struct Server {
 }
 impl Server {
     fn start() -> Self {
+        Self::start_command(&["sh", "-c", "printf 'READY\n'; while IFS= read -r line; do case \"$line\" in size) set -- $(stty size); printf 'SIZE_ROWS_%s_COLS_%s\n' \"$1\" \"$2\";; quit) exit;; *) printf 'RECEIVED_%s_END\n' \"$line\";; esac; done"])
+    }
+    fn start_command(command: &[&str]) -> Self {
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let port = socket.local_addr().unwrap().port();
         drop(socket);
         let output = Command::new("mosh-server")
-            .args(["new", "-i", "127.0.0.1", "-p", &port.to_string(), "-c", "256", "--", "sh", "-c", "printf 'READY\n'; while IFS= read -r line; do case \"$line\" in size) set -- $(stty size); printf 'SIZE_ROWS_%s_COLS_%s\n' \"$1\" \"$2\";; quit) exit;; *) printf 'RECEIVED_%s_END\n' \"$line\";; esac; done"])
-            .env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8").env("TERM", "xterm-256color")
+            .args([
+                "new",
+                "-i",
+                "127.0.0.1",
+                "-p",
+                &port.to_string(),
+                "-c",
+                "256",
+                "--",
+            ])
+            .args(command)
+            .env("LANG", "C.UTF-8")
+            .env("LC_ALL", "C.UTF-8")
+            .env("TERM", "xterm-256color")
             .env("MOSH_SERVER_NETWORK_TMOUT", "20")
-            .stdin(Stdio::null()).output().expect("requires official mosh-server on PATH");
+            .stdin(Stdio::null())
+            .output()
+            .expect("requires official mosh-server on PATH");
         assert!(output.status.success(), "mosh-server fixture did not start");
         let text = String::from_utf8(output.stdout).unwrap();
         let words: Vec<_> = text
@@ -1111,6 +1128,69 @@ fn session(label: &str) {
         format!("127.0.0.1:{}", server.port).parse().unwrap(),
         label,
     );
+}
+#[test]
+#[ignore = "requires official mosh-server and python3"]
+fn official_server_redraws_question_after_keyboard_resize() {
+    use lazysh_mosh_transport::Client;
+    use std::time::Duration;
+    let program = r#"import os,sys,signal,termios,tty,fcntl,struct
+fd=sys.stdin.fileno();tty.setraw(fd)
+def draw(*args):
+ r,c,_,_=struct.unpack('HHHH',fcntl.ioctl(fd,termios.TIOCGWINSZ,bytes(8)))
+ sys.stdout.write('\x1b[2J\x1b[H'+f'SIZE_{r}_{c}\r\nQUESTION?\r\nOPTION_YES\r\nOPTION_NO\r\nINPUT>');sys.stdout.flush()
+signal.signal(signal.SIGWINCH,draw);draw()
+answers=0
+while True:
+ b=os.read(fd,1)
+ if b==b'y':answers+=1;sys.stdout.write('\r\nANSWER_RECEIVED');sys.stdout.flush()
+ if b==b'v':sys.stdout.write(f'\r\nANSWER_COUNT_{answers}');sys.stdout.flush()
+ if b==b'q':break
+"#;
+    let server = Server::start_command(&["python3", "-c", program]);
+    let mut client = Client::new(
+        &server.key,
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+        60,
+        20,
+    )
+    .unwrap();
+    let wait = |client: &mut Client, marker: &str| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut bytes = Vec::new();
+        while std::time::Instant::now() < deadline {
+            bytes.extend(client.poll().unwrap().bytes);
+            if bytes
+                .windows(marker.len())
+                .any(|part| part == marker.as_bytes())
+            {
+                return bytes;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("fixture did not render {marker}");
+    };
+    wait(&mut client, "SIZE_20_60");
+    client.resize(60, 8).unwrap();
+    let shrunk = wait(&mut client, "SIZE_8_60");
+    for marker in ["QUESTION?", "OPTION_YES", "OPTION_NO", "INPUT>"] {
+        assert!(shrunk
+            .windows(marker.len())
+            .any(|part| part == marker.as_bytes()));
+    }
+    client.write(b"y").unwrap();
+    wait(&mut client, "ANSWER_RECEIVED");
+    let deadline = std::time::Instant::now() + Duration::from_millis(250);
+    while std::time::Instant::now() < deadline {
+        client.poll().unwrap();
+        thread::sleep(Duration::from_millis(5));
+    }
+    client.write(b"v").unwrap();
+    wait(&mut client, "ANSWER_COUNT_1");
+    client.resize(60, 20).unwrap();
+    wait(&mut client, "SIZE_20_60");
+    client.write(b"q").unwrap();
+    client.shutdown().unwrap();
 }
 #[test]
 #[ignore = "requires official mosh-server; run cargo test --test official_server -- --ignored"]
