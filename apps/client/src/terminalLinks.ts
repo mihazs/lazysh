@@ -97,6 +97,30 @@ function trimmed(text: string): string {
   return text.slice(0, end);
 }
 
+/**
+ * The text of glyphs `[from, to)` of `lines[index]`, continued onto the following lines while it runs to the end of
+ * its row and the next line holds the rest of it (see `continuation`). Characters outside the BMP take two UTF-16
+ * units, each pointing at its glyph.
+ */
+export function joinWrapped(lines: Logical[], index: number, cols: number, from: number, to: number) {
+  const logical = lines[index], units: Glyph[] = [];
+  let text = '';
+  const push = (source: Logical, a: number, b: number) => {
+    for (const glyph of source.glyphs.slice(a, b)) { text += glyph.text; units.push(...Array.from(glyph.text, () => glyph)); }
+  };
+  push(logical, from, to);
+  const startColumn = logical.glyphs[from].x;
+  let current = logical, cursor = index, open = to - 1 === logical.tail.end;
+  while (open && lines[cursor + 1]) {
+    const next = lines[cursor + 1], stop = continuation(text, startColumn, cols, current, next);
+    if (stop === undefined) break;
+    push(next, next.head.first, stop);
+    open = stop - 1 === next.tail.end;
+    current = next; cursor++;
+  }
+  return {text, units};
+}
+
 /** The logical lines around 1-based buffer line `line`: whole soft-wrapped lines, a few rows either side. */
 export function logicalWindow(rows: Rows, cols: number, line: number): Logical[] {
   const y = line - 1;
@@ -117,23 +141,8 @@ export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
   lines.forEach((logical, index) => {
     for (const match of logical.text.matchAll(URL_RE)) {
       if (match.index > 0 && /[A-Za-z0-9]/.test(logical.text[match.index - 1])) continue;
-      // Characters outside the BMP take two UTF-16 units; each unit points at its glyph.
-      const units: Glyph[] = [];
-      let text = '', last = logical.offset.findIndex(offset => offset >= match.index + match[0].length);
-      const push = (source: Logical, a: number, b: number) => {
-        for (const glyph of source.glyphs.slice(a, b)) { text += glyph.text; units.push(...Array.from(glyph.text, () => glyph)); }
-      };
-      if (last < 0) last = logical.glyphs.length;
-      push(logical, logical.offset.indexOf(match.index), last);
-      const urlColumn = units[0].x;
-      let current = logical, cursor = index, open = last - 1 === logical.tail.end;
-      while (open && lines[cursor + 1]) {
-        const next = lines[cursor + 1], stop = continuation(text, urlColumn, cols, current, next);
-        if (stop === undefined) break;
-        push(next, next.head.first, stop);
-        open = stop - 1 === next.tail.end;
-        current = next; cursor++;
-      }
+      const last = logical.offset.findIndex(offset => offset >= match.index + match[0].length);
+      const {text, units} = joinWrapped(lines, index, cols, logical.offset.indexOf(match.index), last < 0 ? logical.glyphs.length : last);
       const url = trimmed(text);
       if (!/^https?:\/\/[^/?#]/i.test(url)) continue;
       const range = unitRange(units, 0, url.length);
