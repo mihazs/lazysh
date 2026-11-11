@@ -144,6 +144,15 @@ impl Host {
             Self::Local(host) => host.blocking(lease, move || local_fs::list(&path)).await,
         }
     }
+    /// The login home directory: SFTP's canonical form of its starting directory over
+    /// SSH, the desktop user's home for a local session. Always absolute.
+    pub(crate) async fn home(&self, lease: &AccessLease) -> Result<String> {
+        match self {
+            Self::Remote(session) => ssh::sftp_home(session, lease).await,
+            #[cfg(desktop)]
+            Self::Local(host) => host.blocking(lease, local_fs::home).await,
+        }
+    }
     /// UTF-8 text preview limited to 1 MiB.
     pub(crate) async fn read_text(&self, lease: &AccessLease, path: String) -> Result<String> {
         match self {
@@ -401,6 +410,12 @@ mod local_fs {
             ));
         }
         Ok(path)
+    }
+    pub(super) fn home() -> Result<String> {
+        crate::local::home_dir()
+            .and_then(|home| home.into_os_string().into_string().ok())
+            .ok_or_else(|| SshError::new("home_unavailable", "The home directory is unavailable"))
+            .and_then(ssh::absolute_home)
     }
     pub(super) fn list(path: &str) -> Result<Vec<FileEntry>> {
         let mut entries = Vec::new();
