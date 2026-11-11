@@ -199,6 +199,7 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }
 

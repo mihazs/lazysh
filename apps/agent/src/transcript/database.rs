@@ -119,6 +119,7 @@ pub fn read_database_page(
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }
 

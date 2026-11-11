@@ -106,6 +106,19 @@ describe('a bound conversation with a live watch',()=>{
     await send(delta(1,2,[],{activity:'waiting'}));expect(screen.getByText('Agent is waiting for your answer')).toBeTruthy();
     await send(delta(1,3,[],{activity:null}));expect(screen.queryByText(/Agent is (working|waiting)/)).toBeNull();
   });
+  it('passes the session facts of the stream to the header and keeps them when a delta carries none',async()=>{
+    const sessions:unknown[]=[];
+    render(<ChatPanel sessionId="host" shown bound={{agent:'claude',path:'/host/session.jsonl'}} timeline onSession={session=>sessions.push(session)}/>);
+    await advance(0);await send(hello);
+    await send({...snapshot(1,1,first.map(message=>entry(message))),session:{model:'claude-opus-5-5',mode:'plan',usage:{usedTokens:5}}});
+    expect(sessions.at(-1)).toEqual({model:'claude-opus-5-5',mode:'plan',usage:{usedTokens:5}});
+    await send(delta(1,2,[],{session:{model:'claude-opus-5-5',mode:'auto'}}));
+    expect(sessions.at(-1)).toEqual({model:'claude-opus-5-5',mode:'auto'});
+    await send(delta(1,3,[entry(text('a2','assistant','More'))]));
+    expect(sessions.at(-1)).toEqual({model:'claude-opus-5-5',mode:'auto'});
+    await send(delta(1,4,[],{session:null}));
+    expect(sessions.at(-1)).toBeUndefined();
+  });
   it('closes the channel when the view is hidden and opens a new one when it is shown again',async()=>{
     const view=render_();await advance(0);await goLive();
     view.rerender({shown:false});await advance(0);

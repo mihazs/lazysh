@@ -13,6 +13,8 @@ import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
 import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
 import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
+import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
+import type {AgentSessionInfo} from './agentSession';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -81,6 +83,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const focusKey=focus?.key;
   // Focus moved to another pane, tab or workspace: a hand-picked conversation and an open list no longer apply.
   useEffect(()=>{if(herdrSession && focusKey!==undefined){setPicked(previous=>previous && previous.focusKey!==focusKey?undefined:previous);setChoosing(false);}},[herdrSession,focusKey]);
+  const [info,setInfo] = useState<AgentSessionInfo>();
   const request=useRef(0);
   const active=useRef({sessionId,shown});active.current={sessionId,shown};
   const retained = useRef<{id:string;conversation:BoundConversation} | undefined>(undefined);
@@ -195,6 +198,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
       <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
       {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
       {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
+      {reader && <AgentHeaderPills session={info}/>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
     </header>
@@ -209,6 +213,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
       {selected && !selected.linked && <p>{t('agentViewSelectedNoStage')}</p>}
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
+      {reader && <AgentSessionDetails session={info}/>}
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
@@ -237,7 +242,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} />}
     {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }

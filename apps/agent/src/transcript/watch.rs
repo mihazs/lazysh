@@ -84,6 +84,7 @@ pub struct Watcher {
     activity: Option<&'static str>,
     queued: Vec<Value>,
     work: Option<Vec<Value>>,
+    session: Option<Value>,
     seen: Option<Fingerprint>,
     located: Option<PathBuf>,
     /// Duration of the last projection; the next check waits at least three times as long.
@@ -129,6 +130,7 @@ impl Watcher {
             activity: None,
             queued: Vec::new(),
             work: None,
+            session: None,
             seen: None,
             located: None,
             cost: Duration::ZERO,
@@ -215,6 +217,8 @@ impl Watcher {
         self.queued = page.queued;
         let work_changed = self.work != page.work;
         self.work.clone_from(&page.work);
+        let session_changed = self.session != page.session;
+        self.session = page.session;
         let dropped = if rewritten || self.generation == 0 {
             None
         } else {
@@ -250,7 +254,7 @@ impl Watcher {
             Some(json!({
                 "type":"snapshot","gen":self.generation,"seq":self.sequence,
                 "entries":entries.iter().map(upsert).collect::<Vec<_>>(),
-                "activity":self.activity,"queued":self.queued,"branchId":page.branch_id,"truncated":page.truncated,
+                "activity":self.activity,"queued":self.queued,"session":self.session,"branchId":page.branch_id,"truncated":page.truncated,
                 "work":self.work,
             }))
         } else if !upserts.is_empty()
@@ -258,6 +262,7 @@ impl Watcher {
             || activity_changed
             || queued_changed
             || work_changed
+            || session_changed
         {
             self.sequence += 1;
             let mut frame = json!({
@@ -273,6 +278,9 @@ impl Watcher {
             }
             if work_changed {
                 frame["work"] = json!(self.work);
+            }
+            if session_changed {
+                frame["session"] = json!(self.session);
             }
             Some(frame)
         } else {
@@ -592,6 +600,24 @@ mod tests {
         let frames = watcher(&path, 100).poll().unwrap();
         assert!(serde_json::to_vec(&frames[0]).unwrap().len() < MAX_FRAME);
         assert!(frames[0]["entries"].as_array().unwrap().len() <= 100);
+    }
+
+    #[test]
+    fn session_changes_alone_are_sent_and_unknown_fields_stay_absent() {
+        let (_directory, path) = fixture(&chain(2));
+        let mut watch = watcher(&path, 50);
+        assert_eq!(watch.poll().unwrap()[0]["session"], Value::Null);
+        append(
+            &path,
+            &(json!({"type":"permission-mode","permissionMode":"plan"}).to_string()
+                + "\n"
+                + &json!({"type":"cost-state","totalCostUSD":1.25}).to_string()
+                + "\n"),
+        );
+        let frame = &watch.poll().unwrap()[0];
+        assert_eq!(frame["session"], json!({"mode":"plan","cost":{"usd":1.25}}));
+        assert!(frame["upserts"].as_array().unwrap().is_empty());
+        assert!(watch.poll().unwrap().is_empty());
     }
 
     #[test]

@@ -18,6 +18,7 @@ fn page(messages: Vec<Value>) -> TranscriptPage {
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     }
 }
 fn now() -> chrono::DateTime<Utc> {

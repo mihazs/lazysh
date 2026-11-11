@@ -177,8 +177,8 @@ least 3*t*, which keeps a very large transcript below about a quarter of one cor
 | Frame | Fields | Meaning |
 | --- | --- | --- |
 | `hello` | `protocol`, `agent`, `intervalMs`, `limit`, `companion` | First line. A client that does not know `protocol` stops. |
-| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `queued`, `branchId`, `truncated`, `work` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
-| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?`, `queued?`, `work?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` and `work` appear only when they changed; `null` means unknown or none. `queued` appears only when the queue changed and replaces the held list (see below). |
+| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `queued`, `session`, `branchId`, `truncated`, `work` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
+| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?`, `queued?`, `session?`, `work?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity`, `session` and `work` appear only when they changed; `null` means unknown or none. `queued` appears only when the queue changed and replaces the held list (see below). |
 | `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet conversation from a dead channel. |
 | `end` | `reason` | The source failed 20 checks in a row (about 5 s), or could not be read at all; the exit status is 1. |
 
@@ -328,6 +328,25 @@ The companion never decides that an old launch is dead: a task with no recorded 
 ### Reading the whole session
 
 `transcript --view conversation` and `herdr-conversation` read the newest `--limit` messages of the recorded branch by default. They also accept one of `--before MESSAGE_ID`, `--after MESSAGE_ID` or `--from-start` (mutually exclusive, and only with the conversation view), which cut the same branch at a message `id` instead: the messages just before or after it, or the first ones. A page is still at most `--limit` messages and 512 KiB, in order, oldest first. `truncated: true` says older messages exist before the page and `hasNewer: true` (absent when false) says newer ones exist after it, so a reader walks to either end by passing the first or last `id` it holds back in. An `id` that is not on the branch is an error, not a different page. The projection runs on every request, bounded by the same snapshot limits as before (16 MiB; up to 100,000 records for Claude, Codex and OpenCode rows, which used to stop at 10,000), so no cursor lives on the host. It works for Claude Code (across compactions), Codex and OpenCode; the Agent view holds at most 400 messages at a time and reads the rest back on demand. A companion that predates these flags rejects them with an unexpected-argument error, and the Agent view then keeps what it has loaded and asks you to update the companion.
+
+### Session facts
+
+Conversation (`active_branch`) responses for Claude Code and Codex can also include a `session` object (additive to schema 1; older clients ignore it, and a client that gets none draws nothing). Every field is optional and absent means unknown, never zero:
+
+| Field | Claude Code | Codex |
+| --- | --- | --- |
+| `model` | `message.model` of the newest main-chain assistant record | `turn_context.model` |
+| `mode` | latest `permission-mode` record (`default`, `acceptEdits`, `plan`, `auto`, `bypassPermissions`) | `turn_context.collaboration_mode.mode` (`default`, `plan`) |
+| `effort`, `approval`, `sandbox` | not recorded | `reasoning_effort`, `approval_policy`, `sandbox_policy.type` of the latest `turn_context` |
+| `folder` | last component of `cwd` of the newest main-chain record that has one | last component of `turn_context.cwd`, else of `session_meta.cwd` |
+| `branch` | `gitBranch` of the newest main-chain record that has one | `session_meta.git.branch` |
+| `worktree` | `worktreeSession.worktreeName` of the latest `worktree-state` record (absent outside a Claude Code worktree) | not recorded |
+| `usage.usedTokens` | input, cache-read, cache-write and output tokens of the newest assistant record | `last_token_usage.total_tokens` of the latest `token_count` event |
+| `usage.limitTokens` | not recorded, so context left is not computed | `model_context_window` |
+| `cost.usd` | `totalCostUSD` of the latest `cost-state` record | not recorded |
+| `rateLimits[]` | not recorded | `primary` and `secondary` `used_percent`, `window_minutes`, `resets_at` of the latest `token_count` event |
+
+Only bounded identifiers, names and numbers are copied; the folder is the last path component, never the full path. The values are what the agent last wrote, not a live reading. The `session` object carries no per-field timestamp; the Agent view treats it as current as of the page it arrived with.
 
 ### Claude current branch
 

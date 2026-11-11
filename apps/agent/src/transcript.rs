@@ -36,6 +36,7 @@ pub use opencode_conversation::{
 };
 #[cfg(test)]
 mod mutation_observer;
+mod session_info;
 mod snapshot;
 mod source_snapshot;
 pub mod watch;
@@ -178,6 +179,9 @@ pub struct TranscriptPage {
     /// Sub-agents, background commands and monitors recorded in the conversation (Claude Code only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work: Option<Vec<Value>>,
+    /// Model, mode, context and cost as recorded; absent fields are unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<Value>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -350,6 +354,7 @@ fn read_records(
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }
 

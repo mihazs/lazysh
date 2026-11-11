@@ -26,6 +26,7 @@ import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import {parseWork,type WorkItem} from './agentWork';
+import {parseSession,type AgentSessionInfo} from './agentSession';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -62,6 +63,7 @@ type Page = {
   activity?: Activity;
   queued?: Queued[];
   work?: WorkItem[];
+  session?: AgentSessionInfo;
 };
 
 
@@ -91,6 +93,7 @@ export function parseTranscript(value: unknown): Page {
   page.activity = parseActivity(page.activity, page.agent, page.view);
   page.queued = parseQueued(page.queued);
   page.work = parseWork(page.work);
+  page.session = parseSession(page.session);
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -208,7 +211,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -268,6 +271,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [activity, setActivity] = useState<Activity>();
   const [queued, setQueued] = useState<Queued[]>([]);
   const [work, setWork] = useState<WorkItem[]>();
+  const [session, setSession] = useState<AgentSessionInfo>();
+  useEffect(() => {onSession?.(session);}, [onSession, session]);
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
@@ -387,6 +392,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
       if(op.kind==='replace')setWork(op.work);else if(op.work)setWork(op.work.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
+      if(op.kind==='replace')setSession(op.session);else if(op.session)setSession(op.session.value);
       setUpdated(Date.now());
     }});
   /** Puts a page into the window of the session that is held, and keeps the turn at the top of the view where it is. */
@@ -540,7 +546,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);setWork(page.work);}
+      if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);setWork(page.work);setSession(page.session);}
       if (source.view === 'conversation') place(slice ?? {kind: 'tail'}, page.messages, {older: page.truncated === true, newer: page.hasNewer === true}, reset && !slice);
       else setMessages((previous) => {
         const combined = replace

@@ -3,7 +3,7 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
-type Fixture={uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
+type Fixture={uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -76,7 +76,7 @@ async function open(page:Page) {
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
         fixture.polls++;
-        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages()};
+        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,session:fixture.session,...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages()};
         return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:messages(args.inlineImages===true)};
       }
       // The synthetic host's `transcript-watch`: off (cannot open), an old companion, or a stream the test drives.
@@ -816,4 +816,24 @@ test('a prompt over 4 KiB is sent whole as one long send, and one past the bound
   await draft.fill('é'.repeat(32769));
   await expect(agent.getByText('Too long for confirmed input (65,536 bytes). Shorten it or use Stage in terminal.',{exact:true})).toBeVisible();
   await expect(agent.getByRole('button',{name:'Send to the agent',exact:true})).toBeDisabled();
+});
+
+test('shows model, plan mode and context left in one header row without taking chat space',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{window.agentView.session={model:'gpt-6.1-terra',mode:'plan',effort:'medium',approval:'never',folder:'app',branch:'fix/login',worktree:'fix-login',usage:{usedTokens:380000,limitTokens:475000}};});
+  const agent=await showAgent(page);
+  const header=agent.locator('header');
+  await expect(header.getByText('Plan mode',{exact:true})).toBeVisible();
+  await expect(header.getByText('20% left',{exact:true})).toBeVisible();
+  // One row of the existing height; the buttons stay reachable at the end of it.
+  expect((await header.boundingBox())!.height).toBeLessThanOrEqual(44);
+  await expect(header.getByRole('button',{name:'Agent view options',exact:true})).toBeInViewport();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await header.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await expect(agent.getByRole('group',{name:'Agent view options',exact:true}).getByText('gpt-6.1-terra · medium',{exact:true})).toBeVisible();
+  const sheet=agent.getByRole('group',{name:'Agent view options',exact:true});
+  await expect(sheet.getByText('fix/login',{exact:true})).toBeVisible();
+  await expect(sheet.getByText('app',{exact:true})).toBeVisible();
+  // Wide panes also draw the branch in the header; a narrow phone leaves it to the sheet so the row does not grow.
+  await expect(header.getByTitle('Git branch')).toBeVisible({visible:(page.viewportSize()?.width??0)>=520});
 });

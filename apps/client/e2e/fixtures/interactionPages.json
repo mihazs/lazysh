@@ -169,6 +169,10 @@
     ],
     "nextOffset": 5472,
     "schemaVersion": 1,
+    "session": {
+      "folder": "fixture",
+      "model": "fixture-model"
+    },
     "truncated": false,
     "view": "active_branch"
   },
