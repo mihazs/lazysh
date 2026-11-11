@@ -81,6 +81,8 @@ import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPast
 import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
+import {useCurrentPaneAgent} from "./useCurrentPaneAgent";
+import {usageTarget} from "./usageAgentProvider";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import HerdrNavigation,{type HerdrContentReceipt} from "./HerdrNavigation";
 import type {HerdrTree} from "./useHerdrNavigation";
@@ -1195,7 +1197,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
-  const {sessionLayout} = usePreferences();
+  const {sessionLayout,usageItem='follow',usageProvider=''} = usePreferences();
   usePrivateKeyboard();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
@@ -1470,7 +1472,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
   // A closed session's id never comes back.
   useEffect(()=>{setAgentMounted(ids=>ids.every(id=>sessions.some(session=>session.id===id))?ids:ids.filter(id=>sessions.some(session=>session.id===id)));},[sessions]);
-  const accountUsage=useAccountUsage(active?.connected ? active.id : null);
+  // The status bar's usage item follows the agent in the current pane unless Preferences pin an account or hide it; the pane is read only while the item has a box on screen.
+  const [usageBarShown,setUsageBarShown]=useState(false);
+  const paneAgent=useCurrentPaneAgent(active?.id??null,native&&!active?.local?active?.attached:undefined,usageBarShown&&usageItem==='follow');
+  const accountUsage=useAccountUsage(active?.connected ? active.id : null,usageItem!=='hidden'||view==='usage',usageTarget(usageItem,usageProvider,paneAgent));
   const navigationState=useRef(navigation);navigationState.current=navigation;
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
@@ -2526,7 +2531,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </Suspense>
             </div>
             <footer className="workspace-footer" data-view={view}>
-              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>visitView('usage')}/>}
+              {active.connected && usageItem!=='hidden' && <AccountUsageBar model={accountUsage} onOpen={()=>visitView('usage')} onShown={setUsageBarShown}/>}
               <span>
                 {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}
                 {active.destination}
@@ -2625,7 +2630,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} pages={[
+          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} usageAccounts={accountUsage.response?.report?.entries} pages={[
             ...(native?[{id:'connections',section:'general',title:t('preferencesCategoryConnections'),value:t('syncHostCount',{count:hosts.length,value:formatNumber(hosts.length)}),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>

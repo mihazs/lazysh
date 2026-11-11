@@ -22,7 +22,7 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   const rows=async(title:string)=>Promise.all((await section(title).getByRole('button').all()).map(name));
   expect(await rows('Terminal')).toEqual(['Appearance and fonts','Terminal and accessibility']);
   expect(await rows('Input')).toEqual(['Keyboard and gestures']);
-  expect(await rows('Agents and notifications')).toEqual(['Notifications','Notification inbox','Agents','Dictate']);
+  expect(await rows('Agents and notifications')).toEqual(['AI account usage','Notifications','Notification inbox','Agents','Dictate']);
   expect(await rows('Security and sync')).toEqual(['Security and app lock','Encrypted sync']);
   expect(await rows('General')).toEqual(['Language and region','Shareable uploads']);
   expect(await rows('Help')).toEqual(['About lazysh']);

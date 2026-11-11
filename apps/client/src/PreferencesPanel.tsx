@@ -1,5 +1,5 @@
 import SettingsNavigation,{type SettingsPage,type SettingsSection} from "./SettingsNavigation";
-import {t, useUi, formatNumber} from './i18n/core';
+import {t, useUi, formatNumber, type UiKey} from './i18n/core';
 import { useEffect, useRef, useState } from "react";
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import FontDownloadPanel from "./FontDownloadPanel";
@@ -12,6 +12,7 @@ import ChordBuilder from "./ChordBuilder";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
+import { providerName, usageProviders, type UsageBarMode } from "./usageAgentProvider";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 const themeLabels={forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const;
@@ -28,9 +29,10 @@ export const settingsSections=():SettingsSection[]=>[
   {id:"reset",footer:t("settingsResetFooter")},
 ];
 const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):undefined;
+const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFixed",hidden:"preferencesUsageHidden"} as const satisfies Record<UsageBarMode,UiKey>;
 
 /** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
-export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[];footer?:string}={}) {
+export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[]}={}) {
   useUi();
   const preferences = usePreferences();
   const invoke = useProtectedInvoke();
@@ -64,6 +66,7 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
   function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = discreteGestureActions) {
     return <GestureBindingField key={slot} label={label} action={action} keys={preferences.gestureChords[slot]} allowed={allowed} onAction={change} onKeys={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />;
   }
+  const usageItem=preferences.usageItem ?? "follow";
   const appThemeName=preferences.appTheme==="custom"?preferences.customThemeInfo?.name??t("preferencesCustom"):preferences.appTheme==="forest"?"lazysh":t(themeLabels[preferences.appTheme]);
   const own:SettingsPage[]=[
 {id:"appearance",section:"terminal",title:t("preferencesCategoryAppearance"),value:`${appThemeName} · ${t("settingsFontSizeValue",{size:formatNumber(preferences.fontSize)})}`,content:<>
@@ -164,6 +167,18 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
         if (!update({chords: [...preferences.chords, {label: chordLabel.trim(), keys}]})) return false;
         setChordLabel(''); return true;
       }} />
+
+</>},
+{id:"accountUsage",section:"agents",title:t("preferencesCategoryAccountUsage"),value:t(usageItemLabels[usageItem]),content:<>
+
+    <fieldset><legend>{t("preferencesUsageItem")}</legend>{(Object.keys(usageItemLabels) as UsageBarMode[]).map(value => <label key={value}><input type="radio" name="usage-item" value={value} checked={usageItem === value} onChange={() => update({usageItem: value === "follow" ? undefined : value})} />{t(usageItemLabels[value])}</label>)}</fieldset>
+    <p>{t("preferencesUsageFollowHelp")}</p>
+    <label>{t("preferencesUsageProvider")}<select value={preferences.usageProvider ?? ""} disabled={usageItem === "hidden"} onChange={e => update({usageProvider: e.target.value || undefined})}>
+      <option value="">{t("preferencesUsageProviderHost")}</option>
+      {usageProviders.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+      {[...usageAccounts, ...(preferences.usageProvider ? [{id: preferences.usageProvider, name: providerName(preferences.usageProvider)}] : [])].filter((account, index, all) => !usageProviders.some(([id]) => id === account.id) && all.findIndex(other => other.id === account.id) === index).map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+    </select></label>
+    <p>{t("preferencesUsageProviderHelp")}</p>
 
 </>},
 ...(isAndroidApp() ? [{id:"android-notifications",section:"general",title:t("androidNotificationTitle"),content:<>

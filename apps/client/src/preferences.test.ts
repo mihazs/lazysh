@@ -8,6 +8,21 @@ describe("terminal preferences trust boundary", () => {
     expect(defaults.dismissKeyboardOnOverscroll).toBe(false);
     expect(parsePreferences(JSON.parse(JSON.stringify({...defaults,dismissKeyboardOnOverscroll:true}))).dismissKeyboardOnOverscroll).toBe(true);
   });
+  it('follows the current agent by default and for every setting stored before the usage item had a choice',()=>{
+    expect(defaults.usageItem).toBeUndefined();expect(defaults.usageProvider).toBeUndefined();
+    // A pre-existing stored snapshot has neither key: it reads as "follow", the same as a fresh install.
+    const {usageItem:_item,usageProvider:_provider,...stored}=JSON.parse(JSON.stringify({...defaults,fontSize:18}));
+    const parsed=parsePreferences(stored);
+    expect(parsed.usageItem).toBeUndefined();expect(parsed.usageProvider).toBeUndefined();expect(parsed.fontSize).toBe(18);
+  });
+  it('keeps only known usage item modes and a bounded provider id',()=>{
+    for(const mode of ['fixed','hidden'] as const)expect(parsePreferences({...defaults,usageItem:mode}).usageItem).toBe(mode);
+    for(const value of ['follow','always',true,1,null,{}])expect(parsePreferences({...defaults,usageItem:value}).usageItem).toBeUndefined();
+    expect(parsePreferences({...defaults,usageItem:'fixed',usageProvider:'openai'}).usageProvider).toBe('openai');
+    expect(parsePreferences({...defaults,usageProvider:'custom:acme'}).usageProvider).toBe('custom:acme');
+    for(const value of ['',7,null,'x'.repeat(161),'a\nb'])expect(parsePreferences({...defaults,usageProvider:value}).usageProvider).toBeUndefined();
+    expect(syncablePreferences(parsePreferences({...defaults,usageItem:'hidden',usageProvider:'kimi'}))).toMatchObject({usageItem:'hidden',usageProvider:'kimi'});
+  });
   it('preserves Shift+Enter as a modified key instead of ordinary submission',()=>{
     expect(parseChord('Shift+Enter')).toBe('\x1b[13;2u');
     expect(parseChord('S-Enter')).toBe('\x1b[13;2u');

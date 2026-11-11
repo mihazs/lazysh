@@ -1,6 +1,41 @@
 # AI account usage
 
-The compact terminal status button opens live provider quotas, balances, reset times and banked reset credits. Recorded transcript token counters remain in the separate transcript usage inspector. Account selection is explicit: the account shown is not inferred from a running agent.
+The compact terminal status button opens live provider quotas, balances, reset times and banked reset credits. Recorded transcript token counters remain in the separate transcript usage inspector.
+
+## The status bar follows the current agent
+
+By default the status-bar usage item shows the account of the agent running in the pane you are looking at. One host report holds every enabled account, so following costs no extra account query: the item only picks the matching entry.
+
+How the pane's agent is found, while the item is on screen:
+
+- **Herdr:** the agent Herdr reports for the focused pane of the attached server (`panes[].focused` of the same snapshot the Agent view reads), every 5 seconds.
+- **tmux:** the newest companion hook report whose `TMUX_PANE` is the attached pane (reports from before the agent's `Session ended` event are ignored), every 5 seconds. This needs a companion that records hook reports; an older companion shows no agent.
+- **Anything else** (a plain shell connection, Zellij, a local terminal): no pane identity exists, so no agent is detected and the default account shows.
+
+| Agent (Herdr label or hook-report name) | Account (report entry id) |
+| --- | --- |
+| Claude Code (`claude`) | Claude (`anthropic`, or its first named account `anthropic@name`) |
+| Codex (`codex`) | Codex (`openai`) |
+| GitHub Copilot CLI (`copilot`) | GitHub Copilot (`copilot`) |
+| Cursor CLI (`cursor`) | Cursor (`cursor`) |
+| Droid (`droid`) | Droid (`droid`) |
+| Kimi CLI (`kimi`) | Kimi (`kimi`) |
+| Cline (`cline`) | Cline (`cline`) |
+| Kiro (`kiro`) | Kiro (`kiro`) |
+| Devin (`devin`) | Devin (`devin`) |
+| Antigravity (`agy`) | Antigravity (`antigravity`) |
+| Grok (`grok`) | SuperGrok (`supergrok`) |
+| Hermes (`hermes`) | Nous Research (`nous`) |
+| Kilo (`kilo`) | Kilo (`kilo`) |
+| Muse (`muse`) | Muse Code (`muse-code`) |
+| OpenCode (`opencode`) | OpenCode Go (`opencode-go`) |
+| Command Code | Command Code (`commandcode`) |
+
+Agents without a supported account collector (Gemini CLI, Amp, pi, omp, Mastra Code, Qoder CLI, Qwen Code, Letta, Maki, Aider) show "No usage for <agent>"; they never show another agent's quota. A mapped agent whose account the host did not report shows "<provider>: no account reported". The remaining built-in providers (Anthropic API, Z.AI, OpenRouter, DeepSeek, DeepInfra, Novita, Synthetic, Moonshot, Grok API, Grok Bot, MiniMax, Ollama Cloud, OrcaRouter, Model Studio, Lyceum) are inference APIs or aggregators with no agent of their own; choose them, or a custom provider the host reports, under **Always show a chosen account**.
+
+Preferences → Agents and notifications → AI account usage: **Follow the current agent** (the default), **Always show a chosen account**, or **Hide the usage item**. The provider picker names the account shown in the second mode and when no agent is detected in the first; empty means the host's default account (the report's `primary`). Earlier versions kept no account choice of their own (they showed the host's default account), so there was nothing to migrate. The settings sync as `usageItem` and `usageProvider`, which are omitted at their defaults so older peers accept the snapshot.
+
+The AI account usage page always opens on the account the item follows, with its own account picker for browsing others; a pick there lasts only until the followed agent changes.
 
 The query runs on the session machine. Android and desktop remote terminals require a current lazysh companion on the connected host (install or update it from Agents); desktop local terminals use the same built-in collectors locally. A compatible `ai-usagebar usage --json` installation is preferred only when its selected reporting configuration disables context monitoring and explicitly disables notifications, and inline credentials already have safe ownership and permissions. The exact preflighted configuration is passed with `--config`; other profiles use the built-in fallback without changing settings. If the executable is missing, fails, times out or produces an unsupported report, built-in collectors provide the fallback. Installing ai-usagebar is optional.
 
