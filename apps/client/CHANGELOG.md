@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.30.3
+
+### Patch Changes
+
+- c2aa152: Print the failed case, its message and first app frame when Android CI instrumentation fails, and name the failing touch-receipt flags of the D-pad acceptance.
+- @lazysh/account-usage@1.30.3
+  - @lazysh/common@1.30.3
+  - @lazysh/display-idle@1.30.3
+  - @lazysh/et-transport@1.30.3
+  - @lazysh/mosh-transport@1.30.3
+
 ## 1.30.2
 
 ### Patch Changes
