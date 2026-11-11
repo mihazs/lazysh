@@ -4,8 +4,14 @@
 //! `run_in_background`, a `Monitor`), gets its task id from the launch result, and ends at a result, a
 //! `<task-notification>` naming its task or tool-use id, or a `TaskStop` call. A launch with no recorded end
 //! stays `running`; the reader decides from the start time when that is too old to believe.
+use super::TranscriptPage;
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
 
 const MAX_TASKS: usize = 100;
 const MAX_EVENTS: usize = 50;
@@ -263,4 +269,90 @@ fn render(task: Task) -> Value {
         out.insert("timeoutMs".into(), json!(timeout));
     }
     Value::Object(out)
+}
+
+const MAX_CHILDREN: usize = 200;
+const MAX_META: u64 = 16 * 1024;
+const TAIL: u64 = 64 * 1024;
+
+fn valid_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+/// The last assistant text of a sub-agent's own file, read from its tail only.
+fn last_line(path: &Path) -> Option<String> {
+    let mut file = super::open_transcript(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(TAIL)))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.take(TAIL).read_to_end(&mut bytes).ok()?;
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["type"] == "assistant")
+        .find_map(|record| {
+            record["message"]["content"]
+                .as_array()?
+                .iter()
+                .filter(|part| part["type"] == "text")
+                .find_map(|part| part["text"].as_str().and_then(first_line))
+        })
+}
+
+/// Ties each sub-agent call to its own conversation: Claude Code writes
+/// `<session>/subagents/agent-<id>.jsonl` and `agent-<id>.meta.json` (`toolUseId`, `finished`).
+/// The meta file is the evidence that a sub-agent ended, so a call without a recorded result but with
+/// `finished: true` is done. Anything unreadable, oversized or not an owned plain file is skipped.
+pub(super) fn attach_children(page: &mut TranscriptPage, transcript: &Path) {
+    let Some(work) = page.work.as_mut().filter(|work| !work.is_empty()) else {
+        return;
+    };
+    let directory = transcript.with_extension("").join("subagents");
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return;
+    };
+    for entry in entries.flatten().take(MAX_CHILDREN * 2) {
+        let name = entry.file_name();
+        let Some(id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("agent-"))
+            .and_then(|name| name.strip_suffix(".meta.json"))
+            .filter(|id| valid_id(id))
+        else {
+            continue;
+        };
+        let Ok(file) = super::open_transcript(&entry.path()) else {
+            continue;
+        };
+        let mut text = String::new();
+        if file.take(MAX_META).read_to_string(&mut text).is_err() {
+            continue;
+        }
+        let Ok(meta) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(item) = meta["toolUseId"]
+            .as_str()
+            .and_then(|call| work.iter_mut().find(|item| item["id"] == call))
+        else {
+            continue;
+        };
+        let child = directory.join(format!("agent-{id}.jsonl"));
+        if super::open_transcript(&child).is_err() {
+            continue;
+        }
+        item["childPath"] = json!(child.to_string_lossy());
+        item["taskId"] = json!(id);
+        if let Some(last) = last_line(&child) {
+            item["last"] = json!(last);
+        }
+        if meta["finished"] == true && item["state"] == "running" {
+            item["state"] = json!("done");
+        }
+    }
 }

@@ -32,7 +32,9 @@ fn conversation_options(
     if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    project_claude(capture(path)?, limit, inline_images)
+    let mut page = project_claude(capture(path)?, limit, inline_images)?;
+    super::work::attach_children(&mut page, path);
+    Ok(page)
 }
 
 pub(super) fn project_claude(
@@ -118,6 +120,19 @@ pub(super) fn project_claude_bounded(
         return Err(Error::InvalidEvent);
     }
     drop(bytes);
+    // A sub-agent's own file records every message as a sidechain; read on its own, that is its main branch.
+    let own_file = {
+        let mut messages = records
+            .iter()
+            .filter(|(_, record)| matches!(record["type"].as_str(), Some("user" | "assistant")))
+            .peekable();
+        messages.peek().is_some() && messages.all(|(_, record)| record["isSidechain"] == true)
+    };
+    if own_file {
+        for (_, record) in &mut records {
+            record["isSidechain"] = Value::Bool(false);
+        }
+    }
     let latest: HashMap<String, usize> = records
         .iter()
         .enumerate()

@@ -2023,6 +2023,8 @@ const translations = {
   agentWorkStopped: ["Interrompido", "Detenido"],
   agentWorkUnknown: ["Sem fim registrado", "Sin fin registrado"],
   agentWorkOutput: ["Saída registrada", "Salida registrada"],
+  agentWorkOpen: ["Abrir conversa", "Abrir conversación"],
+  agentWorkBack: ["Voltar à conversa", "Volver a la conversación"],
   agentViewActivity: ["Atividade ({{count}})", "Actividad ({{count}})"],
   agentViewElapsed: ["Tempo desde o início deste turno", "Tiempo desde el inicio de este turno"],
   agentViewOptions: ["Opções da visão do agente", "Opciones de la vista del agente"],

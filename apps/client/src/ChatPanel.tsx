@@ -18,6 +18,7 @@ import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {projectMessages,type InjectedEvent} from './chatInjected';
 import AgentWorkPill,{WorkInline} from './AgentWorkPill';
+import './AgentWork.css';
 import {parseWork,type WorkItem} from './agentWork';
 
 type Block = {
@@ -482,6 +483,22 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
   const flow = useMemo(() => opened?.view === 'conversation' || timeline ? projectMessages(messages) : messages, [opened?.view, timeline, messages]);
   const turns = useMemo(() => timeline ? groupTurns(flow) : [], [timeline, flow]);
+  // A sub-agent's own conversation opens in place of this one; Back restores the reader where it was.
+  const [child, setChild] = useState<{path: string; title: string}>();
+  const parentView = useRef<{outer: ScrollPosition; list: number} | undefined>(undefined);
+  function openChild(item: WorkItem) {
+    if (!item.childPath || !access.current()) return;
+    parentView.current = {outer: captureScrollPosition(chatRoot.current), list: messageList.current?.scrollTop ?? 0};
+    setChild({path: item.childPath, title: item.title});
+  }
+  useLayoutEffect(() => {
+    const saved = parentView.current;
+    if (child || !saved) return;
+    parentView.current = undefined;
+    restoreScrollPosition(saved.outer);
+    if (messageList.current) messageList.current.scrollTop = saved.list;
+  }, [child]);
+  useEffect(() => setChild(undefined), [sessionId, path]);
   const workByCall = useMemo(() => new Map((timeline ? work ?? [] : []).map(item => [item.id, item])), [timeline, work]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
@@ -515,7 +532,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       </p>}
       {message.blocks.map((block, index) => {
         const task = timeline && block.type === 'tool_use' && block.id ? workByCall.get(block.id) : undefined;
-        if (task) return <WorkInline key={index} item={task} />;
+        if (task) return <WorkInline key={index} item={task} onOpen={openChild} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
         return block.type === "text" ? (
           <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
@@ -549,7 +566,11 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
-    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} data-child-open={child ? "" : undefined} aria-label={t("chatTitle")}>
+      {child && <div className="agent-child">
+        <header><button type="button" className="subtle-button" onClick={() => setChild(undefined)}><ArrowLeft size={18} aria-hidden="true"/>{t('agentWorkBack')}</button><strong title={child.title}>{child.title}</strong></header>
+        <ChatPanel sessionId={sessionId} bound={{agent: 'claude', path: child.path}} timeline allowStage={false} />
+      </div>}
       {!bound && <>
       <h3>{t("chatTitle")}</h3>
       <p>
@@ -704,7 +725,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         </section>) : flow.map(renderMessage)}
       </div>
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      {timeline && bound && <AgentWorkPill work={work} />}
+      {timeline && bound && <AgentWorkPill work={work} onOpen={openChild} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">

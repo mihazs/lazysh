@@ -7,12 +7,12 @@ export type WorkState = 'running' | 'done' | 'failed' | 'stopped' | 'unknown';
 export type WorkKind = 'agent' | 'shell' | 'monitor';
 export type WorkItem = {
   id: string; kind: WorkKind; title: string; state: WorkState; events: string[];
-  subtitle?: string; command?: string; taskId?: string; startedAt?: string; endedAt?: string; last?: string; summary?: string; timeoutMs?: number;
+  subtitle?: string; command?: string; taskId?: string; childPath?: string; startedAt?: string; endedAt?: string; last?: string; summary?: string; timeoutMs?: number;
 };
 
 const states: readonly string[] = ['running', 'done', 'failed', 'stopped', 'unknown'];
 const kinds: readonly string[] = ['agent', 'shell', 'monitor'];
-const optional = ['subtitle', 'command', 'taskId', 'startedAt', 'endedAt', 'last', 'summary'] as const;
+const optional = ['subtitle', 'command', 'taskId', 'childPath', 'startedAt', 'endedAt', 'last', 'summary'] as const;
 const invalid = () => new LocalUiError('chatInvalidWork');
 
 export function parseWork(value: unknown): WorkItem[] | undefined {

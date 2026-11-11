@@ -2017,6 +2017,8 @@ export const english = {
   agentWorkStopped: "Stopped",
   agentWorkUnknown: "No end recorded",
   agentWorkOutput: "Recorded output",
+  agentWorkOpen: "Open conversation",
+  agentWorkBack: "Back to the conversation",
   agentViewActivity: "Activity ({{count}})",
   agentViewElapsed: "Time since this turn started",
   agentViewOptions: "Agent view options",

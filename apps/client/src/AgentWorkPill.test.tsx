@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {cleanup,fireEvent,render,screen,within} from '@testing-library/react';
-import {afterEach,expect,it} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import AgentWorkPill from './AgentWorkPill';
 import {parseWork,settleWork,type WorkItem} from './agentWork';
 
@@ -56,4 +56,17 @@ it('refuses a work list that is not what the companion sends', () => {
   expect(parseWork(work)).toEqual(work);
   expect(() => parseWork([{...work[0], state: 'paused'}])).toThrow();
   expect(() => parseWork([{...work[0], events: [1]}])).toThrow();
+});
+
+it('offers to open only the sub-agents the host tied to their own conversation', () => {
+  const open = vi.fn();
+  const rows: WorkItem[] = [{...work[0], childPath: '/s/subagents/agent-a1.jsonl'}, {...work[2], id: 'x', title: 'No child'}];
+  render(<AgentWorkPill work={rows} onOpen={open} />);
+  fireEvent.click(screen.getByRole('button', {name: /running|finished/}));
+  const buttons = screen.getAllByRole('button', {name: 'Open conversation'});
+  expect(buttons).toHaveLength(1);
+  fireEvent.click(buttons[0]);
+  expect(open).toHaveBeenCalledWith(rows[0]);
+  expect(parseWork(rows)).toEqual(rows);
+  expect(() => parseWork([{...rows[0], childPath: 3}])).toThrow();
 });

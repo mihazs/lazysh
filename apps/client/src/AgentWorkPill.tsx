@@ -9,7 +9,7 @@ const kinds: WorkKind[] = ['agent', 'shell', 'monitor'];
 const kindTitle = {agent: 'agentWorkAgents', shell: 'agentWorkShells', monitor: 'agentWorkMonitors'} as const;
 const stateText = {running: 'agentWorkRunning', done: 'agentWorkDone', failed: 'agentWorkFailed', stopped: 'agentWorkStopped', unknown: 'agentWorkUnknown'} as const satisfies Record<WorkState, string>;
 
-export function WorkRow({item, now}: {item: WorkItem; now: number}) {
+export function WorkRow({item, now, onOpen}: {item: WorkItem; now: number; onOpen?: (item: WorkItem) => void}) {
   const start = Date.parse(item.startedAt ?? ''), end = item.endedAt ? Date.parse(item.endedAt) : item.state === 'running' ? now : NaN;
   const elapsed = end >= start ? formatCountdown(end - start) : undefined;
   const more = item.command || item.events.length > 0 || item.summary;
@@ -26,17 +26,18 @@ export function WorkRow({item, now}: {item: WorkItem; now: number}) {
       {item.summary && <p>{item.summary}</p>}
       {item.events.length > 0 && <pre aria-label={t('agentWorkOutput')}>{item.events.join('\n')}</pre>}
     </details>
-    : <div className="agent-work-head">{head}</div>}</li>;
+    : <div className="agent-work-head">{head}</div>}
+    {item.childPath && onOpen && <button type="button" className="agent-work-open" onClick={() => onOpen(item)}>{t('agentWorkOpen')}</button>}</li>;
 }
 
 /** One recorded task where its call is in the conversation, in place of the raw tool block. */
-export function WorkInline({item}: {item: WorkItem}) {
+export function WorkInline({item, onOpen}: {item: WorkItem; onOpen?: (item: WorkItem) => void}) {
   const now = useNow(1000, item.state === 'running');
-  return <ul className="agent-work-inline"><WorkRow item={settleWork([item], now)[0]} now={now} /></ul>;
+  return <ul className="agent-work-inline"><WorkRow item={settleWork([item], now)[0]} now={now} onOpen={onOpen} /></ul>;
 }
 
 /** "2 running": sub-agents, background shells and monitors the conversation recorded, listed above the composer. */
-export default function AgentWorkPill({work}: {work?: readonly WorkItem[]}) {
+export default function AgentWorkPill({work, onOpen}: {work?: readonly WorkItem[]; onOpen?: (item: WorkItem) => void}) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const now = useNow(1000, open);
@@ -53,7 +54,7 @@ export default function AgentWorkPill({work}: {work?: readonly WorkItem[]}) {
       const group = items.filter(item => item.kind === kind);
       return group.length > 0 && <section key={kind} aria-label={t(kindTitle[kind])}>
         <h5>{t(kindTitle[kind])}</h5>
-        <ul>{group.map(item => <WorkRow key={item.id} item={item} now={now} />)}</ul>
+        <ul>{group.map(item => <WorkRow key={item.id} item={item} now={now} onOpen={onOpen} />)}</ul>
       </section>;
     })}</div>
   </div>;
