@@ -151,14 +151,16 @@ export default function TerminalPane({ session, active, quietActivation = false,
   }
   function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; cancelDpad();}
   function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);} state.shift = false; setShift(false);}
-  /** With submit, the accepted paste bytes and a separate Enter leave as one paced sequence. */
-  function pasteLiteral(text: string, submit = false) {
+  /** The accepted paste bytes (bracketed when the program asked for it) leave as one write; with submit, a separate Enter follows in one paced sequence. Resolves true only once the write was accepted, so a caller keeps its text otherwise. */
+  async function pasteLiteral(text: string, submit = false): Promise<boolean> {
     imeInput.current?.flush();
     const accepted: string[] = [];
-    literalPaste.current = true; literalCapture.current = submit ? accepted : null;
+    literalPaste.current = true; literalCapture.current = accepted;
     try {session.terminal.paste(text);} finally {literalPaste.current = false; literalCapture.current = null;}
     const pasted = accepted.join("");
-    if (pasted && session.connected) void writeInput('terminal-user', [pasted, "\r"]).catch(error => reportError(captureUiError(error)));
+    if (!pasted || !session.connected) return false;
+    try {await writeInput('terminal-user', submit ? [pasted, "\r"] : pasted); return true;}
+    catch (error) {reportError(captureUiError(error)); return false;}
   }
   const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent, owner?:InputOwner) => boolean>(() => false);
   const [unappliedEdit, setUnappliedEdit] = useState<UnappliedTerminalEdit | null>(null);
@@ -1111,6 +1113,17 @@ export default function TerminalPane({ session, active, quietActivation = false,
     </div>});
     return pages;
   }
+  const submittingDraft = useRef(false);
+  /** Send pastes the draft and presses Enter; Insert only pastes it. The draft and composer stay when the write fails. */
+  async function submitDraft(enter: boolean) {
+    const text = draftRef.current;
+    if (submittingDraft.current || !session.connected || !composerDraftReady(text, enter)) return;
+    submittingDraft.current = true;
+    try {
+      if (!await pasteLiteral(expandComposerDraft(text, liveAttachmentsRef.current), enter) || !mounted.current || draftRef.current !== text) return;
+      setDraft(""); setDraftAttachments([]); setComposing(false); focusTerminal();
+    } finally {submittingDraft.current = false;}
+  }
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const keyRows = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer);
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
@@ -1152,10 +1165,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
     {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput} attachments={liveAttachments}
       disabled={!session.connected} sendEnter={preferences.composerSendEnter}
-      onSubmit={() => {
-        if (!session.connected || !composerDraftReady(draftRef.current, preferences.composerSendEnter)) return;
-        pasteLiteral(expandComposerDraft(draftRef.current, liveAttachmentsRef.current), preferences.composerSendEnter); setDraft(""); setDraftAttachments([]); setComposing(false); focusTerminal();
-      }}
+      onSubmit={enter => void submitDraft(enter)}
       onClose={() => setComposing(false)}
       onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.('composer');} : undefined} />}
     </div>

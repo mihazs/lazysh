@@ -1205,7 +1205,7 @@ test.describe('terminal composer sheet',()=>{
     const stage=await page.locator('.terminal-stage:visible').boundingBox();
     await expect.poll(()=>sheet.boundingBox()).toEqual(stage);
     if(testInfo.project.name==='phone')await expect(page.locator('.terminal-keys')).toBeHidden();
-    else await expect(page.getByText('Ctrl+Enter to send',{exact:true})).toBeVisible();
+    else await expect(page.getByText('Ctrl+Enter to send · Ctrl+Shift+Enter to insert',{exact:true})).toBeVisible();
     await editor.pressSequentially('first line');await editor.press('Enter');await editor.pressSequentially('second line');
     await expect(page.getByText('22 characters · 2 lines',{exact:true})).toBeVisible();
     expect(await steps(page)).toEqual([]);
@@ -1246,10 +1246,10 @@ test.describe('terminal composer sheet',()=>{
     expect(await resizes(page)).toBe(before);
   });
 
-  test('turning off Send Enter restores paste without Enter and labels the action Paste draft',async({page})=>{
+  test('turning off Ctrl+Enter sends makes the shortcut insert without Enter while Send and Insert stay on screen',async({page})=>{
     await fixture(page);
     await openPreferenceCategory(page,'Input');
-    const option=page.getByRole('checkbox',{name:'Send Enter after pasting the draft',exact:true});
+    const option=page.getByRole('checkbox',{name:'Ctrl+Enter sends the draft (off: it only inserts it)',exact:true});
     await expect(option).toBeChecked();
     await option.uncheck();
     expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).composerSendEnter)).toBe(false);
@@ -1259,14 +1259,15 @@ test.describe('terminal composer sheet',()=>{
     await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
     await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?2004h'));
     await page.getByRole('button',{name:'Compose',exact:true}).click();
-    await expect(page.getByRole('button',{name:'Send',exact:true})).toHaveCount(0);
+    await expect(page.getByRole('button',{name:'Send',exact:true})).toBeVisible();
     const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
-    await editor.fill('git status');
-    await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+    // The preference only points Ctrl+Enter at Insert; Ctrl+Shift+Enter then sends.
+    await editor.fill('git status');await editor.press('Control+Enter');
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[200~git status\x1b[201~']);
     expect(await steps(page)).toEqual([]);
-    await expect(editor).toHaveCount(0);
-    await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+    await page.getByRole('button',{name:'Compose',exact:true}).click();
+    await editor.fill('git log');await editor.press('Control+Shift+Enter');
+    await expect.poll(()=>steps(page)).toEqual([['\x1b[200~git log\x1b[201~','\r']]);
   });
 
   test('the sheet keeps its editor and actions above a soft keyboard that only shrinks the visual viewport',async({page},testInfo)=>{
