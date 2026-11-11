@@ -1,5 +1,11 @@
 # @lazysh/et-transport
 
+## 1.33.4
+
+### Patch Changes
+
+- @lazysh/common@1.33.4
+
 ## 1.33.3
 
 ### Patch Changes
