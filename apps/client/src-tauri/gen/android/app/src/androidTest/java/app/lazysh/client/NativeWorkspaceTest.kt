@@ -3379,9 +3379,11 @@ class NativeWorkspaceTest {
             val fresh = UUID.randomUUID().toString().replace("-", "")
             val response = "BG_${fresh}_RESUMED"
             // Dash reports the waited writer as "[1] + Done (<its whole command>)"
-            // before its next prompt; `jobs` consumes that notice first.
+            // before its next prompt; `jobs` consumes that notice first. Send reopens the soft
+            // keyboard, which resizes the Mosh screen, and mosh-server drops the bottom rows of a
+            // shrink that a shell cannot redraw. Print the response only after that has settled.
             val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; jobs >/dev/null 2>&1; if ! test -f $directory/background-expired; then " +
-                record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
+                record("after") + "sleep 5; printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
             require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
             send(challenge)
             awaitDocument(scenario, "owned Mosh fresh response after background", proof(response), observe = { remaining ->
