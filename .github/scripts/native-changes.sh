@@ -64,7 +64,7 @@ classify() {
     # Checked only by the always-running client and agent jobs, or by fdroid.yml.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/native-changes.test.ts | \
-      tests/pinned-download.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
+      tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
     */*) add all ;;
     *.md) add docs ;;
     *) add all ;;

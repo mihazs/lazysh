@@ -154,7 +154,7 @@ test.each([
   ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
     `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2 }] as const),
-  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts',
+  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts',
     'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
 ] as const)('a pull request changing %s runs exactly the jobs it can affect', async (_, paths, expected) => {
   const outputs = await classify([...paths]);
