@@ -81,6 +81,13 @@ async function open(page:Page) {
 const switcher=(page:Page)=>page.getByRole('group',{name:'Session view',exact:true});
 const agentView=(page:Page)=>page.getByRole('region',{name:'Agent view',exact:true}).and(page.locator(':visible'));
 const terminalText=(page:Page)=>page.locator('.terminal-pane:visible .xterm-rows').innerText();
+/** Switches to the Agent view and waits for the bound conversation. */
+async function showAgent(page:Page) {
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  return agent;
+}
 const fixture=(page:Page)=>page.evaluate(()=>({...window.agentView,channels:undefined}));
 
 test('switches the same tmux session between Terminal and Agent mid-turn without touching the terminal, and both inputs reach both views',async({page})=>{
@@ -204,9 +211,7 @@ test('phone never offers Both',async({page},testInfo)=>{
   await expect(page.locator('.workspace-header').getByText('Fixture / work',{exact:true})).toBeVisible();
   expect(await page.locator('.workspace-header').getByText('Fixture / work',{exact:true}).evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   // The Agent view reads like a chat: no recorded-reader follow controls, and the conversation keeps most of the screen.
-  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
-  const agent=agentView(page);
-  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  const agent=await showAgent(page);
   await expect(agent.getByRole('checkbox')).toHaveCount(0);
   await expect(agent.getByRole('heading',{name:'user',exact:true})).toHaveCount(0);
   expect((await agent.getByRole('region',{name:'Conversation messages',exact:true}).boundingBox())!.height).toBeGreaterThan(844/2);
@@ -218,9 +223,18 @@ test('phone never offers Both',async({page},testInfo)=>{
 });
 
 /** Stock Herdr host: six live agents, fifty ended hook reports without pane identity, and a companion that may predate conversation reading. */
-async function openHerdr(page:Page,companion:boolean) {
+/** What a real Claude Code transcript holds around a harness event: usage counters, a background-task notification typed by the harness and tool activity. */
+const richConversation=[
+  {id:'p0',role:'user',blocks:[{type:'text',text:'Explain the build'}]},
+  {id:'t0',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'ls'}]},
+  {id:'a0',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}],usage:{inputTokens:2,outputTokens:51,cacheReadTokens:157518,cacheWriteTokens:1790}},
+  {id:'n0',role:'user',blocks:[{type:'text',text:'<task-notification>\n<task-id>bl44ejerw</task-id>\n<summary>Monitor event: "Version PRs whose checks are green or failed"</summary>\n<event>version PR #624 checks green</event>\n</task-notification>'}]},
+  {id:'t1',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'gh pr list'},{type:'tool_use',name:'Monitor',text:'watch'}]},
+  {id:'a1',role:'assistant',blocks:[{type:'text',text:'v0.158.0 is published.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
+];
+async function openHerdr(page:Page,companion:boolean,rich=false) {
   await installBaseHost(page);
-  await page.addInitScript(companion=>{
+  await page.addInitScript(({companion,rich,richConversation})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
     const sessions=['claude-0','claude-1','claude-2','claude-3','claude-4','claude-5'];
     const panes=sessions.map((id,index)=>({workspace_id:`w${index}`,tab_id:`w${index}:t1`,pane_id:`w${index}:p1`,terminal_id:`term-${index}`,cwd:`/home/owner/dev/project-${index}`,focused:false,agent_status:index===1?'working':'idle'}));
@@ -242,13 +256,13 @@ async function openHerdr(page:Page,companion:boolean) {
       if(command==='agent_herdr_conversation'){
         const target=args.target as {agentSessionId:string};record.conversations.push(target.agentSessionId);
         if(!companion)throw {kind:'herdr_conversation_companion_required',message:'Update the companion'};
-        return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+        return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:rich?richConversation:[
           {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'t',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'ls'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
       }
       if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.3',support:'full',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
-  },companion);
+  },{companion,rich,richConversation});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
@@ -269,6 +283,7 @@ test('stock Herdr: the Agent view lists the live agents, and selecting one opens
   await expect(agent.getByRole('region',{name:'Turn',exact:true})).toHaveCount(1);
   await expect(agent.locator('header')).toContainText('Claude Code · project-5');
   expect([...new Set((await herdrFixture(page)).conversations)]).toEqual(['00000005-0000-4000-8000-000000000000']);
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
   await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'}]);
 });
@@ -280,6 +295,52 @@ test('stock Herdr with an old companion: the Agent view says to update it and st
   await expect(agent.getByRole('alert')).toContainText('too old to read agent conversations');
   await expect(agent.getByRole('alert')).toBeInViewport();
   await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
   await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'}]);
+});
+
+test('a selected conversation keeps its chrome to one compact row and shows harness records as events, not raw tags',async({page},testInfo)=>{
+  await openHerdr(page,true,true);
+  const agent=agentView(page);
+  await agent.locator('article.agent-card').filter({hasText:'project-0'}).getByRole('button',{name:/Open conversation/}).click();
+  await expect(agent.getByText('v0.158.0 is published.',{exact:true})).toBeVisible();
+  const flow=agent.getByRole('region',{name:'Conversation messages',exact:true});
+  // Nothing but the one header row sits between the session header and the first message.
+  const header=await agent.locator('header').boundingBox(),first=await flow.boundingBox(),shell=await page.locator('.workspace-header').boundingBox();
+  expect(header!.height).toBeLessThanOrEqual(48);
+  expect(first!.y).toBeLessThanOrEqual(header!.y+header!.height+1);
+  // On a phone the session header is the only thing above that row.
+  if(testInfo.project.name==='phone')expect(first!.y-(shell!.y+shell!.height)).toBeLessThanOrEqual(52);
+  await expect(agent.getByRole('button',{name:'Back to sessions'})).toHaveCount(0);
+  await expect(agent.getByRole('button',{name:'Enter session'})).toHaveCount(0);
+  await expect(agent.getByText(/not verified as belonging|association with this pane is unverified/)).toHaveCount(0);
+  // The injected notification is a muted event row; the person's bubble is only what they typed. Counters are not in the flow.
+  await expect(flow).not.toContainText(/<task-notification|inputTokens|cacheReadTokens|<task-id>/);
+  await expect(flow.getByRole('article',{name:'user',exact:true})).toHaveText(['Explain the build']);
+  await expect(flow.getByText(/^Task notification/)).toHaveText('Task notification · version PR #624 checks green');
+  // The caveat, Back and Enter and the counters stay one tap away.
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
+  const menu=agent.getByRole('group',{name:'Agent view options',exact:true});
+  await expect(menu.getByRole('button',{name:'Back to sessions',exact:true})).toBeVisible();
+  await expect(menu.getByRole('button',{name:'Enter session',exact:true})).toBeVisible();
+  await expect(menu).toContainText('not verified as belonging to this terminal');
+  await expect(menu).toContainText('Last response: 2 input, 114 output, 153,532 cache read, 472 cache write tokens');
+  expect((await menu.boundingBox())!.x).toBeGreaterThanOrEqual(0);
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+});
+
+test('the bound composer is one line with a visible Send control beside it and the conversation keeps the screen',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}),stage=agent.getByRole('button',{name:'Stage in terminal',exact:true});
+  const [field,send,composer,flow]=await Promise.all([draft.boundingBox(),stage.boundingBox(),agent.getByRole('form',{name:'Transcript draft',exact:true}).boundingBox(),agent.getByRole('region',{name:'Conversation messages',exact:true}).boundingBox()]);
+  expect(field!.height).toBeLessThanOrEqual(48);
+  expect(send!.y).toBeLessThan(field!.y+field!.height);expect(send!.x).toBeGreaterThan(field!.x+field!.width-1);
+  expect(composer!.height).toBeLessThanOrEqual(150);
+  // The composer grows with its text and stays within the screen.
+  await draft.fill('one\ntwo\nthree');
+  expect((await draft.boundingBox())!.height).toBeGreaterThan(field!.height+20);
+  expect(flow!.height).toBeGreaterThan(page.viewportSize()!.height*0.5);
 });
