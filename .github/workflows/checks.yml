@@ -10,6 +10,10 @@ permissions:
 
 env:
   MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
+  # Shallow jobs have no base branch to diff, and `moon run` on a pull request would fail resolving it.
+  # Only the two `moon ci` steps need changed files; they override MOON_BASE with the pull request base.
+  MOON_BASE: HEAD
+  MOON_HEAD: HEAD
 
 # A newer pull request push supersedes its older checks; main runs always finish so every
 # merged commit gets a complete native verification (GitHub still keeps one pending run).
@@ -101,6 +105,8 @@ jobs:
       # (-g). Pushes to main always run everything: it is the full parity evidence.
       - name: Build, type-check and test the client (affected tasks)
         if: github.event_name == 'pull_request'
+        env:
+          MOON_BASE: origin/${{ github.base_ref }}
         run: bunx moon ci client:build client:check client:test -g -c 1
       - name: Build, type-check and test the client
         if: github.event_name != 'pull_request'
@@ -152,6 +158,7 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
+          MOON_BASE: origin/${{ github.base_ref }}
         run: |
           # Pull requests run only the affected crates and their dependents (-g); main runs all.
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g'; else verb=run; fi

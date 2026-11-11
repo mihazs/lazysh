@@ -9,8 +9,9 @@ export function moonJson(args: string[], cwd = root): Promise<any> {
   const key = `${cwd}\0${args.join('\0')}`;
   if (!memo.has(key)) {
     memo.set(key, (async () => {
+      const { MOON_BASE, MOON_HEAD, ...environment } = process.env; // checks.yml pins both for its shallow jobs
       const child = Bun.spawn([process.execPath, moonScript, ...args], {
-        cwd, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, MOON_TELEMETRY: 'false', NO_COLOR: '1' },
+        cwd, stdout: 'pipe', stderr: 'pipe', env: { ...environment, MOON_TELEMETRY: 'false', NO_COLOR: '1' },
       });
       const [status, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       if (status !== 0) throw new Error(`moon ${args.join(' ')} exited ${status}: ${error}`);
