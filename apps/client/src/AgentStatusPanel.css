@@ -1,0 +1,12 @@
+.agent-status { display: grid; gap: 6px; margin-inline: 12px; min-width: 0; font-size: 13px; }
+.agent-status-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.agent-status-bar > button { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--theme-control, transparent); color: inherit; }
+.agent-status-bar > .agent-status-toggle { padding-inline-start: 8px; font-weight: 600; }
+.agent-status-tree { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 30vh; overflow-y: auto; }
+.agent-status-tree > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; padding: 6px 10px; border-inline-start: 2px solid var(--border); }
+.agent-status-tree > li[data-state="running"] { border-inline-start-color: var(--accent); }
+.agent-status-tree > li[data-state="failed"] { border-inline-start-color: var(--danger, currentColor); }
+.agent-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-status-type, .agent-status-meta, .agent-status-tree small { color: var(--muted); }
+.agent-status-meta { grid-column: 1 / -1; font-variant-numeric: tabular-nums; }
+.agent-status-tree small { grid-column: 1 / -1; overflow-wrap: anywhere; }

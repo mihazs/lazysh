@@ -111,3 +111,24 @@ The working state, the waiting state and the model and mode each name their sour
 view, because the apps studied show that a state taken from the wrong source is the most
 common way a mobile client misleads (a turn shown finished while it runs, "ready for review"
 with background work, a send arrow stuck disabled).
+
+## Status area under the prompt, per agent
+
+Tracked by [#1299](https://github.com/mihazs/lazysh/issues/1299), under the Agent view epic
+[#1277](https://github.com/mihazs/lazysh/issues/1277). Every agent TUI shows a status area
+around its prompt; the Agent view shows the same facts, from the source named in each cell.
+A fact whose only source is the terminal screen is a listed gap, because lazysh has no
+screen-reading command: the terminal snapshot of the confirmed input
+(`parseTerminalSnapshot`) identifies the pane to write to and carries no screen text.
+
+| Agent | TUI element | Source in lazysh | Agent view today |
+| --- | --- | --- | --- |
+| Claude Code | Counters of background shells and monitors | Recorded `Bash` calls with `run_in_background`, `Monitor` calls, their results, `TaskStop` and the harness `task-notification` records | Shipped in the background-work panel: counter buttons that list each shell or monitor with state and elapsed time |
+| Claude Code | Tree of sub-agents (type, state, elapsed, tokens) with "N more" | Recorded `Agent` or `Task` calls, their results and the notification's `usage` (tokens, duration) | Shipped: type, state, live elapsed time, tokens once finished, three rows then **N more**. No tokens up and down while one runs (sub-agent records are sidechain and not read yet, [#1229](https://github.com/mihazs/lazysh/issues/1229)); no openable child conversation |
+| Claude Code | Dynamic workflows with progress bars and token totals | A recorded `Workflow` call and its notification; no per-step record in the conversation | Partial: one running row per workflow. Progress bars wait for a companion record ([#1284](https://github.com/mihazs/lazysh/issues/1284)) |
+| Claude Code | Permission-mode line ("auto mode on", Shift+Tab cycles) | `permission-mode` records, read by [#1224](https://github.com/mihazs/lazysh/issues/1224) as the session `mode` | Gap: the mode line and the tap-to-cycle control need a guarded Shift+Tab key in the confirmed input, which today sends text and Escape only |
+| Claude Code | Output viewer behind a shell or monitor | The task's output file on the host | Gap: needs a companion command that reads a task output file inside the Claude task directory |
+| Codex | Footer: model and effort, context left, approval policy, sandbox | `turn_context` and `token_count` records, read by [#1224](https://github.com/mihazs/lazysh/issues/1224) as the session `model`, `effort`, `approval`, `sandbox` and `usage` | In flight with #1224 (header pills and options sheet) |
+| Codex | Background terminals count (`/ps`), sub-agent threads | `exec_command` sessions and `spawn_agent` calls; their record shapes are not yet confirmed against a real session, so no fixture exists | Gap: tracked in [#1285](https://github.com/mihazs/lazysh/issues/1285); the panel's derivation is Claude-only until synthetic fixtures exist |
+| OpenCode | Footer: model, agent (build or plan), context used, cost | The OpenCode database messages (model, tokens, cost) | Gap: the Agent view binds Claude Code and Codex only; OpenCode follows in [#1125](https://github.com/mihazs/lazysh/issues/1125) |
+| Gemini CLI | Footer: folder, sandbox state, model, context left, approval mode (default, auto-edit, YOLO) | No transcript reader; hook events carry none of it | Gap: [#1125](https://github.com/mihazs/lazysh/issues/1125); the footer is on screen only |
