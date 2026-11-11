@@ -5,7 +5,7 @@ import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import {installTerminalLinks} from "./terminalLinks";
 import { Keyboard, KeyboardOff, Lock, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
@@ -645,11 +645,10 @@ export default function TerminalPane({ session, active, quietActivation = false,
     const terminal = session.terminal;
     const addon = new TerminalFitAddon();
     terminal.loadAddon(addon);
-    const links = new WebLinksAddon((_event, uri) => {
+    const links = installTerminalLinks(terminal, uri => {
       const url = terminalWebUrl(uri);
       if (url) setLink(url);
     });
-    terminal.loadAddon(links);
     const osc = terminal.parser.registerOscHandler(52, data => {
       const text = decodeClipboardRequest(data);
       if (text !== undefined && !pendingClipboard.current) {

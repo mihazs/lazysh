@@ -57,18 +57,30 @@ test.describe('remote clipboard (OSC 52)',()=>{
   });
 });
 
+/** Presses a cell until the link region opens: xterm only offers a link after the pointer reached it. */
+async function tapLink(page:Page,projectName:string,row:number,column:number) {
+  const target=await cellPoint(page,row,column);
+  const region=page.getByRole('region',{name:'Terminal link',exact:true});
+  await expect(async()=>{
+    if(projectName==='phone')await page.touchscreen.tap(target.x,target.y);
+    else {await page.mouse.move(target.x,target.y);await page.mouse.move(target.x+1,target.y);await page.mouse.click(target.x+1,target.y);}
+    await expect(region).toBeVisible({timeout:1000});
+  }).toPass();
+  return region;
+}
+async function terminalColumns(page:Page) {
+  return screen(page).evaluate(node=>{
+    const probe=node.closest('.xterm')!.querySelector('.xterm-char-measure-element')!;
+    return Math.floor(node.getBoundingClientRect().width/(probe.getBoundingClientRect().width/Math.max(1,(probe.textContent??'').length)));
+  });
+}
+
 test('a terminal link offers Open in browser and Copy URL',async({page},testInfo)=>{
   await openClipboardTerminal(page);
   const url='https://example.invalid/owned/path?q=1';
   await output(page,`\x1b[2J\x1b[Hsee ${url} here\r\n`);
   await expect(screen(page)).toContainText(url);
-  const target=await cellPoint(page,0,10);
-  const activate=async()=>{
-    if(testInfo.project.name==='phone')await page.touchscreen.tap(target.x,target.y);
-    else {await page.mouse.move(target.x,target.y);await page.mouse.move(target.x+1,target.y);await page.mouse.click(target.x+1,target.y);}
-  };
-  const region=page.getByRole('region',{name:'Terminal link',exact:true});
-  await expect(async()=>{await activate();await expect(region).toBeVisible({timeout:1000});}).toPass();
+  const region=await tapLink(page,testInfo.project.name,0,10);
   await expect(region).toContainText(url);
   await region.getByRole('button',{name:'Copy URL',exact:true}).click();
   await expect.poll(()=>readClipboard(page)).toBe(url);
@@ -76,6 +88,31 @@ test('a terminal link offers Open in browser and Copy URL',async({page},testInfo
   await expect(region).toHaveCount(0);
   expect(await page.evaluate(()=>window.simpleShortcutOpened)).toEqual([url]);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+});
+
+test.describe('URLs that fill more than one row',()=>{
+  for(const [name,wrap] of [
+    ['soft-wrapped by the terminal',(url:string)=>url],
+    ['broken at the last column by a program or multiplexer',(url:string,columns:number)=>url.match(new RegExp(`.{1,${columns}}`,'g'))!.join('\r\n')],
+  ] as const)test(`tapping the second row of a URL ${name} opens the whole URL`,async({page},testInfo)=>{
+    await openClipboardTerminal(page);
+    const columns=await terminalColumns(page);
+    const url=`https://example.invalid/${'long-path-segment/'.repeat(Math.ceil(columns/18)+1)}end?q=1&r=two`;
+    await output(page,`\x1b[2J\x1b[H${wrap(url,columns)}\r\nnext line\r\n`);
+    const region=await tapLink(page,testInfo.project.name,1,2);
+    await expect(region).toContainText(url);
+    await region.getByRole('button',{name:'Open in browser',exact:true}).click();
+    await expect(region).toHaveCount(0);
+    expect(await page.evaluate(()=>window.simpleShortcutOpened)).toEqual([url]);
+  });
+  test('an application hyperlink (OSC 8) wins over the URL its own text looks like',async({page},testInfo)=>{
+    await openClipboardTerminal(page);
+    await output(page,'\x1b[2J\x1b[H\x1b]8;;https://owned.invalid/target?a=1\x1b\\https://shown.invalid/label\x1b]8;;\x1b\\ https://other.invalid/plain\r\n');
+    const region=await tapLink(page,testInfo.project.name,0,2);
+    await expect(region).toContainText('https://owned.invalid/target?a=1');
+    await region.getByRole('button',{name:'Open in browser',exact:true}).click();
+    expect(await page.evaluate(()=>window.simpleShortcutOpened)).toEqual(['https://owned.invalid/target?a=1']);
+  });
 });
 
 test('toolbar Paste sends the real clipboard text to the terminal',async({page})=>{

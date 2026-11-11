@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: 
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
-vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
+vi.mock("./terminalLinks", () => ({installTerminalLinks: (_terminal: unknown, open: (uri: string) => void) => {mocks.link = (_event, uri) => open(uri); return {dispose() {}};}}));
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
