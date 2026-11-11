@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.30.5
+
+### Patch Changes
+
+- a738e6f: List only live Herdr agents in Agent view, open the selected agent's conversation as native chat, and say so when the host companion must be updated.
+- @lazysh/account-usage@1.30.5
+  - @lazysh/common@1.30.5
+  - @lazysh/display-idle@1.30.5
+  - @lazysh/et-transport@1.30.5
+  - @lazysh/mosh-transport@1.30.5
+
 ## 1.30.4
 
 ### Patch Changes
