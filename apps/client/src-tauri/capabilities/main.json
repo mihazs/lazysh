@@ -84,6 +84,8 @@
     "allow-voice-cloud-cancel",
     "allow-herdr-tree",
     "allow-agent-herdr-conversation",
+    "allow-agent-watch-start",
+    "allow-agent-watch-stop",
     "allow-herdr-action",
     "allow-herdr-workspace-plan",
     "allow-herdr-workspace-create",

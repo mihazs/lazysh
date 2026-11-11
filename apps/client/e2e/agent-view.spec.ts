@@ -3,7 +3,8 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 
 type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;
-  channels:Record<string,{onmessage:(event:unknown)=>void}>};
+  channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
+  emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
 
@@ -31,7 +32,13 @@ async function open(page:Page) {
   await installBaseHost(page);
   await page.addInitScript(({snapshot,bound,transcript})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'tmux',name:'work'}},{hostId:'fixture',attached:{kind:'tmux',name:'other'}}]));
-    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{}};
+    const messages=()=>fixture.turns.flatMap((turn,index)=>[
+      {id:`p${index}`,role:'user',blocks:[{type:'text',text:turn.prompt}]},
+      {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
+      {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
+    ]);
+    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},polls:0,watchMode:'off',watchStops:0,
+      emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
     // The synthetic agent answers each submitted prompt; the terminal echoes it once, as a TUI would.
@@ -62,12 +69,21 @@ async function open(page:Page) {
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
-        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:fixture.turns.flatMap((turn,index)=>[
-          {id:`p${index}`,role:'user',blocks:[{type:'text',text:turn.prompt}]},
-          {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
-          {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
-        ])};
+        fixture.polls++;
+        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:messages()};
       }
+      // The synthetic host's `transcript-watch`: off (cannot open), an old companion, or a stream the test drives.
+      if(command==='agent_watch_start'){
+        if(fixture.watchMode==='off')throw new Error('The channel could not open');
+        const events=args.events as {onmessage:(event:unknown)=>void};fixture.watch=events;
+        setTimeout(()=>{
+          if(fixture.watchMode==='old')return events.onmessage({type:'unavailable',reason:'companion_required'});
+          fixture.emit({type:'hello',protocol:1,agent:'codex'});
+          fixture.emit({type:'snapshot',gen:1,seq:1,entries:messages().map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+        });
+        return 'watch-1';
+      }
+      if(command==='agent_watch_stop'){fixture.watchStops++;return;}
       if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
@@ -88,7 +104,7 @@ async function showAgent(page:Page) {
   await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
   return agent;
 }
-const fixture=(page:Page)=>page.evaluate(()=>({...window.agentView,channels:undefined}));
+const fixture=(page:Page)=>page.evaluate(()=>({...window.agentView,channels:undefined,watch:undefined,emit:undefined,messages:undefined}));
 
 test('switches the same tmux session between Terminal and Agent mid-turn without touching the terminal, and both inputs reach both views',async({page})=>{
   await open(page);
@@ -343,4 +359,111 @@ test('the bound composer is one line with a visible Send control beside it and t
   await draft.fill('one\ntwo\nthree');
   expect((await draft.boundingBox())!.height).toBeGreaterThan(field!.height+20);
   expect(flow!.height).toBeGreaterThan(page.viewportSize()!.height*0.5);
+});
+
+/** Opens the Agent view with the synthetic host's `transcript-watch` in the given mode. */
+async function openLive(page:Page,mode:Fixture['watchMode']) {
+  await open(page);
+  await page.evaluate(mode=>{window.agentView.watchMode=mode;},mode);
+  return showAgent(page);
+}
+const flowOf=(agent:ReturnType<typeof agentView>)=>agent.getByRole('region',{name:'Conversation messages',exact:true});
+const watchState=(agent:ReturnType<typeof agentView>)=>agent.locator('section.chat-panel');
+
+test('live: a reply that grows in parts is patched in place over one channel, without polling, a reload or a scroll jump',async({page})=>{
+  const agent=await openLive(page,'stream');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  const flow=flowOf(agent);
+  // Enough earlier turns that the reader can be well above the tail.
+  await page.evaluate(()=>{
+    const fixture=window.agentView;
+    for(let index=1;index<=12;index++)fixture.turns.push({prompt:`Earlier question ${index}`,answer:`Earlier answer ${index}`});
+    fixture.emit({type:'snapshot',gen:2,seq:2,entries:fixture.messages().map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+  });
+  await expect(flow.getByText('Earlier answer 12',{exact:true})).toBeVisible();
+  const polls=(await fixture(page)).polls;
+  await expect.poll(()=>flow.evaluate(node=>node.scrollHeight-node.clientHeight-node.scrollTop)).toBeLessThan(30);
+  // Scroll up to an earlier answer and remember the element and the offset.
+  const earlier=flow.getByText('Earlier answer 3',{exact:true});
+  await earlier.scrollIntoViewIfNeeded();
+  await earlier.evaluate(node=>{node.closest('article')!.setAttribute('data-original','');});
+  await flow.evaluate(node=>{node.scrollTop-=40;node.dispatchEvent(new Event('scroll'));});
+  await expect(agent.getByRole('button',{name:'Jump to latest',exact:true})).toBeVisible();
+  const top=await flow.evaluate(node=>node.scrollTop);
+  const at=await earlier.evaluate(node=>node.getBoundingClientRect().top);
+  // The last answer arrives in three parts, and an earlier one is revised in place meanwhile.
+  const last=`a${12}`;
+  const parts=['The build','The build uses','The build uses Vite and a test run.'];
+  for(const [index,text] of parts.entries()) {
+    await page.evaluate(({text,index,last})=>{
+      const fixture=window.agentView;fixture.turns[12].answer=text;
+      fixture.emit({type:'delta',gen:2,seq:3+index,upserts:[{id:last,rev:2+index,message:{id:last,role:'assistant',blocks:[{type:'text',text}]}}],drops:[]});
+    },{text,index,last});
+    await expect(flow.getByText(text,{exact:true})).toBeVisible();
+  }
+  await page.evaluate(()=>window.agentView.emit({type:'delta',gen:2,seq:6,upserts:[{id:'a3',rev:2,message:{id:'a3',role:'assistant',blocks:[{type:'text',text:'Earlier answer 3, revised'}]}}],drops:[]}));
+  await expect(flow.getByText('Earlier answer 3, revised',{exact:true})).toBeVisible();
+  // Nothing was replaced and the reader did not move: same element, same offset, same scroll position.
+  await expect(flow.locator('article[data-original]')).toHaveCount(1);
+  expect(await flow.evaluate(node=>node.scrollTop)).toBe(top);
+  expect(Math.abs((await flow.getByText('Earlier answer 3, revised',{exact:true}).evaluate(node=>node.getBoundingClientRect().top))-at)).toBeLessThan(2);
+  await expect(agent.getByRole('button',{name:'Jump to latest',exact:true})).toBeVisible();
+  // Jump to latest returns to the tail, where the new text is.
+  await agent.getByRole('button',{name:'Jump to latest',exact:true}).click();
+  await expect(flow.getByText(parts[2],{exact:true})).toBeInViewport();
+  await page.waitForTimeout(3000);
+  expect((await fixture(page)).polls).toBe(polls);
+});
+
+test('live: the stream follows the tail while the reader is there and shows the agent working',async({page})=>{
+  const agent=await openLive(page,'stream');
+  const flow=flowOf(agent);
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  await page.evaluate(()=>{
+    const fixture=window.agentView;
+    for(let index=1;index<=12;index++)fixture.turns.push({prompt:`Question ${index}`,answer:`Answer ${index}`});
+    fixture.emit({type:'snapshot',gen:2,seq:2,activity:'working',entries:fixture.messages().map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+  });
+  await expect(agent.getByRole('status').filter({hasText:'Agent is working'})).toBeVisible();
+  await expect(flow.getByText('Answer 12',{exact:true})).toBeInViewport();
+  const elapsed=await page.evaluate(()=>new Promise<number>(resolve=>{
+    const started=performance.now();
+    new MutationObserver((_records,observer)=>{
+      if(document.body.textContent?.includes('Fresh answer')){observer.disconnect();resolve(performance.now()-started);}
+    }).observe(document.body,{childList:true,subtree:true,characterData:true});
+    const fixture=window.agentView;fixture.turns.push({prompt:'Fresh question',answer:'Fresh answer'});
+    fixture.emit({type:'delta',gen:2,seq:3,upserts:fixture.messages().slice(-3).map(message=>({id:(message as {id:string}).id,rev:1,message})),drops:[],activity:null});
+  }));
+  console.log(`stream frame to rendered card: ${elapsed.toFixed(0)} ms`);
+  expect(elapsed).toBeLessThan(500);
+  await expect(flow.getByText('Fresh answer',{exact:true})).toBeInViewport();
+  await expect(agent.getByText('Agent is working',{exact:true})).toHaveCount(0);
+});
+
+test('delayed: without a watch channel the view polls every 2 seconds and says it can lag',async({page})=>{
+  const agent=await openLive(page,'off');
+  await expect(agent.getByText('Live updates are unavailable, so this view refreshes every 2 seconds and can lag.',{exact:true})).toBeVisible();
+  await expect(watchState(agent)).toHaveAttribute('data-watch','delayed');
+  const polls=(await fixture(page)).polls;
+  await page.evaluate(()=>window.agentView.turns.push({prompt:'Typed in the terminal',answer:'Answered by polling'}));
+  await expect(agent.getByText('Answered by polling',{exact:true})).toBeVisible({timeout:6000});
+  expect((await fixture(page)).polls).toBeGreaterThan(polls);
+});
+
+test('an old host companion: the view says what to update, offers the installation and keeps polling',async({page})=>{
+  const agent=await openLive(page,'old');
+  await expect(agent.getByText(/Live updates need a newer host companion/)).toBeVisible();
+  await expect(watchState(agent)).toHaveAttribute('data-watch','unsupported');
+  await page.evaluate(()=>window.agentView.turns.push({prompt:'Typed in the terminal',answer:'Answered by polling'}));
+  await expect(agent.getByText('Answered by polling',{exact:true})).toBeVisible({timeout:6000});
+  await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
+});
+
+test('leaving the Agent view closes the channel and coming back opens a new one',async({page})=>{
+  const agent=await openLive(page,'stream');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  await expect.poll(async()=>(await fixture(page)).watchStops).toBe(1);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
 });

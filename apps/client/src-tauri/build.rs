@@ -127,6 +127,8 @@ fn main() {
         "herdr_chat",
         "herdr_tree",
         "agent_herdr_conversation",
+        "agent_watch_start",
+        "agent_watch_stop",
         "herdr_action",
         "herdr_workspace_plan",
         "herdr_workspace_create",

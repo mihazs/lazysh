@@ -39,6 +39,7 @@ mod theme_links;
 mod theme_qr;
 mod tmux_jump;
 mod tmux_server;
+mod transcript_watch;
 mod ui_locale;
 mod vault;
 mod voice;
@@ -93,6 +94,7 @@ pub fn run() {
         .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
+        .manage(transcript_watch::TranscriptWatches::default())
         .manage(share::ShareState::default())
         .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
@@ -243,6 +245,8 @@ pub fn run() {
                 herdr_guard::herdr_chat,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
+                transcript_watch::agent_watch_start,
+                transcript_watch::agent_watch_stop,
                 herdr::herdr_action,
                 herdr_create::herdr_workspace_plan,
                 herdr_create::herdr_workspace_create,

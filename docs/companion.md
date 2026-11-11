@@ -90,6 +90,21 @@ input. A row with no single reported Claude Code or Codex conversation says so, 
 **Enter session** opens the exact pane. A host companion without
 `herdr-conversation` makes the view ask you to update it from Agents.
 
+While a bound Claude Code or Codex conversation is followed, the Agent view opens one
+`lazysh-agent transcript-watch` channel instead of polling (see
+[Live conversation stream](#live-conversation-stream)): each frame patches the cards in
+place, so a reply that grows, or a tool result that lands on an older turn, changes that card
+without replacing the page or moving the reading position, and **Jump to latest** and position
+hold behave as before. The channel is closed when the Agent view is hidden, the session ends
+or the app locks, and a Herdr-selected conversation is checked against the live Herdr tree
+every 10 seconds while it streams. When the channel cannot open, or is lost, the view polls
+every 2 seconds as before and says "Live updates are unavailable" (never opened) or
+"Connection lost. Showing the last update" (was live), and tries again after 1, 2, 5, 10 and
+then 30 seconds. A host companion that predates `transcript-watch` makes the view say that
+live updates need a newer companion and offer **Host companion installation**; it is asked
+again after a minute. A row at the end of the thread shows **Agent is working** or **Agent is
+waiting for your answer** from the recorded turn state.
+
 The view keeps its chrome to one row: the agent kind and folder, its state, an
 options button and a **Terminal** shortcut. **Back to sessions**, **Enter session**,
 the caveat that a conversation grants no terminal input, and the token counters of

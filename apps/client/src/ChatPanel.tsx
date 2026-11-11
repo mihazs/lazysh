@@ -5,7 +5,7 @@ import {shellPath} from './attachment';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
-import {formatCountdown} from './relativeTime';
+import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +16,8 @@ import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
 import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
+import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
+import {applyWatchOp} from './transcriptWatch';
 import {projectMessages,type InjectedEvent} from './chatInjected';
 
 type Block = {
@@ -144,6 +146,9 @@ export function parseTranscript(value: unknown): Page {
   }
   return page;
 }
+
+/** A watch frame's messages go through the paged reader's own validation. */
+const parseWatchPage = (page: unknown) => parseTranscript(page);
 
 type Turn = {key: string; prompt?: Message; event?: Message; activity: Message[]; answer?: Message};
 /** One block per turn: the prompt, the work in between, and the closing answer. Tool results are not prompts. */
@@ -338,11 +343,42 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {if (following && atLatestRef.current) jumpToLatest();}, [following,messages]);
   const autoRead = useRef(() => {});
   autoRead.current = () => {void read(false,true);};
+  // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
+  const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path} : undefined, [bound,conversation,sourceMatches]);
+  const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current(),sessionId,
+    target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
+      holdPosition();setError('');
+      setMessages(previous=>applyWatchOp(previous,op));
+      if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
+      setUpdated(Date.now());
+    }});
+  const watchLive=useRef(false);watchLive.current=watch.live;
+  // Reading older turns: the turn at the top of the view stays where it is while updates land around it.
+  const anchor=useRef<{key:string;top:number}|null>(null);
+  function holdPosition() {
+    const list=messageList.current;anchor.current=null;
+    if(!list || atLatestRef.current)return;
+    const top=list.getBoundingClientRect().top;
+    for(const child of Array.from(list.children)) {
+      const box=child.getBoundingClientRect(),key=(child as HTMLElement).dataset.anchor;
+      if(key && box.bottom>top){anchor.current={key,top:box.top-top};return;}
+    }
+  }
+  useLayoutEffect(()=>{
+    const held=anchor.current;anchor.current=null;
+    const list=messageList.current;
+    const element=held && list ? Array.from(list.children).find(child=>(child as HTMLElement).dataset.anchor===held.key) : undefined;
+    if(held && list && element)list.scrollTop+=element.getBoundingClientRect().top-list.getBoundingClientRect().top-held.top;
+  },[messages]);
+  const [updated,setUpdated] = useState(Date.now);
   useEffect(() => {
-    if (!following || !canFollow || busy || !visible || !shown || !access.current()) return;
+    if (!following || !canFollow || busy || !visible || !shown || watch.live || !access.current()) return;
     const timer = setTimeout(() => autoRead.current(),2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,shown,completed,accessState.epoch,access]);
+  }, [following,canFollow,busy,visible,shown,watch.live,completed,accessState.epoch,access]);
+  const lagging = !!watchTarget && following && (watch.state === 'delayed' || watch.state === 'stale');
+  const now = useNow(1000, lagging);
   async function discover() {
     if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
     flight.current = true;
@@ -372,7 +408,25 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if (mounted.current && access.current()) {setBusy(false); setCompleted(value => value + 1);}
     }
   }
+  /** The hook report must still tie this conversation to this pane and this file; a change retires the view. */
+  async function checkReport(still: () => boolean) {
+    if (!bound?.report) return;
+    try {
+      if(bound.report.paneId) {
+        const snapshot=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}}));
+        if (!still()) return;
+        if(snapshot.destination.paneId!==bound.report.paneId) throw new LocalUiError('chatChanged');
+      }
+      const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
+      if (!still()) return;
+      const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
+      if(matches.length!==1 || matches[0].agent!==bound.report.agent || (bound.report.paneId && (matches[0].paneId!==bound.report.paneId || reports.filter(row=>row.paneId===bound.report!.paneId).length!==1))) throw new LocalUiError('chatChanged');
+      const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
+      if(history.status!=='available' || history.path!==bound.path || (bound.report.paneId && history.paneId!==bound.report.paneId)) throw new LocalUiError('chatChanged');
+    } catch(error) {if(still())onBoundInvalid?.();throw error;}
+  }
   async function read(reset: boolean, automatic = false, prepare = false) {
+    if (watchLive.current && !reset) return;
     if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
     if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden')) return;
     const source = reset
@@ -398,22 +452,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     try {
       const replace = reset || source.view === "conversation";
       const cursor = replace ? 0 : offset;
-      const validateReport = async () => {
-        if (!bound?.report) return;
-        try {
-          if(bound.report.paneId) {
-            const snapshot=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}}));
-            if (!currentRequest(current)) return;
-            if(snapshot.destination.paneId!==bound.report.paneId) throw new LocalUiError('chatChanged');
-          }
-          const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
-          if (!currentRequest(current)) return;
-          const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
-          if(matches.length!==1 || matches[0].agent!==bound.report.agent || (bound.report.paneId && (matches[0].paneId!==bound.report.paneId || reports.filter(row=>row.paneId===bound.report!.paneId).length!==1))) throw new LocalUiError('chatChanged');
-          const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
-          if(history.status!=='available' || history.path!==bound.path || (bound.report.paneId && history.paneId!==bound.report.paneId)) throw new LocalUiError('chatChanged');
-        } catch(error) {if(currentRequest(current))onBoundInvalid?.();throw error;}
-      };
+      const validateReport = () => checkReport(() => currentRequest(current));
       if (bound?.report) {
         await validateReport();
         if (!currentRequest(current)) return;
@@ -426,7 +465,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
         })),
       );
-      if (!currentRequest(current)) return;
+      // A stream that went live while this poll was out is newer than the page.
+      if (!currentRequest(current) || (watchLive.current && !reset)) return;
       if (bound?.report) {
         await validateReport();
         if (!currentRequest(current)) return;
@@ -448,6 +488,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOpened(source);
       if (prepare || (reset && bound)) {setFollowing(true); followRef.current = true;}
       if (reset) {atLatestRef.current = true; setAtLatest(true);}
+      setUpdated(Date.now());
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
@@ -464,7 +505,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if (currentRequest(current)) {
         setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
           ? new LocalUiError('chatChanged') : captureUiError(e));
-        setFollowing(false); followRef.current = false;
+        // A bound conversation keeps trying through a dropped connection, since the stream or the next poll recovers it
+        // and clears the error. A conversation that is no longer this pane's, or a host that cannot read it, stops.
+        const permanent = e instanceof LocalUiError ? ['chatChanged','herdrConversationCompanion','chatUpdateCompanion'].includes(e.key) : (e as {kind?: string} | null)?.kind === 'herdr_target_missing';
+        if (!(bound && automatic) || permanent) {setFollowing(false); followRef.current = false;}
       }
     } finally {
       flight.current = false;
@@ -541,7 +585,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
-    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-watch={watchTarget && following ? watch.state : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
       {!bound && <>
       <h3>{t("chatTitle")}</h3>
       <p>
@@ -688,13 +732,18 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
       }}>
-        {timeline ? turns.map(turn => <section key={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
+        {timeline ? turns.map(turn => <section key={turn.key} data-anchor={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
           {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
+        {timeline && (activity === 'working' || activity === 'waiting') && <p className="agent-working" role="status" data-activity={activity}>
+          <span className="chat-activity-dot" aria-hidden="true" />{t(activity === 'working' ? 'chatActivityWorking' : 'chatActivityWaiting')}
+        </p>}
       </div>
+      {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
+      {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
