@@ -25,6 +25,7 @@ import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './history
 import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
+import AgentThinking from './AgentThinking';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -179,6 +180,8 @@ export function groupTurns(messages: Message[]): Turn[] {
 
 /** The timeline keeps the latest plan in one chip above the composer, so a plan block is not drawn in its turn. */
 const isPlanBlock = (block: Block) => block.card?.kind === 'plan';
+/** The timeline folds all thinking of a turn into one row, so a thinking block is not drawn in its message. */
+const isThinking = (block: Block) => block.type === 'thinking';
 const commandTools = new Set(['bash', 'command', 'shell', 'exec_command', 'local_shell', 'run_terminal_cmd']);
 const editTools = new Set(['edit', 'multiedit', 'write', 'notebookedit', 'apply_patch', 'str_replace_based_edit_tool']);
 /** The folded activity row: what the agent did ("Ran 3 commands · Made 2 edits · 1 failed · 1:12"). */
@@ -593,7 +596,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
         : <p>{eventLabel(message.event)}</p>}
     </article>
-  ) : timeline && message.blocks.every(isPlanBlock) ? null : (
+  ) : timeline && message.blocks.every(block => isPlanBlock(block) || isThinking(block)) ? null : (
     <article key={message.id} data-anchor={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
@@ -604,7 +607,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
       </p>}
       {message.blocks.map((block, index) => {
-        if (timeline && isPlanBlock(block)) return null;
+        if (timeline && (isPlanBlock(block) || isThinking(block))) return null;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
@@ -796,6 +799,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {timeline ? turns.map(turn => <section key={turn.key} data-anchor={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
+          <AgentThinking turn={turn} />
           {(()=>{
             // Only the last turn can still wait for its question.
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];

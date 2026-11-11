@@ -2107,6 +2107,8 @@ export const english = {
   agentViewStageOnly: "This session cannot take confirmed input. Use Stage in terminal to send a draft.",
   agentViewTurn: "Turn",
   agentPlanProgress: "{{done}} of {{total}}",
+  agentThinking: "Thinking",
+  agentThoughtFor: "Thought for {{time}}",
   agentViewActivity: "Activity ({{count}})",
   agentViewElapsed: "Time since this turn started",
   agentViewOptions: "Agent view options",

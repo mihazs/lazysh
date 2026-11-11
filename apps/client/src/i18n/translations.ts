@@ -2110,6 +2110,8 @@ const translations = {
   agentViewStageOnly: ["Esta sessão não aceita entrada confirmada. Use Preparar no terminal para enviar um rascunho.", "Esta sesión no acepta entrada confirmada. Usa Preparar en el terminal para enviar un borrador."],
   agentViewTurn: ["Turno", "Turno"],
   agentPlanProgress: ["{{done}} de {{total}}", "{{done}} de {{total}}"],
+  agentThinking: ["Pensando", "Pensando"],
+  agentThoughtFor: ["Pensou por {{time}}", "Pensó durante {{time}}"],
   agentViewActivity: ["Atividade ({{count}})", "Actividad ({{count}})"],
   chatWatchDelayed: ["As atualizações ao vivo não estão disponíveis; esta visão atualiza a cada 2 segundos e pode atrasar.", "Las actualizaciones en vivo no están disponibles; esta vista se actualiza cada 2 segundos y puede retrasarse."],
   chatWatchStale: ["Conexão perdida. Mostrando a última atualização de {{time}}; reconectando.", "Conexión perdida. Se muestra la última actualización de {{time}}; reconectando."],
