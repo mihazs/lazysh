@@ -68,7 +68,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
   useUi();
   const api = useProtectedApi(nativeApi);
   const invoke = useProtectedInvoke();
-  const stockHerdr = useRef<string | undefined>(undefined);
+  const noGuardedHistory = useRef<string | undefined>(undefined);
   const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -393,13 +393,13 @@ export default function TerminalPane({ session, active, quietActivation = false,
         }
         if (!alive || !activeRef.current || !session.connected || !access.current() || gesture.cancelled) return;
         await scrollHerdrHistory(invoke, session.id, gesture.target, batch.x, batch.y, batch.lines);
-      }).catch(async () => {
+      }).catch((error: {kind?: string} | undefined) => {
         const first = !gesture.failed;
         gesture.failed = true;
         if (!first || gesture.cancelled || !alive || !activeRef.current || !access.current()) return;
-        // A host without the guard (stock Herdr) cannot serve history: keep the wheel path for the session instead of failing every swipe.
-        if (!gesture.target && await invoke<{available?: boolean}>('herdr_chat', {sessionId: session.id, action: {kind: 'status'}}).then(reply => reply?.available === false, () => false)) {stockHerdr.current = session.id; return;}
-        if (alive && access.current()) reportError(new LocalUiError('unavailable'));
+        // A host that cannot serve guarded history at all (stock Herdr, an older running server) must not fail every swipe: keep the wheel path for the session. Only a busy guard is transient.
+        if (!gesture.target && error?.kind !== 'herdr_chat_busy') {noGuardedHistory.current = session.id; return;}
+        reportError(new LocalUiError('unavailable'));
       });
     };
     let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
@@ -472,7 +472,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
             const tracking = session.terminal.modes.mouseTrackingMode;
             const pixelWheel = tracking === 'none' || tracking === 'x10';
             const viewportScroll = pixelWheel && session.terminal.buffer.active.type !== 'alternate' && session.terminal.options.scrollback !== 0;
-            const herdrHistory = multiplexer === 'herdr' && stockHerdr.current !== session.id && !viewportScroll;
+            const herdrHistory = multiplexer === 'herdr' && noGuardedHistory.current !== session.id && !viewportScroll;
             const route = `${herdrHistory}:${tracking}:${viewportScroll}:${session.terminal.buffer.active.type}:${session.terminal.options.scrollback === 0}`;
             const height = (session.terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / session.terminal.rows;
             let count = 1, amount = deltaY, lines = 0;
