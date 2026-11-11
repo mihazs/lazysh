@@ -455,14 +455,19 @@ mod tests {
         fs::rename(&path, directory.path().join("old.jsonl")).unwrap();
         fs::write(&path, chain(2).replace("text 1", "text X")).unwrap();
         let rotated = watch.poll().unwrap();
+        // Only Unix exposes a file identity, so only there is a replaced file known to be a rewrite;
+        // elsewhere the same change arrives as an in-place upsert of the entry that differs.
+        #[cfg(unix)]
         assert_eq!(
             (rotated[0]["type"].as_str(), rotated[0]["gen"].as_u64()),
             (Some("snapshot"), Some(3))
         );
-        assert_eq!(
-            rotated[0]["entries"][1]["message"]["blocks"][0]["text"],
-            "text X"
-        );
+        let entries = rotated[0]["entries"]
+            .as_array()
+            .or_else(|| rotated[0]["upserts"].as_array())
+            .unwrap();
+        let revised = entries.iter().find(|entry| entry["id"] == "m1").unwrap();
+        assert_eq!(revised["message"]["blocks"][0]["text"], "text X");
         assert_eq!(rotated[0]["seq"], 3);
     }
 
