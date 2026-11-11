@@ -14,6 +14,8 @@ The [local workspace specification](local-workspace.md) describes how desktop lo
 
 The [multiplexer compatibility specification](multiplexer-compatibility.md) describes the planned capability checklist for tmux, Zellij, Herdr and rmux.
 
+The [host browser specification](host-browser.md) describes the planned opt-in view and control of a Chrome or Firefox on the host from the phone, with its [measured feasibility](reference/host-browser-feasibility.md).
+
 Anyone can follow the public issues or propose a focused contribution without
 private project access. Maintainers also use the private
 [GitHub Project](https://github.com/users/mihazs/projects/2) to coordinate work;
