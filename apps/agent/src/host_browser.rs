@@ -20,7 +20,8 @@ const CANDIDATES: [&str; 5] = [
     "chromium-browser",
     "chrome",
 ];
-const START_TIMEOUT: Duration = Duration::from_secs(20);
+// A cold browser on a loaded CI runner needs well over the 1 s a developer machine takes.
+const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub struct Launch<'a> {
     pub binary: Option<&'a Path>,
@@ -111,9 +112,10 @@ pub fn run(launch: &Launch) -> Result<()> {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        // The browser's own start-up errors are the only diagnosis of a browser that never listens.
+        .stderr(Stdio::inherit());
     if !launch.headed {
-        command.arg("--headless=new");
+        command.args(["--headless=new", "--disable-gpu"]);
     }
     if launch.no_sandbox {
         command.arg("--no-sandbox");

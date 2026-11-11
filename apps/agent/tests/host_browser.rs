@@ -56,6 +56,16 @@ fn first_line(child: &mut Child) -> Value {
     BufReader::new(child.stdout.as_mut().unwrap())
         .read_line(&mut line)
         .unwrap();
+    if line.is_empty() {
+        // The launcher gave up: show why, instead of a bare parse error.
+        let mut diagnostics = String::new();
+        let _ = child
+            .stderr
+            .as_mut()
+            .unwrap()
+            .read_to_string(&mut diagnostics);
+        panic!("launcher printed nothing; stderr: {diagnostics}");
+    }
     serde_json::from_str(&line).unwrap_or_else(|_| panic!("not JSON: {line:?}"))
 }
 
