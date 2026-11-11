@@ -26,6 +26,8 @@ const legacyToolbars: readonly (readonly string[])[] = [
 export const toolbarRowBreak = "row-break";
 export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
 export const maxToolbarRows = 3;
+/** Terminal toolbar key height in CSS pixels: below the minimum a key is too small to hit, above the maximum two rows crowd a phone's screen. */
+export const toolbarKeyHeights = {min: 28, max: 56, step: 2, default: 32} as const;
 /** Rows of the stored toolbar, including empty rows; at most `maxToolbarRows`. */
 export function toolbarRows(toolbar: readonly ToolbarEntry[]): ToolbarKey[][] {
   const rows: ToolbarKey[][] = [[]];
@@ -98,6 +100,8 @@ export type Preferences = {
   gestureChords: Partial<Record<GestureSlot, string>>;
   /** Long-press actions per toolbar key; omitted when empty so older sync peers accept the snapshot. */
   toolbarAlternates?: Partial<Record<ToolbarKey, ToolbarAlternate>>;
+  /** Toolbar key height in CSS pixels; omitted at the default so older sync peers accept the snapshot. */
+  toolbarKeyHeight?: number;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -153,6 +157,7 @@ export function parsePreferences(value: unknown): Preferences {
   }
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
+  const toolbarKeyHeight = number("toolbarKeyHeight", toolbarKeyHeights.min, toolbarKeyHeights.max, toolbarKeyHeights.default);
   return {
     version: 1,
     uiLanguage: isUiLanguage(p.uiLanguage) ? p.uiLanguage : "system",
@@ -179,6 +184,7 @@ export function parsePreferences(value: unknown): Preferences {
     ]) as Preferences["bodyGestures"],
     gestureChords,
     ...(Object.keys(toolbarAlternates).length ? {toolbarAlternates} : {}),
+    ...(toolbarKeyHeight !== toolbarKeyHeights.default ? {toolbarKeyHeight} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
@@ -188,6 +194,14 @@ export function parsePreferences(value: unknown): Preferences {
     toolbar: parseToolbar(p.toolbar),
     snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).map(({label, text}) => ({label, text})) : [],
   };
+}
+/** Settings that describe this device's screen stay on it: sync neither uploads them nor lets a download replace them. */
+export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight"> {
+  const {toolbarKeyHeight: _device, ...shared} = value;
+  return shared;
+}
+export function keepDevicePreferences(imported: unknown, local: Preferences): unknown {
+  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight} : imported;
 }
 let cached: Preferences | undefined;
 let nativeUiLanguage: UiLanguage | undefined;

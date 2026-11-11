@@ -116,6 +116,26 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByLabelText('Control'));
     expectRejectedShortcutDrafts(['b你好','abcdefghi','a,','1']);
   });
+  it("sets the toolbar key height with a bounded slider, shows it live and resets to the default size", () => {
+    savePreferences({...defaults});
+    mountPreferences('Keyboard and gestures', 'Toolbar keys and order');
+    const slider = screen.getByLabelText<HTMLInputElement>("Toolbar key height");
+    expect([slider.min, slider.max, slider.step, slider.value]).toEqual(["28", "56", "2", "32"]);
+    expect(slider.getAttribute("aria-valuetext")).toBe("32 px");
+    const preview = document.querySelector<HTMLElement>(".toolbar-preview-keys")!;
+    expect(preview.style.getPropertyValue("--terminal-key-height")).toBe("32px");
+    const reset = screen.getByRole("button", {name: "Default size"});
+    expect(reset.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(slider, {target: {value: "44"}});
+    expect(getPreferences().toolbarKeyHeight).toBe(44);
+    expect(slider.value).toBe("44");
+    expect(preview.style.getPropertyValue("--terminal-key-height")).toBe("44px");
+    expect(reset.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(reset);
+    expect(getPreferences().toolbarKeyHeight).toBeUndefined();
+    expect(slider.value).toBe("32");
+    expect(reset.hasAttribute("disabled")).toBe(true);
+  });
   it("rearranges toolbar rows without dragging through key actions, keyboard shortcuts and announcements", () => {
     savePreferences({...defaults, toolbar: ["esc", "ctrl", "tab"]});
     mountPreferences('Keyboard and gestures', 'Toolbar keys and order');

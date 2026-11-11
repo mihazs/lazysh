@@ -78,6 +78,8 @@ test('pointer drags reorder, move between rows, add and remove toolbar keys, and
   await page.screenshot({path:testInfo.outputPath('toolbar-editor-one-row.png')});
   await editor.getByRole('combobox',{name:'Toolbar rows',exact:true}).selectOption('2');
   await expect(row(2)).toContainText('Drag keys here');
+  // Keep both rows clear of the page edge, where a drag would start scrolling the page under the finger.
+  await row(2).evaluate(node=>node.scrollIntoView({block:'center'}));
 
   const tab=await startDrag(page,testInfo,chip('tab'));
   await tab.move(await center(row(2)));
