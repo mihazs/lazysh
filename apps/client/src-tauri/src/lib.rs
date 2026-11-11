@@ -12,6 +12,7 @@ mod desktop_launch;
 mod devices;
 mod edge_gestures;
 mod et;
+mod file_transfer;
 mod forward_agent;
 mod herdr;
 mod herdr_create;
@@ -83,6 +84,7 @@ pub fn run() {
         .plugin(app_icons::init())
         .plugin(edge_gestures::init())
         .plugin(private_keyboard::init())
+        .plugin(file_transfer::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -114,6 +116,7 @@ pub fn run() {
                 .clone();
             app.manage(state);
             local::install_cleanup(app)?;
+            file_transfer::install(app)?;
             voice::cloud::install_cleanup(app)?;
             app.manage(voice::VoiceState::new(
                 app.path().app_data_dir()?.join("voice-models"),
@@ -281,6 +284,10 @@ pub fn run() {
                 ssh::probe_connections,
                 ssh::list_directory,
                 ssh::host_home,
+                file_transfer::host_file_stat,
+                file_transfer::host_file_download,
+                file_transfer::host_file_cancel,
+                file_transfer::host_file_deliver,
                 ssh::read_file,
                 attachment_upload::upload_reserve,
                 attachment_upload::upload_cancel,

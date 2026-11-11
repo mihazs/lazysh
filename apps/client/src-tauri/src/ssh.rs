@@ -3664,6 +3664,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "connection_parity_fixture.rs"]
     mod connection_parity_fixture;
+    #[cfg(unix)]
+    #[path = "file_download_fixture.rs"]
+    mod file_download_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(unix)]
@@ -6143,6 +6146,10 @@ mod tests {
             "restore_file_transfer",
             "restore_host_tools",
             "host_home",
+            "host_file_stat",
+            "host_file_download",
+            "host_file_cancel",
+            "host_file_deliver",
             "get_companion_settings",
             "update_companion_settings",
         ] {
@@ -7470,6 +7477,7 @@ mod tests {
         .unwrap();
         assert!(staged.contains("+before"));
         repository_review_fixture::verify(&app, &id, &repo).await;
+        file_download_fixture::verify(&app, &id, dir.path()).await;
         repository_review_fixture::verify_discovery(&app, &id).await;
         app.manage(crate::previews::PreviewState::default());
         let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

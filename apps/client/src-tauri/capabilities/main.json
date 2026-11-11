@@ -130,6 +130,7 @@
     "allow-probe-connections",
     "allow-list-directory",
     "allow-host-home",
+    "allow-host-file-stat", "allow-host-file-download", "allow-host-file-cancel", "allow-host-file-deliver",
     "allow-read-file",
     "allow-upload-reserve",
     "allow-upload-cancel",

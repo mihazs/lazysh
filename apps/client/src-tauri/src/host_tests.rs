@@ -6,7 +6,13 @@ mod local {
         local::{adopted_test_session, local_disconnect, LocalState},
         ssh::{AppState, SshError},
     };
-    use std::{fs, future::Future, path::Path, process::Command, time::Duration};
+    use std::{
+        fs,
+        future::Future,
+        path::{Path, PathBuf},
+        process::Command,
+        time::Duration,
+    };
     use tauri::{test::MockRuntime, App, Manager};
 
     type Answer<T> = std::result::Result<Guarded<T>, GuardedError<SshError>>;
@@ -123,6 +129,235 @@ mod local {
         ))
         .await;
         assert_eq!(std::path::PathBuf::from(reported), home);
+    }
+
+    /// A staging area and the transfers it owns, beside a live local session.
+    async fn staging(directory: &Path) -> (crate::file_transfer::Transfers, PathBuf) {
+        let downloads = directory.join("Downloads");
+        (
+            crate::file_transfer::Transfers::new(
+                directory.join("staging"),
+                Some(downloads.clone()),
+            ),
+            downloads,
+        )
+    }
+    fn request<'a>(
+        id: &'a str,
+        file: &Path,
+        follow_link: bool,
+        allow_large: bool,
+    ) -> crate::file_transfer::Request<'a> {
+        crate::file_transfer::Request {
+            session_id: "local",
+            id,
+            path: path(file),
+            options: crate::file_transfer::Options {
+                follow_link,
+                allow_large,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn local_downloads_stage_exact_bytes_report_progress_and_never_run_or_overwrite() {
+        let (temp, _app, _id, host) = resolved().await;
+        let (transfers, downloads) = staging(temp.path()).await;
+        let source = temp.path().join("Résumé 世界 & 100%.txt");
+        let bytes: Vec<u8> = (0..3_000_000u32).map(|n| (n % 251) as u8).collect();
+        fs::write(&source, &bytes).unwrap();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let id = uuid::Uuid::new_v4().to_string();
+        let staged = crate::file_transfer::download(
+            &transfers,
+            &host,
+            &lease(),
+            request(&id, &source, false, false),
+            |progress| {
+                seen.lock()
+                    .unwrap()
+                    .push(serde_json::to_value(progress).unwrap())
+            },
+        )
+        .await
+        .unwrap();
+        let staged = serde_json::to_value(staged).unwrap();
+        assert_eq!(staged["name"], "Résumé 世界 & 100%.txt");
+        assert_eq!(staged["size"], bytes.len());
+        let copy = temp
+            .path()
+            .join("staging")
+            .join(&id)
+            .join("Résumé 世界 & 100%.txt");
+        assert_eq!(fs::read(&copy).unwrap(), bytes);
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&fs::metadata(&copy).unwrap().permissions())
+                & 0o111,
+            0,
+            "a staged copy must never be executable"
+        );
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.first().unwrap()["bytes"], 0);
+        assert_eq!(seen.last().unwrap()["bytes"], bytes.len());
+        assert_eq!(seen.last().unwrap()["total"], bytes.len());
+        assert!(seen
+            .windows(2)
+            .all(|pair| pair[0]["bytes"].as_u64() <= pair[1]["bytes"].as_u64()));
+        // Saving twice keeps both and never touches an existing file.
+        fs::create_dir_all(&downloads).unwrap();
+        fs::write(downloads.join("Résumé 世界 & 100%.txt"), "mine").unwrap();
+        let saved =
+            crate::file_transfer::save_to(&downloads, &copy, "Résumé 世界 & 100%.txt").unwrap();
+        assert_eq!(saved.file_name().unwrap(), "Résumé 世界 & 100% (1).txt");
+        assert_eq!(
+            fs::read_to_string(downloads.join("Résumé 世界 & 100%.txt")).unwrap(),
+            "mine"
+        );
+        // The same id cannot be reused, and a missing source leaves no staging directory.
+        let reused = crate::file_transfer::download(
+            &transfers,
+            &host,
+            &lease(),
+            request(&id, &source, false, false),
+            |_| {},
+        )
+        .await;
+        assert_eq!(reused.unwrap_err().kind(), "transfer_unavailable");
+        let missing_id = uuid::Uuid::new_v4().to_string();
+        let missing = crate::file_transfer::download(
+            &transfers,
+            &host,
+            &lease(),
+            request(&missing_id, &temp.path().join("absent"), false, false),
+            |_| {},
+        )
+        .await;
+        assert!(missing.is_err());
+        assert!(!temp.path().join("staging").join(&missing_id).exists());
+    }
+
+    #[tokio::test]
+    async fn local_downloads_refuse_directories_unconfirmed_links_and_unconfirmed_large_files() {
+        let (temp, _app, _id, host) = resolved().await;
+        let (transfers, _) = staging(temp.path()).await;
+        let folder = temp.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let target = temp.path().join("target.txt");
+        fs::write(&target, "linked").unwrap();
+        let big = temp.path().join("big.bin");
+        fs::File::create(&big)
+            .unwrap()
+            .set_len(crate::file_transfer::LARGE + 1)
+            .unwrap();
+        let run = |file: PathBuf, follow: bool, large: bool| {
+            let (transfers, host) = (&transfers, &host);
+            async move {
+                let id = uuid::Uuid::new_v4().to_string();
+                let result = crate::file_transfer::download(
+                    transfers,
+                    host,
+                    &lease(),
+                    request(&id, &file, follow, large),
+                    |_| {},
+                )
+                .await;
+                (id, result)
+            }
+        };
+        assert_eq!(
+            run(folder.clone(), false, false)
+                .await
+                .1
+                .unwrap_err()
+                .kind(),
+            "not_regular_file"
+        );
+        let (id, large) = run(big.clone(), false, false).await;
+        assert_eq!(large.unwrap_err().kind(), "file_large");
+        assert!(
+            !temp.path().join("staging").join(id).exists(),
+            "a refused download leaves nothing behind"
+        );
+        let (id, confirmed) = run(big, false, true).await;
+        assert_eq!(
+            serde_json::to_value(confirmed.unwrap()).unwrap()["size"],
+            crate::file_transfer::LARGE + 1
+        );
+        assert!(temp.path().join("staging").join(id).exists());
+        #[cfg(unix)]
+        {
+            let link = temp.path().join("link.txt");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let stat = host.stat_file(&lease(), path(&link)).await.unwrap();
+            assert_eq!((stat.kind, stat.size), (crate::host::Kind::File, 6));
+            assert_eq!(
+                stat.link.as_deref().map(Path::new),
+                Some(fs::canonicalize(&target).unwrap().as_path())
+            );
+            assert_eq!(
+                run(link.clone(), false, false).await.1.unwrap_err().kind(),
+                "symlink_unconfirmed"
+            );
+            let (id, followed) = run(link, true, false).await;
+            followed.unwrap();
+            assert_eq!(
+                fs::read_to_string(temp.path().join("staging").join(id).join("link.txt")).unwrap(),
+                "linked"
+            );
+        }
+        assert_eq!(
+            host.stat_file(&lease(), path(&folder)).await.unwrap().kind,
+            crate::host::Kind::Directory
+        );
+        assert!(host
+            .stat_file(&lease(), path(&temp.path().join("absent")))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_local_download_stops_it_and_removes_the_partial_copy() {
+        let (temp, _app, _id, host) = resolved().await;
+        let (transfers, _) = staging(temp.path()).await;
+        let source = temp.path().join("big.bin");
+        fs::write(&source, vec![7u8; 8 * 1024 * 1024]).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let progress = std::sync::atomic::AtomicU64::new(0);
+        let result = crate::file_transfer::download(
+            &transfers,
+            &host,
+            &lease(),
+            request(&id, &source, false, false),
+            |value| {
+                let bytes = serde_json::to_value(value).unwrap()["bytes"]
+                    .as_u64()
+                    .unwrap();
+                progress.store(bytes, std::sync::atomic::Ordering::SeqCst);
+                // The user pressed Cancel once data was flowing.
+                if bytes > 0 {
+                    transfers.cancel(&id, "local", &lease());
+                }
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().kind(), "transfer_cancelled");
+        assert!(progress.load(std::sync::atomic::Ordering::SeqCst) < 8 * 1024 * 1024);
+        assert!(!temp.path().join("staging").join(&id).exists());
+        // A finished download is discarded by the same call.
+        let kept = uuid::Uuid::new_v4().to_string();
+        crate::file_transfer::download(
+            &transfers,
+            &host,
+            &lease(),
+            request(&kept, &source, false, false),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(temp.path().join("staging").join(&kept).exists());
+        transfers.cancel(&kept, "local", &lease());
+        assert!(!temp.path().join("staging").join(&kept).exists());
     }
 
     #[tokio::test]

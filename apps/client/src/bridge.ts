@@ -63,6 +63,9 @@ export type TmuxJumpSnapshot = {
   sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
 };
 
+export type HostFileAction = 'save' | 'open' | 'share';
+export type HostFileStat = {path: string; name: string; kind: 'file' | 'directory' | 'other'; size: number; link: string | null; actions: HostFileAction[]};
+export type HostFileProgress = {bytes: number; total: number | null};
 export const native = isTauri();
 function remoteInvoke<T>(command:string, args:{sessionId:string}&Record<string,unknown>):Promise<T> {
   if(args.sessionId.startsWith('local:')) return Promise.reject(new Error('This tool requires an SSH connection.'));
@@ -146,6 +149,18 @@ export const api = {
     invoke<FileEntry[]>("list_directory", { sessionId, path }),
   /** The host's absolute login directory: what `~` means for this session. */
   hostHome: (sessionId: string) => invoke<string>("host_home", { sessionId }),
+  /** What a host path is (file, directory, symlink target) before anything is copied. */
+  hostFileStat: (sessionId: string, path: string) => invoke<HostFileStat>("host_file_stat", { sessionId, path }),
+  /** Streams a host file into a private staging copy on this device; progress arrives while it runs. */
+  hostFileDownload: (sessionId: string, path: string, transferId: string, confirmed: {followLink: boolean; allowLarge: boolean}, onProgress: (value: HostFileProgress) => void) => {
+    const progress = new Channel<HostFileProgress>(); progress.onmessage = guardAccessCallback(onProgress);
+    return invoke<{name: string; size: number}>("host_file_download", { sessionId, path, transferId, ...confirmed, progress }).finally(() => { progress.onmessage = () => {}; });
+  },
+  /** Stops a running download or discards a finished one. */
+  hostFileCancel: (sessionId: string, transferId: string) => invoke<void>("host_file_cancel", { sessionId, transferId }),
+  /** Saves, opens (system Open with) or shares the staged copy. The file is never executed. */
+  hostFileDeliver: (sessionId: string, transferId: string, action: HostFileAction) =>
+    invoke<{location: string | null}>("host_file_deliver", { sessionId, transferId, action }),
   readFile: (sessionId: string, path: string) =>
     invoke<string>("read_file", { sessionId, path }),
   hostClipboardCopy: (sessionId: string, uploadId: string) =>

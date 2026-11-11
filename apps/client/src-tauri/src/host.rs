@@ -6,8 +6,9 @@ use crate::{
     local::LocalState,
     ssh::{self, AppState, FileEntry, Result, SshError, FILE_LIMIT, OP_TIMEOUT},
 };
-use std::{sync::Arc, time::Duration};
-use tokio::io::AsyncReadExt;
+use serde::Serialize;
+use std::{pin::Pin, sync::Arc, time::Duration};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub(crate) enum Host {
     Remote(Arc<ssh::Session>),
@@ -51,6 +52,47 @@ impl Cmd {
             }))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Kind {
+    File,
+    Directory,
+    Other,
+}
+/// What a path names. For a symbolic link `kind` and `size` describe the target and `link`
+/// holds where it points, so a caller can say so before following it.
+#[derive(Debug)]
+pub(crate) struct FileStat {
+    pub(crate) kind: Kind,
+    pub(crate) size: u64,
+    pub(crate) link: Option<String>,
+}
+impl FileStat {
+    fn new(kind: Kind, size: Option<u64>, link: Option<String>) -> Self {
+        Self {
+            kind,
+            size: size.unwrap_or(0),
+            link,
+        }
+    }
+}
+/// A regular file opened for reading, with the size of that very file (`None`: unreported).
+pub(crate) struct Source {
+    pub(crate) reader: Pin<Box<dyn AsyncRead + Send>>,
+    pub(crate) size: Option<u64>,
+    /// Keeps the SFTP session behind `reader` open.
+    _hold: Option<Box<dyn Send>>,
+}
+impl Source {
+    pub(crate) fn new(reader: Pin<Box<dyn AsyncRead + Send>>, size: Option<u64>) -> Self {
+        Self {
+            reader,
+            size,
+            _hold: None,
+        }
     }
 }
 
@@ -153,6 +195,72 @@ impl Host {
             Self::Local(host) => host.blocking(lease, local_fs::home).await,
         }
     }
+    /// What `path` is, without reading it; a dangling link is an error.
+    pub(crate) async fn stat_file(&self, lease: &AccessLease, path: String) -> Result<FileStat> {
+        match self {
+            Self::Remote(session) => tokio::time::timeout(OP_TIMEOUT, async {
+                let sftp = ssh::sftp(session, lease).await?;
+                let found = async {
+                    let own = sftp.symlink_metadata(&path).await?;
+                    if !own.is_symlink() {
+                        return Ok(FileStat::new(kind(&own), own.size, None));
+                    }
+                    let target = sftp.metadata(&path).await?;
+                    // Servers without realpath still report where the link points.
+                    let resolved = match sftp.canonicalize(&path).await {
+                        Ok(resolved) => resolved,
+                        Err(_) => sftp.read_link(&path).await?,
+                    };
+                    Ok::<_, SshError>(FileStat::new(kind(&target), target.size, Some(resolved)))
+                }
+                .await;
+                let _ = tokio::time::timeout(Duration::from_secs(2), sftp.close()).await;
+                found
+            })
+            .await
+            .map_err(|_| SshError::new("timeout", "Reading file information timed out"))?,
+            #[cfg(desktop)]
+            Self::Local(host) => host.blocking(lease, move || local_fs::stat(&path)).await,
+        }
+    }
+    /// Opens a regular file for streaming. A symbolic link is followed only when `follow_link`.
+    pub(crate) async fn open_file(
+        &self,
+        lease: &AccessLease,
+        path: String,
+        follow_link: bool,
+    ) -> Result<Source> {
+        match self {
+            Self::Remote(session) => tokio::time::timeout(OP_TIMEOUT, async {
+                let sftp = ssh::sftp(session, lease).await?;
+                if !follow_link && sftp.symlink_metadata(&path).await?.is_symlink() {
+                    return Err(unconfirmed_link());
+                }
+                let file = sftp.open(path).await?;
+                // The opened handle, not the path, decides: a swapped-in directory or device is refused.
+                let attributes = file.metadata().await?;
+                if !attributes.is_regular() {
+                    return Err(not_regular());
+                }
+                Ok(Source {
+                    _hold: Some(Box::new(sftp)),
+                    ..Source::new(Box::pin(file), attributes.size)
+                })
+            })
+            .await
+            .map_err(|_| SshError::new("timeout", "Opening the file timed out"))?,
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                let (file, size) = host
+                    .blocking(lease, move || local_fs::open_regular(&path, follow_link))
+                    .await?;
+                Ok(Source::new(
+                    Box::pin(tokio::fs::File::from_std(file)),
+                    Some(size),
+                ))
+            }
+        }
+    }
     /// UTF-8 text preview limited to 1 MiB.
     pub(crate) async fn read_text(&self, lease: &AccessLease, path: String) -> Result<String> {
         match self {
@@ -192,6 +300,21 @@ impl Host {
             }
         }
     }
+}
+fn kind(attributes: &russh_sftp::protocol::FileAttributes) -> Kind {
+    if attributes.is_dir() {
+        Kind::Directory
+    } else if attributes.is_regular() {
+        Kind::File
+    } else {
+        Kind::Other
+    }
+}
+fn unconfirmed_link() -> SshError {
+    SshError::new(
+        "symlink_unconfirmed",
+        "This is a symbolic link. Confirm that you want the file it points to.",
+    )
 }
 fn not_regular() -> SshError {
     SshError::new(
@@ -435,10 +558,36 @@ mod local_fs {
         ssh::sort_entries(&mut entries);
         Ok(entries)
     }
-    pub(super) fn read(path: &str, limit: u64) -> Result<Vec<u8>> {
+    pub(super) fn stat(path: &str) -> Result<FileStat> {
+        let path = resolve(path)?;
+        let own = fs::symlink_metadata(&path)?;
+        let (metadata, link) = if own.file_type().is_symlink() {
+            let resolved = fs::canonicalize(&path)?;
+            (
+                fs::metadata(&path)?,
+                Some(resolved.to_string_lossy().into_owned()),
+            )
+        } else {
+            (own, None)
+        };
+        let kind = if metadata.is_dir() {
+            Kind::Directory
+        } else if metadata.is_file() {
+            Kind::File
+        } else {
+            Kind::Other
+        };
+        Ok(FileStat::new(kind, Some(metadata.len()), link))
+    }
+    /// A regular file and its size; a symbolic link is refused unless `follow_link`.
+    pub(super) fn open_regular(path: &str, follow_link: bool) -> Result<(fs::File, u64)> {
         let path = resolve(path)?;
         let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        if metadata.file_type().is_symlink() {
+            if !follow_link {
+                return Err(unconfirmed_link());
+            }
+        } else if !metadata.is_file() {
             return Err(not_regular());
         }
         let mut options = fs::OpenOptions::new();
@@ -447,18 +596,29 @@ mod local_fs {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::custom_flags(
             &mut options,
-            libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            if follow_link { 0 } else { libc::O_NOFOLLOW } | libc::O_NONBLOCK,
         );
         #[cfg(windows)]
         std::os::windows::fs::OpenOptionsExt::custom_flags(
             &mut options,
-            0x0020_0000, // FILE_FLAG_OPEN_REPARSE_POINT
+            if follow_link { 0 } else { 0x0020_0000 }, // FILE_FLAG_OPEN_REPARSE_POINT
         );
         let file = options.open(&path)?;
         let metadata = file.metadata()?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        if !metadata.is_file() {
             return Err(not_regular());
         }
+        Ok((file, metadata.len()))
+    }
+    pub(super) fn read(path: &str, limit: u64) -> Result<Vec<u8>> {
+        // Previews have always reported a link as "not a regular file".
+        let (file, _) = open_regular(path, false).map_err(|error| {
+            if error.kind() == "symlink_unconfirmed" {
+                not_regular()
+            } else {
+                error
+            }
+        })?;
         let mut bytes = Vec::new();
         file.take(limit + 1).read_to_end(&mut bytes)?;
         Ok(bytes)
