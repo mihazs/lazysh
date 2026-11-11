@@ -2,7 +2,7 @@ import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 
-type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;
+type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -65,7 +65,7 @@ async function open(page:Page) {
         for(const key of data){if(key==='\r'){submit(fixture.typed);fixture.typed='';}else{fixture.typed+=key;echo(String(args.sessionId),key);}}
         return;
       }
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'codex-thread',agent:'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:'Working on your prompt',paneId:'%3',eventCount:4}]};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'codex-thread',agent:'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
@@ -144,6 +144,27 @@ test('switches the same tmux session between Terminal and Agent mid-turn without
   await expect.poll(async()=>(await fixture(page)).turns.length).toBe(3);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   await expect(agent.getByText('Answered: Typed here',{exact:true})).toBeVisible({timeout:6000});
+});
+
+test('names what the agent waits for in the header and opens the Agent view from a needs-you notification',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{window.agentView.state='needs_attention';window.agentView.summary='AskUserQuestion';});
+  // A needs-you notification tap lands on the Agent view of its session, not the terminal.
+  await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('lazysh-inbox-open',{detail:{sessionId:'display-work',waiting:true}})));
+  const agent=agentView(page);
+  await expect(agent.locator('header')).toContainText('Waiting for your answer · ',{timeout:8000});
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(page.locator('.terminal-pane:visible')).toHaveCount(0);
+  const bounds=await agent.boundingBox();const header=await agent.locator('header').boundingBox();
+  expect(header!.x+header!.width).toBeLessThanOrEqual(bounds!.x+bounds!.width+1);
+  // The session list of a terminal without an agent counts the waiting session and names what it waits for.
+  await page.getByRole('tab',{name:'Fixture / other',exact:true}).click();
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const list=agentView(page).getByRole('region',{name:'Last-reported agent sessions',exact:true});
+  await expect(list.getByRole('status')).toHaveText('1 waiting for you');
+  await expect(list.getByRole('button',{name:/Codex · \/work · Waiting for your answer · /})).toBeVisible();
+  const row=await list.getByRole('button').first().boundingBox();expect(row!.x+row!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{

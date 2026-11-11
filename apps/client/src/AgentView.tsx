@@ -8,7 +8,8 @@ import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSessi
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
 import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
-import {formatRelativeTime, pathBasename} from './relativeTime';
+import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
+import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -142,8 +143,13 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const held=manual ?? linkedKept;
   const kept=held?.conversation ?? retained.current?.conversation;
   const title = selected?.title ?? (row ? [row.agent, row.project && pathBasename(row.project)].filter(Boolean).join(' · ') : t('agentViewTitle'));
+  // A report that waits for the user says what for; Herdr's blocked status is the same wait with no known kind.
+  const waiting = row && !selected?.status ? waitingKind(row) : undefined;
   const state = selected?.status ? {tone: herdrTones[selected.status], name: t(herdrStatusKeys[selected.status])}
-    : row ? {tone: reportedTones[row.state], name: t(reportedStateNames[row.state])} : undefined;
+    : row ? {tone: reportedTones[row.state], name: t(waiting ? waitingKeys[waiting] : reportedStateNames[row.state])} : undefined;
+  const queue = waitingFirst(sessions);
+  const waitingCount = queue.filter(session=>waitingKind(session)).length;
+  const now = useNow(30000, shown && (waitingCount>0 || !!waiting));
   const counts = usage && ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].some(key=>usage[key]!==undefined) ? (key:string)=>formatNumber(Number(usage[key] ?? 0)) : undefined;
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
@@ -159,7 +165,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     <header className="agent-view-header">
       {state && <StatusRing tone={state.tone} />}
       <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
-      {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}</span>}
+      {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
       {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
@@ -186,8 +192,9 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
       </div>
     </div>}
     {!selected && !herdrSession && (!reader || choosing) && access.current() && sessions.length>0 && <section className="agent-view-picker" aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>
+      {waitingCount>0 && <p role="status">{t('agentWaitingCount', {waiting: formatNumber(waitingCount)})}</p>}
       {unavailable && <p role="alert">{t('agentViewSessionUnavailable')}</p>}
-      {sessions.map(session=><button type="button" key={session.sessionId} disabled={selecting} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {t('agentViewLastReportedState', {state:t(reportedStateNames[session.state])})} · {formatRelativeTime(session.updatedAt)}</button>)}</section>}
+      {queue.map(session=><button type="button" key={session.sessionId} disabled={selecting} data-waiting={waitingKind(session)} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {waitingKind(session) ? <WaitingLabel row={session} now={now}/> : <>{t('agentViewLastReportedState', {state:t(reportedStateNames[session.state])})} · {formatRelativeTime(session.updatedAt)}</>}</button>)}</section>}
     {listing && fresh && !choosing && focus && !empty && <p role="status">{focus.agent ? t('agentViewPaneNoConversation',{agent:focus.agent.agent ?? focus.agent.name ?? ''}) : t('agentViewPaneNoAgent')}</p>}
     {listing && empty && navigation.data && <section className="agent-view-fallback" aria-label={t('agentViewStartAgent')}>
       <p>{t('agentViewNoAgentRunning')}</p>

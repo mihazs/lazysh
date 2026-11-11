@@ -1,5 +1,5 @@
 //! Native lifecycle adapters observe status; they never answer approvals.
-use crate::{field, Event, Result, SessionState};
+use crate::{field, Event, Result, SessionState, Waiting};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -158,6 +158,7 @@ pub(crate) fn cursor_event(payload: &Value, pane: Option<&str>) -> Result<Option
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
+        waiting: None,
     }))
 }
 
@@ -179,6 +180,8 @@ pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Ev
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
+        waiting: (state == SessionState::NeedsAttention && summary == "Permission requested")
+            .then_some(Waiting::Approval),
     }))
 }
 
@@ -217,6 +220,7 @@ pub(crate) fn cline_event(payload: &Value, pane: Option<&str>) -> Result<Option<
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
+        waiting: None,
     }))
 }
 
@@ -288,5 +292,12 @@ pub(crate) fn opencode_event(payload: &Value, pane: Option<&str>) -> Result<Opti
         state,
         summary: summary.into(),
         pane_id: pane.map(str::to_owned),
+        waiting: (state == SessionState::NeedsAttention).then_some(if kind == "question.asked" {
+            Waiting::Question
+        } else if kind == "permission.asked" {
+            Waiting::Approval
+        } else {
+            Waiting::Unknown
+        }),
     }))
 }

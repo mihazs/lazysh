@@ -58,7 +58,7 @@ it.each([
     expect(await screen.findByText(labels.staged)).toBeTruthy();
     expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:session.id,text:original});
     fireEvent.click(screen.getByRole('button',{name:labels.openConnected}));
-    expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:session.id});
+    expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:session.id,waiting:true});
     fireEvent.click(screen.getByRole('button',{name:labels.enable}));
     await waitFor(()=>expect(requestPermission).toHaveBeenCalledOnce());
     await waitFor(()=>expect(registerActionTypes).toHaveBeenCalledOnce());

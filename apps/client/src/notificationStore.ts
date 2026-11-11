@@ -79,6 +79,6 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
 export function openInboxEvent(eventId: string, sessions: InboxSession[], expectedSessionId?: string): boolean {
   const row = getInbox().rows.find(row => row.eventId === eventId);
   if (!row || (expectedSessionId !== undefined && row.sessionId !== expectedSessionId) || !sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)) return false;
-  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId } }));
+  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, waiting: row.state === 'needs_attention' } }));
   return true;
 }

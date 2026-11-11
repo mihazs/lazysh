@@ -63,3 +63,5 @@
 .agent-view .agent-working[data-activity="waiting"] .chat-activity-dot { background: var(--theme-warning, var(--accent)); }
 @keyframes agent-working-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .agent-view .agent-working[data-activity="working"] .chat-activity-dot { animation: none; } }
+.agent-waiting[data-waiting] { color: var(--accent); font-weight: 600; }
+.agent-view-picker > button[data-waiting] { border-inline-start: 3px solid var(--accent); }

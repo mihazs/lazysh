@@ -238,6 +238,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         state: lazysh_agent::SessionState::Done,
         summary: "Turn finished".into(),
         pane_id: None,
+        waiting: None,
     };
     let recorded = chrono::Utc::now() - chrono::TimeDelta::days(8);
     let mut store = lazysh_agent::Store::open(&directory.join("state")).unwrap();

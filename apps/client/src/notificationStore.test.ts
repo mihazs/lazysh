@@ -39,7 +39,7 @@ it('routes only a known event to its exact connected SSH session', async () => {
   expect(openInboxEvent('unknown', [session])).toBe(false);
   expect(openInboxEvent(eventId, [session], 'stale-session')).toBe(false);
   expect(openInboxEvent(eventId, [session])).toBe(true);
-  expect((navigate.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1' });
+  expect((navigate.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: true });
   window.removeEventListener('lazysh-inbox-open', navigate);
 });
 

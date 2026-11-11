@@ -113,7 +113,7 @@ it('shows the fallback without a transcript picker when no hook report names thi
 });
 
 it('labels a detected agent without a reported conversation as partial and never reads a transcript',async()=>{
-  host('codex',[row('Codex','%3','needs_attention')],'missing',[[]]);
+  host('codex',[{...row('Codex','%3','needs_attention'),summary:'Turn failed'}],'missing',[[]]);
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(screen.getByText(/^The last Codex report names this pane, but its conversation is unavailable/)).toBeTruthy();
@@ -557,4 +557,40 @@ it.each(['pane','report','history'] as const)('discards a tmux transcript if its
   await advance(0);changed=true;if(change==='pane')pane='%4';if(change==='report')rows.splice(0);
   await act(async()=>finish(page('codex',turn('Stale prompt','Stale answer'))));
   expect(screen.queryByText('Stale answer')).toBeNull();expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
+});
+
+describe('waiting for the user',()=>{
+  const reported=(summary:string,state:string,minutes:number,pane:string|null=null)=>({...row('Claude Code',pane,state),sessionId:`s-${summary}`,summary,updatedAt:new Date(Date.now()-minutes*60_000).toISOString()});
+  const header=()=>screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
+  it.each([
+    ['Bash','Waiting for your approval'],['AskUserQuestion','Waiting for your answer'],['ExitPlanMode','Waiting for your plan decision'],['Agent needs attention','Waiting for you'],
+  ])('names a %s report in the header with how long it waits',async(summary,label)=>{
+    host('claude',[reported(summary,'needs_attention',5,'%3')],'available',[turn('Prompt','Answer')]);
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(header().textContent).toContain(`${label} · 5 min. ago`);
+  });
+  it('keeps the plain state for a failed turn',async()=>{
+    host('claude',[reported('Turn failed','needs_attention',5,'%3')],'available',[turn('Prompt','Answer')]);
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(within(header()).getByText('Attention')).toBeTruthy();expect(header().textContent).not.toContain('Waiting');
+  });
+  it('counts the waiting sessions and lists the longest waiting first',async()=>{
+    host('claude',[reported('Working','working',1),reported('Bash','needs_attention',3),reported('AskUserQuestion','needs_attention',9)],'available',[turn('Prompt','Answer')]);
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await advance(0);
+    const list=screen.getByRole('region',{name:'Last-reported agent sessions'});
+    expect(within(list).getByRole('status').textContent).toBe('2 waiting for you');
+    const buttons=within(list).getAllByRole('button').map(button=>button.textContent);
+    expect(buttons[0]).toContain('Waiting for your answer · 9 min. ago');expect(buttons[1]).toContain('Waiting for your approval · 3 min. ago');expect(buttons[2]).toContain('Last reported: Working');
+  });
+});
+
+it('shows how long the agent has waited from the recorded start of the wait, not its last report',async()=>{
+  const minutes=(count:number)=>new Date(Date.now()-count*60_000).toISOString();
+  host('claude',[{...row('Claude Code','%3','needs_attention'),summary:'Agent needs attention',waiting:'question',waitingSince:minutes(12),updatedAt:minutes(1)}],'available',[turn('Prompt','Answer')]);
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByRole('region',{name:'Agent view'}).querySelector('header')!.textContent).toContain('Waiting for your answer · 12 min. ago');
 });

@@ -25,6 +25,7 @@ fn event() -> Event {
         state: SessionState::Working,
         summary: "Synthetic".into(),
         pane_id: None,
+        waiting: None,
     }
 }
 

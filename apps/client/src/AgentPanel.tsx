@@ -27,6 +27,9 @@ export type AgentSession = {
   summary: string;
   paneId: string | null;
   eventCount: number;
+  /** What a needs-attention report waits for, and since when; from a companion that records it. */
+  waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown';
+  waitingSince?: string;
 };
 const states: AgentState[] = ['needs_attention', 'working', 'done'];
 function reportKey(row:AgentSession) {return JSON.stringify([row.agent,row.sessionId]);}
@@ -52,6 +55,8 @@ export function parseSnapshot(value: unknown): AgentSession[] {
     if (!states.includes(row.state as AgentState) || !Number.isFinite(Date.parse(row.updatedAt as string)) || !Number.isSafeInteger(row.eventCount) || Number(row.eventCount) < 1 || (row.paneId !== null && typeof row.paneId !== 'string')) {
       throw new LocalUiError('agentsInvalidSession');
     }
+    if ((row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
+      || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))) throw new LocalUiError('agentsInvalidSession');
     return row as AgentSession;
   });
 }
