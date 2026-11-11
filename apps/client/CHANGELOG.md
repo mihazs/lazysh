@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.33.4
+
+### Patch Changes
+
+- a653d76: Fix the Files view not resolving paths that start with `~`: `~`, `~/x`, `$HOME/x` and `${HOME}/x` now expand to the SSH user's home as reported by the host's SFTP server, the resolved absolute path is shown, and `~otheruser` is refused with a clear message.
+- @lazysh/account-usage@1.33.4
+  - @lazysh/common@1.33.4
+  - @lazysh/display-idle@1.33.4
+  - @lazysh/et-transport@1.33.4
+  - @lazysh/mosh-transport@1.33.4
+
 ## 1.33.3
 
 ### Patch Changes
