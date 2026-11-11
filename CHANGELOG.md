@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+- Fix finger scrolling in Herdr sessions on hosts without the optional guarded Herdr build, including stock Herdr 0.9.3 to 0.9.5. Since 1.29.1 every swipe there scrolled nothing and showed the error **Unavailable**. After the first swipe of a session, which still scrolls nothing, those hosts take swipes as wheel input again, as before 1.29.1: scrolling works and shows no error, but a swipe over an open agent question can still move its selected option, which only a guarded host prevents. Guarded hosts are unchanged. No defaults change.
+
 - Organize setup guides and service, transfer, theme and notification contracts into task, reference and explanation pages; existing documentation paths and section anchors remain available.
 - Toggle the current session between Terminal and Agent with Ctrl+Shift+Y (Cmd+Shift+Y on Apple keyboards). The shortcut is available from the terminal, the Agent draft and the session controls. No defaults change.
-- Detect live Claude Code and Codex agents from the attached Herdr server in Agent view, including hosts running stock Herdr 0.9.3. Select a live Herdr row to open its reported conversation or enter its exact pane; the conversation’s association with the pane is unverified, and selected conversations cannot stage input into another terminal; Agent view no longer asks you to choose transcript files. Finger swipes no longer become wheel or arrow input inside Herdr agent questions. A compatible guarded Herdr host scrolls its retained pane history directly; unsupported hosts report that history scrolling is unavailable. Ordinary mouse wheels are unchanged.
+- Detect live Claude Code and Codex agents from the attached Herdr server in Agent view, including hosts running stock Herdr 0.9.3. Select a live Herdr row to open its reported conversation or enter its exact pane; the conversation’s association with the pane is unverified, and selected conversations cannot stage input into another terminal; Agent view no longer asks you to choose transcript files. On a compatible guarded Herdr host, finger swipes no longer become wheel or arrow input inside Herdr agent questions and scroll the retained pane history directly. Ordinary mouse wheels are unchanged.
 - Use an accessible segmented cursor-shape picker in terminal preferences.
 - Show app language choices as a checked list, keeping System as the default and retaining the existing locale save and retry behavior.
 
