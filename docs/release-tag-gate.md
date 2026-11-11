@@ -132,7 +132,8 @@ create or update workflow ... without workflows permission`. The release commit
 is main's tip when the run starts, so the check passes then. The builds take 40 to
 90 minutes, and `.github/workflows` changes land on main often. Once one has, no branch
 carries the candidate's workflow files any more, except by chance (another open branch
-cut from the same main), so the tag, and later the release, is refused. Creating a
+cut from the same main, which is the likely reason 1.30.1 and 1.30.3 passed), so the
+tag, and later the release, is refused. Creating a
 branch at an old commit whose workflows matched no other branch flipped every
 previously refused commit with those files to 201, and removing it restored the 403.
 
