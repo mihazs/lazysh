@@ -348,8 +348,11 @@ pub(crate) async fn download(
         .await?;
         Ok::<_, SshError>(size)
     };
+    // Cancel also stops a transfer still opening its SFTP channel.
+    let mut stopped = guard.stopped.clone();
     let size = tokio::select! { biased;
         _ = lease.cancelled() => return Err(SshError::new("app_locked", "App access changed")),
+        _ = stopped.changed() => return Err(cancelled()),
         result = work => result?,
     };
     let staged = Staged { name, size };
