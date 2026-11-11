@@ -3,6 +3,8 @@ import {Check} from 'lucide-react';
 export type StatusTone='working'|'attention'|'done'|'idle'|'unknown';
 /** Ring tones for hook-reported states shared by Reported activity and the agent inbox. */
 export const reportedTones={needs_attention:'attention',working:'working',done:'done'} as const satisfies Record<string,StatusTone>;
+/** Ring tones for the live status Herdr reports for a pane. */
+export const herdrTones={blocked:'attention',working:'working',done:'done',idle:'idle',unknown:'unknown'} as const satisfies Record<string,StatusTone>;
 
 /** Decorative state ring; the owning row always carries the state as text. */
 export function StatusRing({tone}:{tone:StatusTone}) {

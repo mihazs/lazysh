@@ -90,6 +90,20 @@ input. A row with no single reported Claude Code or Codex conversation says so, 
 **Enter session** opens the exact pane. A host companion without
 `herdr-conversation` makes the view ask you to update it from Agents.
 
+The view keeps its chrome to one row: the agent kind and folder, its state, an
+options button and a **Terminal** shortcut. **Back to sessions**, **Enter session**,
+the caveat that a conversation grants no terminal input, and the token counters of
+the latest response sit behind the options button, not in the message flow. The
+conversation shows only what you typed as a bubble. Records the agent harness wrote
+into the transcript appear as one muted line: a background-task notification
+(`<task-notification>`), command output (`<local-command-stdout>`, `<bash-stdout>`),
+an interruption, a context compaction or an answered question. Slash commands and
+`!` shell input read as the words typed. Context written for the model
+(`<system-reminder>`, `<local-command-caveat>`, environment and instruction
+wrappers) and redacted, empty thinking are not shown. The client does this
+itself, so it also works against a companion that predates it. A conversation that
+cannot stage or send input has no composer.
+
 The companion's metadata lookup is
 `lazysh-agent reported-history --session-id=OPAQUE_ID`; use the exact reported
 session identifier, not an inferred filename. It obeys the host's transcript

@@ -16,6 +16,7 @@ import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
 import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
+import {projectMessages,type InjectedEvent} from './chatInjected';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -34,6 +35,8 @@ type Message = {
   timestamp?: string;
   blocks: Block[];
   usage?: Record<string, number | string>;
+  /** Set by the client for a record the harness wrote; shown as one compact row instead of a bubble. */
+  event?: InjectedEvent;
 };
 type Page = {
   schemaVersion: 1;
@@ -142,14 +145,15 @@ export function parseTranscript(value: unknown): Page {
   return page;
 }
 
-type Turn = {key: string; prompt?: Message; activity: Message[]; answer?: Message};
+type Turn = {key: string; prompt?: Message; event?: Message; activity: Message[]; answer?: Message};
 /** One block per turn: the prompt, the work in between, and the closing answer. Tool results are not prompts. */
 export function groupTurns(messages: Message[]): Turn[] {
   const turns: Turn[] = [];
   for (const message of messages) {
-    const prompt = message.role === 'user' && message.blocks.some(block => block.type === 'text' && !block.card);
-    if (prompt || !turns.length) turns.push({key: message.id, prompt: prompt ? message : undefined, activity: []});
-    if (!prompt) turns.at(-1)!.activity.push(message);
+    // A harness event starts the next turn without being the person's prompt.
+    const prompt = message.role === 'user' && !message.event && message.blocks.some(block => block.type === 'text' && !block.card);
+    if (prompt || message.event || !turns.length) turns.push({key: message.id, prompt: prompt ? message : undefined, event: message.event ? message : undefined, activity: []});
+    if (!prompt && !message.event) turns.at(-1)!.activity.push(message);
   }
   for (const turn of turns) {
     const last = turn.activity.at(-1);
@@ -172,7 +176,7 @@ export function activitySummary(turn: Turn): string {
     uses.length - commands - edits && t('agentTurnTools', {count: uses.length - commands - edits}), failed && t('agentTurnFailed', {count: failed}),
   ].filter((part): part is string => !!part);
   if (!parts.length) parts.push(t('agentViewActivity', {count: turn.activity.length}));
-  const start = Date.parse(turn.prompt?.timestamp ?? ''), end = Date.parse([...turn.activity, turn.answer].map(message => message?.timestamp).filter(Boolean).at(-1) ?? '');
+  const start = Date.parse((turn.prompt ?? turn.event)?.timestamp ?? ''), end = Date.parse([...turn.activity, turn.answer].map(message => message?.timestamp).filter(Boolean).at(-1) ?? '');
   if (end > start) parts.push(formatCountdown(end - start));
   return parts.join(' · ');
 }
@@ -182,7 +186,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,allowStage=true,onBoundInvalid,onOpenCompanion }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -470,7 +474,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   }
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
-  const turns = useMemo(() => timeline ? groupTurns(messages) : [], [timeline, messages]);
+  // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
+  const flow = useMemo(() => opened?.view === 'conversation' || timeline ? projectMessages(messages) : messages, [opened?.view, timeline, messages]);
+  const turns = useMemo(() => timeline ? groupTurns(flow) : [], [timeline, flow]);
+  // The counters of the latest response go to the caller's details instead of under every answer.
+  const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
+  useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
@@ -479,9 +488,16 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
   }
+  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
-  const renderMessage = (message: Message) => (
+  const renderMessage = (message: Message) => message.event ? (
+    <article key={message.id} className="chat-message agent-event">
+      {message.event.detail
+        ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
+        : <p>{eventLabel(message.event)}</p>}
+    </article>
+  ) : (
     <article key={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
@@ -509,7 +525,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           </details></Fragment>
         );
       })}
-      {message.usage && (
+      {message.usage && !timeline && (
         <small>
           {Object.entries(message.usage)
             .map(([name, count]) => `${name}: ${count}`)
@@ -518,15 +534,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       )}
     </article>
   );
-  // Bound to the Agent view, the composer is one row: these tools move beside Stage.
+  // Bound to the Agent view, the composer is one row: these tools move beside Stage. A followed conversation needs no Refresh.
   const draftTools = <div className="chat-draft-tools">
-    {opened && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
+    {opened && !(bound && following) && <button type="button" className="icon-button" disabled={busy} aria-label={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} title={t(busy?'chatReading':more?'chatNextMessages':'chatRefreshMessages')} onClick={() => void read(false)}><RefreshCw size={18} aria-hidden="true"/></button>}
     <button ref={attachmentButton} type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>toggleAttachment(!attachmentOpen)}>{attachmentOpen?<X size={18} aria-hidden="true"/>:<Paperclip size={18} aria-hidden="true"/>}</button>
     {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
     <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
-      {bound?.herdr && <p className="security-note">{t("agentsHerdrSessionNotice")}</p>}
       {!bound && <>
       <h3>{t("chatTitle")}</h3>
       <p>
@@ -674,13 +689,15 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
       }}>
         {timeline ? turns.map(turn => <section key={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
+          {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
           {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
           {turn.answer && renderMessage(turn.answer)}
-        </section>) : messages.map(renderMessage)}
+        </section>) : flow.map(renderMessage)}
       </div>
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      <div className="chat-draft">
+      {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
+      {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">
           <label htmlFor={draftId} className={bound ? "sr-only" : undefined}>{t("chatDraftLabel")}</label>
           {!bound && draftTools}
@@ -697,8 +714,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           }}/>
         </div>}
         <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
-          <textarea id={draftId} rows={bound && !draft ? 1 : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
-          <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}<button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button>{allowStage && <button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>}</div>
+          <textarea id={draftId} rows={bound ? Math.min(6, draft.split('\n').length) : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
+          <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}{(!bound || draft) && <button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button>}{allowStage && <button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>}</div>
           {shown && terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
             key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput} notes={!bound || draftHelpOpen}
             access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
@@ -708,7 +725,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           />}
           {draftStatus && <p role="status">{t(draftStatus)}</p>}
         </form>
-      </div>
+      </div>}
     </section>
   );
 }
