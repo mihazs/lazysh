@@ -161,7 +161,8 @@ events or arrow keys to its program. This needs the optional guarded host's
 checks the original attached client, pane runtime and visible viewport. The
 first implementation supports its focused pane; other panes of a guarded host
 report unavailable rather than changing an agent's selected option. A host
-without the guard, such as stock Herdr, takes swipes as wheel input like before
+that cannot serve guarded history at all, such as stock Herdr or an older
+guarded server that is still running, takes swipes as wheel input like before
 1.29.1 after the first swipe of a session: scrolling works with no error, but a
 swipe over an open agent question can still move its selected option. Mouse wheels
 keep their ordinary terminal behavior. Updating a host binary does not upgrade

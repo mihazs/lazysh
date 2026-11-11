@@ -442,13 +442,11 @@ it.each(['inactive','disconnect','replacement','dispose'] as const)('captures di
     expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
   } finally {warn.mockRestore();}
 });
-/** A Herdr host whose history requests fail as unavailable; `guarded` is what its status answers. */
-function herdrHistoryUnavailable(guarded:boolean) {
-  mocks.invoke.mockImplementation(async(_command,args)=>{
-    if(args.action.kind==='status')return {kind:'status',available:guarded};
-    throw {kind:'herdr_chat_unavailable',message:'Herdr history unavailable'};
-  });
+/** A Herdr host whose guarded history requests fail with this error kind. */
+function herdrHistoryFails(kind:string) {
+  mocks.invoke.mockRejectedValue({kind,message:'Herdr history unavailable'});
 }
+const swipe=async(touch:(type:string,x:number,y:number)=>void)=>act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
 function touchScrollFixture(height?:number, herdr=false, reportError=vi.fn()) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
@@ -1125,24 +1123,35 @@ describe("terminal interactions", () => {
     await act(async()=>observe({kind:'observed',destination:{pane:'owned'}}));
     expect(mocks.invoke).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
   });
-  it.each(['tracking','alternate'])('scrolls a stock Herdr host in %s mode like a wheel after its first swipe and reports nothing',async mode=>{
+  it.each([
+    ['tracking','herdr_chat_unavailable'],['alternate','herdr_chat_unavailable'],['tracking','herdr_chat_uncertain'],['tracking','herdr_chat_protocol'],
+  ])('scrolls like a wheel in %s mode after guarded history cannot be observed (%s) and reports nothing',async(mode,kind)=>{
     if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
     else Object.assign(terminal.buffer.active,{type:'alternate'});
-    herdrHistoryUnavailable(false);
+    herdrHistoryFails(kind);
     const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
-    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    await swipe(touch);
     expect(wheels).toHaveLength(0);
-    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    await swipe(touch);
     expect(reportError).not.toHaveBeenCalled();
     expect(wheels.length).toBeGreaterThan(0);
-    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'},{kind:'status'}]);
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'}]);
   });
-  it.each(['tracking','alternate'])('reports unavailable Herdr history on a guarded host in %s mode without forwarding the swipe into the menu',async mode=>{
+  it('keeps trying guarded history after a busy guard and reports it',async()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    herdrHistoryFails('herdr_chat_busy');
+    const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
+    await swipe(touch);await swipe(touch);
+    expect(reportError).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'},{kind:'observe'}]);
+    expect(wheels).toHaveLength(0);
+  });
+  it.each(['tracking','alternate'])('reports a failed Herdr history scroll in %s mode without forwarding the swipe into the menu',async mode=>{
     if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
     else Object.assign(terminal.buffer.active,{type:'alternate'});
-    herdrHistoryUnavailable(true);
+    mocks.invoke.mockResolvedValueOnce({kind:'observed',destination:{pane:'owned'}}).mockRejectedValue({kind:'herdr_chat_unavailable',message:'Herdr history unavailable'});
     const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
-    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    await swipe(touch);
     expect(reportError).toHaveBeenCalledWith(expect.objectContaining({key:'unavailable'}));
     await uiI18n.changeLanguage('pt-BR');
     expect(uiErrorText(reportError.mock.calls[0][0])).toBe('Indisponível.');
