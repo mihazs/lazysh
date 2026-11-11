@@ -19,6 +19,8 @@
   border: 1px solid var(--ui-control-border); background: var(--ui-fill);
   color: var(--theme-text, #b2c3a4); font-family: monospace; font-size: 10px; white-space: nowrap;
 }
+/* The cell the Arrows cluster leaves beside Up keeps its width so Down stays under Up. */
+.toolbar-preview-row > .toolbar-preview-gap { border: 0; background: none; }
 
 .toolbar-size { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 12px; }
 .toolbar-size > label { margin: 0; }

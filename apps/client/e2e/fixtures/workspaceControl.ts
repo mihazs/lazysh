@@ -61,3 +61,10 @@ export async function openAgentSetup(page: Page) {
   const button=page.getByRole('button',{name:label,exact:true});
   if(await button.getAttribute('aria-expanded')!=='true')await button.click();
 }
+
+/** Opens Preferences → Input → Toolbar keys and order. */
+export async function openToolbarSettings(page:Page) {
+  await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Input');
+  await page.getByText('Toolbar keys and order',{exact:true}).click();
+}

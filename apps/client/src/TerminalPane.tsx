@@ -830,7 +830,12 @@ export default function TerminalPane({ session, active, quietActivation = false,
     if (!current() || document.hidden) return false;
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${((repeatShift.current ?? state.shift) && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
-    try {void writeInput('named-key', key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`),expectedOwner).catch(error => reportError(captureUiError(error)));}
+    try {
+      const sequence = key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`);
+      // Application cursor-key mode (DECCKM) sends the unmodified cursor keys as SS3 sequences, as xterm does.
+      const input = session.terminal.modes?.applicationCursorKeysMode ? sequence.replace(/^\x1b\[([ABCDHF])$/, "\x1bO$1") : sequence;
+      void writeInput('named-key', input,expectedOwner).catch(error => reportError(captureUiError(error)));
+    }
     catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return false;}
     followLive();
     consumeModifiers();
@@ -1171,7 +1176,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="" style={{"--toolbar-columns": toolbarColumns(keyRows), "--toolbar-rows": keyRows.length, "--terminal-key-height": `${preferences.toolbarKeyHeight ?? toolbarKeyHeights.default}px`} as CSSProperties}>
-      <ToolbarPages repeats={repeatStarts} pages={[{id: "keys", content: keyRows.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">{row.map(toolbarKey)}</div>)}, ...toolbarExtraPages()]} />
+      <ToolbarPages repeats={repeatStarts} pages={[{id: "keys", content: keyRows.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">{row.map((key, column) => key === "gap" ? <span key={`gap-${column}`} aria-hidden="true" /> : toolbarKey(key))}</div>)}, ...toolbarExtraPages()]} />
     </div>}
   </div>;
 }

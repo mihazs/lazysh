@@ -1,22 +1,8 @@
 import {expect,test,type Locator,type Page,type TestInfo} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {openToolbarTerminal as openToolbar} from './fixtures/localTerminal';
 
 const oldDefault=['esc','ctrl','meta','shift','tab','paste','attach','left','up','down','right','c','d'];
 
-/** A local terminal; `preferences` seeds the stored settings (the default layout when it has no toolbar). Input bytes are recorded. */
-async function openToolbar(page:Page,testInfo:TestInfo,preferences:Record<string,unknown>={}) {
-  await installLocalTerminal(page);
-  await page.addInitScript(preferences=>{
-    if(sessionStorage.getItem('toolbar-compact-seeded'))return;
-    sessionStorage.setItem('toolbar-compact-seeded','1');
-    localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,composerSendEnter:false,...preferences}));
-  },preferences);
-  await page.goto('/');
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
-  return page.getByLabel('Terminal keys',{exact:true});
-}
 const writes=(page:Page)=>page.evaluate(()=>window.simpleShortcutWrites.filter(data=>data!=='\x1b[I'&&data!=='\x1b[O'));
 /** A key's accessible name: icon and arrow keys have no text of their own. */
 const names=(row:Locator)=>row.getByRole('button').evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')??button.textContent));
