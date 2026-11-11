@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.29.3
+
+### Patch Changes
+
+- 0e794d4: Use a segmented cursor-shape picker in terminal preferences.
+- @lazysh/account-usage@1.29.3
+  - @lazysh/common@1.29.3
+  - @lazysh/display-idle@1.29.3
+  - @lazysh/et-transport@1.29.3
+  - @lazysh/mosh-transport@1.29.3
+
 ## 1.29.2
 
 ### Patch Changes
