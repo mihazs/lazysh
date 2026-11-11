@@ -1530,6 +1530,23 @@ mod tests {
     }
 
     #[test]
+    fn device_local_settings_are_refused_in_a_settings_snapshot() {
+        let mut bundle = settings();
+        // The client keeps these on the device that chose them; a snapshot that carries one is not from this app.
+        for field in [
+            ("toolbarKeyHeight", serde_json::json!(44)),
+            ("privateKeyboard", serde_json::json!(true)),
+        ] {
+            bundle.preferences = Some(serde_json::json!({"version":1,(field.0):field.1}));
+            assert!(
+                validate_bundle(&bundle, Scope::Settings).is_err(),
+                "{}",
+                field.0
+            );
+        }
+    }
+
+    #[test]
     fn validates_production_urls_etags_and_independent_opt_in() {
         for url in [
             "http://127.0.0.1/dav/",

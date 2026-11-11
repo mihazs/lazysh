@@ -1,14 +1,9 @@
 import {expect,test,type Page,type TestInfo} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {installLocalTerminal,openLocalTerminal as openTerminal} from './fixtures/localTerminal';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 
 const storedHeight=(page:Page)=>page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')??'{}').toolbarKeyHeight as number|undefined);
 
-async function openTerminal(page:Page,testInfo:TestInfo) {
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
-}
 /** What the toolbar costs the terminal: the rendered height of its keys and the rows the PTY was last resized to. */
 async function measure(page:Page) {
   const key=page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:'esc',exact:true});

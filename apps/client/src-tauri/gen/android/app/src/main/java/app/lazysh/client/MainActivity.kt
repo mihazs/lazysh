@@ -17,6 +17,7 @@ class MainActivity : TauriActivity() {
     ClipboardPlugin.onWebViewCreated(this, webView)
     VaultPlugin.onWebViewCreated(this, webView)
     DisplayIdlePlugin.onWebViewCreated(this, webView)
+    PrivateKeyboard.attach(webView)
     super.onWebViewCreate(webView)
   }
   override fun onCreate(savedInstanceState: Bundle?) {

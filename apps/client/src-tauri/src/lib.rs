@@ -27,6 +27,7 @@ mod mosh;
 mod multiplexer;
 mod notifications;
 mod previews;
+mod private_keyboard;
 mod push;
 mod repository;
 mod routing;
@@ -81,6 +82,7 @@ pub fn run() {
         .plugin(session_background::init())
         .plugin(app_icons::init())
         .plugin(edge_gestures::init())
+        .plugin(private_keyboard::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -140,6 +142,7 @@ pub fn run() {
                 ui_locale::ui_locale_set,
                 app_icons::app_icon_status,
                 app_icons::set_app_icon,
+                private_keyboard::terminal_private_keyboard,
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,

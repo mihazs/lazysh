@@ -101,8 +101,13 @@ mod receiver {
         let mut total = 0;
         let expected = nonce
             .map(|nonce| format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}"));
+        // Private keyboard mode then types one more fixed text, after the two soft line breaks.
+        let private = nonce
+            .zip(expected.as_ref())
+            .map(|(nonce, expected)| format!("{expected}\r\x1b[13;2uowned-private-{nonce}"));
         let mut observed = Vec::new();
         let mut acknowledged = false;
+        let mut private_acknowledged = false;
         let mut announced = [0; 4];
         let mut bytes = [0; 512];
         loop {
@@ -146,6 +151,17 @@ mod receiver {
                         writeln!(terminal, "{tag}_{nonce}_DELIVERED\r")?;
                         terminal.flush()?;
                         acknowledged = true;
+                    }
+                    if !dpad
+                        && !private_acknowledged
+                        && private
+                            .as_ref()
+                            .is_some_and(|private| observed == private.as_bytes())
+                    {
+                        output.flush()?;
+                        writeln!(terminal, "IME_{nonce}_PRIVATE\r")?;
+                        terminal.flush()?;
+                        private_acknowledged = true;
                     }
                 }
             }
@@ -372,6 +388,55 @@ mod receiver {
             .unwrap();
             assert_eq!(terminal, ack);
             assert_eq!(stored, [expected.as_slice(), b"extra"].concat());
+        }
+
+        #[test]
+        fn private_keyboard_text_is_acknowledged_only_after_the_exact_full_wire() {
+            let nonce = "0123456789abcdef0123456789abcdef";
+            let delivered =
+                format!("{IME_TRANSACTIONS}\x1b[13;2u\r\x1b[13;2uowned-current-{nonce}");
+            let lines = format!("{delivered}\r\x1b[13;2u").into_bytes();
+            let typed = format!("{delivered}\r\x1b[13;2uowned-private-{nonce}").into_bytes();
+            let run = |input: &[u8]| {
+                let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+                copy_bounded(
+                    &mut Cursor::new(input),
+                    &mut stored,
+                    LIMIT,
+                    Some(nonce),
+                    false,
+                    &mut terminal,
+                )
+                .unwrap();
+                String::from_utf8(terminal).unwrap()
+            };
+            assert_eq!(run(&typed), format!("IME_{nonce}_PRIVATE\r\n"));
+            // Reads that split the wire still acknowledge each stage once, in order.
+            let (mut stored, mut terminal) = (Vec::new(), Vec::new());
+            copy_bounded(
+                &mut Cursor::new(&delivered)
+                    .chain(Cursor::new(b"\r\x1b[13;2u"))
+                    .chain(Cursor::new(format!("owned-private-{nonce}"))),
+                &mut stored,
+                LIMIT,
+                Some(nonce),
+                false,
+                &mut terminal,
+            )
+            .unwrap();
+            assert_eq!(stored, typed);
+            assert_eq!(
+                String::from_utf8(terminal).unwrap(),
+                format!("IME_{nonce}_DELIVERED\r\nIME_{nonce}_PRIVATE\r\n")
+            );
+            for input in [
+                lines.clone(),
+                [typed.as_slice(), b"extra"].concat(),
+                format!("{delivered}\r\x1b[13;2uowned-private-wrong").into_bytes(),
+                format!("{delivered}\r\x1b[13;2u\r\x1b[13;2uowned-private-{nonce}").into_bytes(),
+            ] {
+                assert!(!run(&input).contains("_PRIVATE"));
+            }
         }
 
         #[test]

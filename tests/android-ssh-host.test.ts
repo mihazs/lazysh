@@ -435,7 +435,7 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
       const copyAdmitted=copy.isFile() && copy.nlink===1 && copy.uid===process.getuid?.() && (copy.mode&0o777)===0o500;
       expect(copyAdmitted && createHash('sha256').update(await readFile(binary)).digest('hex')===hash).toBe(true);
       client=await fixture.client();
-      const wait=async(stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery',predicate:()=>boolean)=>{
+      const wait=async(stage:'prompt'|'metadata'|'rejection'|'ready'|'delivery'|'private',predicate:()=>boolean)=>{
         const deadline=performance.now()+5000;
         while(!predicate()) {
           if(client!.child.exitCode!==null || performance.now()>=deadline) {
@@ -482,6 +482,11 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         client.child.stdin!.write(wire);
         await wait('delivery',()=>client!.stdout.includes(delivered));
         expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
+        // The two soft line breaks and the text typed with Private keyboard on complete the wire, and only they are acknowledged.
+        const typed=Buffer.concat([wire,Buffer.from(`\r\x1b[13;2uowned-private-${fixture.nonce}`)]),privateText=`IME_${fixture.nonce}_PRIVATE`;
+        expect(client.stdout.includes(privateText)).toBe(false);
+        client.child.stdin!.write(typed.subarray(wire.length));
+        await wait('private',()=>client!.stdout.includes(privateText));
         expect((await identity(saved!.pid))?.start===saved!.start).toBe(true);
         const admitted=await checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash);
         expect(admitted).toEqual(saved);
@@ -501,7 +506,7 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         await expect(checkRawReceiverIdentity(saved,undefined,fixture.daemon.child.pid!,hash)).rejects.toThrow('not observed');
         expect(await checkRawReceiverIdentity(saved,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
         expect(await checkRawReceiverIdentity(undefined,admitted,fixture.daemon.child.pid!,hash)).toEqual(saved);
-        expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);
+        expect((await readFile(join(output,'received-bytes'))).equals(typed)).toBe(true);
       }
     } catch(error){primary=error;}
     finally {
