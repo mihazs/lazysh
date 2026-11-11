@@ -55,10 +55,9 @@ Each disclosure row opens a full sub-page in the navigation stack. Back returns 
 
 ## Not yet matched
 
-These reference patterns are recorded above but are not used yet. Sub-pages still use native selects, checkboxes and text fields under group headers:
+These reference patterns are recorded above but are not used yet. The language sub-page uses a checked list. Other sub-pages still use native selects, checkboxes and text fields under group headers:
 
 - inline switches on the root list;
 - the segmented picker for short enumerations such as cursor shape;
-- the checked picker page for language;
 - the accordion select for notification modes;
 - hint subtitles under each switch.

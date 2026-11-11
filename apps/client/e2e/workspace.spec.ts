@@ -1228,7 +1228,7 @@ for(const width of [393,1200])test(`sidebar mode labels stay whole and reachable
       await page.screenshot({path:testInfo.outputPath(`appearance-${width}.png`)});
     }
     await openPreferenceCategory(page,'Language');
-    await page.locator('[data-settings-page="language"] select').selectOption(locale);
+    await page.locator(`[data-settings-page="language"] input[value="${locale}"]`).check();
     await closePreferences(page);
     if(width<=600) {
       await page.locator('.mobile-menu:visible').click();
