@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaults, decodeClipboardRequest, keepDevicePreferences, parseChord, parseChordSteps, parsePreferences, parseTheme, syncablePreferences, terminalOptions, toolbarFromRows, toolbarKeyHeights, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
+import { defaults, decodeClipboardRequest, edgeGestureSettings, keepDevicePreferences, parseChord, parseChordSteps, parsePreferences, parseTheme, syncablePreferences, terminalOptions, toolbarFromRows, toolbarKeyHeights, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
   it('keeps past-bottom keyboard dismissal opt-in for old, invalid and stored settings',()=>{
@@ -157,6 +157,16 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences(keepDevicePreferences({...defaults, toolbarKeyHeight: 56, fontSize: 20}, mine))).toMatchObject({toolbarKeyHeight: 44, fontSize: 20});
   expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, parsePreferences({...defaults}))).toolbarKeyHeight).toBeUndefined();
   expect(keepDevicePreferences(null, mine)).toBeNull();
+ });
+ it("defaults the edge gestures on at 24 dp, stores only changes and ignores malformed values", () => {
+  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 24});
+  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 24}}), "edgeGestures")).toBe(false);
+  const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 40}})));
+  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 40});
+  for (const zoneWidth of [0, 15, 49, 30.5, "30", null]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(24);
+  expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {bottomMenu: "no", viewSwitch: 0}}))).toMatchObject({bottomMenu: true, viewSwitch: true});
+  // It syncs with the other preferences.
+  expect(syncablePreferences(saved).edgeGestures).toEqual(saved.edgeGestures);
  });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);

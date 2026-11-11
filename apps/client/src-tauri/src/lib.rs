@@ -10,6 +10,7 @@ mod companion;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
+mod edge_gestures;
 mod et;
 mod forward_agent;
 mod herdr;
@@ -78,6 +79,7 @@ pub fn run() {
         .plugin(clipboard::init())
         .plugin(session_background::init())
         .plugin(app_icons::init())
+        .plugin(edge_gestures::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -199,6 +201,7 @@ pub fn run() {
                 approvals::resolve_agent_approval,
                 notifications::notify_agent_attention,
                 notifications::notification_test,
+                edge_gestures::edge_gesture_exclusion,
                 session_background::open_notification_settings,
                 session_background::request_notification_permission,
                 voice::voice_models,

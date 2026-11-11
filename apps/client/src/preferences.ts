@@ -74,6 +74,22 @@ export type ToolbarAlternate = {action: GestureAction; keys?: string};
 export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr"; }
 export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
+export const edgeGestureIds = ["leftMenu", "bottomMenu", "viewSwitch"] as const;
+export type EdgeGestureId = typeof edgeGestureIds[number];
+export const edgeGestureZone = {min: 16, max: 48, step: 2, default: 24} as const;
+export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number};
+const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default};
+/** The saved edge gesture settings with the defaults filled in. */
+export function edgeGestureSettings(p: Pick<Preferences, "edgeGestures">): EdgeGestureSettings { return {...edgeGestureDefaults, ...p.edgeGestures}; }
+function parseEdgeGestures(value: unknown): EdgeGestureSettings | undefined {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const zone = source.zoneWidth;
+  const parsed: EdgeGestureSettings = {
+    ...Object.fromEntries(edgeGestureIds.map(id => [id, source[id] !== false])) as Record<EdgeGestureId, boolean>,
+    zoneWidth: typeof zone === "number" && Number.isInteger(zone) && zone >= edgeGestureZone.min && zone <= edgeGestureZone.max ? zone : edgeGestureZone.default,
+  };
+  return (Object.keys(parsed) as (keyof EdgeGestureSettings)[]).every(name => parsed[name] === edgeGestureDefaults[name]) ? undefined : parsed;
+}
 export type Preferences = {
   version: 1;
   theme: keyof typeof themes | "custom";
@@ -102,6 +118,8 @@ export type Preferences = {
   toolbarAlternates?: Partial<Record<ToolbarKey, ToolbarAlternate>>;
   /** Toolbar key height in CSS pixels; omitted at the default so older sync peers accept the snapshot. */
   toolbarKeyHeight?: number;
+  /** Edge-swipe gestures and their zone width in dp; synced, and omitted at the defaults so older sync peers accept the snapshot. */
+  edgeGestures?: EdgeGestureSettings;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -157,6 +175,7 @@ export function parsePreferences(value: unknown): Preferences {
   }
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
+  const edgeGestures = parseEdgeGestures(p.edgeGestures);
   const toolbarKeyHeight = number("toolbarKeyHeight", toolbarKeyHeights.min, toolbarKeyHeights.max, toolbarKeyHeights.default);
   return {
     version: 1,
@@ -185,6 +204,7 @@ export function parsePreferences(value: unknown): Preferences {
     gestureChords,
     ...(Object.keys(toolbarAlternates).length ? {toolbarAlternates} : {}),
     ...(toolbarKeyHeight !== toolbarKeyHeights.default ? {toolbarKeyHeight} : {}),
+    ...(edgeGestures ? {edgeGestures} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {

@@ -1,5 +1,5 @@
 import {expect,test,type CDPSession,type Page} from '@playwright/test';
-import {historyLines,historyView,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
+import {cell,historyLines,historyView,longPress,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
 import {controlContrast} from './fixtures/controlContrast';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
@@ -14,13 +14,6 @@ async function open(page:Page,mosh:boolean) {
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
   await output(page,historyLines(300));await settle(page);
 }
-/** Centre of a visible cell in viewport coordinates. */
-function cell(page:Page,row:number,column:number) {
-  return page.evaluate(([row,column])=>{
-    const t=window.ownedHistory.terminal,r=t.element!.querySelector('.xterm-screen')!.getBoundingClientRect();
-    return {x:r.left+(column+.5)*r.width/t.cols,y:r.top+(row+.5)*r.height/t.rows};
-  },[row,column] as const);
-}
 const screenEdges=(page:Page)=>page.evaluate(()=>{const r=window.ownedHistory.terminal.element!.querySelector('.xterm-screen')!.getBoundingClientRect();return {top:r.top,bottom:r.bottom};});
 /** The selection read independently from buffer cells, joined as the terminal holds its rows. */
 function selected(page:Page) {
@@ -31,13 +24,6 @@ function selected(page:Page) {
   });
 }
 async function touch(page:Page) {return page.context().newCDPSession(page);}
-async function longPress(page:Page,point:{x:number;y:number}) {
-  const input=await touch(page);
-  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});
-  await page.waitForTimeout(650);
-  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-  await input.detach();
-}
 /** Drags a handle to `to`, holds it there until `until` holds, then lifts. */
 async function dragHandle(page:Page,input:CDPSession,which:'start'|'end',to:{x:number;y:number},until:()=>Promise<boolean>) {
   const box=(await handle(page,which).boundingBox())!,from={x:box.x+box.width/2,y:box.y+box.height/2};

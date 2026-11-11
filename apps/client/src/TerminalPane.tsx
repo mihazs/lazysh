@@ -12,6 +12,7 @@ import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
+import {endTextComposition, markTyping, registerTextInteraction} from './textInteraction';
 import { api as nativeApi } from "./bridge";
 import { bodyGestureSlots, decodeClipboardRequest, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
@@ -175,6 +176,8 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
   pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
   function writeInput(caller: InputCaller, data: string | string[], owner = inputOwner.current) {
+    // Toolbar keys and chords are typing too (keyboard input is seen as key events; wheel reports and gestures are not typing).
+    if (caller === 'named-key' || caller === 'chord') markTyping();
     const snapshot = () => {
       const sameView = !!owner && pasteView.current.id === owner.session.id && pasteView.current.terminal === owner.session.terminal;
       return {active: activeRef.current, connected: sameView ? pasteView.current.connected : !!owner?.session.connected,
@@ -216,6 +219,12 @@ export default function TerminalPane({ session, active, quietActivation = false,
   liveAttachmentsRef.current = liveAttachments;
   // Expanded input tools share the keyboard-sized workspace.
   useEffect(()=>{if(composing)setDpadOpen(false);},[composing]);
+  // Edge swipes never run while this terminal has a selection or a composing keyboard.
+  useEffect(() => {
+    if (!active) return;
+    const release = [registerTextInteraction('selection', () => session.terminal.hasSelection()), registerTextInteraction('composition', () => !!composingIme())];
+    return () => release.forEach(stop => stop());
+  }, [active, session.terminal]);
   // Selection handles appear after a touch long-press; actions also after a mouse selection.
   const [selectionTools, setSelectionTools] = useState<{handles: boolean} | null>(null);
   useEffect(() => setSelectionTools(null), [session.id, session.terminal]);
@@ -244,7 +253,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
   // Read the flag only through composingIme(); a direct read of
   // imeComposing.current can see that stale composition.
   const composingIme = () => {
-    if (imeComposing.current && imeInput.current?.composing() === false) imeComposing.current = false;
+    if (imeComposing.current && imeInput.current?.composing() === false) {imeComposing.current = false; endTextComposition();}
     return imeComposing.current;
   };
   const pointers = useRef(new Map<number, {x: number; y: number}>());
@@ -428,6 +437,8 @@ export default function TerminalPane({ session, active, quietActivation = false,
     };
     let remainder: {mode: string; height: number; pending: number; direction: number} | null = null;
     let scroll: {x: number; y: number; lastY: number; pending: number; direction: number; mode: string | null; height: number; active: boolean; dismiss:InputOwner|null} | null = null;
+    // Edge swipes wait while this terminal's own finger scroll runs.
+    const scrolling = registerTextInteraction('scroll', () => !!scroll?.active);
     const safeDismiss=(owner:InputOwner|null)=>{
       const terminal=session.terminal,area=terminal.textarea,buffer=terminal.buffer.active,view=pasteView.current;
       return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.terminal===terminal
@@ -567,6 +578,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     element.addEventListener('contextmenu', menu, {capture: true});
     return () => {
       alive = false;
+      scrolling();
       release();
       element.removeEventListener('contextmenu', menu, {capture: true});
       accessChanged();bufferChanged?.dispose();
@@ -1055,7 +1067,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
       if (modifier) {
         if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
         if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
-        imeInput.current?.settle(); imeComposing.current = false;
+        imeInput.current?.settle(); imeComposing.current = false; endTextComposition();
       }
       if (key === "ctrl" || key === "meta") cycleModifier(key);
       else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}
@@ -1157,7 +1169,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     </div>
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
-    {dpadEnabled && <div ref={dpadElement} className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
+    {dpadEnabled && <div ref={dpadElement} className="terminal-dpad" role="group" data-edge-gestures-ignore="" aria-label={t('terminalDpadGroup')} style={{touchAction:'none'}} onContextMenu={event=>event.preventDefault()} onPointerDown={dpadDown} onPointerMove={dpadMove} onLostPointerCapture={event=>{if(dpad.current.pointers.has(event.pointerId))cancelDpad();}} onClickCapture={event=>{
       if(document.querySelector('[role="dialog"][aria-modal="true"]')||(event.detail>0&&dpad.current.suppressClick)){cancelDpad();event.preventDefault();event.stopPropagation();return;}
       if(event.detail===0)cancelDpad();
     }}>
