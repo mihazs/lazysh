@@ -2444,7 +2444,7 @@ pub(crate) async fn probe_connections_inner(
     .await;
 }
 
-fn check_path(path: &str) -> Result<()> {
+pub(crate) fn check_path(path: &str) -> Result<()> {
     if path.is_empty() || path.len() > 4096 || path.contains('\0') {
         return Err(SshError::new("invalid_path", "Enter a valid remote path"));
     }
@@ -3628,6 +3628,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "transcript_image_fixture.rs"]
     mod transcript_image_fixture;
+    #[cfg(unix)]
+    #[path = "transcript_watch_fixture.rs"]
+    mod transcript_watch_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
@@ -6279,6 +6282,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH and a current-source companion binary with transcript-watch"]
+    async fn openssh_transcript_watch_streams_appends_and_closes_with_the_channel() {
+        openssh_interoperability(OpenSshCheck::TranscriptWatch).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
     async fn openssh_companion_install_and_managed_path() {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
@@ -6323,6 +6333,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         Clipboard,
         TranscriptImages,
+        TranscriptWatch,
         TemporaryAttachments,
         CompanionInstall,
         #[cfg(target_os = "linux")]
@@ -6395,7 +6406,10 @@ mod tests {
             account_usage_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::environment(dir.path())
-        } else if matches!(check, OpenSshCheck::TranscriptImages) {
+        } else if matches!(
+            check,
+            OpenSshCheck::TranscriptImages | OpenSshCheck::TranscriptWatch
+        ) {
             transcript_image_fixture::companion_path(dir.path())
         } else {
             String::new()
@@ -6479,6 +6493,11 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::TranscriptWatch) {
+            app.manage(crate::transcript_watch::TranscriptWatches::default());
+            transcript_watch_fixture::verify(&app, &id, dir.path()).await;
             return;
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {

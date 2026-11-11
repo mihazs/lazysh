@@ -115,6 +115,8 @@ that lands on an older turn patches that card in place, without moving the reade
 scroll. The window is bounded (500 entries, as today). When the channel cannot be
 opened, the client falls back to the existing 2 s page polling.
 
+The first client slice (Claude Code and Codex, [#1124](https://github.com/mihazs/lazysh/issues/1124)) follows this design with the companion's `transcript-watch` command: see [Live conversation stream](companion.md#live-conversation-stream) for the frames. It patches cards in place, shows the delayed, stale and old-companion states, and leaves model, mode and context usage to [#1224](https://github.com/mihazs/lazysh/issues/1224) and the Codex daemon to a later slice.
+
 ### Data model
 
 `TranscriptPage` schema 2 adds, without changing schema 1 readers:

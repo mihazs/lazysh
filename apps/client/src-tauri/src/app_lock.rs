@@ -237,6 +237,10 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
             .cancel_for_lock()
             .await;
         handle
+            .state::<crate::transcript_watch::TranscriptWatches>()
+            .cancel_for_lock()
+            .await;
+        handle
             .state::<crate::previews::PreviewState>()
             .cancel_for_lock()
             .await;
@@ -675,6 +679,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "board_keep_awake_release"
             | "stop_preview"
             | "device_stream_stop"
+            | "agent_watch_stop"
             | "voice_cancel"
             | "voice_parakeet_cancel"
             | "voice_download_cancel"

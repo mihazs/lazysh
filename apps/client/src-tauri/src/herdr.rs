@@ -411,6 +411,28 @@ fn conversation_page(raw: &str, agent: &str) -> Result<serde_json::Value> {
     Ok(page)
 }
 
+/// Fails unless the live Herdr tree still names this pane's one agent session.
+pub(crate) async fn check_selected(
+    session: &crate::ssh::Session,
+    name: &str,
+    pane: &str,
+    terminal: &str,
+    agent: &str,
+    id: &str,
+    access: &AccessLease,
+) -> Result<()> {
+    target(pane, Some('p'))?;
+    text(terminal, 256)?;
+    let tree = read_tree(session, name, access).await?;
+    if selected_agent(&tree, pane, terminal, agent, id) {
+        return Ok(());
+    }
+    Err(SshError::new(
+        "herdr_target_missing",
+        "The selected agent session is no longer available",
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HerdrConversationTarget {
