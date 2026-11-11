@@ -6169,7 +6169,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd; run explicitly for interoperability"]
     async fn openssh_sftp_and_command_interoperability() {
-        openssh_interoperability(OpenSshCheck::Files).await;
+        // Boxed: the whole check is too large for a debug test thread's stack otherwise.
+        Box::pin(openssh_interoperability(OpenSshCheck::Files)).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -43,12 +43,13 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
 
     // Status from a subdirectory resolves the root and lists every change kind.
     let status = json(
-        crate::repository::repository_status(
+        Box::pin(crate::repository::repository_status(
+            app.state(),
             app.state(),
             id.into(),
             repo.join("docs").to_string_lossy().into_owned(),
             access_lease(),
-        )
+        ))
         .await
         .unwrap()
         .into_inner()
@@ -79,14 +80,15 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
         let path = path.clone();
         async move {
             json(
-                crate::repository::repository_diff(
+                Box::pin(crate::repository::repository_diff(
+                    app.state(),
                     app.state(),
                     id.into(),
                     path,
                     file.into(),
                     staged,
                     access_lease(),
-                )
+                ))
                 .await
                 .unwrap()
                 .into_inner()
@@ -113,14 +115,15 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
         let path = path.clone();
         async move {
             json(
-                crate::repository::repository_history(
+                Box::pin(crate::repository::repository_history(
+                    app.state(),
                     app.state(),
                     id.into(),
                     path,
                     offset,
                     revision,
                     access_lease(),
-                )
+                ))
                 .await
                 .unwrap()
                 .into_inner()
@@ -153,14 +156,15 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
         let path = path.clone();
         async move {
             json(
-                crate::repository::repository_tree(
+                Box::pin(crate::repository::repository_tree(
+                    app.state(),
                     app.state(),
                     id.into(),
                     path,
                     revision,
                     directory.map(Into::into),
                     access_lease(),
-                )
+                ))
                 .await
                 .unwrap()
                 .into_inner()
@@ -191,13 +195,14 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
         let object = object["oid"].as_str().unwrap().to_owned();
         async move {
             json(
-                crate::repository::repository_blob(
+                Box::pin(crate::repository::repository_blob(
+                    app.state(),
                     app.state(),
                     id.into(),
                     path,
                     object,
                     access_lease(),
-                )
+                ))
                 .await
                 .unwrap()
                 .into_inner()
@@ -221,14 +226,15 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
         let path = path.clone();
         async move {
             json(
-                crate::repository::repository_image(
+                Box::pin(crate::repository::repository_image(
+                    app.state(),
                     app.state(),
                     id.into(),
                     path,
                     "image.png".into(),
                     object,
                     access_lease(),
-                )
+                ))
                 .await
                 .unwrap()
                 .into_inner()
@@ -244,12 +250,15 @@ pub(super) async fn verify(app: &App, id: &str, repo: &Path) {
 
     // Files opens Markdown as text over the same SFTP channel.
     assert_eq!(
-        read_file(
-            access_lease(),
-            app.state(),
-            id.into(),
-            repo.join("docs/readme.md").to_string_lossy().into_owned(),
-        )
+        Box::pin(Box::pin(Box::pin(Box::pin(Box::pin(Box::pin(Box::pin(
+            read_file(
+                access_lease(),
+                app.state(),
+                app.state(),
+                id.into(),
+                repo.join("docs/readme.md").to_string_lossy().into_owned(),
+            )
+        )))))))
         .await
         .unwrap()
         .into_inner()
