@@ -1,5 +1,5 @@
 import {expect,test,type Page} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {connectLocalTerminal,installLocalTerminal} from './fixtures/localTerminal';
 
 /** The terminal beside the free area it may use: the session body down to the toolbar,
  * or to the status bar when the toolbar is hidden. Insets are 0 in a browser. */
@@ -33,11 +33,7 @@ test('the terminal fills the free area edge to edge, with the soft keyboard clos
   const phone=testInfo.project.name==='phone';
   await installLocalTerminal(page);
   await page.goto('/');
-  const hosts=page.getByRole('button',{name:'Open hosts',exact:true});
-  if(await hosts.isVisible())await hosts.click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+  await connectLocalTerminal(page);
   await page.evaluate(()=>window.simpleShortcutOutput('hello\r\n'));
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutResizes.length)).toBeGreaterThan(0);
   const settled=async()=>{await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));await page.waitForTimeout(150);};

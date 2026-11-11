@@ -221,6 +221,22 @@ in both the phone and desktop projects, and the toolbar keys with clicks, agains
 a synthetic SSH session. The Android runtime suite adds both toolbar keys to a
 real SSH connection and opens and leaves each view.
 
+## Bottom menu on a phone
+
+In a connected session on a phone, swipe up from the very bottom edge of the
+screen: a panel follows your finger up over the terminal. Swipe it down, tap
+outside it, press Android Back or Escape to hide it. It holds **Show composer /
+Hide composer** and **Hide toolbar / Show toolbar** (and **Show keyboard / Hide
+keyboard** where the platform has that button). Hiding the toolbar gives its rows
+to the terminal and a phone remembers the choice on that device; the terminal
+does not resize while the menu is open.
+
+The swipe never starts while you type, compose with the keyboard, have a text
+field focused or text selected, or scroll or pinch the terminal. A small bar at
+the bottom edge shows where it starts. With a screen reader on, or with the
+bottom swipe switched off in Preferences, an **Open bottom menu** button in the
+session controls opens the same menu.
+
 ## Command palette
 
 Press **Ctrl+K** (Cmd+K on macOS) outside the terminal, or **Ctrl+Shift+P**

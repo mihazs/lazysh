@@ -185,6 +185,15 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: false, fontSize: 20}, mine))).toMatchObject({privateKeyboard: true, fontSize: 20});
   expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: true}, parsePreferences({...defaults}))), "privateKeyboard")).toBe(false);
  });
+ it("remembers a hidden or shown toolbar on this device only, and nothing until it was chosen", () => {
+  expect(Object.hasOwn(parsePreferences({...defaults}), "toolbarHidden")).toBe(false);
+  for (const hidden of [true, false]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarHidden: hidden})))).toolbarHidden).toBe(hidden);
+  for (const junk of ["true", 1, null, [], {}]) expect(Object.hasOwn(parsePreferences({...defaults, toolbarHidden: junk}), "toolbarHidden")).toBe(false);
+  const mine = parsePreferences({...defaults, toolbarHidden: true});
+  expect(Object.hasOwn(syncablePreferences(mine), "toolbarHidden")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: false, fontSize: 20}, mine))).toMatchObject({toolbarHidden: true, fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: true}, parsePreferences({...defaults}))), "toolbarHidden")).toBe(false);
+ });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);
   // The previous release's validator: keep known keys only, in order.

@@ -56,6 +56,68 @@ it('sizes the toolbar keys from the saved key height and follows a change withou
   act(()=>savePreferences({...getPreferences(),toolbarKeyHeight:undefined}));
   expect(height()).toBe('32px');
 });
+/** A window of the given width class; every other media query is false. */
+function stubWindow(phone:boolean) {
+  vi.stubGlobal('matchMedia',(query:string)=>({matches:phone&&query==='(max-width: 600px)',media:query,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){}}));
+}
+describe('bottom menu',()=>{
+  it('remembers a hidden toolbar on a phone for the next session, and a desktop window does not',()=>{
+    stubWindow(true);
+    const first=mount();
+    fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(getPreferences().toolbarHidden).toBe(true);
+    first.unmount();
+    const second=mount();
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Show terminal keys'}));
+    expect(screen.getByLabelText('Terminal keys')).toBeTruthy();
+    expect(getPreferences().toolbarHidden).toBe(false);
+    second.unmount();
+    savePreferences({...defaults});stubWindow(false);
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(getPreferences().toolbarHidden).toBeUndefined();
+  });
+  it('offers the menu as a visible button in screen-reader mode, and its toolbar and composer actions drive the pane',()=>{
+    stubWindow(true);
+    savePreferences({...defaults,screenReader:true});
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'Open bottom menu'}));
+    fireEvent.click(screen.getByRole('button',{name:'Show composer'}));
+    expect(screen.getByRole('textbox',{name:/./})).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Open bottom menu'}));
+    fireEvent.click(screen.getByRole('button',{name:'Hide toolbar'}));
+    expect(screen.queryByLabelText('Terminal keys')).toBeNull();
+    expect(screen.getByRole('button',{name:'Hide composer',hidden:true})).toBeTruthy();
+  });
+  it('closes on Android Back before anything else, and the menu button reflects it',()=>{
+    stubWindow(true);
+    savePreferences({...defaults,screenReader:true});
+    const onBackChange=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
+    expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+    const button=screen.getByRole('button',{name:'Open bottom menu'});
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    const back=onBackChange.mock.lastCall?.[1] as ()=>boolean;
+    act(()=>{expect(back()).toBe(true);});
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  });
+  it('has no menu on a desktop window or for a session that ended',()=>{
+    stubWindow(false);
+    savePreferences({...defaults,screenReader:true});
+    const {container,unmount}=mount();
+    expect(container.querySelector('.bottom-menu')).toBeNull();
+    unmount();
+    stubWindow(true);
+    const ended=render(<TerminalPane session={{id:'ssh',name:'Host',connected:false,terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
+    expect(ended.container.querySelector('.bottom-menu')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Open bottom menu'})).toBeNull();
+  });
+});
 it.each(['write','resize'] as const)('keeps structured native and localized %s failures readable',async operation=>{
   let receive!:(data:string)=>void, resized!:(size:{cols:number;rows:number})=>void;
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
