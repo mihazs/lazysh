@@ -11,22 +11,59 @@ use tauri::{ipc::Channel, State};
 pub struct Capability {
     available: bool,
     reason: &'static str,
+    targets: Vec<Target>,
+}
+/// A local place sessions run in, with the host tools the UI may offer for it.
+#[derive(Serialize)]
+#[cfg_attr(not(desktop), allow(dead_code))]
+pub struct Target {
+    id: &'static str,
+    label: String,
+    kind: &'static str,
+    tools: Tools,
+}
+#[derive(Serialize)]
+#[cfg_attr(not(desktop), allow(dead_code))]
+pub struct Tools {
+    files: bool,
+    repository: bool,
 }
 #[tauri::command]
-pub fn local_capability() -> Capability {
-    let available = cfg!(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    ));
-    Capability {
-        available,
-        reason: if available {
-            "Local shell runs on this desktop device."
-        } else {
-            "Local terminals require the desktop app."
-        },
+pub async fn local_capability() -> Capability {
+    #[cfg(desktop)]
+    {
+        let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+        Capability {
+            available: true,
+            reason: "Local shell runs on this desktop device.",
+            targets: vec![Target {
+                id: "default",
+                label: std::path::Path::new(&shell)
+                    .file_stem()
+                    .map_or(shell.clone(), |name| name.to_string_lossy().into_owned()),
+                kind: if cfg!(windows) { "windows" } else { "posix" },
+                tools: Tools {
+                    files: true,
+                    repository: crate::host::local_program("git").await,
+                },
+            }],
+        }
     }
+    #[cfg(not(desktop))]
+    {
+        Capability {
+            available: false,
+            reason: "Local terminals require the desktop app.",
+            targets: Vec::new(),
+        }
+    }
+}
+/// The user's home directory, where local sessions and relative host-tool paths start.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_dir())
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,6 +210,18 @@ pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Resu
         let _ = (state, id, request);
         Ok(false)
     }
+}
+/// A real, adopted local terminal running the default login shell.
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(crate) async fn adopted_test_session(state: &LocalState, lease: AccessLease) -> String {
+    let connected = desktop::connect(state, lease.clone(), None, 80, 24, Channel::new(|_| Ok(())))
+        .await
+        .unwrap();
+    desktop::adopt(state, &connected.session_id, &lease).unwrap();
+    connected.session_id
 }
 pub fn install_cleanup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -587,10 +636,7 @@ mod desktop {
                 compatible.to_owned()
             };
             command.cwd(directory);
-        } else if let Some(home) =
-            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .filter(|path| std::path::Path::new(path).is_dir())
-        {
+        } else if let Some(home) = super::home_dir() {
             command.cwd(home);
         }
         Ok(command)

@@ -147,6 +147,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
         >
           <RefreshCw size={16} />
         </button>
+        {/* Local sessions read this device's files; uploads stay an SSH host tool for now. */}
+        {!sessionId.startsWith('local:') && <>
         <button
           type="button"
           className="subtle-button"
@@ -172,6 +174,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             setDestination(join(path, file.name));
           }}
         />
+        </>}
       </form>
       {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
       {error && (

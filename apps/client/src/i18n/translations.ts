@@ -847,7 +847,7 @@ const translations = {
   appNewConnection: ['Nova conexão', 'Nueva conexión'],
   appSessionViews: ['Visualizações da sessão', 'Vistas de la sesión'],
   appEndValue1Connection: ['Encerrar conexão de {{value1}}', 'Finalizar conexión de {{value1}}'],
-  appLocalShellOnThisDeviceSSHHostToolsRemote: ['Shell local neste dispositivo. Ferramentas SSH, arquivos remotos, agentes e prévias não estão disponíveis nesta sessão.', 'Shell local en este dispositivo. Las herramientas SSH, los archivos remotos, los agentes y las vistas previas no están disponibles en esta sesión.'],
+  appLocalShellOnThisDeviceSSHHostToolsRemote: ['Shell local neste dispositivo. Arquivos e revisão do repositório usam este dispositivo; agentes, prévias e outras ferramentas SSH não estão disponíveis nesta sessão.', 'Shell local en este dispositivo. Los archivos y la revisión del repositorio usan este dispositivo; los agentes, las vistas previas y otras herramientas SSH no están disponibles en esta sesión.'],
   appOpeningTerminal: ['Abrindo terminal…', 'Abriendo terminal…'],
   appThisConnectionHasEnded: ['Esta conexão foi encerrada.', 'Esta conexión ha finalizado.'],
   appConnectAgainFromHostsToReadLiveData: ['Conecte-se novamente em Servidores para ler dados em tempo real.', 'Vuelve a conectar desde Servidores para leer datos en tiempo real.'],

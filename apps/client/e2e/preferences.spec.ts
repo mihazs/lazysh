@@ -65,7 +65,29 @@ test('brand, light and dark themes keep controls readable and reset', async ({ p
   for (const theme of ['forest', 'paper', 'midnight']) {
     await appTheme.selectOption(theme);
     await expect(page.locator('html')).toHaveAttribute('data-app-theme', theme);
+    await page.locator('[data-settings-page=appearance]').evaluate(async page => {
+      await Promise.all(page.getAnimations().map(animation => animation.finished));
+    });
     const contrast = await page.getByRole('dialog').evaluate(controlContrast);
+    const failed = contrast.findIndex(item => item.ratio < 4.5);
+    if (failed !== -1) {
+      const styles = await page.getByRole('dialog').evaluate((dialog, index) => {
+        let node: Element | null = Array.from(dialog.querySelectorAll('h2, p, label, input:not([type=checkbox]), select, button'))
+          .filter(child => child.checkVisibility() && getComputedStyle(child).opacity === '1')[index];
+        const chain = [];
+        const context = document.createElement('canvas').getContext('2d')!;
+        while (node && chain.length < 32) {
+          const style = getComputedStyle(node);
+          context.fillStyle = style.color;
+          const canvasColor = context.fillStyle;
+          context.fillStyle = style.backgroundColor;
+          chain.push({tag: node.tagName, opacity: style.opacity, color: style.color, background: style.backgroundColor, canvasColor, canvasBackground: context.fillStyle});
+          node = node.parentElement;
+        }
+        return chain;
+      }, failed);
+      console.log('Contrast failure style chain', JSON.stringify({theme, styles}));
+    }
     expect(contrast.filter(item => item.ratio < 4.5), theme).toEqual([]);
     await page.screenshot({path: testInfo.outputPath(`${theme}-preferences.png`)});
   }
