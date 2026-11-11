@@ -19,33 +19,26 @@ const wasCancelled = (error: unknown) => !!error && typeof error === 'object' &&
 
 /**
  * One host file at a time: confirm a symbolic link or a large file, stream a private copy with progress,
- * then save, open or share it. A copy another app may still be reading (open, share) is discarded at the
- * next transfer or when the view goes away; a saved one at once.
+ * then save, open or share it. A saved copy is discarded at once. A copy another app may still be reading
+ * (open, share) stays; native code keeps only the newest few and deletes the rest at every app start.
  */
 export function useHostFile(api: Api, sessionId: string) {
   const access = useRef(captureAccess()).current;
   const alive = useRef(true);
   const job = useRef<Job | null>(null);
-  const staged = useRef<string | null>(null);
   const [state, setState] = useState<Transfer>({phase: 'idle'});
   const live = () => alive.current && access.current();
   const show = (next: Transfer) => { if (live()) setState(next); };
-  function discard() {
-    const id = staged.current;
-    staged.current = null;
-    if (id) void api.hostFileCancel(sessionId, id).catch(() => {});
-  }
+  const discard = (id: string) => void api.hostFileCancel(sessionId, id).catch(() => {});
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
-      if (job.current) void api.hostFileCancel(sessionId, job.current.id).catch(() => {});
-      discard();
+      if (job.current) discard(job.current.id);
     };
   }, [sessionId]);
 
   async function run(stat: HostFileStat, action: HostFileAction) {
-    discard();
     const current: Job = {id: crypto.randomUUID(), cancelled: false, name: stat.name};
     job.current = current;
     const running = (progress: HostFileProgress): Transfer => ({phase: 'running', name: stat.name, progress, cancelling: current.cancelled});
@@ -54,14 +47,12 @@ export function useHostFile(api: Api, sessionId: string) {
       await api.hostFileDownload(sessionId, stat.path, current.id, {followLink: stat.link !== null, allowLarge: stat.size > LARGE_FILE}, progress => {
         if (job.current === current) show(running(progress));
       });
-      staged.current = current.id;
       if (current.cancelled) throw {kind: 'transfer_cancelled'};
       const delivered = await api.hostFileDeliver(sessionId, current.id, action);
-      // A saved file is complete; another app may still be reading an opened or shared one.
-      if (action === 'save') discard();
+      if (action === 'save') discard(current.id);
       show({phase: 'done', action, location: delivered.location});
     } catch (error) {
-      discard();
+      discard(current.id);
       show(current.cancelled || wasCancelled(error) ? {phase: 'cancelled'} : {phase: 'failed', error: captureUiError(error)});
     } finally {
       if (job.current === current) job.current = null;

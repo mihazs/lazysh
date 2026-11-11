@@ -25,6 +25,8 @@ use tokio::{
 /// Copying anything larger needs the user's explicit confirmation first.
 pub(crate) const LARGE: u64 = 50 * 1024 * 1024;
 const MAX_TRANSFERS: usize = 2;
+/// Finished copies kept for other apps (Open with, Share); older ones are deleted when a newer one finishes.
+const KEEP_STAGED: usize = 3;
 /// A host that sends nothing for this long has stalled the transfer.
 const IDLE: Duration = Duration::from_secs(60);
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
@@ -146,10 +148,12 @@ struct Entry {
     session_id: String,
     generation: u64,
     cancel: watch::Sender<bool>,
-    staged: Option<(PathBuf, Staged)>,
+    /// The finished copy and its completion sequence number.
+    staged: Option<(PathBuf, Staged, u64)>,
 }
 /// Private staging directory plus one entry per download, owned by session and access generation.
 pub(crate) struct Transfers {
+    finished: std::sync::atomic::AtomicU64,
     root: PathBuf,
     #[cfg_attr(not(desktop), allow(dead_code))]
     downloads: Option<PathBuf>,
@@ -160,6 +164,7 @@ impl Transfers {
     pub(crate) fn new(root: PathBuf, downloads: Option<PathBuf>) -> Self {
         let _ = std::fs::remove_dir_all(&root);
         Self {
+            finished: Default::default(),
             root,
             downloads,
             entries: Mutex::default(),
@@ -227,6 +232,26 @@ impl Transfers {
         });
         if running == Some(true) {
             self.remove(id);
+        }
+    }
+    /// Deletes the oldest finished copies beyond `KEEP_STAGED`.
+    fn evict(&self) {
+        let old: Vec<String> = match self.entries.lock() {
+            Ok(entries) => {
+                let mut done: Vec<_> = entries
+                    .iter()
+                    .filter_map(|(id, entry)| {
+                        entry.staged.as_ref().map(|staged| (staged.2, id.clone()))
+                    })
+                    .collect();
+                done.sort();
+                let surplus = done.len().saturating_sub(KEEP_STAGED);
+                done.into_iter().take(surplus).map(|(_, id)| id).collect()
+            }
+            Err(_) => return,
+        };
+        for id in old {
+            self.remove(&id);
         }
     }
     fn remove(&self, id: &str) {
@@ -357,6 +382,9 @@ pub(crate) async fn download(
     };
     let staged = Staged { name, size };
     let file = transfers.dir(id).join(&staged.name);
+    let order = transfers
+        .finished
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let kept = transfers.owned(id, session_id, lease, |entry| {
         entry.staged = Some((
             file,
@@ -364,12 +392,14 @@ pub(crate) async fn download(
                 name: staged.name.clone(),
                 size,
             },
+            order,
         ));
     });
     if kept.is_none() {
         return Err(cancelled());
     }
     guard.keep = true;
+    transfers.evict();
     Ok(staged)
 }
 
@@ -523,7 +553,7 @@ pub async fn host_file_deliver(
                     entry
                         .staged
                         .as_ref()
-                        .map(|(file, staged)| (file.clone(), staged.name.clone()))
+                        .map(|(file, staged, _)| (file.clone(), staged.name.clone()))
                 })
                 .flatten()
                 .ok_or_else(unavailable)?;

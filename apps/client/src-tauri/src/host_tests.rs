@@ -374,6 +374,33 @@ mod local {
     }
 
     #[tokio::test]
+    async fn only_the_three_newest_finished_copies_stay_staged_for_other_apps() {
+        let (temp, _app, _id, host) = resolved().await;
+        let (transfers, _) = staging(temp.path()).await;
+        let source = temp.path().join("note.txt");
+        fs::write(&source, b"note").unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            let id = uuid::Uuid::new_v4().to_string();
+            crate::file_transfer::download(
+                &transfers,
+                &host,
+                &lease(),
+                request(&id, &source, false, false),
+                |_| {},
+            )
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        let staged = |id: &String| temp.path().join("staging").join(id).exists();
+        assert_eq!(
+            ids.iter().map(staged).collect::<Vec<_>>(),
+            [false, false, true, true, true]
+        );
+    }
+
+    #[tokio::test]
     async fn a_file_that_shrinks_during_a_local_download_fails_and_leaves_nothing() {
         let (_temp, _id, error) = interrupted(|_, source, _, bytes| {
             if bytes > 0 && bytes < 8 * 1024 * 1024 {

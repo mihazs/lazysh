@@ -80,16 +80,15 @@ it('asks before following a symbolic link and before a large file, and never bef
   expect(named('host_file_download')[0]).toMatchObject({followLink: true, allowLarge: true});
 });
 
-it('opens with another app, keeps the copy for it, and discards it at the next transfer', async () => {
+it('opens with another app and keeps the copy for it', async () => {
   mount();
   await press(t('filesOpenWith'));
   await screen.findByText(t('filesOpened'));
   const [first] = named('host_file_download');
   expect(named('host_file_deliver')).toEqual([{sessionId: 'ssh:transfer', transferId: first.transferId, action: 'open'}]);
   expect(named('host_file_cancel')).toEqual([]);
-  await press(t('filesDownload'));
-  await screen.findByText(t('filesSaved', {location: '/home/mía/Downloads/relatório final (1).pdf'}));
-  expect(named('host_file_cancel')[0]).toEqual({sessionId: 'ssh:transfer', transferId: first.transferId});
+  cleanup();
+  expect(named('host_file_cancel')).toEqual([]);
 });
 
 it('offers Share only where the device supports it', async () => {
