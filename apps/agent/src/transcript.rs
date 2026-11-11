@@ -35,6 +35,7 @@ pub use opencode_conversation::conversation as opencode_conversation;
 mod mutation_observer;
 mod snapshot;
 mod source_snapshot;
+pub mod watch;
 pub use conversation::{claude_conversation_images, conversation};
 pub use database::read_database_page;
 pub use discovery::discover;

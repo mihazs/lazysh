@@ -186,6 +186,28 @@ enum Command {
         #[arg(long, value_enum, default_value_t = lazysh_agent::transcript::TranscriptView::Records)]
         view: lazysh_agent::transcript::TranscriptView,
     },
+    /// Stream upserts of one Claude Code or Codex conversation until stdin closes.
+    TranscriptWatch {
+        #[arg(long, value_enum)]
+        agent: lazysh_agent::transcript::TranscriptAgent,
+        /// A transcript file, as `transcript --view conversation` reads it.
+        #[arg(
+            long,
+            conflicts_with = "session_id",
+            required_unless_present = "session_id"
+        )]
+        path: Option<std::path::PathBuf>,
+        /// A provider session id resolved inside the agent's own data root.
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        #[arg(long, default_value_t=250, value_parser=clap::value_parser!(u64).range(50..=5000))]
+        interval_ms: u64,
+        /// Frame vocabulary version; only 1 exists.
+        #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
+        protocol: u8,
+    },
 }
 #[derive(Subcommand)]
 enum SettingsCommand {
@@ -468,6 +490,23 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 })
                 .map_err(|_| Error::InvalidEvent)?,
             )
+        }
+        Command::TranscriptWatch {
+            agent,
+            path,
+            session_id,
+            limit,
+            interval_ms,
+            protocol: _,
+        } => {
+            lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
+                agent,
+                path,
+                session_id,
+                limit,
+                interval: std::time::Duration::from_millis(interval_ms),
+            })?;
+            None
         }
         Command::Ingest {
             agent,

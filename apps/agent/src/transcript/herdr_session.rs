@@ -2,13 +2,9 @@
 use super::{Error, Result, TranscriptAgent, TranscriptPage};
 use std::path::{Path, PathBuf};
 
-pub fn read_herdr_conversation(
-    agent: TranscriptAgent,
-    id: &str,
-    limit: u8,
-) -> Result<TranscriptPage> {
+fn session_root(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
     let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
-    if parsed.to_string() != id || !(1..=100).contains(&limit) {
+    if parsed.to_string() != id {
         return Err(Error::InvalidArgument);
     }
     let (variable, fallback, child) = match agent {
@@ -20,7 +16,25 @@ pub fn read_herdr_conversation(
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|path| path.join(fallback)))
         .ok_or(Error::InvalidArgument)?;
-    read_in(&home.join(child), agent, id, limit)
+    Ok(home.join(child))
+}
+
+pub fn read_herdr_conversation(
+    agent: TranscriptAgent,
+    id: &str,
+    limit: u8,
+) -> Result<TranscriptPage> {
+    let root = session_root(agent, id)?;
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    read_in(&root, agent, id, limit)
+}
+
+/// The file `read_herdr_conversation` would read, for cheap change checks only.
+/// Content always comes from `read_herdr_conversation`, which re-validates the file.
+pub(super) fn locate(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    locate_in(&session_root(agent, id)?, agent, id)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -28,8 +42,25 @@ fn read_in(_: &Path, _: TranscriptAgent, _: &str, _: u8) -> Result<TranscriptPag
     Err(Error::InvalidArgument)
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn locate_in(_: &Path, _: TranscriptAgent, _: &str) -> Result<PathBuf> {
+    Err(Error::InvalidArgument)
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<TranscriptPage> {
+fn locate_in(root: &Path, agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    find(&open_roots(root, agent)?.1, agent, id)
+}
+
+/// The provider home (Codex only) and the anchored directory holding the sessions.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_roots(
+    root: &Path,
+    agent: TranscriptAgent,
+) -> Result<(
+    Option<crate::managed_directory::Directory>,
+    crate::managed_directory::Directory,
+)> {
     use crate::managed_directory::Directory;
     let home = if matches!(agent, TranscriptAgent::Codex) {
         if root.file_name().is_none_or(|name| name != "sessions") {
@@ -46,6 +77,12 @@ fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<T
     } else {
         Directory::profile(root)?
     };
+    Ok((home, root))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_in(root: &Path, agent: TranscriptAgent, id: &str, limit: u8) -> Result<TranscriptPage> {
+    let (home, root) = open_roots(root, agent)?;
     let path = find(&root, agent, id)?;
     let relative = path
         .strip_prefix(&root.path)

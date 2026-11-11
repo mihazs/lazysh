@@ -126,6 +126,44 @@ The displayed status is the last reported event, not proof that a process is sti
 
 Within each state, the board groups reports by project on the connected host, most recently reported project first. **Archive** hides a report on this device only; **Archived N** lists archived reports with **Restore**. An archived report returns when its agent reports a newer event, and the archive forgets it once the companion ages the report out. Archives are stored per saved host on the device and are not synced or written to the host.
 
+### Live conversation stream
+
+`lazysh-agent transcript-watch --agent claude|codex (--path FILE | --session-id UUID)
+[--limit 1..100] [--interval-ms 50..5000] [--protocol 1]` keeps one command channel open
+and prints one JSON frame per line. `--path` reads a transcript file the way
+`transcript --view conversation` does; `--session-id` resolves a Claude Code or Codex
+session inside the agent's own data root the way `herdr-conversation` does, so no host
+path is supplied. It ends when its standard input closes (an SSH channel going away), on
+SIGINT or SIGTERM, or when its output breaks; it keeps no state on the host and obeys no
+host setting beyond what the two readers above already check. Other agents have no stream
+and stay on paged reads.
+
+Every 250 ms (`--interval-ms`) it opens the file and compares identity, length and
+modification time. Only a change re-projects the conversation with the same bounded readers
+as the paged commands (the last `--limit` messages of the recorded branch, at most 512 KiB, a
+partial last line ignored until its newline arrives), so an idle conversation costs one
+`open` and `fstat` per interval. After a projection that took *t*, the next check waits at
+least 3*t*, which keeps a very large transcript below about a quarter of one core.
+
+| Frame | Fields | Meaning |
+| --- | --- | --- |
+| `hello` | `protocol`, `agent`, `intervalMs`, `limit`, `companion` | First line. A client that does not know `protocol` stops. |
+| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `branchId`, `truncated` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
+| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` appears only when it changed; `null` means unknown. |
+| `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet conversation from a dead channel. |
+| `end` | `reason` | The source failed 20 checks in a row (about 5 s), or could not be read at all; the exit status is 1. |
+
+`seq` rises by one with every `snapshot` and `delta`; `rev` is 1 for a new entry and rises by
+one each time the entry's content changes, so a client discards a frame whose `seq` it has
+seen and an upsert whose `rev` it already holds. `message` is the schema 1 message of the
+paged conversation view, so one renderer serves both. A tool result that lands on an older
+turn arrives as an upsert of that turn's entry, not as a new row. A frame is at most 1 MiB.
+Later protocol versions only add frame types and fields; a client ignores frame types it
+does not know.
+
+An older companion rejects the subcommand as a usage error (exit status 2), which a client
+treats as "update the host companion" and answers by polling `transcript` as before.
+
 ## Other agents and scripts
 
 Use the [generic lifecycle event protocol and storage reference](reference/companion-events.md) for schema, retention, WAL backups, filesystem admission and bounded syscall-observation evidence. For a reporting task, follow [configure the companion](how-to/configure-companion.md). Only configure hosts and agents you control.
