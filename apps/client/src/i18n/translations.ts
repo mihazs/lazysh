@@ -2216,6 +2216,8 @@ const translations = {
   agentDiffCopy: ["Copiar diff", "Copiar diff"],
   agentViewTurn: ["Turno", "Turno"],
   agentPlanProgress: ["{{done}} de {{total}}", "{{done}} de {{total}}"],
+  agentThinking: ["Pensando", "Pensando"],
+  agentThoughtFor: ["Pensou por {{time}}", "Pensó durante {{time}}"],
   agentViewActivity: ["Atividade ({{count}})", "Actividad ({{count}})"],
   chatWatchDelayed: ["As atualizações ao vivo não estão disponíveis; esta visão atualiza a cada 2 segundos e pode atrasar.", "Las actualizaciones en vivo no están disponibles; esta vista se actualiza cada 2 segundos y puede retrasarse."],
   chatWatchStale: ["Conexão perdida. Mostrando a última atualização de {{time}}; reconectando.", "Conexión perdida. Se muestra la última actualización de {{time}}; reconectando."],

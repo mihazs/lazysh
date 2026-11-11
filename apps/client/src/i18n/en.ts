@@ -2213,6 +2213,8 @@ export const english = {
   agentDiffCopy: "Copy diff",
   agentViewTurn: "Turn",
   agentPlanProgress: "{{done}} of {{total}}",
+  agentThinking: "Thinking",
+  agentThoughtFor: "Thought for {{time}}",
   agentViewActivity: "Activity ({{count}})",
   agentViewElapsed: "Time since this turn started",
   agentViewOptions: "Agent view options",
