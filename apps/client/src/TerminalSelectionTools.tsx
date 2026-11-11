@@ -110,13 +110,13 @@ export default function TerminalSelectionTools({terminal, handles, onCopy, onDon
     terminal.clearSelection();
   }
   const handle = (which: Handle) => <div ref={which === 'start' ? start : end} role="button" tabIndex={-1}
-    aria-label={t(which === 'start' ? 'terminalSelectionStart' : 'terminalSelectionEnd')} data-selection-handle={which} {...grab(which)}
+    aria-label={t(which === 'start' ? 'terminalSelectionStart' : 'terminalSelectionEnd')} data-selection-handle={which} data-edge-gestures-ignore="" {...grab(which)}
     style={{position: 'fixed', left: 0, top: 0, zIndex: 1000, width: HANDLE, height: HANDLE, touchAction: 'none', cursor: 'grab',
       borderRadius: which === 'start' ? '50% 0 50% 50%' : '0 50% 50% 50%', background: 'var(--theme-accent, #7aa2f7)', opacity: .9}} />;
   return <>
     {handles && handle('start')}
     {handles && handle('end')}
-    <div ref={bar} className="terminal-selection-tools" role="toolbar" aria-label={t('terminalSelectionTools')} onPointerDown={event => event.preventDefault()}
+    <div ref={bar} className="terminal-selection-tools" role="toolbar" data-edge-gestures-ignore="" aria-label={t('terminalSelectionTools')} onPointerDown={event => event.preventDefault()}
       style={{position: 'fixed', left: 0, top: 0, zIndex: 1001, display: 'flex', gap: 4, padding: 4, borderRadius: 8}}>
       <button type="button" onClick={() => copyAndClose(terminal.getSelection())}>{t('terminalCopy')}</button>
       <button type="button" onClick={() => terminal.selectAll()}>{t('terminalSelectAll')}</button>

@@ -1,5 +1,5 @@
 import {expect,test,type Page} from '@playwright/test';
-import {fingerDrag,historyLines,historyView,mountHistory,rowHeight,settle} from './fixtures/terminalHistory';
+import {compose,fingerDrag,historyLines,historyView,mountHistory,rowHeight,settle} from './fixtures/terminalHistory';
 
 // Finger drags exist only on a touch screen; the desktop wheel path is covered by terminal-history.spec.ts.
 test.skip(({isMobile})=>!isMobile,'Finger drags need a touch screen.');
@@ -29,13 +29,6 @@ function travelled(page:Page,route:Route) {
 async function drag(page:Page,rows:number,slant=0) {
   const box=(await page.locator('.terminal-canvas .xterm-screen').boundingBox())!;
   await fingerDrag(page,{x:box.x+box.width/2,y:box.y+box.height/4},await rowHeight(page),rows,{slant});
-}
-/** The on-screen keyboard holds a word in composition, as SwiftKey and Gboard do after typing. */
-async function compose(page:Page,text:string) {
-  await page.evaluate(()=>window.ownedHistory.terminal.focus());
-  const cdp=await page.context().newCDPSession(page);
-  await cdp.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
-  await cdp.detach();
 }
 /** The reader waits while the agent keeps writing. */
 async function pause(page:Page,route:Route) {

@@ -11,7 +11,7 @@ import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
-import { bodyGestureSlots, defaults, discreteGestureActions, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
+import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 const themeLabels={forest:"themeForest",midnight:"themeMidnight",paper:"themePaper"} as const;
@@ -123,6 +123,10 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
 {id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>
 
       <p>{t("preferencesBindingsAreOptionalSelectionCompositionAndScreenReaderGestures")}</p>
+      <h3 className="settings-group-title">{t("edgeGesturesHeading")}</h3>
+      <p>{t("edgeGesturesHint")}</p>
+      {edgeGestureIds.map(id => <label key={id}><input type="checkbox" checked={edgeGestureSettings(preferences)[id]} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), [id]: e.target.checked}})} />{t(({leftMenu: "edgeGestureLeftMenu", bottomMenu: "edgeGestureBottomMenu", viewSwitch: "edgeGestureViewSwitch"} as const)[id])}</label>)}
+      <label>{t("edgeGestureZoneWidth", {value: formatNumber(edgeGestureSettings(preferences).zoneWidth)})}<input type="range" min={edgeGestureZone.min} max={edgeGestureZone.max} step={edgeGestureZone.step} value={edgeGestureSettings(preferences).zoneWidth} onChange={e => update({edgeGestures: {...edgeGestureSettings(preferences), zoneWidth: Number(e.target.value)}})} /></label>
       <label><input type="checkbox" checked={preferences.dismissKeyboardOnOverscroll} onChange={e=>update({dismissKeyboardOnOverscroll:e.target.checked})} />{t("preferencesDismissKeyboardOnOverscroll")}</label>
       {bodyGestureSlots.map(slot => binding(slot, {tap: t("gestureSingleTap"), doubleTap: t("gestureDoubleTap"), tripleTap: t("gestureTripleTap"), swipeLeft: t("gestureSwipeLeft"), swipeRight: t("gestureSwipeRight")}[slot], preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}})))}
       {gestureDirections.map(direction => binding(`two${direction[0].toUpperCase()}${direction.slice(1)}` as GestureSlot, t(({left:"gestureTwoLeft",right:"gestureTwoRight",up:"gestureTwoUp",down:"gestureTwoDown"} as const)[direction]), preferences.gestures[direction], action => update({gestures: {...preferences.gestures, [direction]: action}}), levelAwareGestureActions))}
@@ -130,7 +134,7 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
       {levelGestureSlots.map(slot => binding(slot, t(({pinch:"gesturePinch",pullShallow:"gesturePullShallow",pullDeep:"gesturePullDeep"} as const)[slot]), preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}}), slot === "pinch" ? gestureActions : levelAwareGestureActions))}
       <p>{t("preferencesAddTheDPadItemUnderToolbarKeysTo")}</p>
       {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", t(corner === "left" ? "gestureDpadLeft" : "gestureDpadRight"), preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
-      <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll})}>{t("preferencesResetGestures")}</button>
+      <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll, edgeGestures: undefined})}>{t("preferencesResetGestures")}</button>
 
 </>},
 {id:"preferencesToolbarKeysAndOrder",title:t("preferencesToolbarKeysAndOrder"),parent:"input",content:<>

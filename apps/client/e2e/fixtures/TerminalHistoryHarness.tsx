@@ -1,13 +1,14 @@
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
+import EdgeGestureHost from './EdgeGestureHost';
 import {createTerminal,type LiveSession} from '../../src/terminal';
 import {installMoshResize} from '../../src/moshResize';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import '../../src/styles.css';
 
 /** Synthetic remote screen only: no host, transport or private terminal content. */
-export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean}={}) {
+export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean}={}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic browser access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'a'.repeat(64)});
   const host=document.createElement('section');
@@ -47,7 +48,8 @@ export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false}
     return app(command,args,options);
   };
   const root=createRoot(host);
-  flushSync(()=>root.render(<TerminalPane session={session} active reportError={error=>errors.push(String(error))}/>));
+  const pane=<TerminalPane session={session} active reportError={error=>errors.push(String(error))}/>;
+  flushSync(()=>root.render(edgeLog?<EdgeGestureHost log={edgeLog} close={edgeClose}>{pane}</EdgeGestureHost>:pane));
   return {terminal,session,errors,writes,opened,resizes,
     /** Uncovers the workspace beneath while the terminal stays mounted. */
     hide(hidden:boolean){host.style.display=hidden?'none':'flex';},

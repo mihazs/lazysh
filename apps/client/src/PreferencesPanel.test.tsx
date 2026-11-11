@@ -22,6 +22,18 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));expect(getPreferences().dismissKeyboardOnOverscroll).toBe(false);
     } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
   });
+  it('switches each edge swipe on or off, sets the zone width and resets them with the gestures', () => {
+    savePreferences({...defaults});mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));
+    const left=screen.getByRole('checkbox',{name:t('edgeGestureLeftMenu')});
+    expect(left).toHaveProperty('checked',true);
+    expect(screen.getByRole('checkbox',{name:t('edgeGestureBottomMenu')})).toHaveProperty('checked',true);
+    expect(screen.getByRole('checkbox',{name:t('edgeGestureViewSwitch')})).toHaveProperty('checked',true);
+    fireEvent.click(left);
+    fireEvent.change(screen.getByRole('slider',{name:t('edgeGestureZoneWidth',{value:'24'})}),{target:{value:'40'}});
+    expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:40});
+    fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));
+    expect(getPreferences().edgeGestures).toBeUndefined();
+  });
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});
     mountPreferences('Keyboard and gestures','Terminal touch gestures');
