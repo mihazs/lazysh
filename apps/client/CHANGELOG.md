@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.31.0
+
+### Minor Changes
+
+- 4a8f4b3: Browse this device's files and review its Git repositories from a local desktop session.
+
+### Patch Changes
+
+- 4c075b5: Fix finger scrolling in Herdr sessions whose host cannot serve guarded history, which showed Unavailable on every swipe.
+- 7a1168b: Fix Chat's View choice snapping back to Recorded messages in WebKit apps after switching Agent to Codex, and run the native Chat recorded-conversation and card cases on Linux and Android.
+- @lazysh/account-usage@1.31.0
+  - @lazysh/common@1.31.0
+  - @lazysh/display-idle@1.31.0
+  - @lazysh/et-transport@1.31.0
+  - @lazysh/mosh-transport@1.31.0
+
 ## 1.30.5
 
 ### Patch Changes
