@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.33.2
+
+### Patch Changes
+
+- f8c530b: Make the terminal fill all the free screen area: no margin above it, no side gutter, and one or two more columns of text on a phone, so it sits edge to edge like other mobile SSH clients.
+- @lazysh/account-usage@1.33.2
+  - @lazysh/common@1.33.2
+  - @lazysh/display-idle@1.33.2
+  - @lazysh/et-transport@1.33.2
+  - @lazysh/mosh-transport@1.33.2
+
 ## 1.33.1
 
 ### Patch Changes
