@@ -1,4 +1,5 @@
 //! Read the selected OpenCode projection, never the model-context replay log.
+use super::window::{select, Window};
 use super::{
     block, database, interaction, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
     TranscriptPage, MAX_PAGE,
@@ -10,7 +11,9 @@ use std::{
     path::Path,
 };
 
-const MAX_ROWS: usize = 10_000;
+const MAX_ROWS: usize = 100_000;
+/// A message carries several parts (text, tool calls, results); the 16 MiB input budget still bounds both.
+const MAX_PARTS: usize = 400_000;
 const MAX_INPUT: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -63,6 +66,15 @@ struct Row {
 }
 
 pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptPage> {
+    conversation_window(path, session, limit, &Window::Tail)
+}
+
+pub fn conversation_window(
+    path: &Path,
+    session: &str,
+    limit: u8,
+    window: &Window,
+) -> Result<TranscriptPage> {
     if session.is_empty()
         || session.len() > 256
         || session.chars().any(char::is_control)
@@ -97,7 +109,7 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         .transpose()?;
     let mut queued = HashSet::new();
     if kind == Schema::V2 {
-        let mut query = db.prepare("SELECT id FROM session_inbox WHERE session_id=?1 AND type='user' AND delivery='queue' LIMIT 10001")?;
+        let mut query = db.prepare("SELECT id FROM session_inbox WHERE session_id=?1 AND type='user' AND delivery='queue' LIMIT 100001")?;
         for id in query.query_map([session], |r| r.get::<_, String>(0))? {
             let id = id?;
             if id.len() > 256 || queued.len() == MAX_ROWS {
@@ -107,9 +119,9 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         }
     }
     let sql = if kind == Schema::V2 {
-        "SELECT id,type,data,time_created FROM session_message WHERE session_id=?1 ORDER BY seq LIMIT 10001"
+        "SELECT id,type,data,time_created FROM session_message WHERE session_id=?1 ORDER BY seq LIMIT 100001"
     } else {
-        "SELECT id,json_extract(data,'$.role'),data,time_created FROM message WHERE session_id=?1 ORDER BY time_created,id LIMIT 10001"
+        "SELECT id,json_extract(data,'$.role'),data,time_created FROM message WHERE session_id=?1 ORDER BY time_created,id LIMIT 100001"
     };
     let mut query = db.prepare(sql)?;
     let mut cursor = query.query([session])?;
@@ -137,9 +149,9 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         return Err(Error::InvalidEvent);
     }
     let sql = if kind == Schema::V2 {
-        "SELECT message_id,data FROM session_part WHERE session_id=?1 ORDER BY message_id,ordinal LIMIT 10001"
+        "SELECT message_id,data FROM session_part WHERE session_id=?1 ORDER BY message_id,ordinal LIMIT 400001"
     } else {
-        "SELECT message_id,data FROM part WHERE session_id=?1 ORDER BY message_id,id LIMIT 10001"
+        "SELECT message_id,data FROM part WHERE session_id=?1 ORDER BY message_id,id LIMIT 400001"
     };
     let mut query = db.prepare(sql)?;
     let mut cursor = query.query([session])?;
@@ -148,7 +160,7 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
     let mut count = 0;
     while let Some(row) = cursor.next()? {
         count += 1;
-        if count > MAX_ROWS {
+        if count > MAX_PARTS {
             return Err(Error::InvalidEvent);
         }
         let id: String = row.get(0)?;
@@ -169,10 +181,8 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
             rows.truncate(index);
         }
     }
-    let mut messages = Vec::new();
-    let mut output = 0;
-    let mut truncated = false;
-    for row in rows.iter().rev() {
+    let mut all = Vec::new();
+    for row in &rows {
         // V2 TUI applies lexical IDs before grouping; V1 was cut by ordered index.
         if queued.contains(&row.id)
             || (kind == Schema::V2 && boundary.as_ref().is_some_and(|id| &row.id >= id))
@@ -180,24 +190,16 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
             continue;
         }
         let overlay = parts.get(&row.id);
-        if let Some(message) = normalize(
+        all.extend(normalize(
             kind,
             &row.id,
             &row.role,
             &row.data,
             overlay.map(Vec::as_slice),
             row.time,
-        )? {
-            let size = super::message_size(&message)?;
-            if messages.len() == usize::from(limit) || output + size > MAX_PAGE {
-                truncated = true;
-                break;
-            }
-            output += size;
-            messages.push(message);
-        }
+        )?);
     }
-    messages.reverse();
+    let selected = select(all, window, limit)?;
     let activity = if kind == Schema::V1 {
         activity(&rows, &parts)
     } else {
@@ -208,12 +210,13 @@ pub fn conversation(path: &Path, session: &str, limit: u8) -> Result<TranscriptP
         schema_version: 1,
         view: "active_branch",
         agent: TranscriptAgent::Opencode,
-        messages,
+        messages: selected.messages,
         next_offset: 0,
         has_more: false,
         branch_id: Some(session.into()),
-        truncated,
+        truncated: selected.has_older,
         checkpoint: None,
+        has_newer: selected.has_newer,
         activity,
         queued: Vec::new(),
     })
@@ -580,6 +583,7 @@ pub(super) fn records(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
         queued: Vec::new(),
     })

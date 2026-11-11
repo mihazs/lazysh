@@ -11,6 +11,31 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+/// Which part of a conversation to read; the newest messages when none is given.
+#[derive(clap::Args, Default)]
+struct WindowArgs {
+    /// The messages just before the one with this id.
+    #[arg(long, conflicts_with_all = ["after", "from_start"])]
+    before: Option<String>,
+    /// The messages just after the one with this id.
+    #[arg(long, conflicts_with = "from_start")]
+    after: Option<String>,
+    /// The first messages of the session.
+    #[arg(long)]
+    from_start: bool,
+}
+impl WindowArgs {
+    fn window(self) -> lazysh_agent::transcript::window::Window {
+        use lazysh_agent::transcript::window::Window;
+        match (self.before, self.after, self.from_start) {
+            (Some(id), _, _) => Window::Before(id),
+            (_, Some(id), _) => Window::After(id),
+            (_, _, true) => Window::Start,
+            _ => Window::Tail,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print the exact retained third-party licenses and attribution notices.
@@ -180,6 +205,8 @@ enum Command {
         session_id: String,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// Read a bounded page of transcript records without starting an agent.
     Transcript {
@@ -203,6 +230,9 @@ enum Command {
         limit: u8,
         #[arg(long, value_enum, default_value_t = lazysh_agent::transcript::TranscriptView::Records)]
         view: lazysh_agent::transcript::TranscriptView,
+        /// Conversation view only: read before or after a message instead of the newest ones.
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// Stream upserts of one Claude Code or Codex conversation until stdin closes.
     TranscriptWatch {
@@ -417,11 +447,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             session_id,
             limit,
+            window,
         } => Some(
-            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation(
+            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation_window(
                 agent,
                 &session_id,
                 limit,
+                &window.window(),
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
@@ -435,7 +467,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             offset,
             limit,
             view,
+            window,
         } => {
+            let window = window.window();
+            if window != lazysh_agent::transcript::window::Window::Tail
+                && !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
+            {
+                return Err(Error::InvalidArgument);
+            }
             if checkpointed
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
@@ -510,15 +549,20 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                             return Err(Error::InvalidArgument);
                         }
                         if matches!(agent, lazysh_agent::transcript::TranscriptAgent::Opencode) {
-                            lazysh_agent::transcript::opencode_conversation(
+                            lazysh_agent::transcript::opencode_conversation_window(
                                 &path,
                                 session_id.as_deref().ok_or(Error::InvalidArgument)?,
                                 limit,
+                                &window,
                             )?
-                        } else if inline_images {
-                            lazysh_agent::transcript::claude_conversation_images(&path, limit)?
                         } else {
-                            lazysh_agent::transcript::conversation(&path, agent, limit)?
+                            lazysh_agent::transcript::conversation_window(
+                                &path,
+                                agent,
+                                limit,
+                                inline_images,
+                                &window,
+                            )?
                         }
                     }
                 })

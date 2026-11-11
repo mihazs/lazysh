@@ -9,7 +9,7 @@ use std::{
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RECORDS: usize = 10_000;
+const MAX_RECORDS: usize = 100_000;
 const MAX_SOURCES: usize = 16;
 
 struct ListEntry {

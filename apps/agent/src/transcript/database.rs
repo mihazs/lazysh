@@ -115,6 +115,7 @@ pub fn read_database_page(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
         queued: Vec::new(),
     })

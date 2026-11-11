@@ -205,6 +205,7 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
             branch_id: None,
             truncated: false,
             checkpoint: None,
+            has_newer: false,
             activity: None,
             queued: Vec::new(),
         },

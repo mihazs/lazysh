@@ -1,6 +1,5 @@
-use super::{
-    normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
-};
+use super::window::{select, Window};
+use super::{normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -10,11 +9,22 @@ use std::{
 };
 
 pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, agent, limit, false)
+    conversation_options(path, agent, limit, false, &Window::Tail)
 }
 
 pub fn claude_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    conversation_options(path, TranscriptAgent::Claude, limit, true)
+    conversation_options(path, TranscriptAgent::Claude, limit, true, &Window::Tail)
+}
+
+/// One page of the active branch at any position of the session, for reading it from the first message.
+pub fn conversation_window(
+    path: &Path,
+    agent: TranscriptAgent,
+    limit: u8,
+    inline_images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    conversation_options(path, agent, limit, inline_images, window)
 }
 
 fn conversation_options(
@@ -22,26 +32,43 @@ fn conversation_options(
     agent: TranscriptAgent,
     limit: u8,
     inline_images: bool,
+    window: &Window,
 ) -> Result<TranscriptPage> {
-    if matches!(agent, TranscriptAgent::Codex) {
-        return super::codex_conversation::conversation(path, limit);
-    }
-    if matches!(agent, TranscriptAgent::GrokAcp) {
-        return super::grok_conversation::conversation(path, limit);
-    }
-    if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
+    if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project_claude(capture(path)?, limit, inline_images)
+    if matches!(agent, TranscriptAgent::Codex) {
+        return super::codex_conversation::conversation(path, limit, window);
+    }
+    if matches!(agent, TranscriptAgent::GrokAcp) {
+        return super::grok_conversation::conversation(path, limit, window);
+    }
+    if !matches!(agent, TranscriptAgent::Claude) {
+        return Err(Error::InvalidArgument);
+    }
+    project_claude(capture(path)?, limit, inline_images, window)
 }
 
 pub(super) fn project_claude(
     bytes: Vec<u8>,
     limit: u8,
     inline_images: bool,
+    window: &Window,
 ) -> Result<TranscriptPage> {
-    project_claude_bounded(bytes, limit, inline_images, super::MAX_LINE, 10_000, None)
+    project_claude_bounded(
+        bytes,
+        limit,
+        inline_images,
+        super::MAX_LINE,
+        MAX_RECORDS,
+        None,
+        window,
+    )
 }
+
+/// A 16 MiB snapshot holds at most this many records of any realistic size; the cap stops a file of
+/// tiny records from costing more memory than the snapshot budget implies.
+const MAX_RECORDS: usize = 100_000;
 
 pub(super) fn project_claude_bounded(
     bytes: Vec<u8>,
@@ -50,6 +77,7 @@ pub(super) fn project_claude_bounded(
     line_limit: u64,
     record_limit: usize,
     expected_session_id: Option<&str>,
+    window: &Window,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
@@ -99,6 +127,7 @@ pub(super) fn project_claude_bounded(
                                 "type"
                                     | "uuid"
                                     | "parentUuid"
+                                    | "logicalParentUuid"
                                     | "subtype"
                                     | "isSidechain"
                                     | "isMeta"
@@ -139,37 +168,29 @@ pub(super) fn project_claude_bounded(
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
-    let mut messages = Vec::new();
-    let mut output_bytes = 0;
-    let mut truncated = false;
-    for index in chain.into_iter().rev() {
-        let (position, record) = &records[index];
-        let message = if inline_images {
-            super::normalize_images(record, agent, *position)
-        } else {
-            normalize(record, agent, *position)
-        };
-        if let Some(message) = message {
-            let size = super::message_size(&message)?;
-            if messages.len() == usize::from(limit) || output_bytes + size > MAX_PAGE {
-                truncated = true;
-                break;
+    let all = chain
+        .into_iter()
+        .filter_map(|index| {
+            let (position, record) = &records[index];
+            if inline_images {
+                super::normalize_images(record, agent, *position)
+            } else {
+                normalize(record, agent, *position)
             }
-            output_bytes += size;
-            messages.push(message);
-        }
-    }
-    messages.reverse();
+        })
+        .collect();
+    let selected = select(all, window, limit)?;
     let queued = queue.pending();
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
         agent,
-        messages,
+        messages: selected.messages,
         next_offset: offset,
         has_more: false,
         branch_id,
-        truncated,
+        truncated: selected.has_older,
+        has_newer: selected.has_newer,
         checkpoint: None,
         activity,
         queued,
@@ -393,7 +414,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
         if let Some(id) = record["uuid"].as_str() {
             by_id.insert(id, index);
         }
-        if let Some(parent) = record["parentUuid"].as_str() {
+        if let Some(parent) = parent(record) {
             parents.insert(parent);
         }
     }
@@ -418,9 +439,7 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
                 }
                 break;
             }
-            current = record["parentUuid"]
-                .as_str()
-                .and_then(|parent| by_id.get(parent).copied());
+            current = parent(record).and_then(|parent| by_id.get(parent).copied());
         }
     }
     let Some(leaf) = leaves.into_iter().max() else {
@@ -437,12 +456,21 @@ fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)>
             return Err(Error::InvalidEvent);
         }
         chain.push(index);
-        current = records[index].1["parentUuid"]
-            .as_str()
-            .and_then(|parent| by_id.get(parent).copied());
+        current = parent(&records[index].1).and_then(|parent| by_id.get(parent).copied());
     }
     chain.reverse();
     Ok((recover_parallel(records, &chain, &mut seen)?, Some(leaf)))
+}
+
+/// The record before this one in the session. A compaction restarts the chain with `parentUuid`
+/// null and keeps the earlier conversation behind `logicalParentUuid`, so reading across it shows
+/// the whole session from its first message.
+fn parent(record: &Value) -> Option<&str> {
+    record["parentUuid"].as_str().or_else(|| {
+        (record["subtype"] == "compact_boundary")
+            .then(|| record["logicalParentUuid"].as_str())
+            .flatten()
+    })
 }
 
 fn is_main(record: &Value) -> bool {

@@ -1,7 +1,7 @@
 //! Recorded UI history, qualified against Codex 0.166.0. Not model context.
+use super::window::{select, Window};
 use super::{
     codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
-    MAX_PAGE,
 };
 use serde_json::{json, Value};
 use std::{
@@ -297,11 +297,8 @@ fn pending_question(payload: &Value, asked: &mut HashSet<String>) {
     }
 }
 
-pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
-    project(codex_lineage::read(path)?, limit)
+pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<TranscriptPage> {
+    project(codex_lineage::read(path)?, limit, window)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -310,14 +307,19 @@ pub(super) fn anchored(
     path: &Path,
     limit: u8,
     expected: &super::SourceSnapshot,
+    window: &Window,
 ) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    project(codex_lineage::read_anchored(root, path, expected)?, limit)
+    project(
+        codex_lineage::read_anchored(root, path, expected)?,
+        limit,
+        window,
+    )
 }
 
-fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage> {
+fn project(history: codex_lineage::History, limit: u8, window: &Window) -> Result<TranscriptPage> {
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
@@ -420,31 +422,18 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
         .into_iter()
         .flat_map(|turn| turn.messages)
         .collect::<Vec<_>>();
-    let mut messages = Vec::new();
-    let mut bytes = 0;
-    for value in all.iter().rev() {
-        let size = message_size(value)?;
-        if size > MAX_PAGE {
-            return Err(Error::InvalidEvent);
-        }
-        if messages.len() == usize::from(limit) || bytes + size > MAX_PAGE {
-            break;
-        }
-        messages.push(value.clone());
-        bytes += size;
-    }
-    let truncated = messages.len() < all.len();
-    messages.reverse();
+    let selected = select(all, window, limit)?;
     history.verify()?;
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
         agent: TranscriptAgent::Codex,
-        messages,
+        messages: selected.messages,
         next_offset: history.offset,
         has_more: false,
         branch_id: Some(history.thread),
-        truncated,
+        truncated: selected.has_older,
+        has_newer: selected.has_newer,
         checkpoint: None,
         activity: match activity {
             Some("working") if !asked.is_empty() => Some("waiting"),
