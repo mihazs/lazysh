@@ -1,0 +1,10 @@
+/* One compact row under the conversation: attach, the text field, Stop, Send. Notes and the terminal-input flow take the rows below. */
+.agent-composer { flex: 0 0 auto; display: grid; gap: 4px; margin: 6px 8px 8px; padding: 6px 8px; border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; background: var(--theme-panel, var(--surface)); max-height: 60%; overflow: auto; min-width: 0; }
+.agent-composer-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.agent-composer-row > textarea { flex: 1 1 6rem; min-width: 0; min-height: 40px; max-height: 40vh; margin: 0; resize: none; }
+.agent-composer-row > .icon-button, .agent-composer-row > .agent-composer-send { flex: 0 0 auto; width: 40px; height: 40px; min-width: 40px; min-height: 40px; margin: 0; padding: 0; }
+.agent-composer-note { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-composer > section { margin: 0; font-size: 12px; }
+.agent-composer > section > :is(p, div) { margin: 2px 0; }
+.agent-composer-attach { display: grid; gap: 6px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
+.agent-composer-attach > p { margin: 0; font-size: 12px; color: var(--muted); }
