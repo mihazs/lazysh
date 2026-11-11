@@ -750,7 +750,7 @@ jobs:
           targets: x86_64-linux-android
       - &android-owned-host-dependencies
         name: Install native Mosh fixture dependencies
-        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+        run: sudo sh .github/scripts/apt-install.sh openssh-server openssh-client iproute2 mosh bubblewrap libnss-wrapper protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
       - &android-owned-namespace
         name: Verify native GUI namespace prerequisites
         env:
@@ -798,7 +798,7 @@ jobs:
           cargo test --locked -p lazysh-agent --example owned_terminal_receiver
           cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
-        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux'
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER != 'mosh' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'tmux' && env.LAZYSH_ANDROID_RUNTIME_OWNER != 'ssh-parity'
       - &android-owned-kvm
         name: Grant this runner access to KVM
         run: |
@@ -860,6 +860,7 @@ jobs:
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
             tmux) bun run test:android-tmux; exit $? ;;
+            ssh-parity) bun run test:android-ssh-parity; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
             biometric) bun run test:android-biometric; exit $? ;;
@@ -936,6 +937,19 @@ jobs:
           path: *android-runtime-result-paths
           if-no-files-found: warn
           retention-days: 3
+
+  # Owned OpenSSH password, encrypted-key, rotated-key, bastion and agent-forwarding
+  # parity cases (#985) on the emulator; separate so their verdict is attributable.
+  native-android-ssh-parity:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: ssh-parity
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-ssh-parity-results
+    steps: *android-owned-runtime-steps
 
   # Owned pinned tmux on the emulator; separate so its verdict is attributable.
   native-android-tmux:

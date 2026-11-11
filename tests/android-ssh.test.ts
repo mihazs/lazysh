@@ -2452,7 +2452,7 @@ test('recorded Android routing preserves the ordinary owner and uses its own rep
 
 test('recorded select geometry reports only the bounded hit category from its existing hit test',async()=>{
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('fun selectOwnedOption(')[1].split('val tapScript')[0];
+  const body=kotlin.split('fun selectNativeOption(')[1].split('val tapScript')[0];
   const expression=body.match(/val geometry = JSONArray\(evaluate\(scenario, """([\s\S]*?)"""\)\)/)![1]
     .replace('${JSONObject.quote(selector)}',JSON.stringify('owned-select'));
   let calls=0,hit:unknown;
