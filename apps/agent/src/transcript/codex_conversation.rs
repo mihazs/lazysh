@@ -415,6 +415,7 @@ fn project(
     let mut activity = None;
     let mut asked = HashSet::new();
     let mut session = super::session_info::Session::default();
+    let mut goal_seen: Option<(Option<&str>, Option<&str>)> = None;
     for record in &history.records {
         let value = &record.value;
         session.codex(value);
@@ -424,6 +425,11 @@ fn project(
         }
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
+            let id = format!("compacted-{}", record.key);
+            projection.put(
+                None,
+                super::events::codex_compacted(&id, &value["timestamp"]),
+            )?;
             continue;
         }
         if value["type"] != "event_msg" {
@@ -456,6 +462,20 @@ fn project(
                     continue;
                 }
                 projection.finish();
+                continue;
+            }
+            "thread_goal_updated" => {
+                // Updates repeat while the goal runs; only a new goal or a new status is an event.
+                let goal = &event["goal"];
+                let key = (goal["objective"].as_str(), goal["status"].as_str());
+                if goal_seen != Some(key) {
+                    goal_seen = Some(key);
+                    let id = format!("goal-{}", record.key);
+                    if let Some(message) = super::events::codex_goal(&id, goal, &value["timestamp"])
+                    {
+                        projection.put(event["turn_id"].as_str(), message)?;
+                    }
+                }
                 continue;
             }
             "thread_rolled_back" => {

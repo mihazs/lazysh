@@ -154,8 +154,11 @@ pub(super) fn project_claude_bounded(
                                     | "agentId"
                                     | "sourceToolAssistantUUID"
                                     | "timestamp"
+                                    | "attachment"
+                                    | "content"
                             )
                         });
+                    super::events::trim(&mut record);
                 }
                 records.push((offset, record));
                 if records.len() > record_limit {
@@ -217,7 +220,9 @@ pub(super) fn project_claude_bounded(
         .into_iter()
         .filter_map(|index| {
             let (position, record) = &records[index];
-            if inline_images {
+            if let Some(event) = super::events::claude(record) {
+                Some(event)
+            } else if inline_images {
                 super::normalize_images(record, agent, *position)
             } else {
                 normalize(record, agent, *position)

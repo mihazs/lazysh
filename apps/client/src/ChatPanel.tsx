@@ -20,7 +20,7 @@ import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
 import {applyWatchOp} from './transcriptWatch';
-import {projectMessages,type InjectedEvent} from './chatInjected';
+import {projectMessages,recordedEventKinds,type InjectedEvent} from './chatInjected';
 import {ChatRich} from './ChatRich';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
@@ -46,7 +46,7 @@ type Block = {
 };
 type Message = {
   id: string;
-  role: "user" | "assistant" | "tool" | "record";
+  role: "user" | "assistant" | "tool" | "record" | "event";
   record?: { source: string; type: string; status: string; stepIndex?: number; exitCode?: number; errorCode?: number; truncatedFields: string[] };
   timestamp?: string;
   blocks: Block[];
@@ -109,7 +109,8 @@ export function parseTranscript(value: unknown): Page {
       !message ||
       typeof message.id !== "string" ||
       message.id.length > 4096 ||
-      !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")) ||
+      !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")
+        || (message.role === "event" && ["claude", "codex"].includes(page.agent) && page.view === "active_branch")) ||
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
@@ -123,6 +124,11 @@ export function parseTranscript(value: unknown): Page {
         || (metadata.exitCode !== undefined && (!Number.isInteger(metadata.exitCode) || metadata.exitCode < -2147483648 || metadata.exitCode > 2147483647)))
         throw new LocalUiError('chatInvalidRecordMetadata');
     } else if (message.record !== undefined) throw new LocalUiError('chatUnexpectedRecordMetadata');
+    // The companion writes an event message for the harness records it chose to show; it carries nothing else.
+    const event = message.event;
+    if (message.role === "event" ? (message.blocks.length > 0 || !event || typeof event !== "object" || !(recordedEventKinds as readonly string[]).includes(event.kind)
+        || typeof event.text !== "string" || event.text.length > 4096 || (event.detail !== undefined && (typeof event.detail !== "string" || event.detail.length > 4096)))
+      : event !== undefined) throw new LocalUiError('chatInvalidMessage');
     for (const block of message.blocks) {
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
@@ -638,8 +644,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
   }
-  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
-  const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
+  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer',goal:'chatEventGoal',goalMet:'chatEventGoalMet',planMode:'chatEventPlanMode',planModeExit:'chatEventPlanModeExit',recap:'chatEventRecap',hookFailed:'chatEventHookFailed'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
+  const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord",event:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
   const renderMessage = (message: Message) => message.event ? (
