@@ -238,6 +238,29 @@ Not tried against any real profile, by design. What is known:
   The dialog is on the host's screen, so a person away from the host cannot approve it. Not verified here.
 - Firefox has no equivalent of the approval mode.
 
+## Prototype measurements
+
+The prototype in the repository (`lazysh-agent host-browser` and the Vite-only viewer, see the
+[design](../host-browser.md#prototype)) was run by hand against the same machine, with a real `ssh -L` to a
+throwaway `sshd` and the same user-space link shaper. The page is the static fixture: a tap turns the whole page
+from red to blue. The time runs from the viewer's pointer-down to the moment the first decoded frame on the canvas
+differs (so it includes the screencast encode, the transfer, the JPEG decode and the canvas draw). Press and
+release are sent together. Twelve taps per link, single run.
+
+| Link | Median | 95th percentile |
+| --- | --- | --- |
+| Loopback through SSH, no shaper | 16 ms | 17 ms |
+| Wi-Fi-like, 10 ms round trip, 50 Mbit/s | 17 ms | 19 ms |
+| LTE-like, 40 ms, 20 Mbit/s | 47 ms | 48 ms |
+| Poor, 150 ms, 1.5 Mbit/s | 158 ms | 158 ms |
+
+These are lower than the 50, 95 and 319 ms of the screencast tests above for the same links because the earlier
+script awaited the press before sending the release, which costs a second round trip. Sent together, a tap costs
+about one display refresh plus one round trip, which is what the design assumes (the derived saving noted above
+is confirmed). The
+same fixture test runs in CI and prints its loopback figure (16 to 17 ms on this machine) without asserting on
+it, because a hosted runner's speed is not a requirement.
+
 ## Not verified
 
 - A real phone. Rendering, decode speed, battery and the on-screen keyboard behavior in the app's web view were
@@ -252,5 +275,5 @@ Not tried against any real profile, by design. What is known:
 - Whether a sign-in flow that rejects automated browsers can be completed.
 - A statistical confidence interval for any figure. They are single short runs.
 
-The scripts that produced these figures were kept outside the repository. The repeatable part is the
+The scripts that produced the figures above were kept outside the repository. The repeatable part is the
 prototype's CI test described in the [design](../host-browser.md#prototype).
