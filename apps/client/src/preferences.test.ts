@@ -129,8 +129,8 @@ describe("OSC52 clipboard requests", () => {
 
  it("keeps flat toolbars as one row and validates stored row breaks", () => {
   expect(toolbarRows(parsePreferences({...defaults, toolbar: ["esc", "tab"]}).toolbar)).toEqual([["esc", "tab"]]);
-  // Two rows of nine once the terminal adds its More key to the second, so the arrows sit under Home, Up and End.
-  expect(toolbarRows(defaults.toolbar)).toEqual([["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End"], ["shift", "ctrl", "meta", "c", "d", "left", "down", "right"]]);
+  // Two rows of nine: the arrows sit under Home, Up and End.
+  expect(toolbarRows(defaults.toolbar)).toEqual([["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End"], ["shift", "ctrl", "meta", "c", "d", "enter", "left", "down", "right"]]);
   const stored = parsePreferences(JSON.parse(JSON.stringify({...defaults, toolbar: toolbarFromRows([["esc", "ctrl"], [], ["left", "right"]])})));
   expect(toolbarRows(stored.toolbar)).toEqual([["esc", "ctrl"], [], ["left", "right"]]);
   // Duplicates across rows, unknown entries and breaks beyond the third row are dropped without losing keys.
@@ -168,6 +168,8 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences({...defaults, toolbar:["esc","ctrl","tab","c","d","paste","left","up","down","right"]}).toolbar).toEqual(defaults.toolbar);
   // The one-row default of the previous release, as saved with any other preference change.
   expect(parsePreferences({...defaults, toolbar:["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","c","d"]}).toolbar).toEqual(defaults.toolbar);
+  // The compact default of 1.32 and 1.33, which had the More key in the cell that now holds Enter.
+  expect(parsePreferences({...defaults, toolbar:["keyboard","attach","esc","tab","paste","/","Home","up","End",toolbarRowBreak,"shift","ctrl","meta","c","d","left","down","right"]}).toolbar).toEqual(defaults.toolbar);
   // The same keys in another order, or with one removed, are the user's own layout and keep every key.
   for (const toolbar of [["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","d","c"], ["esc","ctrl","meta","shift","tab","paste","attach","left","up","down","right","c"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);
   for (const toolbar of [[], ["meta","F12","attach","shift"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);

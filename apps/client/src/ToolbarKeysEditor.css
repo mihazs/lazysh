@@ -19,7 +19,6 @@
   border: 1px solid var(--ui-control-border); background: var(--ui-fill);
   color: var(--theme-text, #b2c3a4); font-family: monospace; font-size: 10px; white-space: nowrap;
 }
-.toolbar-preview-row > .toolbar-preview-fixed { border: 1px dashed var(--ui-border); color: var(--theme-muted, #8d9b84); }
 
 .toolbar-size { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 12px; }
 .toolbar-size > label { margin: 0; }

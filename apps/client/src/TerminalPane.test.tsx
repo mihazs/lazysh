@@ -82,11 +82,8 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
-/** Find, Copy and the saved snippets and chords sit behind the More key; the list closes after each press. */
-function pressMore(name:string){
-  if(!screen.queryByRole('group',{name:'More keys'}))fireEvent.click(screen.getByRole('button',{name:'More keys'}));
-  fireEvent.click(screen.getByRole('button',{name}));
-}
+/** Find, Copy and the saved snippets and chords sit on toolbar pages after the keys; every page is in the document, so a press needs no slide. */
+function pressMore(name:string){fireEvent.click(screen.getByRole('button',{name}));}
 function installCompositionHelper(){Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});}
 function skipLocalCorrection(textarea:HTMLTextAreaElement){act(()=>{
   textarea.value='local correction';textarea.setSelectionRange(16,16);
@@ -430,8 +427,6 @@ it.each(['terminal-user','terminal-nonuser','named-key','chord','gesture'] as co
     };
     for(const [kind,cause,message] of [['backpressure','queue-full','Terminal input queue is full'],['input_closed','channel-closed','Terminal input channel is closed'],['transport_error','other','private native failure']]) {
       mocks[caller==='chord'?'writeSequence':'write'].mockRejectedValueOnce({kind,message,hostId:'private-host',sessionId:'private-session'});
-      // The saved chord sits behind the More key, which must be open before the act scope below.
-      if(caller==='chord')fireEvent.click(screen.getByRole('button',{name:'More keys'}));
       await act(async()=>send());
       const raw=warn.mock.calls.at(-1)!;
       expect(raw).toHaveLength(1);

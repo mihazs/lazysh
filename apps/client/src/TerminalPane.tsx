@@ -2,11 +2,11 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Ellipsis, Keyboard, KeyboardOff, Lock, SquarePen } from "lucide-react";
+import { Keyboard, KeyboardOff, Lock, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
@@ -22,7 +22,8 @@ import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
-import { toolbarCells, toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
+import { toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
+import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
 import "./ToolbarRows.css";
 import "./TerminalGestures.css";
 
@@ -196,8 +197,6 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const [link, setLink] = useState<string | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const moreId = useId();
   const [query, setQuery] = useState("");
   const searchLine = useRef(-1);
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
@@ -252,16 +251,6 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const taps = useRef<{count: number; when: number; x: number; y: number; timer?: ReturnType<typeof setTimeout>} | null>(null);
   const gesture = useRef<{x: number; y: number; distance: number; fontSize: number; zoomed: boolean; moved: Set<number>} | null>(null);
   const toolbarVisible = toolbarOverride ?? !(preferences.autoHideToolbar && desktopPointer);
-  // The More list closes on a press outside the toolbar, on Escape while a toolbar key has focus (anywhere else Escape belongs to the terminal), and when the toolbar hides.
-  useEffect(() => {
-    if (!moreOpen) return;
-    if (!toolbarVisible) {setMoreOpen(false); return;}
-    const outside = (event: PointerEvent) => {if (!(event.target as Element | null)?.closest?.(".terminal-keys")) setMoreOpen(false);};
-    const escape = (event: KeyboardEvent) => {if (event.key === "Escape" && document.activeElement?.closest(".terminal-keys")) setMoreOpen(false);};
-    window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("keydown", escape, true);
-    return () => {window.removeEventListener("pointerdown", outside, true); window.removeEventListener("keydown", escape, true);};
-  }, [moreOpen, toolbarVisible]);
   const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
   dpadView.current={session,enabled:dpadEnabled};
   function ownsDpad(gesture:DpadGesture) {
@@ -1097,18 +1086,21 @@ export default function TerminalPane({ session, active, quietActivation = false,
       {locked && <Lock className="terminal-key-lock" size={9} aria-hidden="true" />}
     </button>;
   }
-  /** Find, Copy and the saved snippets and chords: one key opens them over the terminal, so the key rows stay a fixed grid. */
-  function toolbarMore() {
-    const close = () => setMoreOpen(false);
-    return <div id={moreId} role="group" aria-label={t("terminalMoreKeys")} className="terminal-keys-more">
-      <button type="button" onPointerDown={event => event.preventDefault()} onClick={() => {close(); setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
-      <button type="button" onPointerDown={event => event.preventDefault()} onClick={() => {close(); const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
-      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} type="button" disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {close(); setDraft(snippet.text); setDraftAttachments([]); setComposing(true);}}>{snippet.label}</button>)}
-      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} type="button" title={chord.keys} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={() => {close(); if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
-    </div>;
+  /** The toolbar pages after the keys: Find and Copy, then the saved snippets and chords when there are any. */
+  function toolbarExtraPages(): ToolbarPage[] {
+    const hold = (event: ReactPointerEvent<HTMLButtonElement>) => event.preventDefault();
+    const pages: ToolbarPage[] = [{id: "tools", content: <div className="terminal-keys-list">
+      <button type="button" onPointerDown={hold} onClick={() => {setSearching(!searching); requestAnimationFrame(() => focusTerminal(searchInput.current));}}>{t('terminalFind')}</button>
+      <button type="button" onPointerDown={hold} onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
+    </div>}];
+    if (preferences.snippets.length || preferences.chords.length) pages.push({id: "snippets", content: <div className="terminal-keys-list">
+      {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} type="button" disabled={!session.connected} onPointerDown={hold} onClick={() => {setDraft(snippet.text); setDraftAttachments([]); setComposing(true);}}>{snippet.label}</button>)}
+      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} type="button" title={chord.keys} disabled={!session.connected} onPointerDown={hold} onClick={() => {if (sendChord(chord.keys)) focusTerminal();}}>{chord.label}</button>)}
+    </div>});
+    return pages;
   }
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
-  const cells = toolbarCells(visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer));
+  const keyRows = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer);
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
@@ -1166,14 +1158,8 @@ export default function TerminalPane({ session, active, quietActivation = false,
       {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadRightCorner')} title={preferences.gestureChords.cornerRight ?? t(gestureLabelKeys[preferences.dpadCorners.right])} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
       {(['left','down','right'] as const).map(dpadArrow)}
     </div>}
-    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="" style={{"--toolbar-columns": toolbarColumns(cells), "--toolbar-rows": cells.length, "--terminal-key-height": `${preferences.toolbarKeyHeight ?? toolbarKeyHeights.default}px`} as CSSProperties}>
-      {cells.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">
-        {row.map(key => key === "more"
-          ? <button key={key} type="button" aria-label={t("terminalMoreKeys")} aria-expanded={moreOpen} aria-controls={moreId}
-            onPointerDown={event => event.preventDefault()} onClick={() => setMoreOpen(!moreOpen)}><Ellipsis size={16} aria-hidden="true" /></button>
-          : toolbarKey(key))}
-      </div>)}
-      {moreOpen && toolbarMore()}
+    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="" style={{"--toolbar-columns": toolbarColumns(keyRows), "--toolbar-rows": keyRows.length, "--terminal-key-height": `${preferences.toolbarKeyHeight ?? toolbarKeyHeights.default}px`} as CSSProperties}>
+      <ToolbarPages repeats={repeatStarts} pages={[{id: "keys", content: keyRows.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">{row.map(toolbarKey)}</div>)}, ...toolbarExtraPages()]} />
     </div>}
   </div>;
 }

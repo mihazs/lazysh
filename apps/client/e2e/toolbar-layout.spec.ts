@@ -129,12 +129,11 @@ test('pointer drags reorder, move between rows, add and remove toolbar keys, and
   const rows=keys.locator('.terminal-keys-row');
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0).getByRole('button')).toHaveText(['←']);
-  // The last row ends with the More key, which holds Find, Copy and the saved snippets.
-  expect(await names(rows.nth(1))).toEqual(['ctrl','tab','enter','More keys']);
+  expect(await names(rows.nth(1))).toEqual(['ctrl','tab','enter']);
   const [first,second]=[(await rows.nth(0).boundingBox())!,(await rows.nth(1).boundingBox())!];
   expect(second.y).toBeGreaterThanOrEqual(first.y+first.height);
   // Compact keys: tall enough for a finger and never narrower than the grid's minimum column.
-  for(const button of await keys.getByRole('button').all()){const box=(await button.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(32);expect(box.width).toBeGreaterThanOrEqual(28);}
+  for(const button of await rows.getByRole('button').all()){const box=(await button.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(32);expect(box.width).toBeGreaterThanOrEqual(28);}
   const press=async(target:Locator)=>{if(testInfo.project.name==='phone')await target.tap();else await target.click();};
   for(const name of ['Arrow left','tab','enter'])await press(keys.getByRole('button',{name,exact:true}));
   await expect.poll(()=>page.evaluate(()=>window.toolbarWrites)).toEqual(['\x1b[D','\t','\r']);
@@ -161,11 +160,11 @@ test('three stored rows render as three terminal lines and an older flat toolbar
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   const rows=page.getByLabel('Terminal keys',{exact:true}).locator('.terminal-keys-row');
   await expect(rows).toHaveCount(3);
-  expect(await names(rows.nth(2))).toEqual(['Arrow left','Arrow right','More keys']);
+  expect(await names(rows.nth(2))).toEqual(['Arrow left','Arrow right']);
   await page.screenshot({path:testInfo.outputPath('terminal-three-rows.png')});
   await page.evaluate(()=>{localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['esc','tab','left']}));window.dispatchEvent(new StorageEvent('storage',{key:'lazysh.preferences.v1'}));});
   await expect(rows).toHaveCount(1);
-  expect(await names(rows.first())).toEqual(['esc','tab','More keys','Arrow left']);
+  expect(await names(rows.first())).toEqual(['esc','tab','Arrow left']);
 });
 
 test('a quick touch swipe over the keys scrolls the settings page instead of dragging',async({page},testInfo)=>{
