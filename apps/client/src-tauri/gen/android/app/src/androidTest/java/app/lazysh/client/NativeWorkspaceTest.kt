@@ -5664,13 +5664,9 @@ class NativeWorkspaceTest {
         }
     }
 
-    /** Native taps send one key from each toolbar page, and a native slide returns to the key rows. */
+    /** Native taps send one key from the fixed key grid and one saved chord from the More list, which closes after the press. */
     private fun verifyToolbarPages(scenario: ActivityScenario<MainActivity>, prompt: String, nonce: String) {
         val marker = "# PAGES_${nonce}_"
-        val tabs = "document.querySelectorAll('.terminal-keys [role=tab]')"
-        fun selected(page: String) = "(()=>{const tab=Array.from($tabs).find(x=>x.getAttribute('aria-label')===${JSONObject.quote(page)});" +
-            "const panel=document.getElementById(tab?.getAttribute('aria-controls')||''),pages=panel?.parentElement;" +
-            "return tab?.getAttribute('aria-selected')==='true'&&Math.abs(panel.getBoundingClientRect().left-pages.getBoundingClientRect().left)<2;})()"
         /** The center of the one matching visible control, in WebView CSS pixels, after a hit test. */
         fun cssCenter(selector: String, text: String?) = JSONArray(evaluate(scenario, """
             (()=>{const matches=Array.from(document.querySelectorAll(${JSONObject.quote(selector)})).filter(x=>${if (text == null) "true" else "x.textContent.trim()===${JSONObject.quote(text)}"});
@@ -5695,6 +5691,7 @@ class NativeWorkspaceTest {
         }
         val focused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
         val store = "lazysh.preferences.v1"
+        val more = "button[aria-label='More keys']"
         evaluate(scenario, """
             (()=>{const key=${JSONObject.quote(store)},original=localStorage.getItem(key),value=JSON.parse(original||'{"version":1}');
               window.__lazyshOwnedToolbarPages={original};
@@ -5702,25 +5699,20 @@ class NativeWorkspaceTest {
               window.dispatchEvent(new StorageEvent('storage',{key}));return true;})()
         """)
         try {
-            awaitDocument(scenario, "owned toolbar shows its tools page and indicators", "$tabs.length===2 && ${selected("Tools")}")
-            assertEquals("Terminal keeps input focus before paging", "true", evaluate(scenario, focused))
-            tap(".terminal-keys [role=tab][aria-label='Snippets']")
-            awaitDocument(scenario, "native indicator tap opens the snippets page", selected("Snippets"))
-            assertEquals("Choosing a page leaves terminal input focus in place", "true", evaluate(scenario, focused))
-            tap(".terminal-keys button", "Page mark")
-            awaitDocument(scenario, "snippets-page chord typed its literal text",
-                "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(marker)}))")
+            awaitDocument(scenario, "owned toolbar is a fixed key grid with a More key and no page indicators",
+                "document.querySelectorAll('.terminal-keys .terminal-keys-row').length>=1 && !!document.querySelector('.terminal-keys $more') && !document.querySelector('.terminal-keys [role=tablist]')")
+            assertEquals("Terminal keeps input focus before the More list opens", "true", evaluate(scenario, focused))
+            tap(".terminal-keys $more")
+            awaitDocument(scenario, "native tap opens the More list", "!!document.querySelector('.terminal-keys-more')")
+            assertEquals("Opening the More list leaves terminal input focus in place", "true", evaluate(scenario, focused))
+            tap(".terminal-keys-more button", "Page mark")
+            awaitDocument(scenario, "More-list chord typed its literal text and closed the list",
+                "!document.querySelector('.terminal-keys-more') && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(marker)}))")
             closeSoftKeyboard()
-            // A native finger slide to the right over the snippets page returns to the key rows.
-            val page = cssCenter(".terminal-keys [role=tabpanel][data-toolbar-page='snippets']", null)
-            val travel = page.getDouble(2) * 0.35
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.SLOW,
-                { view -> screen(view, page, -travel) }, { view -> screen(view, page, travel) }, Press.FINGER))
-            awaitDocument(scenario, "native slide returns to the tools page", selected("Tools"))
-            tap(".terminal-keys button", "c")
+            tap(".terminal-keys .terminal-keys-row button", "c")
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             val line = JSONObject.quote("${marker}c")
-            awaitDocument(scenario, "keys from both toolbar pages reached the remote shell in order",
+            awaitDocument(scenario, "keys from the grid and the More list reached the remote shell in order",
                 "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>{const i=x.textContent.lastIndexOf($line);return i>=0&&x.textContent.lastIndexOf(${JSONObject.quote(prompt)})>i;})")
             closeSoftKeyboard()
         } finally {
@@ -5728,7 +5720,7 @@ class NativeWorkspaceTest {
                 (()=>{const key=${JSONObject.quote(store)},original=window.__lazyshOwnedToolbarPages?.original;
                   if(original===undefined)return false;
                   if(original===null)localStorage.removeItem(key);else localStorage.setItem(key,original);
-                  localStorage.removeItem('lazysh.terminal-toolbar-page.v1');delete window.__lazyshOwnedToolbarPages;
+                  delete window.__lazyshOwnedToolbarPages;
                   window.dispatchEvent(new StorageEvent('storage',{key}));return true;})()
             """)
         }

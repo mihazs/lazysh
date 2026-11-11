@@ -2498,7 +2498,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 )}
               </Suspense>
             </div>
-            <footer className="workspace-footer">
+            <footer className="workspace-footer" data-view={view}>
               {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>visitView('usage')}/>}
               <span>
                 {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}

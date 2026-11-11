@@ -17,7 +17,11 @@ export function toolbarKeyLabel(key: ToolbarKey): string {
 }
 /** Toolbar keys that open a navigation view instead of typing. */
 export const toolbarNavigationActions = {agents: "openAgents", workspaces: "openWorkspaces"} as const satisfies Partial<Record<ToolbarKey, GestureAction>>;
-const legacyToolbar = ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"];
+/** Earlier default toolbars; a stored copy was never customized, so it moves to the current default. */
+const legacyToolbars: readonly (readonly string[])[] = [
+  ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"],
+  ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"],
+];
 /** Row separator stored inside `toolbar`. Older clients drop unknown entries, so they read the same keys as one row. */
 export const toolbarRowBreak = "row-break";
 export type ToolbarEntry = ToolbarKey | typeof toolbarRowBreak;
@@ -36,7 +40,7 @@ export function toolbarFromRows(rows: readonly (readonly ToolbarKey[])[]): Toolb
 }
 function parseToolbar(value: unknown): ToolbarEntry[] {
   if (!Array.isArray(value)) return [...defaults.toolbar];
-  if (value.length === legacyToolbar.length && value.every((item, index) => item === legacyToolbar[index])) return [...defaults.toolbar];
+  if (legacyToolbars.some(legacy => value.length === legacy.length && value.every((item, index) => item === legacy[index]))) return [...defaults.toolbar];
   const seen = new Set<ToolbarKey>();
   let breaks = 0;
   return value.filter((item): item is ToolbarEntry => {
@@ -106,7 +110,8 @@ export const defaults: Preferences = {
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
-  toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
+  // Two full rows of nine: the arrows form an inverted T under Home, Up and End, and the terminal's More key joins the second row ahead of them.
+  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "left", "down", "right"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "auto", right: "auto", up: "auto", down: "auto"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none", pinch: "auto", pullShallow: "auto", pullDeep: "auto"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };

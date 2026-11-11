@@ -2,6 +2,7 @@ import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceContr
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 import {installLocalTerminal} from './fixtures/localTerminal';
+import {pressMore} from './fixtures/toolbarMore';
 
 async function fixture(page:Page) {
   await installLocalTerminal(page);
@@ -247,7 +248,7 @@ test('momentary terminal touch feedback clears after release while modifiers rem
     const modifier=keys.getByRole('button',{name:new RegExp(`^${name}(?: · lock)?$`)});
     await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','true');
     expect(await colors(modifier)).not.toEqual(resting);
-    await activate(modifier);await expect(modifier).toContainText('lock');
+    await activate(modifier);await expect(modifier).toHaveAccessibleName(`${name} · lock`);await expect(modifier.locator('.terminal-key-lock')).toBeVisible();
     await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','false');
     await expect.poll(()=>colors(modifier)).toEqual(resting);
   }
@@ -314,8 +315,8 @@ test('Simple custom text survives reload and sends exact toolbar bytes only on e
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   await expect(page.getByLabel('Terminal keys',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
-  for (const [label] of cases) await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:label,exact:true}).click();
-  await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:'Unicode',exact:true}).click();
+  for (const [label] of cases) await pressMore(page,label);
+  await pressMore(page,'Unicode');
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([...cases.map(item=>item[2]),' 你好,, 😀 ']);
   expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x02','1'],['\x01','\x02'],['\x01',',','b'],['\x00','b',' '],[' 你好,, 😀 ']]);
 });
@@ -464,7 +465,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} retained parse
   await setLocale('en');await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:rawLabel,exact:true}).click();
+  await pressMore(page,rawLabel);
   expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x01',',','b']]);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x01,b']);
 });
@@ -499,7 +500,7 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   const toolbar=page.getByLabel('Terminal keys',{exact:true});
   await expect(toolbar).toBeVisible();
-  await toolbar.getByRole('button',{name:'Agent action',exact:true}).click();
+  await pressMore(page,'Agent action');
   const terminal=page.locator('.terminal-canvas');
   await terminal.dispatchEvent('pointerdown',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
   await terminal.dispatchEvent('pointerup',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
@@ -859,13 +860,12 @@ test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and pr
   await clear(); await keys.getByRole('button',{name:'ctrl',exact:true}).click();
   await expect(input).toBeFocused();
   if ((page.viewportSize()?.width??1280)<=600) {
-    // Each toolbar row is its own horizontal scroller.
+    // A finger sliding across the fixed key grid types nothing.
     const line=keys.locator('.terminal-keys-row').first(),bounds=await line.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
     const y=bounds.y+bounds.height/2, x=bounds.x+bounds.width-30;
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
     for (const offset of [30,80,160]) await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-offset,y}]});
     await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-    await expect.poll(()=>line.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
     expect(await writes()).toEqual([]);
   }
 });
@@ -982,7 +982,7 @@ async function dragSelectedTerminalBody(page:Page,origin:{x:number;y:number},not
 }
 
 async function selectScrollSearchResult(page:Page,row:number) {
-  await page.getByRole('button',{name:'Find',exact:true}).click();
+  await pressMore(page,'Find');
   await page.locator('.terminal-search input').fill(`OWNED_SELECTION_ROW ${row}`);
   await page.locator('.terminal-search input').press('Enter');
   await expect.poll(()=>page.locator('.terminal-canvas .xterm-selection > div').count()).toBeGreaterThan(0);
@@ -1000,23 +1000,23 @@ test('normal scrollback finger scrolling preserves selected text',async({page},t
   const viewport=page.locator('.terminal-canvas:visible .xterm-viewport'),screen=page.locator('.terminal-canvas:visible .xterm-screen');
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(0);
   await selectScrollSearchResult(page,96);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();
+  await pressMore(page,'Copy');
   const selected=await page.evaluate(()=>window.simpleShortcutCopies.at(-1));expect(selected).toContain('OWNED_SELECTION_ROW 96');
   const box=(await screen.boundingBox())!,origin={x:box.x+80,y:box.y+Math.min(240,box.height/2)};
   const notch=await screen.evaluate(node=>Math.ceil(node.getBoundingClientRect().height/node.querySelectorAll('.xterm-rows > div').length)+1);
   const beforeWheel=await viewport.evaluate(node=>node.scrollTop);
   await page.mouse.move(origin.x,origin.y);await page.mouse.wheel(0,-notch);
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeWheel);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   const beforeTouch=await viewport.evaluate(node=>node.scrollTop);
   const input=await dragSelectedTerminalBody(page,origin,notch);
   await testInfo.attach('selected-scrollback',{body:JSON.stringify({beforeWheel,beforeTouch,afterTouch:await viewport.evaluate(node=>node.scrollTop),selected,writes:await page.evaluate(()=>window.simpleShortcutWrites)}),contentType:'application/json'});
   await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(beforeTouch);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   const top=await screen.locator('.xterm-rows > div').first().innerText(),size=page.viewportSize()!;
   await page.setViewportSize({width:size.width,height:size.height-150});
   await expect(screen.locator('.xterm-rows > div').first()).toHaveText(top);
-  await page.getByRole('button',{name:'Copy',exact:true}).click();expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
+  await pressMore(page,'Copy');expect(await page.evaluate(()=>window.simpleShortcutCopies.at(-1))).toBe(selected);
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
   await input.detach();
 });

@@ -31,6 +31,8 @@ async function openToolbarSettings(page:Page) {
   await openPreferenceCategory(page,'Input');
   await page.getByText('Toolbar keys and order',{exact:true}).click();
 }
+/** Accessible names of a row's keys: icon and arrow keys have no text of their own. */
+const names=(row:Locator)=>row.getByRole('button').evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')??button.textContent));
 const stored=(page:Page)=>page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).toolbar as string[]);
 const center=async(target:Locator):Promise<Point>=>{const box=(await target.boundingBox())!;return {x:box.x+box.width/2,y:box.y+box.height/2};};
 const leftEdge=async(target:Locator):Promise<Point>=>{const box=(await target.boundingBox())!;return {x:box.x+4,y:box.y+box.height/2};};
@@ -125,17 +127,19 @@ test('pointer drags reorder, move between rows, add and remove toolbar keys, and
   const rows=keys.locator('.terminal-keys-row');
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0).getByRole('button')).toHaveText(['←']);
-  await expect(rows.nth(1).getByRole('button')).toHaveText(['ctrl','tab','enter','Find','Copy']);
+  // The last row ends with the More key, which holds Find, Copy and the saved snippets.
+  expect(await names(rows.nth(1))).toEqual(['ctrl','tab','enter','More keys']);
   const [first,second]=[(await rows.nth(0).boundingBox())!,(await rows.nth(1).boundingBox())!];
   expect(second.y).toBeGreaterThanOrEqual(first.y+first.height);
-  for(const button of await keys.getByRole('button').all()){const box=(await button.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(44);expect(box.width).toBeGreaterThanOrEqual(44);}
+  // Compact keys: tall enough for a finger and never narrower than the grid's minimum column.
+  for(const button of await keys.getByRole('button').all()){const box=(await button.boundingBox())!;expect(box.height).toBeGreaterThanOrEqual(32);expect(box.width).toBeGreaterThanOrEqual(28);}
   const press=async(target:Locator)=>{if(testInfo.project.name==='phone')await target.tap();else await target.click();};
   for(const name of ['Arrow left','tab','enter'])await press(keys.getByRole('button',{name,exact:true}));
   await expect.poll(()=>page.evaluate(()=>window.toolbarWrites)).toEqual(['\x1b[D','\t','\r']);
   // The modifier in the second row keeps its one-shot, locked and released states.
   const ctrl=keys.getByRole('button',{name:/^ctrl(?: · lock)?$/});
   await press(ctrl);await expect(ctrl).toHaveAttribute('aria-pressed','true');
-  await press(ctrl);await expect(ctrl).toContainText('lock');
+  await press(ctrl);await expect(ctrl).toHaveAccessibleName('ctrl · lock');await expect(ctrl.locator('.terminal-key-lock')).toBeVisible();
   await press(ctrl);await expect(ctrl).toHaveAttribute('aria-pressed','false');
   await page.screenshot({path:testInfo.outputPath('terminal-two-rows.png')});
   if(testInfo.project.name==='phone'){
@@ -155,11 +159,11 @@ test('three stored rows render as three terminal lines and an older flat toolbar
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   const rows=page.getByLabel('Terminal keys',{exact:true}).locator('.terminal-keys-row');
   await expect(rows).toHaveCount(3);
-  await expect(rows.nth(2).getByRole('button')).toHaveText(['←','→','Find','Copy']);
+  expect(await names(rows.nth(2))).toEqual(['Arrow left','Arrow right','More keys']);
   await page.screenshot({path:testInfo.outputPath('terminal-three-rows.png')});
   await page.evaluate(()=>{localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['esc','tab','left']}));window.dispatchEvent(new StorageEvent('storage',{key:'lazysh.preferences.v1'}));});
   await expect(rows).toHaveCount(1);
-  await expect(rows.first().getByRole('button')).toHaveText(['esc','tab','←','Find','Copy']);
+  expect(await names(rows.first())).toEqual(['esc','tab','More keys','Arrow left']);
 });
 
 test('a quick touch swipe over the keys scrolls the settings page instead of dragging',async({page},testInfo)=>{

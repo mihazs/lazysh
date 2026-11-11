@@ -167,7 +167,7 @@ describe("terminal settings", () => {
     fireEvent.click(screen.getByRole("button",{name:"Toolbar keys and order"}));
     fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
-    expect(getPreferences().toolbar.slice(0, 2)).toEqual(["ctrl", "esc"]);
+    expect(toolbarRows(getPreferences().toolbar)[1].slice(0, 2)).toEqual(["ctrl", "shift"]);
     fireEvent.click(screen.getByRole("button",{name:"Back"}));
     fireEvent.click(screen.getByRole("button",{name:"Back"}));
     fireEvent.click(screen.getByRole("button",{name:"Appearance and fonts"}));
