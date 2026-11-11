@@ -48,7 +48,7 @@ Security and data (each is tested, not only stated):
 | How is the browser started? | The app starts it, with a dedicated, ephemeral profile and a debug flag. | A debug flag is read only at startup; a browser the user already runs cannot be attached to without restarting it, and the port gives its holder every signed-in session. |
 | How does Chrome reach the client? | A host companion relay on one SSH exec channel, talking to Chrome over `--remote-debugging-pipe`. | No listening socket exists on the host at all. The debug port has no authentication and every local account on the host can use it (measured). |
 | How does Firefox reach the client? | The same relay, talking BiDi to a loopback port the relay alone uses. | Firefox has no pipe mode. The relay hides its one-session limit, its exact `Host` header rule and its lack of push frames. |
-| Does the client open the debug port? | No, in the product. Yes, in the flagged prototype only. | The client is a web view; it cannot set `Host`, and it sends an `Origin` that both browsers refuse unless widened. The prototype widens it for one exact origin to prove the forwarded-loopback path. |
+| Does the client open the debug port? | No, in the product. Yes, in the flagged prototype only. | The client is a web view; it cannot set `Host`, it sends an `Origin` that both browsers refuse unless widened, and the app's Content Security Policy (`connect-src`) allows no loopback WebSocket. The prototype widens the origin for one exact origin and runs only in the Vite dev server, where no such policy applies, to prove the forwarded-loopback path. |
 | Frames | JPEG, length-prefixed binary on the channel, acknowledged after decode. | PNG was 340 KB per frame against 15 KB for JPEG (measured). Base64 inside JSON costs 33 percent. |
 | Input | A fixed set of relay operations that map onto each browser's input commands. | The phone never sends a raw protocol command. |
 | Normal profile | A separate, advanced, warned option, not in the first release. | See "Attaching to the normal profile". |
@@ -313,7 +313,8 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   below were made by hand with a real `ssh -L`.
 - **Why a raw forward here, and not in the product.** The prototype uses a forwarded debug port because it
   needs no new relay, and the measurements show why it is not the shipped transport (no authentication on the
-  port, exposure to every local account, and a web view that cannot set `Host`).
+  port, exposure to every local account, a web view that cannot set `Host`, and a Content Security Policy that
+  allows no loopback WebSocket in the app).
 
 ## What it will not do
 
