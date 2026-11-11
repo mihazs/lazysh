@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {OwnedProcess} from './support/ownedProcess';
@@ -284,6 +284,7 @@ if [[ "$1" == logcat ]]; then
 fi
 if [[ "$DIAGNOSTIC_FAILURE" == 1 ]]; then exit 79; fi
 if [[ "$DIAGNOSTIC_OVERFLOW" == 1 && "$*" == *lastanr-traces ]]; then exec yes native-frame; fi
+if [[ "$1" == exec-out ]]; then printf '<hierarchy rotation="0"></hierarchy>'; exit 0; fi
 printf 'native diagnostic fixture\\n'
 `);
   await writeFile(fakeCargo, `#!/bin/bash
@@ -293,12 +294,14 @@ printf '%s\\0' "$@" > "$SDK_ARGUMENTS"
 exit "$SDK_EXIT"
 `);
   await Promise.all([fakeBun, fakeAdb, fakeCargo].map(path => chmod(path, 0o755)));
+  await mkdir(join(directory, '.github/scripts'), { recursive: true });
+  await copyFile(new URL('../.github/scripts/android-dismiss-error-dialogs.sh', import.meta.url), join(directory, '.github/scripts/android-dismiss-error-dialogs.sh'));
   const child = Bun.spawn(['sh', '-c', commands[0]], {
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
-      RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile,
+      RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
     stdout: 'pipe', stderr: 'pipe',
@@ -306,7 +309,8 @@ exit "$SDK_EXIT"
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : ['herdr-navigation','tmux','ssh-parity'].includes(owner) ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
-  expect(stdout).toBe('');
+  // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
+  expect(stdout).toBe(diagnosticFailure ? 'android error dialogs: view hierarchy unavailable\n' : 'android error dialogs: none present\n');
   if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity'].includes(owner)?'':'Unknown Android runtime owner\n');
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
