@@ -109,7 +109,7 @@ test('a touched shared crate selects its dependents and nothing unrelated', asyn
   await Promise.all(listed.map(async path => cp(join(root, path), join(directory, path), { recursive: true }).catch(() => {})));
   await Bun.write(join(directory, 'packages/common/src/lib.rs'), 'pub fn a() {}\n');
   const git = (...args: string[]) => expect(Bun.spawnSync(['git', '-c', 'user.email=a@b', '-c', 'user.name=x', ...args], { cwd: directory }).exitCode).toBe(0);
-  git('init', '-q', '.'); git('add', '-A'); git('commit', '-qm', 'init');
+  git('init', '-q', '-b', 'main', '.'); git('add', '-A'); git('commit', '-qm', 'init');
   await Bun.write(join(directory, 'packages/common/src/lib.rs'), 'pub fn b() {}\n');
   const affected = await moonJson(['query', 'tasks', '--affected', '--downstream', 'deep'], directory);
   const selected = Object.keys(affected.tasks);
