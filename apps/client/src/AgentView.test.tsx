@@ -837,3 +837,49 @@ describe('session header',()=>{
     }
   });
 });
+
+describe('working row',()=>{
+  const mount=async(state:string,activity:string|undefined,messages:unknown[],updatedAt=new Date().toISOString(),summary='Working')=>{
+    host('claude',[{...row('Claude Code','%3',state),updatedAt,summary}],'available',[messages]);
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),activity}:reply;});
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+  };
+  const working=()=>[...document.querySelectorAll('.agent-working-row')].map(node=>node.textContent);
+
+  it('shows Working with a running clock when the hook says working but the transcript has not moved, without re-rendering the messages',async()=>{
+    await mount('working','idle',turn('Earlier prompt','Earlier answer'));
+    expect(working()).toEqual(['Working · 0:00']);
+    const list=screen.getByRole('region',{name:'Conversation messages'});
+    const mutations:MutationRecord[]=[];const observer=new MutationObserver(records=>mutations.push(...records));
+    observer.observe(list,{subtree:true,childList:true,characterData:true,attributes:true});
+    await advance(3000);
+    expect(working()).toEqual(['Working · 0:03']);
+    expect(observer.takeRecords().length+mutations.length).toBe(0);observer.disconnect();
+  });
+
+  it('times a recorded running turn from its prompt and shows its tokens and the tool still running',async()=>{
+    const start=Date.now()-72_000;
+    await mount('done','working',[
+      {id:'p',role:'user',timestamp:new Date(start).toISOString(),blocks:[{type:'text',text:'Run it'}]},
+      {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'t1',name:'Bash',text:'sleep 100'}],usage:{inputTokens:2,outputTokens:1200}},
+    ],new Date(Date.now()-3_600_000).toISOString());
+    // The hour-old hook report is ignored; the recorded turn state decides.
+    expect(working()).toEqual(['Working · 1:12 · 1.2K tokens · Bash']);
+    // The prompt of the running turn stays pinned while its reply is written.
+    expect(screen.getAllByRole('region',{name:'Turn'}).map(turn=>turn.hasAttribute('data-running'))).toEqual([true]);
+  });
+
+  it('names a wait for the person, and draws nothing for a finished turn',async()=>{
+    const prompt=[{id:'p',role:'user',blocks:[{type:'text',text:'Plan it'}]}];
+    await mount('needs_attention','waiting',prompt,undefined,'AskUserQuestion');
+    expect(working()).toEqual(['Waiting for your answer · 0:00']);
+    cleanup();
+    await mount('needs_attention','waiting',prompt,undefined,'Agent needs attention');
+    expect(working()).toEqual(['Waiting for you · 0:00']);
+    cleanup();
+    await mount('done','idle',turn('Old prompt','Old answer'));
+    expect(working()).toEqual([]);
+  });
+});

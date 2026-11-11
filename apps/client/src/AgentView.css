@@ -27,6 +27,8 @@
 /* Prompt and answer read as chat bubbles: the prompt on the trailing side, the answer as plain text. */
 .agent-view .agent-bubble { border: 0; padding: 0; }
 .agent-view .agent-turn > .agent-bubble-user { justify-self: end; max-width: min(85%, 640px); padding: 10px 14px; border-radius: 16px 16px 4px 16px; background: var(--ui-fill-selected, var(--surface)); }
+/* While the reply is being written the prompt it answers stays at the top of the thread. */
+.agent-view .agent-turn[data-running] > .agent-bubble-user { position: sticky; top: 0; z-index: 1; max-height: 25vh; overflow: auto; }
 .agent-view .agent-turn > .agent-bubble-user > :is(p, div):first-child { margin-top: 0; }
 .agent-view .agent-turn > .agent-bubble-user > :is(p, div):last-child { margin-bottom: 0; }
 .agent-view .agent-turn-activity .agent-bubble { padding-inline-start: 12px; border-inline-start: 2px solid var(--theme-border, var(--border)); }
@@ -55,14 +57,7 @@
 .agent-view .agent-event details { margin: 0; }
 .agent-view .agent-event summary { min-height: 32px; display: flex; align-items: center; cursor: pointer; }
 .agent-view .agent-event pre { margin: 4px 0 0; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-/* The agent is working: one quiet line at the end of the thread, which the follow-the-tail scroll keeps in view. */
-.agent-view .agent-working { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
-.agent-view .agent-working[data-activity="waiting"] { color: var(--accent); }
 .agent-view .chat-watch-note { flex-shrink: 0; margin: 0 18px; font-size: 12px; color: var(--muted); }
-.agent-view .agent-working[data-activity="working"] .chat-activity-dot { background: var(--accent); animation: agent-working-pulse 1.4s ease-in-out infinite; }
-.agent-view .agent-working[data-activity="waiting"] .chat-activity-dot { background: var(--theme-warning, var(--accent)); }
-@keyframes agent-working-pulse { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .agent-view .agent-working[data-activity="working"] .chat-activity-dot { animation: none; } }
 .agent-waiting[data-waiting] { color: var(--accent); font-weight: 600; }
 .agent-view-picker > button[data-waiting] { border-inline-start: 3px solid var(--accent); }
 /* Pending permission requests sit above the conversation and scroll on their own when several wait. */

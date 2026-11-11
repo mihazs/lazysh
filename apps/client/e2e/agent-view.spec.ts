@@ -586,7 +586,7 @@ test('live: the stream follows the tail while the reader is there and shows the 
     for(let index=1;index<=12;index++)fixture.turns.push({prompt:`Question ${index}`,answer:`Answer ${index}`});
     fixture.emit({type:'snapshot',gen:2,seq:2,activity:'working',entries:fixture.messages().map(message=>({id:(message as {id:string}).id,rev:1,message}))});
   });
-  await expect(agent.getByRole('status').filter({hasText:'Agent is working'})).toBeVisible();
+  await expect(agent.locator('.agent-working-row')).toHaveText(/^Working · /);
   await expect(flow.getByText('Answer 12',{exact:true})).toBeInViewport();
   const elapsed=await page.evaluate(()=>new Promise<number>(resolve=>{
     const started=performance.now();
@@ -599,7 +599,6 @@ test('live: the stream follows the tail while the reader is there and shows the 
   console.log(`stream frame to rendered card: ${elapsed.toFixed(0)} ms`);
   expect(elapsed).toBeLessThan(500);
   await expect(flow.getByText('Fresh answer',{exact:true})).toBeInViewport();
-  await expect(agent.getByText('Agent is working',{exact:true})).toHaveCount(0);
 });
 
 test('delayed: without a watch channel the view polls every 2 seconds and says it can lag',async({page})=>{
@@ -896,4 +895,18 @@ test('live: an older page loads above the reader while a live append arrives, an
   await expect(flow.getByText('Earlier line 39',{exact:true})).toBeAttached();
   await expect(flow.getByText('Earlier line 40',{exact:true})).toHaveCount(1);
   await expect(flow.getByText('Earlier line 59',{exact:true})).toHaveCount(1);
+});
+
+test('shows one working line with a running clock above the composer and removes it when the agent is done',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const row=agent.locator('.agent-working-row');
+  await expect(row).toHaveText(/^Working · 0:0\d/);
+  await expect(row).toHaveText(/Working · 0:0[1-9]/,{timeout:4000});
+  expect((await row.boundingBox())!.height).toBeLessThanOrEqual(28);
+  const composer=await agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}).boundingBox();
+  expect((await row.boundingBox())!.y).toBeLessThan(composer!.y);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.evaluate(()=>{window.agentView.state='done';});
+  await expect(row).toHaveCount(0,{timeout:8000});
 });

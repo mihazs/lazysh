@@ -27,6 +27,7 @@ import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
+import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -211,7 +212,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -592,6 +593,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
+  const lastTurn = turns.at(-1);
+  const progress = useMemo(() => turnProgress([...(lastTurn?.activity ?? []), ...(lastTurn?.answer ? [lastTurn.answer] : [])]), [lastTurn]);
+  const workState = liveState?.state ?? activity;
+  // A turn the transcript already closed is not what a live "working" is running: the row then starts its own clock.
+  const turnRunning = !history.newer && (activity === 'working' || activity === 'waiting' || (!activity && !lastTurn?.answer));
+  const workSince = turnRunning ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
@@ -809,7 +816,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         }
       }}>
         {opened?.view === 'conversation' && <ChatHistoryControls edge="top" more={history.older} first={messages.length > 0} busy={busy} onMore={loadOlder} onJumpStart={() => readSlice({kind: 'start'})} />}
-        {timeline ? turns.map(turn => <section key={turn.key} data-anchor={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
+        {timeline ? turns.map((turn, index) => <section key={turn.key} data-anchor={turn.key} data-running={turnRunning && index === turns.length - 1 || undefined} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
           {(()=>{
@@ -821,9 +828,6 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
         {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
-        {timeline && (activity === 'working' || activity === 'waiting') && !history.newer && <p className="agent-working" role="status" data-activity={activity}>
-          <span className="chat-activity-dot" aria-hidden="true" />{t(activity === 'working' ? 'chatActivityWorking' : 'chatActivityWaiting')}
-        </p>}
         {timeline && <AgentQueued queued={queued} />}
       </div>
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
@@ -831,6 +835,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
       {timeline && bound && <AgentStatusPanel messages={messages} work={work} />}
       {timeline && bound && <AgentPlanChip messages={flow} />}
+      {timeline && <AgentWorkingRow state={workState} label={liveState?.label} since={workSince} {...(turnRunning ? progress : {})} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">
