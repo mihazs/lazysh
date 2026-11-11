@@ -21,7 +21,7 @@ const app = (id: string, text: string) => node(`com.example:id/${id}`, text, '[1
  * recorded (99 keeps it up), and whose uiautomator can be made to fail. Every tap is recorded,
  * like the real `input tap`.
  */
-async function run(dialog: string[], options: { gone?: number; attempts?: number; unreadable?: boolean } = {}) {
+async function run(dialog: string[], options: { gone?: number; attempts?: number; unreadable?: boolean; focus?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-error-dialogs-'));
   temporary.push(directory);
   const taps = join(directory, 'taps');
@@ -34,29 +34,30 @@ case "$1 $2" in
   "exec-out cat")
     if [ "$(wc -l < "$TAPS")" -lt "$GONE" ]; then cat "$DIR/with-dialog.xml"; else cat "$DIR/clean.xml"; fi ;;
   "shell input") shift 3; echo "$*" >> "$TAPS" ;;
+  "shell dumpsys") printf '  mHoldScreenWindow=null\n  mCurrentFocus=Window{1a2b u0 %s}\n  mFocusedApp=null\n' "$FOCUS" ;;
 esac
 `, { mode: 0o700 });
   const child = new OwnedProcess('/bin/sh', [script], directory, {
     PATH: process.env.PATH, ADB: join(directory, 'adb'), DIR: directory, TAPS: taps,
-    GONE: String(options.gone ?? 0), LAZYSH_DIALOG_SETTLE_SECONDS: '0', ...(options.attempts ? { LAZYSH_DIALOG_ATTEMPTS: String(options.attempts) } : {}),
+    GONE: String(options.gone ?? 0), FOCUS: options.focus ?? 'app.lazysh.client/app.lazysh.client.MainActivity', LAZYSH_DIALOG_SETTLE_SECONDS: '0', ...(options.attempts ? { LAZYSH_DIALOG_ATTEMPTS: String(options.attempts) } : {}),
     ...(options.unreadable ? { UNREADABLE: '1' } : {}),
   });
-  const stdout = await child.finish('actual dialog dismissal script', 10_000);
-  return { stdout, taps: (await readFile(taps, 'utf8')).split('\n').filter(Boolean) };
+  const [focus, ...receipt] = (await child.finish('actual dialog dismissal script', 10_000)).split('\n');
+  return { focus, stdout: receipt.join('\n'), taps: (await readFile(taps, 'utf8')).split('\n').filter(Boolean) };
 }
 
 test.skipIf(process.platform !== 'linux')('leaves a clean screen untouched', async () => {
-  expect(await run([])).toEqual({ stdout: 'android error dialogs: none present\n', taps: [] });
+  expect(await run([])).toEqual({ focus: 'android error dialogs: mCurrentFocus=Window{1a2b u0 app.lazysh.client/app.lazysh.client.MainActivity}', stdout: 'android error dialogs: none present\n', taps: [] });
 });
 
 test.skipIf(process.platform !== 'linux')('taps the centre of Wait, not Close app, until the dialog is gone', async () => {
   expect(await run([message, close, wait], { gone: 1 })).toEqual({
-    stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_wait at 600 700\n', taps: ['600 700'] });
+    focus: expect.stringContaining('mCurrentFocus'), stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_wait at 600 700\n', taps: ['600 700'] });
 });
 
 test.skipIf(process.platform !== 'linux')('falls back to Close app for a crash dialog without Wait', async () => {
   expect(await run([message, close], { gone: 1 })).toEqual({
-    stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_close at 200 300\n', taps: ['200 300'] });
+    focus: expect.stringContaining('mCurrentFocus'), stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_close at 200 300\n', taps: ['200 300'] });
 });
 
 test.skipIf(process.platform !== 'linux')('finds Wait by its label when a release renames the resource id', async () => {
@@ -64,20 +65,25 @@ test.skipIf(process.platform !== 'linux')('finds Wait by its label when a releas
 });
 
 test.skipIf(process.platform !== 'linux')('never taps an app control that is merely labelled Wait or Close app', async () => {
-  expect(await run([app('wait', 'Wait'), app('close', 'Close app')], { gone: 99 })).toEqual({ stdout: 'android error dialogs: none present\n', taps: [] });
+  expect(await run([app('wait', 'Wait'), app('close', 'Close app')], { gone: 99 })).toEqual({ focus: expect.stringContaining('mCurrentFocus'), stdout: 'android error dialogs: none present\n', taps: [] });
 });
 
 test.skipIf(process.platform !== 'linux')('names the text of a system window whose controls it does not recognise instead of tapping', async () => {
   expect(await run([message], { gone: 99 })).toEqual({
-    stdout: `android error dialogs: none present; other system text: text="System UI isn't responding"\n`, taps: [] });
+    focus: expect.stringContaining('mCurrentFocus'), stdout: `android error dialogs: none present; other system text: text="System UI isn't responding"\n`, taps: [] });
 });
 
 test.skipIf(process.platform !== 'linux')('follows a second dialog and stops at its attempt bound without failing the job', async () => {
   expect((await run([wait], { gone: 2 })).taps).toEqual(['600 700', '600 700']);
   expect(await run([wait], { gone: 99, attempts: 3 })).toEqual({
-    stdout: 'android error dialogs: still present after 3 tap(s), last aerr_wait at 600 700\n', taps: ['600 700', '600 700', '600 700'] });
+    focus: expect.stringContaining('mCurrentFocus'), stdout: 'android error dialogs: still present after 3 tap(s), last aerr_wait at 600 700\n', taps: ['600 700', '600 700', '600 700'] });
 });
 
 test.skipIf(process.platform !== 'linux')('reports an unreadable hierarchy without tapping or failing the job', async () => {
-  expect(await run([wait], { unreadable: true, attempts: 2 })).toEqual({ stdout: 'android error dialogs: view hierarchy unavailable\n', taps: [] });
+  expect(await run([wait], { unreadable: true, attempts: 2 })).toEqual({ focus: expect.stringContaining('mCurrentFocus'), stdout: 'android error dialogs: view hierarchy unavailable\n', taps: [] });
+});
+
+test.skipIf(process.platform !== 'linux')('prints the focused window first, so a stuck system dialog is named even when it has no tappable control', async () => {
+  const result = await run([], { focus: 'Application Not Responding: com.android.systemui' });
+  expect(result.focus).toBe('android error dialogs: mCurrentFocus=Window{1a2b u0 Application Not Responding: com.android.systemui}');
 });

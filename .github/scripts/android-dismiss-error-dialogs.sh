@@ -21,6 +21,10 @@ centre() {
     grep -o 'bounds="[^"]*"' | tr -c '0-9\n' ' ' | awk 'NF == 4 { printf "%d %d", ($1 + $3) / 2, ($2 + $4) / 2 }'
 }
 
+# The window that has focus when the script starts: a stuck dialog is named "Application Not Responding: <process>".
+focus=$(timeout 30 "$adb" shell dumpsys window 2>/dev/null | grep -m 1 mCurrentFocus | sed 's/^ *//' | cut -c1-160)
+echo "android error dialogs: ${focus:-focus unavailable}"
+
 checks=0 unreadable=0 taps=0 last=
 while [ "$checks" -le "$attempts" ]; do
   checks=$((checks + 1))

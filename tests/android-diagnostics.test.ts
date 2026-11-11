@@ -310,7 +310,7 @@ exit "$SDK_EXIT"
   const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : ['herdr-navigation','tmux','ssh-parity'].includes(owner) ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
   // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
-  expect(stdout).toBe(diagnosticFailure ? 'android error dialogs: view hierarchy unavailable\n' : 'android error dialogs: none present\n');
+  expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
   if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity'].includes(owner)?'':'Unknown Android runtime owner\n');
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
