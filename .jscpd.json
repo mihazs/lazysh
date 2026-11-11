@@ -17,7 +17,7 @@
     "**/node_modules/**",
     "**/target/**",
     "**/dist/**",
-    "**/.turbo/**",
+    "**/.moon/cache/**",
     "**/playwright-report/**",
     "**/test-results/**",
     "docs/architecture/benchmarks/**",

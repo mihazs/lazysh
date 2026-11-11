@@ -1,0 +1,73 @@
+language: rust
+layer: tool
+stack: frontend
+tags: [cargo]
+# Cargo [target.'cfg(..)'.dependencies] and [patch] edges that moon cannot infer.
+dependsOn: [agent, mosh-transport, portable-pty-vendor, deep-link-vendor]
+tasks:
+  # Everything the native-linux job verifies for this crate and its Cargo dependencies.
+  verify-native:
+    command: noop
+    deps: ['~:test-rust', '~:lint', '~:format-check', '^:test-rust', '^:lint', '^:format-check']
+    options: {runInCI: false}
+  # Cargo-driven integration tests that need real tools or fixtures; run them on purpose.
+  test-resume-policy:
+    type: test
+    command: 'cargo test --locked --lib app_lock:: -- --nocapture'
+    options: &local {runInCI: false}
+  test-openssh:
+    type: test
+    command: 'cargo test --locked openssh_sftp_and_command_interoperability -- --ignored'
+    options: *local
+  test-openssh-connections:
+    type: test
+    command: 'cargo test --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --ignored'
+    options: *local
+  test-host-clipboard:
+    type: test
+    command: 'cargo test --locked --lib ssh::tests::macos_host_clipboard_roundtrip -- --ignored --exact --nocapture'
+    options: *local
+  test-local:
+    type: test
+    command: 'cargo test --locked local:: -- --nocapture'
+    options: *local
+  test-mosh:
+    type: test
+    command: 'cargo test --locked openssh_mosh_bootstrap_and_control_interoperability -- --ignored'
+    options: *local
+  test-et:
+    type: test
+    command: 'cargo test --locked openssh_et_bootstrap_and_control_interoperability -- --ignored'
+    options: *local
+  test-multiplexers:
+    type: test
+    command: 'cargo test --locked --lib -- --ignored multiplexer::tests::real_ herdr::tests::real_ herdr_create::tests::real_ zellij::tests::real_'
+    options: *local
+  test-connection-loss:
+    type: test
+    command: 'cargo test --locked --lib ssh::tests::connection_loss_fixture::openssh_ -- --ignored --nocapture'
+    options: *local
+  test-tmux:
+    type: test
+    command: 'cargo test --locked --lib ssh::tmux_jump_fixture::real_tmux_jump_ -- --ignored --nocapture'
+    options: *local
+  test-voice:
+    type: test
+    command: 'cargo test --locked local_whisper_ -- --ignored'
+    options: *local
+  test-parakeet-product:
+    type: test
+    command: 'cargo test --locked --lib voice::parakeet::local::tests::real_manager_installs_once_reuses_warm_model_twice_and_removes_owned_files -- --ignored --exact --nocapture'
+    options: *local
+  test-voice-interop-smoke:
+    type: test
+    command: 'cargo test --locked --features parakeet-acceptance --lib voice::interop_tests::linked_native_runtimes_start_and_exit -- --exact --nocapture'
+    options: *local
+  test-voice-interop:
+    type: test
+    script: 'cargo test --locked --features parakeet-acceptance --lib voice::interop_tests::whisper_then_parakeet -- --ignored --exact --nocapture && cargo test --locked --features parakeet-acceptance --lib voice::interop_tests::parakeet_then_whisper -- --ignored --exact --nocapture'
+    options: *local
+  test-voice-interop-release:
+    type: test
+    script: 'cargo test --locked --release --features parakeet-acceptance --lib voice::interop_tests::whisper_then_parakeet -- --ignored --exact --nocapture && cargo test --locked --release --features parakeet-acceptance --lib voice::interop_tests::parakeet_then_whisper -- --ignored --exact --nocapture'
+    options: *local

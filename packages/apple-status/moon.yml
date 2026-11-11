@@ -1,0 +1,13 @@
+language: rust
+layer: library
+stack: systems
+tags: [cargo]
+tasks:
+  test-apple-status:
+    type: test
+    script: xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshStatusTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO
+    options: &macLocal {os: macos, runInCI: false}
+  build-watchos:
+    type: build
+    script: xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWatch -destination 'generic/platform=watchOS Simulator' build CODE_SIGNING_ALLOWED=NO
+    options: *macLocal

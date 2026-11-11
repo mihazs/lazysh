@@ -1,0 +1,4 @@
+language: rust
+layer: tool
+tags: [vendor]
+dependsOn: [herdr-guard]

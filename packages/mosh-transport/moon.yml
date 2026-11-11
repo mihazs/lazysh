@@ -1,0 +1,17 @@
+language: rust
+layer: library
+stack: systems
+tags: [cargo]
+tasks:
+  test-mosh:
+    type: test
+    command: 'cargo test --test official_server --locked -- --ignored --exact official_server_utf8_input_resize_shutdown_and_parallel_isolation official_server_redraws_question_after_keyboard_resize'
+    options: &local {runInCI: false}
+  test-android-mosh:
+    type: test
+    command: 'cargo test --test official_server --locked android_emulator_official_server_interoperability -- --ignored'
+    options: *local
+  test-ios-mosh:
+    type: test
+    command: 'cargo test --test official_server --locked ios_simulator_official_server_interoperability -- --ignored --show-output'
+    options: *local

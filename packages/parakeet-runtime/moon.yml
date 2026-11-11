@@ -1,0 +1,17 @@
+language: rust
+layer: library
+stack: systems
+tags: [cargo]
+tasks:
+  test-parakeet-native:
+    type: test
+    command: 'cargo test --locked --test native'
+    options: &local {runInCI: false}
+  test-parakeet-inference:
+    type: test
+    command: 'cargo test --locked --test inference offline_public_speech_with_reused_recognizer -- --ignored --exact --nocapture'
+    options: *local
+  test-parakeet-inference-release:
+    type: test
+    command: 'cargo test --release --locked --test inference offline_public_speech_with_reused_recognizer -- --ignored --exact --nocapture'
+    options: *local

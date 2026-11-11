@@ -46,7 +46,7 @@ classify() {
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
-    apps/client/package.json | apps/client/turbo.json | apps/client/src-tauri/Cargo.toml | \
+    apps/client/package.json | apps/client/moon.yml | apps/client/src-tauri/Cargo.toml | \
       apps/client/src-tauri/build.rs | apps/client/src-tauri/tauri.conf.json | \
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;

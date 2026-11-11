@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import * as fileSystem from 'node:fs/promises';
 import * as ownedProcesses from './support/ownedProcess';
+import {commandLine,moonTask} from './support/moon';
 import {reportOwnedTeardownFailure} from './support/ownedProcess';
 import {reportOwnedSshPromptFailure,receiverProbeErrors} from './support/sshFixture';
 import type {HerdrFixture} from './support/androidHerdr';
@@ -1239,10 +1240,11 @@ test('owned attachment readback detects changed content, inode, size and timesta
 
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
-  const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_RECORDED=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 LAZYSH_ANDROID_UI_DPAD=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
-  const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
+  const ssh=await moonTask('client:test-android-ssh');
+  expect(ssh.env).toEqual({LAZYSH_ANDROID_UI_SSH:'1',LAZYSH_ANDROID_UI_RECORDED:'1',LAZYSH_ANDROID_UI_ATTACHMENTS:'1',LAZYSH_ANDROID_UI_IME:'1',LAZYSH_ANDROID_UI_DPAD:'1'});
+  expect(ssh.options.envOverride).toBe(true);
+  expect(commandLine(ssh)).toBe('bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_ATTACHMENTS!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,true)');
@@ -1642,9 +1644,9 @@ test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits, a d
 });
 
 test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{
-  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_IME=1');
-  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_IME).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
   expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
   expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
@@ -1680,9 +1682,9 @@ test('D-pad receipt and wire oracle reject malformed counts, stale/reordered arr
 });
 
 test('native D-pad routing preserves default isolation and the packaged/raw-SSH ownership path',async()=>{
-  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_DPAD=1');
-  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_DPAD).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedSshDpadPanThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')");
   expect(native).toContain('androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true)');
   const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
@@ -2474,9 +2476,9 @@ test('recorded companion preflight compares full protocol values independently o
 });
 
 test('recorded Android routing preserves the ordinary owner and uses its own report and default exclusion',async()=>{
-  const root=join(import.meta.dir,'..'),script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
-  expect(script['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_RECORDED=1');
-  expect(script['test:android']).toContain('NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi');
+  const root=join(import.meta.dir,'..');
+  expect((await moonTask('client:test-android-ssh')).env?.LAZYSH_ANDROID_UI_RECORDED).toBe('1');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedRecordedConversationsThroughRealUi');
   const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
   expect(gradle).toContain('outputs/androidTest-results/recorded-conversation-ui');
   expect(gradle).toContain('"lazyshRecordedConversationAcceptance"');

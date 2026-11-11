@@ -1,0 +1,15 @@
+language: rust
+layer: tool
+stack: backend
+tags: [cargo, cargo-binary, companion]
+tasks:
+  test-storage:
+    type: test
+    command: 'cargo test --locked --lib --test storage_wal'
+    options: &local {runInCI: false}
+  test-hooks:
+    type: test
+    command: 'bun test ./hooks'
+    inputs: ['hooks/**/*']
+    # The hook tests drive the debug binary that `cargo test` builds.
+    deps: ['~:test-rust']

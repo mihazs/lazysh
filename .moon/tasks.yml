@@ -1,0 +1,2 @@
+$schema: 'https://moonrepo.dev/schemas/tasks.json'
+implicitInputs: ['/.moon/tasks.yml', '/.moon/tasks/**/*', '/package.json', '/bun.lock']
