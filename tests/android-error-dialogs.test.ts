@@ -14,17 +14,19 @@ const hierarchy = (...nodes: string[]) => `<?xml version='1.0' encoding='UTF-8' 
 const message = node('android:id/message', "System UI isn't responding", '[10,20][30,40]');
 const close = node('android:id/aerr_close', 'Close app', '[100,200][300,400]');
 const wait = node('android:id/aerr_wait', 'Wait', '[500,600][700,800]');
+const app = (id: string, text: string) => node(`com.example:id/${id}`, text, '[1,1][3,3]', 'com.example');
 
 /**
- * A fake adb whose dialog goes away after `gone` taps (never when `gone` is large) and whose
- * uiautomator can be made to fail. It records every tap, like the real `input tap`.
+ * Runs the real script against a fake adb whose screen shows `dialog` until `gone` taps have been
+ * recorded (99 keeps it up), and whose uiautomator can be made to fail. Every tap is recorded,
+ * like the real `input tap`.
  */
 async function run(dialog: string[], options: { gone?: number; attempts?: number; unreadable?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-error-dialogs-'));
   temporary.push(directory);
   const taps = join(directory, 'taps');
-  await writeFile(join(directory, 'with-dialog.xml'), hierarchy(message, ...dialog));
-  await writeFile(join(directory, 'clean.xml'), hierarchy(message));
+  await writeFile(join(directory, 'with-dialog.xml'), hierarchy(...dialog));
+  await writeFile(join(directory, 'clean.xml'), hierarchy());
   await writeFile(taps, '');
   await writeFile(join(directory, 'adb'), `#!/bin/sh
 case "$1 $2" in
@@ -48,12 +50,12 @@ test.skipIf(process.platform !== 'linux')('leaves a clean screen untouched', asy
 });
 
 test.skipIf(process.platform !== 'linux')('taps the centre of Wait, not Close app, until the dialog is gone', async () => {
-  expect(await run([close, wait], { gone: 1 })).toEqual({
+  expect(await run([message, close, wait], { gone: 1 })).toEqual({
     stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_wait at 600 700\n', taps: ['600 700'] });
 });
 
 test.skipIf(process.platform !== 'linux')('falls back to Close app for a crash dialog without Wait', async () => {
-  expect(await run([close], { gone: 1 })).toEqual({
+  expect(await run([message, close], { gone: 1 })).toEqual({
     stdout: 'android error dialogs: dismissed with 1 tap(s), last aerr_close at 200 300\n', taps: ['200 300'] });
 });
 
@@ -62,8 +64,12 @@ test.skipIf(process.platform !== 'linux')('finds Wait by its label when a releas
 });
 
 test.skipIf(process.platform !== 'linux')('never taps an app control that is merely labelled Wait or Close app', async () => {
-  const app = [node('com.example:id/wait', 'Wait', '[1,1][3,3]', 'com.example'), node('com.example:id/close', 'Close app', '[1,1][3,3]', 'com.example')];
-  expect(await run(app, { gone: 99 })).toEqual({ stdout: 'android error dialogs: none present\n', taps: [] });
+  expect(await run([app('wait', 'Wait'), app('close', 'Close app')], { gone: 99 })).toEqual({ stdout: 'android error dialogs: none present\n', taps: [] });
+});
+
+test.skipIf(process.platform !== 'linux')('names the text of a system window whose controls it does not recognise instead of tapping', async () => {
+  expect(await run([message], { gone: 99 })).toEqual({
+    stdout: `android error dialogs: none present; other system text: text="System UI isn't responding"\n`, taps: [] });
 });
 
 test.skipIf(process.platform !== 'linux')('follows a second dialog and stops at its attempt bound without failing the job', async () => {

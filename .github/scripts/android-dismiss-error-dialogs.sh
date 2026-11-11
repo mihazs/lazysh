@@ -25,7 +25,8 @@ checks=0 unreadable=0 taps=0 last=
 while [ "$checks" -le "$attempts" ]; do
   checks=$((checks + 1))
   hierarchy=
-  if timeout 30 "$adb" shell uiautomator dump "$dump" >/dev/null 2>&1; then
+  # --windows adds every window, not only the active one; older builds reject it and get the plain dump.
+  if timeout 30 "$adb" shell uiautomator dump --windows "$dump" >/dev/null 2>&1 || timeout 30 "$adb" shell uiautomator dump "$dump" >/dev/null 2>&1; then
     hierarchy=$(timeout 30 "$adb" exec-out cat "$dump" 2>/dev/null)
     timeout 30 "$adb" shell rm -f "$dump" >/dev/null 2>&1
   fi
@@ -40,8 +41,11 @@ while [ "$checks" -le "$attempts" ]; do
     point=$(centre "$id" 'Close app' "$hierarchy")
   fi
   if [ -z "$point" ]; then
-    if [ "$taps" -eq 0 ]; then echo 'android error dialogs: none present'
-    else echo "android error dialogs: dismissed with $taps tap(s), last $last"; fi
+    # Name any other text a system window shows, so a dialog with unknown controls is visible in the log.
+    seen=$(printf '%s' "$hierarchy" | grep -o '<node [^>]*package="android"[^>]*>' | grep -o ' text="[^"][^"]*"' | head -n 4 | tr -d '\n')
+    note=${seen:+; other system text:$seen}
+    if [ "$taps" -eq 0 ]; then echo "android error dialogs: none present$note"
+    else echo "android error dialogs: dismissed with $taps tap(s), last $last$note"; fi
     exit 0
   fi
   [ "$taps" -lt "$attempts" ] || break
