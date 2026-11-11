@@ -75,6 +75,7 @@ import {
   type MultiplexerTool,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import { carryKeyboard } from "./softKeyboard";
 import {installMoshResize} from "./moshResize";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
@@ -1231,8 +1232,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
-  // The terminal a Herdr switch activated, until another terminal or view takes over.
-  const [quietTerminal, setQuietTerminal] = useState<string|null>(null);
+  // The terminal the user just opened to type in, by connecting to it or attaching it: the one activation that may raise the soft keyboard, until another terminal or view takes over.
+  const [typingTerminal, setTypingTerminal] = useState<string|null>(null);
   usePaletteShortcut(() => setPalette(true));
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
@@ -1298,7 +1299,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
-  useEffect(()=>{setQuietTerminal(id=>id!==activeId || view!=='terminal'?null:id);},[activeId,view]);
+  useEffect(()=>{setTypingTerminal(id=>id!==activeId || view!=='terminal'?null:id);},[activeId,view]);
   // Keep the last opened Chat reader mounted behind other views of its session, so returning
   // from the terminal or a tool keeps its messages, reading position and unsent draft.
   // A reader opened from reported history still retires when its view is left.
@@ -1323,7 +1324,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const sessionViewOfRef=useRef(sessionViewOf);sessionViewOfRef.current=sessionViewOf;
   function chooseSessionView(session:LiveSession,next:SessionView) {
     // Showing the terminal again is not a request to type: no soft keyboard, so the remote pane keeps its size.
-    if(next!=='agent')setQuietTerminal(session.id);
+    setTypingTerminal(null);
     setViewChoices(choices=>saveSessionView(choices,sessionViewKey(session),next));
   }
   useEffect(()=>{
@@ -1413,6 +1414,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function replaceLostSession(lost: LiveSession, fresh: LiveSession) {
     if(!mounted.current || closingSessions.current.has(lost.id) || !sessionsRef.current.includes(lost))return false;
     const next=sessionsRef.current.map(session=>session===lost?fresh:session);
+    // The lost terminal's input disappears with it: its keyboard, if open, passes to the reconnected one.
+    carryKeyboard();
     sessionsRef.current=next;setSessions(next);
     adoptRetained(fresh);
     setNavigation(previous=>previous[lost.id]?{...previous,[fresh.id]:previous[lost.id]}:previous);
@@ -1683,7 +1686,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       if(!mounted.current){await ownership.close(result.sessionId);disposeTerminal(pending.session);return;}
-      sessionConnected(pending.session);setPalette(false);setSidebar(false);
+      sessionConnected(pending.session,undefined,true);setPalette(false);setSidebar(false);
       ownership.delete(result.sessionId);
     }catch(error){
       await ownership.closeAll().catch(()=>{});
@@ -1990,12 +1993,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setPalette(false);
     setSidebar(false);
   }
-  function sessionConnected(session: LiveSession, launch?:DesktopHostLaunch) {
+  /** `typing` marks a terminal the user just opened to type in; switching to one, restoring and reconnecting are navigation and never raise the soft keyboard. */
+  function sessionConnected(session: LiveSession, launch?:DesktopHostLaunch, typing=false) {
     launch?.lease.assert();
     persistWorkspace([...sessionsRef.current, session]);
     setSessions((previous) => [...previous, session]);
     adoptRetained(session);
-    setActiveId(session.id);
+    setActiveId(session.id);if(typing)setTypingTerminal(session.id);
     if(launch?.mux)setMuxLaunch(Object.freeze({sessionId:session.id,lease:launch.lease,mux:launch.mux}));
     setView(launch?.mux ? "sessions" : "terminal");
     setConnectingHost(null);setHostLaunch(undefined);
@@ -2020,6 +2024,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     owner:AccessLease=lease,
     beforePublish?:()=>void,
     attached?:(session:LiveSession)=>void,
+    /** False when a switch from navigation, not the user opening this terminal to type, attaches it. */
+    typing=true,
   ) {
     if (kind === 'herdr' && !muxTools[source.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')) throw new LocalUiError('muxLimitedHerdr');
     const sourceApi=bindProtectedApi(nativeApi,owner);
@@ -2040,7 +2046,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
       owner.assert();
       beforePublish?.();
-      sessionConnected(pending.session);
+      sessionConnected(pending.session,undefined,typing);
       attached?.(pending.session);
       ownership.delete(result.sessionId);
     } catch (error) {
@@ -2068,9 +2074,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       if(!destination)await attachTmux(source,name,'herdr',undefined,owner,assertCurrent,session=>{
         destination=session;adopted=true;intent.destination=session.id;
-        // Quiet in the same update that activates the new display, before its terminal mounts and claims focus.
-        if(selectedNavigation)setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));setQuietTerminal(session.id);
-      });
+        if(selectedNavigation)setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));
+      },false);
       assertCurrent();
       if(!destination?.connected || destination.disposed || closingSessions.current.has(destination.id))throw new LocalUiError('herdrNavigationChanged');
       if(target) {
@@ -2085,7 +2090,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
         assertCurrent();
       }
-      setActiveId(destination.id);setView('terminal');setSidebar(false);setQuietTerminal(destination.id);
+      setActiveId(destination.id);setView('terminal');setSidebar(false);
       if(fromAgent)chooseSessionView(destination,'terminal');
     } catch(error) {
       const cause=captureUiError(error);
@@ -2433,7 +2438,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={session.id}
                     session={session}
                     active={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "agent"}
-                    quietActivation={quietTerminal === session.id}
+                    typingActivation={typingTerminal === session.id}
                     herdrNavigationOnly={!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')}
                     reportError={setError}
                     onBackChange={bindTerminalBack}
@@ -2565,7 +2570,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           hosts={hostLaunch ? [...hostLaunch.hosts] : hosts}
           host={connectingHost}
           launch={hostLaunch}
-          connected={session=>sessionConnected(session,hostLaunch)}
+          connected={session=>sessionConnected(session,hostLaunch,true)}
           close={() => {setConnectingHost(null);setHostLaunch(undefined);}}
         />
       )}

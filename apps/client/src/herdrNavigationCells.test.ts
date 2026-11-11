@@ -1,0 +1,33 @@
+import {describe,expect,it} from 'vitest';
+import type {Terminal} from '@xterm/xterm';
+import {herdrNavigationCell} from './herdrNavigationCells';
+
+/** A 46-column buffer of `above` rows of history and then `rows`, read from `viewportY`. */
+function screen(rows:string[],viewportY=0,above=viewportY) {
+  const lines=[...Array(above).fill('history'),...rows];
+  return {cols:46,buffer:{active:{viewportY,getLine:(y:number)=>lines[y]===undefined?undefined:{translateToString:(_trim:boolean,start=0,end=46)=>lines[y].padEnd(46).slice(start,end)}}}} as unknown as Terminal;
+}
+const header=['● Development  tab 1',`${' 1 blocked'.padEnd(36)}│ switch  `,'agent output'];
+const switcher=[` switch${' '.repeat(29)}│  close  `,'','● Development','● codex-builder'];
+
+describe("Herdr's own navigation inside the terminal",()=>{
+  it('is the switch button over the top right two rows',()=>{
+    const terminal=screen(header);
+    for(const row of [0,1])expect(herdrNavigationCell(terminal,40,row)).toBe(true);
+    expect(herdrNavigationCell(terminal,36,1)).toBe(true);
+    expect(herdrNavigationCell(terminal,35,1)).toBe(false);
+    expect(herdrNavigationCell(terminal,40,2)).toBe(false);
+  });
+  it('is every cell of the open switcher',()=>{
+    const terminal=screen(switcher);
+    for(const [column,row] of [[2,0],[40,1],[5,3],[20,12]])expect(herdrNavigationCell(terminal,column,row)).toBe(true);
+  });
+  it('is not an agent that merely prints the word',()=>{
+    expect(herdrNavigationCell(screen(['claude','please switch',`${' '.repeat(40)}switch`]),40,1)).toBe(false);
+    expect(herdrNavigationCell(screen(['switch to close']),3,0)).toBe(false);
+  });
+  it('follows the visible rows, not the live screen, once the reader has scrolled up into history',()=>{
+    expect(herdrNavigationCell(screen(header,5),40,1)).toBe(true);
+    expect(herdrNavigationCell(screen(header,0,5),40,1)).toBe(false);
+  });
+});

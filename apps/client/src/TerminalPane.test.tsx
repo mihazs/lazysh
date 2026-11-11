@@ -1707,3 +1707,63 @@ it('reports an unsupported measured Mosh size without clearing the canonical scr
   const session={id:'mosh',name:'Host',connected:true,terminal,moshResize:controller} as unknown as LiveSession;
   try{render(<TerminalPane session={session} active reportError={reportError}/>);expect(reportError).toHaveBeenCalled();expect(mocks.fit).not.toHaveBeenCalled();expect(mocks.resize).not.toHaveBeenCalled();}finally{width.mockRestore();}
 });
+
+describe('soft keyboard on a touch screen', () => {
+  const touchScreen = () => vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
+  // Each test starts long after the last one, so a keyboard carried by an earlier test has expired.
+  let clock = 0;
+  let now: { mockReturnValue(value: number): unknown; mockRestore(): void };
+  beforeEach(() => {clock += 100_000; now = vi.spyOn(performance, 'now').mockReturnValue(clock);});
+  afterEach(() => now.mockRestore());
+  function editableTerminal() {
+    const element = document.createElement('div'), textarea = document.createElement('textarea');
+    element.append(textarea);
+    const mock = Object.assign(createMockTerminal(), {element, textarea});
+    mock.focus.mockImplementation(() => textarea.focus());
+    return mock;
+  }
+  const pair = (first = editableTerminal(), second = editableTerminal()) => ({
+    first, second,
+    panes: (shown: 'first' | 'second', typing?: 'first') => <>{([['first', first], ['second', second]] as const).map(([id, mock]) =>
+      <TerminalPane key={id} session={{id, name: id, connected: true, terminal: mock} as unknown as LiveSession} active={shown === id} typingActivation={typing === id} reportError={vi.fn()} />)}</>,
+  });
+
+  it('never focuses a terminal that navigation activates, and keeps the keyboard it already holds', () => {
+    touchScreen();
+    const {first, second, panes} = pair();
+    const view = render(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    // The user taps the terminal, which raises the keyboard.
+    act(() => first.textarea.focus());
+    view.rerender(panes('second'));
+    expect(second.focus).toHaveBeenCalled();
+    expect(document.activeElement).toBe(second.textarea);
+    // A terminal activated with no keyboard open stays unfocused.
+    act(() => second.textarea.blur());
+    now.mockReturnValue(clock + 10_000);
+    first.focus.mockClear();
+    view.rerender(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(first.textarea);
+  });
+
+  it('focuses a terminal opened to type in once, and treats every later activation as navigation', () => {
+    touchScreen();
+    const {first, second, panes} = pair();
+    const view = render(panes('first', 'first'));
+    expect(first.focus).toHaveBeenCalled();
+    act(() => first.textarea.blur());
+    view.rerender(panes('second'));
+    first.focus.mockClear();
+    view.rerender(panes('first'));
+    expect(first.focus).not.toHaveBeenCalled();
+    expect(second.focus).not.toHaveBeenCalled();
+  });
+
+  it('keeps focusing an activated terminal with a mouse', () => {
+    const {first, panes} = pair();
+    const view = render(panes('second'));
+    view.rerender(panes('first'));
+    expect(first.focus).toHaveBeenCalled();
+  });
+});

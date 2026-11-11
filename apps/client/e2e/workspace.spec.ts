@@ -1,5 +1,6 @@
 import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWith} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
+import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {readFileSync} from 'node:fs';
@@ -220,6 +221,7 @@ function nativeHerdrNavigationReady(label:string,context?:string){
 // The soft keyboard follows the focused editable control.
 async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:boolean;drawer:boolean;replyDelay?:number}){
   await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['keyboard','esc']})));
+  await trackKeyboardRequests(page);
   await openClockedNavigation(page);
   const press=(target:Locator)=>touch?target.tap():target.click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -227,12 +229,15 @@ async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:
   const focused=()=>page.evaluate(()=>{const node=document.activeElement;return node?.matches('input,textarea,select,[contenteditable]')?node.getAttribute('aria-label')??node.tagName:null;});
   const openSpaces=async()=>{if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));await press(modes.getByRole('button',{name:'Workspaces',exact:true}));};
   const switchTo=async(label:string,expected:unknown[],input:string|null)=>{
+    await forgetKeyboardRequests(page);
     await press(page.locator(nativeHerdrNavigationRow(label)));
     // The switched display can mount and claim focus while Herdr replies are still pending.
     for(let elapsed=0;elapsed<=2*replyDelay+500;elapsed+=100){if(touch)expect(await focused()).toBeNull();await page.clock.runFor(100);}
     await expect.poll(navigations).toEqual(expected);
     await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
     expect(await focused()).toBe(input);
+    // Not even a passing focus: that alone raises the keyboard on a touch screen.
+    if(touch)expect(await keyboardRequests(page)).toEqual([]);
   };
   if(drawer)await press(page.getByRole('button',{name:'Open hosts',exact:true}));
   await connectPasswordHost(page);
@@ -266,6 +271,28 @@ test('slow Herdr switches keep the soft keyboard closed on wide touch layouts',a
   const phone=testInfo.project.name==='phone';
   if(phone)await page.setViewportSize({width:844,height:390});
   await herdrSwitchKeyboard(page,{touch:phone,drawer:false,replyDelay:400});
+});
+
+test('a soft keyboard that is already open stays open through a Herdr switch on a wide touch layout',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch screens raise a soft keyboard.');
+  await page.setViewportSize({width:844,height:390});
+  await page.addInitScript(()=>localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,toolbar:['keyboard','esc']})));
+  await openClockedNavigation(page);
+  await connectPasswordHost(page);
+  const terminalInput=()=>page.evaluate(()=>document.activeElement?.matches('.terminal-pane textarea')===true);
+  await expect.poll(async()=>{await page.clock.runFor(100);return page.locator('.terminal-canvas:visible').count();}).toBe(1);
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Workspaces',exact:true}).tap();
+  await expect(page.locator(nativeHerdrNavigationRow('codex-builder'))).toBeVisible();
+  // A tap in the terminal asks for the keyboard.
+  await page.locator('.terminal-canvas:visible').tap();
+  await expect.poll(terminalInput).toBe(true);
+  // The pane switch adopts a new Herdr display; the keyboard must not close for any frame in between.
+  await page.evaluate(()=>{const gaps:number[]=[];Object.assign(window,{keyboardGaps:gaps});const watch=()=>{if(!document.activeElement?.matches('.terminal-pane textarea'))gaps.push(performance.now());requestAnimationFrame(watch);};requestAnimationFrame(watch);});
+  await page.locator(nativeHerdrNavigationRow('codex-builder')).tap();
+  await expect.poll(async()=>{await page.clock.runFor(100);return page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations.length);}).toBe(1);
+  for(let elapsed=0;elapsed<500;elapsed+=100)await page.clock.runFor(100);
+  expect(await terminalInput()).toBe(true);
+  expect(await page.evaluate(()=>(window as unknown as {keyboardGaps:number[]}).keyboardGaps)).toEqual([]);
 });
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
