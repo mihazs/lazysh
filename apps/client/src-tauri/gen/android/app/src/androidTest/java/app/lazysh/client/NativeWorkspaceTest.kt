@@ -5700,7 +5700,7 @@ class NativeWorkspaceTest {
         """)
         try {
             awaitDocument(scenario, "owned toolbar is a fixed key grid with a More key and no page indicators",
-                "document.querySelectorAll('.terminal-keys .terminal-keys-row').length>=1 && !!document.querySelector('.terminal-keys $more') && !document.querySelector('.terminal-keys [role=tablist]')")
+                "document.querySelectorAll('.terminal-keys .terminal-keys-row').length>=1 && !!document.querySelector(${JSONObject.quote(".terminal-keys $more")}) && !document.querySelector('.terminal-keys [role=tablist]')")
             assertEquals("Terminal keeps input focus before the More list opens", "true", evaluate(scenario, focused))
             tap(".terminal-keys $more")
             awaitDocument(scenario, "native tap opens the More list", "!!document.querySelector('.terminal-keys-more')")
