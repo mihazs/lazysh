@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.30.2
+
+### Patch Changes
+
+- 933719e: Fix finger scrolling in Herdr sessions on hosts without the guarded Herdr build, which showed Unavailable on every swipe.
+- @lazysh/account-usage@1.30.2
+  - @lazysh/common@1.30.2
+  - @lazysh/display-idle@1.30.2
+  - @lazysh/et-transport@1.30.2
+  - @lazysh/mosh-transport@1.30.2
+
 ## 1.30.1
 
 ### Patch Changes
