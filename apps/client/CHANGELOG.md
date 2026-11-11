@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.33.1
+
+### Patch Changes
+
+- 59b5cf0: Resize Mosh sessions for the soft keyboard so responsive programs can redraw their prompts above it.
+- @lazysh/account-usage@1.33.1
+  - @lazysh/common@1.33.1
+  - @lazysh/display-idle@1.33.1
+  - @lazysh/et-transport@1.33.1
+  - @lazysh/mosh-transport@1.33.1
+
 ## 1.33.0
 
 ### Minor Changes
