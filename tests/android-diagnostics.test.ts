@@ -56,7 +56,7 @@ test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google
   expect(lines).toHaveLength(1);
   expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
     join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
-    ...(variant==='google'?['run','--cwd','apps/client','test:android-ntfy']:['run','test:android-ntfy']),'',
+    'run','test:android-ntfy','',
   ]);
 });
 
@@ -210,9 +210,9 @@ test('actual moon forwards admitted native fixture environment and applies task 
   const directory=await mkdtemp(join(tmpdir(),'lazysh-android-moon-'));temporary.push(directory);
   await mkdir(join(directory,'.moon'));await mkdir(join(directory,'probe'));
   await writeFile(join(directory,'.moon/workspace.yml'),JSON.stringify({projects:{probe:'probe'}}));
-  const probe={command:'bun env-probe.ts',env:real.env};
+  const probe={env:real.env};
   await writeFile(join(directory,'probe/moon.yml'),JSON.stringify({tasks:{
-    override:{...probe,options:{cache:false,envOverride:true}},plain:{...probe,options:{cache:false}}}}));
+    override:{...probe,command:'bun env-probe.ts override',options:{cache:false,envOverride:true}},plain:{...probe,command:'bun env-probe.ts plain',options:{cache:false}}}}));
   const keys=['LAZYSH_TEST_AGENT_BIN','LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT','LAZYSH_NATIVE_GUI_SECRET_SERVICE'];
   const values=['/owned/current-source/lazysh-agent','1','/owned/pinned/mosh-server','true','github-hosted','/owned/pinned/gnome-keyring-daemon'];
   await writeFile(join(directory,'probe/env-probe.ts'),`await Bun.write('observed-'+process.argv[2]+'.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),flag:process.env.LAZYSH_ANDROID_UI_SSH??null}));`);

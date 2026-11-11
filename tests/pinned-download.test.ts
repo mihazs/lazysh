@@ -117,7 +117,7 @@ const moonTargets = (words: string) => words.split(/\s+/).filter(word => /^[#\w-
 // The tasks a `moon run` or `moon ci` command line schedules, dependencies included, planned up front by moon itself.
 const moonPlans = new Map<string, string[]>();
 const moonInvocations = [await Bun.file(join(project, 'package.json')).text(), ...await Promise.all(
-  [...new Bun.Glob('.github/workflows/*.yml').scanSync(project)].map(path => Bun.file(join(project, path)).text()))].join('\n');
+  [...new Bun.Glob('.github/workflows/*.yml').scanSync({ cwd: project, dot: true })].map(path => Bun.file(join(project, path)).text()))].join('\n');
 await Promise.all([...new Set([...moonInvocations.matchAll(/\bmoon (?:run|ci) ([^\n&|;"']+)/g)].map(match => moonTargets(match[1]).join(' ')).filter(Boolean))]
   .map(async targets => { moonPlans.set(targets, await plannedTargets(...targets.split(' '))); }));
 

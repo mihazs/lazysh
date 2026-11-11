@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {moonTask} from './support/moon';
 import {herdrHistoryFailureStage,HerdrFixture,ownedHerdrContext} from './support/androidHerdr';
 
 async function oracle(name:'ownedVisibleHerdr'|'ownedLiveHerdrNavigation'|'ownedHerdrSwipeGeometry'|'ownedHerdrObserveFinger'|'ownedHerdrFailureMarkers'='ownedVisibleHerdr') {
@@ -93,20 +94,17 @@ test('owned host context projects only unique validated label/cwd readback and o
 test('CI actually invokes the stock two-display native case through its own uncached task',async()=>{
   const root=join(import.meta.dir,'..');
   const workflow=Bun.YAML.parse(await readFile(join(root,'.github/workflows/checks.yml'),'utf8')) as any;
-  const client=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8'));
-  const turbo=JSON.parse(await readFile(join(root,'turbo.json'),'utf8'));
   const source=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
   const names=[...source.matchAll(/\('([^']*actual Android two-display stock Herdr navigation[^']*)',async/g)];
   expect(names).toHaveLength(1);
   const name=names[0][1];
-  const script=client.scripts['test:android-herdr-navigation'];
-  expect(script).toBeDefined();
-  expect(script).toStartWith('LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1 bun test ');
-  expect(script).toContain(`--test-name-pattern '^${name}$'`);
-  expect(script).not.toContain('--pass-with-no-tests');
-  const task=turbo.tasks['test:android-herdr-navigation'];
-  expect(task.cache).toBe(false);expect(task.dependsOn).toEqual(['build:android:emulator']);
-  expect(task.passThroughEnv).not.toContain('LAZYSH_ANDROID_UI_HERDR');
+  const task=await moonTask('client:test-android-herdr-navigation');
+  expect(task.env).toEqual({LAZYSH_ANDROID_UI_HERDR_NAVIGATION:'1'});
+  expect(task.command).toBe('bun');
+  expect(task.args!.slice(0,2)).toEqual(['test','../../tests/android-ssh-host.test.ts']);
+  expect(task.args!.slice(-2)).toEqual(['--test-name-pattern',`^${name}$`]);
+  expect(task.args).not.toContain('--pass-with-no-tests');
+  expect(task.options.cache).toBe(false);expect(task.deps!.map(dep=>dep.target)).toEqual(['client:build-android-emulator']);
   const job=workflow.jobs['native-android-herdr-navigation'];
   expect(job.needs).toEqual(['changes','herdr-native']);expect(job['timeout-minutes']).toBe(30);
   expect(job.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('herdr-navigation');
