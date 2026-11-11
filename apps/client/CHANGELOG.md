@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.30.1
+
+### Patch Changes
+
+- dc223b5: Show app language choices as a checked list.
+- @lazysh/account-usage@1.30.1
+  - @lazysh/common@1.30.1
+  - @lazysh/display-idle@1.30.1
+  - @lazysh/et-transport@1.30.1
+  - @lazysh/mosh-transport@1.30.1
+
 ## 1.30.0
 
 ### Minor Changes
