@@ -1,5 +1,4 @@
 import {useEffect, useState} from 'react';
-import {Download, ExternalLink, Share2} from 'lucide-react';
 import {t, useUi, formatNumber} from './i18n/core';
 import {uiErrorText} from './i18n/localError';
 import {useProtectedApi} from './access';
@@ -33,9 +32,9 @@ export default function HostFileActions({sessionId, path}: {sessionId: string; p
   const name = state.phase === 'confirm' ? state.stat.name : '';
   return <>
     <div className="file-actions" role="group" aria-label={t('filesActions')}>
-      {actions.includes('open') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('open')}><ExternalLink size={15}/> {t('filesOpenWith')}</button>}
-      {actions.includes('save') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('save')}><Download size={15}/> {t('filesDownload')}</button>}
-      {actions.includes('share') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('share')}><Share2 size={15}/> {t('filesShare')}</button>}
+      {actions.includes('open') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('open')}>{t('filesOpenWith')}</button>}
+      {actions.includes('save') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('save')}>{t('filesDownload')}</button>}
+      {actions.includes('share') && <button type="button" className="subtle-button" disabled={file.busy} onClick={() => press('share')}>{t('filesShare')}</button>}
     </div>
     {state.phase === 'confirm' && <div className="upload-confirm" role="group" aria-label={t('filesConfirmDownload')}>
       {state.stat.link !== null && <p>{t('filesLinkConfirm', {name, target: state.stat.link})}</p>}
