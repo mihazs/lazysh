@@ -144,6 +144,8 @@ export const api = {
   probeConnections: (sessionIds: string[]) => invoke<void>('probe_connections', { sessionIds }),
   listDirectory: (sessionId: string, path: string) =>
     invoke<FileEntry[]>("list_directory", { sessionId, path }),
+  /** The host's absolute login directory: what `~` means for this session. */
+  hostHome: (sessionId: string) => invoke<string>("host_home", { sessionId }),
   readFile: (sessionId: string, path: string) =>
     invoke<string>("read_file", { sessionId, path }),
   hostClipboardCopy: (sessionId: string, uploadId: string) =>

@@ -3,6 +3,7 @@ import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi, useProtectedInvoke } from './access';
 import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
+import {resolveHostPath} from './hostPath';
 import FilePreview, {type FileContent} from './FilePreview';
 import {IMAGE_PREVIEW_LIMIT, imageUrl, previewKind} from './mediaPreview';
 import { useEffect, useRef, useState } from "react";
@@ -48,7 +49,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     setBusy(true);
     setError("");
     try {
-      const result = await api.listDirectory(sessionId, next);
+      const resolved = await resolveHostPath(api, sessionId, next);
+      const result = await api.listDirectory(sessionId, resolved);
       if (current !== request.current) return;
       setEntries(
         result.sort(
@@ -56,8 +58,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name),
         ),
       );
-      setPath(next);
-      setDraft(next);
+      setPath(resolved);
+      setDraft(resolved);
       setContent(null);
     } catch (e) {
       if (current === request.current) setError(captureUiError(e));
@@ -102,7 +104,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   async function sendFile() {
     if (!upload || !destination.trim() || busy) return;
     setError("");
-    await uploadJob.start(async()=>({path:destination,bytes:new Uint8Array(await upload.arrayBuffer())}),uploadedPath=>{
+    await uploadJob.start(async()=>({path:await resolveHostPath(api,sessionId,destination),bytes:new Uint8Array(await upload.arrayBuffer())}),uploadedPath=>{
       setUpload(null);
       void load(uploadDirectory(uploadedPath));
     });

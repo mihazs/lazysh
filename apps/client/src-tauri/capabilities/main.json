@@ -126,6 +126,7 @@
     "allow-disconnect",
     "allow-probe-connections",
     "allow-list-directory",
+    "allow-host-home",
     "allow-read-file",
     "allow-upload-reserve",
     "allow-upload-cancel",

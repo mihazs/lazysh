@@ -2619,6 +2619,50 @@ pub(crate) async fn sftp_list_dir(
     result
 }
 
+/// A home directory the renderer may expand `~` to: absolute, bounded, one line.
+pub(crate) fn absolute_home(home: String) -> Result<String> {
+    let drive = home
+        .as_bytes()
+        .get(..2)
+        .is_some_and(|prefix| prefix[0].is_ascii_alphabetic() && prefix[1] == b':');
+    if (home.starts_with('/') || drive) && home.len() <= 4096 && !home.contains(['\0', '\n']) {
+        return Ok(home);
+    }
+    Err(SshError::new(
+        "home_unavailable",
+        "The host did not report an absolute home directory",
+    ))
+}
+/// The one place `~` is resolved for host tools: the renderer expands `~` and `$HOME`
+/// against this, so Files and terminal file paths agree on the same home.
+#[tauri::command]
+pub async fn host_home(
+    lease: AccessLease,
+
+    state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
+    session_id: String,
+) -> AccessResult<String> {
+    lease
+        .run(async {
+            crate::host::Host::resolve(&state, &local, &session_id, &lease)
+                .await?
+                .home(&lease)
+                .await
+        })
+        .await
+}
+pub(crate) async fn sftp_home(session: &Session, lease: &AccessLease) -> Result<String> {
+    timeout(OP_TIMEOUT, async {
+        let sftp = sftp(session, lease).await?;
+        let home = sftp.canonicalize(".").await;
+        let _ = timeout(Duration::from_secs(2), sftp.close()).await;
+        absolute_home(home?)
+    })
+    .await
+    .map_err(|_| SshError::new("timeout", "Resolving the home directory timed out"))?
+}
+
 #[tauri::command]
 pub async fn read_file(
     lease: AccessLease,
@@ -5967,6 +6011,33 @@ mod tests {
         assert_eq!(output.stdout, b"a'b; $(touch /tmp/nope)");
     }
     #[test]
+    fn a_home_directory_must_be_absolute_one_line_and_bounded() {
+        for home in [
+            "/home/mihazs",
+            "/",
+            "/home/用户 with space",
+            "C:\\Users\\me",
+            "/C:/Users/me",
+        ] {
+            assert_eq!(absolute_home(home.into()).unwrap(), home);
+        }
+        for home in [
+            "",
+            ".",
+            "home/me",
+            "/home/\nme",
+            "/home/\0me",
+            "C",
+            &format!("/{}", "a".repeat(4096)),
+        ] {
+            assert_eq!(
+                absolute_home(home.into()).unwrap_err().kind(),
+                "home_unavailable",
+                "{home:?}"
+            );
+        }
+    }
+    #[test]
     fn dimensions_reject_invalid_or_unbounded_allocations() {
         assert!(check_size(80, 24).is_ok());
         assert!(check_size(0, 24).is_err());
@@ -5989,6 +6060,7 @@ mod tests {
             "install_companion",
             "restore_file_transfer",
             "restore_host_tools",
+            "host_home",
             "get_companion_settings",
             "update_companion_settings",
         ] {
@@ -7115,6 +7187,18 @@ mod tests {
                 );
             }
         }
+        // `internal-sftp -d` starts in the fixture directory: home is what SFTP canonicalizes.
+        assert_eq!(
+            fs::canonicalize(
+                host_home(access_lease(), app.state(), app.state(), id.clone())
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .unwrap()
+            )
+            .unwrap(),
+            fs::canonicalize(dir.path()).unwrap()
+        );
         let upload = dir
             .path()
             .join("new file' safe.txt")

@@ -113,6 +113,16 @@ mod local {
         assert_eq!(kind(list(path(&crowded))).await, "directory_too_large");
         // Relative paths start in the home directory, as SFTP paths do.
         assert!(Box::pin(list(".".into())).await.is_ok());
+        // `~` expands against the same absolute home the relative paths start in.
+        let home = crate::local::home_dir().unwrap();
+        let reported = ok(crate::ssh::host_home(
+            lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+        ))
+        .await;
+        assert_eq!(std::path::PathBuf::from(reported), home);
     }
 
     #[tokio::test]

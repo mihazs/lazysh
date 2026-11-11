@@ -1397,6 +1397,7 @@ const translations = {
   filesRefresh: ["Atualizar arquivos", "Actualizar archivos"],
   filesUpload: ["Enviar", "Subir"],
   filesTooLarge: ["Escolha um arquivo menor que 10 MiB.", "Elige un archivo de menos de 10 MiB."],
+  filesHomeUser: ["Somente ~ e ~/ expandem para o diretório pessoal do servidor. Use um caminho absoluto para arquivos de outro usuário.", "Solo ~ y ~/ se expanden al directorio personal del servidor. Usa una ruta absoluta para los archivos de otro usuario."],
   filesConfirm: ["Enviar {{name}} ({{bytes}} bytes) para este servidor?", "¿Subir {{name}} ({{bytes}} bytes) a este servidor?"],
   filesDestination: ["Caminho de destino", "Ruta de destino"],
   filesUploadFile: ["Enviar arquivo", "Subir archivo"],

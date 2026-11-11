@@ -1388,6 +1388,7 @@ export const english = {
   filesRefresh: "Refresh files",
   filesUpload: "Upload",
   filesTooLarge: "Choose a file smaller than 10 MiB.",
+  filesHomeUser: "Only ~ and ~/ expand to the host's home directory. Use an absolute path for another user's files.",
   filesConfirm: "Upload {{name}} ({{bytes}} bytes) to this host?",
   filesDestination: "Destination path",
   filesUploadFile: "Upload file",

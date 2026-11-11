@@ -270,6 +270,7 @@ pub fn run() {
                 ssh::disconnect,
                 ssh::probe_connections,
                 ssh::list_directory,
+                ssh::host_home,
                 ssh::read_file,
                 attachment_upload::upload_reserve,
                 attachment_upload::upload_cancel,

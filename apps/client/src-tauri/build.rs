@@ -154,6 +154,7 @@ fn main() {
         "disconnect",
         "probe_connections",
         "list_directory",
+        "host_home",
         "read_file",
         "upload_reserve",
         "upload_cancel",
