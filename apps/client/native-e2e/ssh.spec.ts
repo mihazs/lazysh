@@ -1,15 +1,16 @@
 import {expect,it,vi} from 'vitest';
-import {chmod,copyFile,lstat,mkdir,readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,mkdir,readFile,readlink,readdir,realpath,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash,randomBytes} from 'node:crypto';
 import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {OwnedSshRelay} from './sshRelay';
 import * as socketOwners from './socketOwner';
 import {NativeGui} from './fixture';
-import {nativeOpenCodeManifest,nativeOpenCodeParagraphText} from './policy';
+import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests/support/recordedConversation';
+import {recordedPageCall} from '../../../tests/support/recordedCards';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,ownedCompanionSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -33,174 +34,90 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   await disconnectOwnedSsh(gui,terminal);
 });
 
-const protectedInput=async(path:string,limit:number,allowEmpty=false)=>{
-    expect(path.startsWith('/')).toBe(true);
-    const info=await lstat(path);
-    expect(info.isFile()&&!info.isSymbolicLink()&&info.uid===process.getuid!()&&info.nlink===1&&(info.mode&0o022)===0&&(info.size>0||(allowEmpty&&info.size===0))&&info.size<=limit).toBe(true);
-    const bytes=await readFile(path),after=await lstat(path);
-    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs}).toEqual({dev:info.dev,ino:info.ino,size:info.size,mtime:info.mtimeMs});
-    expect(bytes.length).toBe(info.size);return bytes;
-  };
-
-async function installRecordedCompanion(companion:Buffer,clientSha256:string) {
-  expect(createHash('sha256').update(await readFile(join(import.meta.dirname,'../../../target/release/lazysh'))).digest('hex')).toBe(clientSha256);
-  const {ssh,companion:image}=await ownedCompanionSsh(fixture,companion);
-  return {ssh,image};
-}
-
-async function readActualRecordedConversation(ssh:SshFixture,agent:'codex'|'opencode',records:{path:string;sessionId?:string;messages:string[]}[]) {
-  const label=agent==='codex'?'Codex':'OpenCode';
+type RecordedSource={agent:string;view?:string;path:string;sessionId?:string};
+// Reads the shared synthetic Codex and OpenCode V1/V2 records, then the recorded plan, question,
+// turn-state, Markdown and thinking pages, through the source-built companion over real SSH.
+it('reads synthetic recorded Codex, OpenCode V1 and V2 conversations and their cards through native SSH without replacing its terminal',async()=>{
+  fixture.captureSafe=false;
+  const root=join(import.meta.dirname,'../../..'),companion=await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN);
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  const recorded=await prepareRecordedConversation(ssh,root,companion),sources=recorded.metadata.sources,cards=recorded.metadata.cards;
+  expect(sources.map(source=>source.agent)).toEqual(['codex','opencode','opencode']);expect(cards).toHaveLength(8);
   const gui=fixture.gui=await NativeGui.start();
   const {browser,terminal,owner}=await openOwnedSsh(gui,ssh),terminalId=terminal.elementId;
   await challengeOwnedSsh(gui,ssh,terminal,owner);fixture.captureSafe=true;
-  gui.stage=`owned actual ${label} Conversation`;await workspaceAction(gui,'Transcript');
-  await (await browser.$('//label[normalize-space(text())="Agent"]/select')).selectByAttribute('value',agent);
-  await (await browser.$('//label[normalize-space(text())="View"]/select')).selectByAttribute('value','conversation');
-  const pathInput=await browser.$('input[placeholder="Absolute host path to session.jsonl"]');
-  const readMessages=async()=>{
-    const articles=await browser.$$('.chat-conversation-messages .chat-message');
-    return Promise.all(Array.from(articles).map(async article=>{
-      if(agent==='opencode')expect(await article.$$('p')).toHaveLength(1);
-      return {role:await article.$('h4').getText(),text:agent==='codex'?await article.$('p').getText():String(await article.$('p').getProperty('textContent'))};
-    }));
+  gui.stage='owned synthetic recorded Conversation';await workspaceAction(gui,'Transcript');
+  const panel='//section[contains(concat(" ",@class," ")," chat-panel ")]';
+  const choose=(label:string,value:string)=>browser.waitUntil(async()=>{
+    const select=await browser.$(`${panel}//label[normalize-space(text())="${label}"]/select`);
+    if(await select.getValue()!==value)await select.selectByAttribute('value',value);
+    return await select.getValue()===value;
+  },{timeout:5000,timeoutMsg:`Recorded ${label} did not select ${value}`});
+  const open=async(source:RecordedSource)=>{
+    // Choosing Codex resets View to records, so View is chosen after Agent.
+    await choose('Agent',source.agent);await choose('View',source.view??'conversation');
+    await (await browser.$('.chat-panel input[placeholder="Absolute host path to session.jsonl"]')).setValue(source.path);
+    if(source.sessionId!==undefined && source.agent==='opencode')await (await browser.$(`${panel}//label[normalize-space(text())="Transcript session ID"]/input`)).setValue(source.sessionId);
+    expect(await browser.execute(()=>Array.from(document.querySelectorAll<HTMLSelectElement>('.chat-panel select'),x=>x.value).slice(0,2))).toEqual([source.agent,source.view??'conversation']);
+    await (await browser.$(`${panel}//button[normalize-space(.)="Open transcript"]`)).click();
   };
-  for(const record of records){
-    const expected=record.messages;
-    await pathInput.setValue(record.path);
-    if(record.sessionId!==undefined)await (await browser.$('//label[normalize-space(text())="Transcript session ID"]/input')).setValue(record.sessionId);
-    await (await browser.$('button=Open transcript')).click();
-    try{
-    await browser.waitUntil(async()=>JSON.stringify(await readMessages())===JSON.stringify(expected.map((text,i)=>({role:i%2?'Assistant':'User',text}))),{timeout:20_000,timeoutMsg:`Actual ${label} conversation did not match its captured branch`});
-    }catch(primary){
-      try{console.info(`Owned ${label} native DOM observation`,JSON.stringify(await browser.execute(expected=>{
-        const panel=document.querySelector('.chat-panel'),regions=panel?.querySelectorAll('.chat-conversation-messages'),cards=Array.from(panel?.querySelectorAll('.chat-conversation-messages .chat-message')??[]);
-        const visible=(element:Element)=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(element).visibility!=='hidden';};
-        return {state:!panel?'missing-panel':!regions?.length?'missing-region':cards.length===0?'empty':cards.length===expected.length?'expected-count':'different-count',regions:regions?.length??0,cards:cards.length,visibleCards:cards.filter(visible).length,regionVisible:!!regions?.[0]&&visible(regions[0]),errorPresent:!!panel?.querySelector('[role="alert"]'),pending:!!Array.from(panel?.querySelectorAll('button')??[]).find(button=>button.textContent==='Reading…'),exactMatches:JSON.stringify(cards.map(card=>({role:card.querySelector('h4')?.textContent,text:card.querySelector('p')?.textContent})))===JSON.stringify(expected)};
-      },expected.map((text,i)=>({role:i%2?'assistant':'user',text})))));}catch{/* Preserve the exact primary failure if observation is unavailable. */}
+  // The page compares in place, so the result never depends on driver object serialization.
+  const awaitPage=async(stage:string,name:'messages'|'cards',argument:unknown)=>{
+    try{await browser.waitUntil(async()=>await browser.execute(`return ${recordedPageCall(name,argument)}`)===true,{timeout:20_000,timeoutMsg:stage});}
+    catch(primary){
+      console.info('Owned recorded page observation',stage,await browser.execute(`return ${recordedPageCall(name,argument,true)}`).catch(()=>'unavailable'));
       throw primary;
     }
-    expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  };
+  const unchanged=async()=>{expect(await browser.$$('[role="tab"]')).toHaveLength(1);expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);};
+  let expected:{role:string;text:string}[]=[];
+  for(const source of sources){
+    expected=source.messages;await open(source);
+    await awaitPage(`Synthetic ${source.agent} conversation did not match its records`,'messages',expected);
+    await unchanged();
   }
+  gui.stage='owned recorded reader Home and Refresh';
   const draft=await browser.$('form.chat-composer textarea'),text='Owned unsent recorded Conversation draft';await draft.setValue(text);
-  const region=await browser.$('.chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
-  expect(await region.isFocused()).toBe(true);
-  await browser.waitUntil(async()=>await region.isFocused()&&await region.getProperty('scrollTop')===0,{timeout:5000,timeoutMsg:`Owned ${label} reader did not settle at Home`});
-  const position=await browser.execute(()=>{const element=document.querySelector('.chat-conversation-messages')!;return {top:element.scrollTop,height:element.clientHeight,total:element.scrollHeight};});
-  const readingOverflow=position.total>position.height;
-  if(agent==='opencode')expect(readingOverflow).toBe(true);
-  console.info(`Owned ${label} reading baseline`,JSON.stringify({...position,overflow:readingOverflow}));
-  if(readingOverflow)expect(position.top).toBe(0);
-  await (await browser.$('button=Refresh new messages')).click();
-  await browser.waitUntil(async()=>await browser.$('button=Refresh new messages').isEnabled(),{timeout:20_000});
-  const refreshed=records.at(-1)!.messages.map((value,i)=>({role:i%2?'Assistant':'User',text:value}));
-  if(agent==='codex')expect(await readMessages()).toEqual(refreshed);
-  else expect(JSON.stringify(await readMessages())===JSON.stringify(refreshed)).toBe(true);
-  expect(await draft.getValue()).toBe(text);
-  const refreshedPosition=await browser.execute(()=>document.querySelector('.chat-conversation-messages')!.scrollTop);
-  if(readingOverflow)expect(refreshedPosition).toBe(position.top);
-  console.info(`Owned ${label} refreshed reading position`,JSON.stringify({top:refreshedPosition,overflow:readingOverflow}));
-  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,`../test-results/native-gui/${agent}-readable-conversation.png`));
-  await gui.screenshot();await copyFile(join(import.meta.dirname,'../test-results/native-gui/owned-synthetic-window.png'),join(import.meta.dirname,`../test-results/native-gui/${agent==='codex'?'codex-fork-conversation':'opencode-last-conversation'}.png`));
+  // Two synthetic messages fit the default desktop window; a shorter window makes the reader overflow.
+  await browser.setWindowSize(1200,520);
+  const region=await browser.$('.chat-panel .chat-conversation-messages');await region.scrollIntoView({block:'start'});await region.click();await browser.keys('Home');
+  await browser.waitUntil(async()=>await browser.execute(()=>{const r=document.querySelector('.chat-panel .chat-conversation-messages');return !!r&&document.activeElement===r&&r.scrollHeight>r.clientHeight&&r.scrollTop===0;}),
+    {timeout:5000,timeoutMsg:'Recorded reader did not overflow and settle at Home'}).catch(async primary=>{
+    console.info('Owned recorded reader position',await browser.execute(()=>{const r=document.querySelector('.chat-panel .chat-conversation-messages');
+      return JSON.stringify(r&&{focused:document.activeElement===r,top:r.scrollTop,height:r.clientHeight,total:r.scrollHeight,window:[innerWidth,innerHeight]});}).catch(()=>'unavailable'));
+    throw primary;
+  });
+  // Refresh must disable its button and enable it again; old attribute values catch both changes in one callback.
+  expect(await browser.execute(()=>{
+    const button=document.querySelector<HTMLButtonElement>('.chat-panel button[aria-label="Refresh new messages"]');
+    if(!button||button.disabled)return false;
+    const state={started:false,settled:false};(window as unknown as {__ownedRecordedRefresh?:typeof state}).__ownedRecordedRefresh=state;
+    new MutationObserver(records=>{if(records.some(record=>record.oldValue===null))state.started=true;if(state.started&&!button.disabled)state.settled=true;})
+      .observe(button,{attributes:true,attributeFilter:['disabled'],attributeOldValue:true});
+    return true;
+  })).toBe(true);
+  await (await browser.$('.chat-panel button[aria-label="Refresh new messages"]')).click();
+  await browser.waitUntil(async()=>await browser.execute(()=>(window as unknown as {__ownedRecordedRefresh?:{settled:boolean}}).__ownedRecordedRefresh?.settled===true),
+    {timeout:20_000,timeoutMsg:'Recorded Refresh did not start and settle'});
+  await awaitPage('Recorded Refresh changed the exact messages','messages',expected);
+  expect(await browser.execute(()=>document.querySelector('.chat-panel .chat-conversation-messages')?.scrollTop)).toBe(0);expect(await draft.getValue()).toBe(text);
   await (await browser.$('button=Stage in terminal')).click();await terminal.waitForDisplayed();
   expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
   const staged=await browser.$('.terminal-compose textarea');await staged.waitForDisplayed();expect(await staged.getValue()).toBe(text);expect(await terminal.getText()).not.toContain(text);
-  await (await browser.$('button[aria-label="Close composer"]')).click();await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_WORKSPACES');
+  await (await browser.$('button[aria-label="Close composer"]')).click();
+  await workspaceAction(gui,'Transcript');
+  for(const card of cards){
+    gui.stage=`owned recorded cards: ${card.label}`;await open(card);
+    await awaitPage(`Recorded cards did not render: ${card.label}`,'cards',card.checks);
+    await unchanged();
+  }
+  await workspaceAction(gui,'Terminal');await terminal.waitForDisplayed();
+  expect((await browser.$('.terminal-canvas .xterm-screen')).elementId).toBe(terminalId);
+  await challengeOwnedSsh(gui,ssh,terminal,owner,'AFTER_WORKSPACES');
   expect(await browser.getWindowHandles()).toHaveLength(1);
-  return {gui,terminal,position,refreshedPosition,readingOverflow};
-}
-
-// Ordinary CI without these actual, privately captured CLI records does not qualify this flow.
-it.skipIf(process.env.LAZYSH_NATIVE_CODEX_MANIFEST===undefined)('reads actual owned Codex parent and fork conversations through native SSH without replacing its terminal',async()=>{
-  fixture.captureSafe=false;
-  const productSource=process.env.LAZYSH_NATIVE_CODEX_SOURCE??'';
-  expect(productSource).toMatch(/^[a-f0-9]{40}$/);
-  const digest=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
-  const input:unknown=JSON.parse((await protectedInput(process.env.LAZYSH_NATIVE_CODEX_MANIFEST!,16384)).toString('utf8'));
-  expect(input!==null&&typeof input==='object').toBe(true);
-  const manifest=input as {source:string;clientSha256:string;companion:{path:string;sha256:string};rollouts:{path:string;sha256:string;name:string;threadId:string}[]};
-  expect(manifest.source).toBe(productSource);expect(manifest.clientSha256).toMatch(/^[a-f0-9]{64}$/);expect(manifest.rollouts).toHaveLength(2);
-  const companion=await protectedInput(manifest.companion.path,64*1024*1024);expect(digest(companion)).toBe(manifest.companion.sha256);
-  const originals=await Promise.all(manifest.rollouts.map(async(record,index)=>{
-    const expected=index===0?'01a1a04c-2f93-7231-83d2-c493c0427c27':'01a1a04c-5790-7913-9f46-63227794a710';
-    expect(record.threadId).toBe(expected);expect(record.name).toMatch(new RegExp(`^rollout-2026-11-03T[0-9-]+-${expected}\\.jsonl$`));
-    const bytes=await protectedInput(record.path,1024*1024);expect(digest(bytes)).toBe(record.sha256);
-    const metadata=JSON.parse(bytes.toString('utf8').split('\n')[0]);expect(metadata.type).toBe('session_meta');expect(metadata.payload.id).toBe(expected);
-    return bytes;
-  }));
-  const {ssh,image}=await installRecordedCompanion(companion,manifest.clientSha256);
-  const rolloutDirectory=join(ssh.directory,'.codex/sessions/2026/11/03');await mkdir(rolloutDirectory,{recursive:true,mode:0o700});
-  const copies=manifest.rollouts.map(record=>join(rolloutDirectory,record.name));
-  for(const [index,path]of copies.entries())await writeFile(path,originals[index],{flag:'wx',mode:0o600});
-  const before=await Promise.all(copies.map(async path=>({info:await stat(path),hash:digest(await readFile(path))})));
-  const remote=await ssh.client(true,`'${image}' --version`);
-  expect((await remote.finish('owned source-bound companion version',5000)).trim()).toBe('lazysh-agent 1.9.10');
-  const imageInfo=await stat(image);expect(imageInfo.uid===process.getuid!()&&imageInfo.nlink===1&&(imageInfo.mode&0o777)===0o700).toBe(true);
-  const parent=['Owned first prompt; reply without tools.','Owned isolated Codex answer 1.','Owned resumed prompt; reply without tools.','Owned isolated Codex answer 2.'];
-  const branch=[...parent,'Owned forked prompt; reply without tools.','Owned isolated Codex answer 3.'];
-  for(const [index,expected]of [parent,branch].entries()){
-    const control=await ssh.client(true,`'${image}' transcript --agent codex --path '${copies[index]}' --offset 0 --limit 50 --view conversation`);
-    const output=await control.finish('owned actual Codex companion conversation',5000),page=JSON.parse(output);
-    const projected=Array.isArray(page.messages)?page.messages.map((message:{role:string;blocks:{type:string;text?:string}[]})=>({role:message.role,text:message.blocks.filter(block=>block.type==='text').map(block=>block.text??'').join('\n')})):null;
-    const expectedMessages=expected.map((text,i)=>({role:i%2?'assistant':'user',text}));
-    console.info('Owned Codex SSH reader observation',JSON.stringify({source:productSource,index,agent:page.agent==='codex'?'codex':'unexpected',view:page.view==='active_branch'?'active_branch':'unexpected',schemaVersionMatches:page.schemaVersion===1,branchMatches:page.branchId===manifest.rollouts[index].threadId,messages:Array.isArray(page.messages)?page.messages.length:null,exactMatches:JSON.stringify(projected)===JSON.stringify(expectedMessages),pageSha256:digest(Buffer.from(output)),sourceSha256:before[index].hash,companionSha256:manifest.companion.sha256}));
-    expect(page.schemaVersion).toBe(1);expect(page.agent).toBe('codex');expect(page.view).toBe('active_branch');expect(page.branchId===manifest.rollouts[index].threadId).toBe(true);expect(projected?.length).toBe(expectedMessages.length);expect(JSON.stringify(projected)===JSON.stringify(expectedMessages)).toBe(true);
-  }
-  const {gui,terminal,position,refreshedPosition,readingOverflow}=await readActualRecordedConversation(ssh,'codex',[parent,branch].map((messages,index)=>({path:copies[index],messages})));
-  for(const [index,path]of copies.entries()){
-    const after=await stat(path),prior=before[index].info;
-    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs,mode:after.mode,nlink:after.nlink}).toEqual({dev:prior.dev,ino:prior.ino,size:prior.size,mtime:prior.mtimeMs,mode:prior.mode,nlink:prior.nlink});
-    expect(digest(await readFile(path))).toBe(before[index].hash);expect(digest(await protectedInput(manifest.rollouts[index].path,1024*1024))).toBe(manifest.rollouts[index].sha256);
-  }
-  expect(digest(await readFile(image))).toBe(manifest.companion.sha256);
-  console.info('Owned Codex native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,parentMessages:parent.length,forkMessages:branch.length,readingPosition:{...position,refreshedTop:refreshedPosition,overflowQualified:readingOverflow},rolloutHashes:before.map(value=>value.hash)}));
+  await recorded.verify();
   await disconnectOwnedSsh(gui,terminal);
-});
-
-// A supplied invalid manifest fails closed before any owned SSH or GUI process starts.
-it.skipIf(process.env.LAZYSH_NATIVE_OPENCODE_MANIFEST===undefined)('reads actual owned OpenCode V1 and V2 conversations through native SSH without replacing its terminal',async()=>{
-  fixture.captureSafe=false;
-  const productSource=process.env.LAZYSH_NATIVE_OPENCODE_SOURCE??'';
-  const version=JSON.parse(await readFile(join(import.meta.dirname,'../package.json'),'utf8')).version as string;
-  const manifest=nativeOpenCodeManifest(JSON.parse((await protectedInput(process.env.LAZYSH_NATIVE_OPENCODE_MANIFEST!,16384)).toString('utf8')),productSource,version);
-  const digest=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
-  const companion=await protectedInput(manifest.companion.path,64*1024*1024);expect(digest(companion)).toBe(manifest.companion.sha256);
-  const originals=await Promise.all(manifest.captures.map(async capture=>{
-    const database=await protectedInput(capture.database.path,16*1024*1024);expect(digest(database)).toBe(capture.database.sha256);
-    expect((await protectedInput(capture.database.path+'-wal',1,true)).length).toBe(0);
-    const truth=await protectedInput(capture.groundTruth.path,64*1024);expect(digest(truth)).toBe(capture.groundTruth.sha256);
-    const page=JSON.parse(truth.toString('utf8'));
-    expect(page.agent).toBe('opencode');expect(page.view).toBe('active_branch');expect(page.branchId).toBe(capture.sessionId);expect(page.messages).toHaveLength(2);
-    const messages=page.messages.map((message:{role:string;blocks:{type:string;text:string}[]},index:number)=>{
-      expect(message.role).toBe(index?'assistant':'user');expect(message.blocks).toHaveLength(1);expect(message.blocks[0].type).toBe('text');expect(typeof message.blocks[0].text).toBe('string');return message.blocks[0].text;
-    });
-    return {database,messages};
-  }));
-  const {ssh,image}=await installRecordedCompanion(companion,manifest.clientSha256);
-  const copies=[] as string[];
-  for(const [index,capture]of manifest.captures.entries()){
-    const directory=join(ssh.directory,'owned-opencode',capture.version);await mkdir(directory,{recursive:true,mode:0o700});const path=join(directory,'opencode.db');
-    await writeFile(path,originals[index].database,{flag:'wx',mode:0o400});copies.push(path);
-  }
-  const before=await Promise.all(copies.map(async path=>({info:await stat(path),hash:digest(await readFile(path))})));
-  const remote=await ssh.client(true,`'${image}' --version`);expect((await remote.finish('owned source-bound OpenCode companion version',5000)).trim()).toBe(`lazysh-agent ${version}`);
-  for(const [index,capture]of manifest.captures.entries()){
-    const control=await ssh.client(true,`'${image}' transcript --agent opencode --path '${copies[index]}' --session-id '${capture.sessionId}' --offset 0 --limit 50 --view conversation`);
-    const page=JSON.parse(await control.finish('owned actual OpenCode conversation preflight',5000));
-    expect(page.schemaVersion).toBe(1);expect(page.agent).toBe('opencode');expect(page.view).toBe('active_branch');expect(page.branchId).toBe(capture.sessionId);
-    const expected=originals[index].messages;
-    expect(JSON.stringify(page.messages.map((message:{role:string;blocks:{type:string;text:string}[]})=>({role:message.role,blocks:message.blocks.map(block=>({type:block.type,text:block.text}))})))===JSON.stringify(expected.map((text:string,i:number)=>({role:i?'assistant':'user',blocks:[{type:'text',text}]})))).toBe(true);
-  }
-  const {gui,terminal,position,refreshedPosition,readingOverflow}=await readActualRecordedConversation(ssh,'opencode',manifest.captures.map((capture,index)=>({path:copies[index],sessionId:capture.sessionId,messages:originals[index].messages.map(nativeOpenCodeParagraphText)})));
-  for(const [index,capture]of manifest.captures.entries()){
-    const after=await stat(copies[index]),prior=before[index].info;
-    expect({dev:after.dev,ino:after.ino,size:after.size,mtime:after.mtimeMs,mode:after.mode,nlink:after.nlink}).toEqual({dev:prior.dev,ino:prior.ino,size:prior.size,mtime:prior.mtimeMs,mode:prior.mode,nlink:prior.nlink});
-    expect(digest(await readFile(copies[index]))).toBe(before[index].hash);expect(digest(await protectedInput(capture.database.path,16*1024*1024))).toBe(capture.database.sha256);
-    expect(digest(await protectedInput(capture.groundTruth.path,64*1024))).toBe(capture.groundTruth.sha256);expect((await protectedInput(capture.database.path+'-wal',1,true)).length).toBe(0);
-  }
-  expect(digest(await readFile(image))).toBe(manifest.companion.sha256);
-  console.info('Owned OpenCode native qualification',JSON.stringify({productSource,clientSha256:manifest.clientSha256,companionSha256:manifest.companion.sha256,versions:manifest.captures.map(value=>value.version),messages:originals.map(value=>value.messages.length),readingPosition:{...position,refreshedTop:refreshedPosition,overflowQualified:readingOverflow},databaseHashes:before.map(value=>value.hash)}));
-  await disconnectOwnedSsh(gui,terminal);
-});
+},240_000);
 
 it('pans the expanded D-pad through one native held pointer and stops bytes in its original SSH receiver',async()=>{
   fixture.captureSafe=false;

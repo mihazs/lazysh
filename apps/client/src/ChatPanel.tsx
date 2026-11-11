@@ -562,7 +562,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {["claude", "grok-acp", "opencode", "codex"].includes(agent) && (
           <label>
             {t("chatView")}
+            {/* Changing Agent can reset View in code. WebKit then fires no change when the user picks
+                the option it last reported, so each agent gets a fresh select. */}
             <select
+              key={agent}
               value={view}
               onChange={(event) => setView(event.target.value)}
             >

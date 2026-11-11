@@ -35,6 +35,9 @@ import androidx.core.view.WindowCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.Espresso.onData
+import org.hamcrest.Matchers.anything
+import android.widget.ListView
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
@@ -3530,6 +3533,11 @@ class NativeWorkspaceTest {
                 require(labels.length() == 1 && labels.getString(0).length in 1..128)
                 labels.getString(0)
             }
+            // The popup opens scrolled to the current choice, so an option further down has no row
+            // view yet. Scroll its row on screen by the select's option index before matching it.
+            val position = evaluate(scenario, "Array.from(document.querySelector(${JSONObject.quote(selector)}).options).findIndex(x=>x.value===${JSONObject.quote(value)})").toInt()
+            require(position >= 0) { "Owned select option must exist" }
+            onData(anything()).inAdapterView(isAssignableFrom(ListView::class.java)).inRoot(isDialog()).atPosition(position).check(matches(isDisplayed()))
             val option = onView(withText(transportLabel)).inRoot(isDialog())
             option.check(matches(isDisplayed()))
             println("lazysh SSH UI: native transport chooser ready")
@@ -3618,14 +3626,14 @@ class NativeWorkspaceTest {
         }
         val bytes = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path").use { descriptor ->
             android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                val buffer = ByteArray(16 * 1024 + 1)
+                val buffer = ByteArray(32 * 1024 + 1)
                 var count = 0
                 while (count < buffer.size) {
                     val read = stream.read(buffer, count, buffer.size - count)
                     if (read < 0) break
                     count += read
                 }
-                require(count <= 16 * 1024) { "Owned SSH fixture exceeds bound" }
+                require(count <= 32 * 1024) { "Owned SSH fixture exceeds bound" }
                 buffer.copyOf(count)
             }
         }
@@ -3764,11 +3772,19 @@ class NativeWorkspaceTest {
                       owned.screen===document.querySelector('.terminal-canvas .xterm-screen') && owned.tab===document.querySelector('[role=tab]') && document.querySelectorAll('[role=tab]').length===1;})()
                 """))
             }
-            fun exactMessages(): String = """
-                (()=>{const expected=$messages,cards=Array.from(document.querySelectorAll('.chat-conversation-messages .chat-message'));
-                  return cards.length===expected.length && cards.every((card,i)=>card.querySelectorAll('p').length===1 &&
-                    card.querySelector('h4')?.textContent===expected[i].role && card.querySelector('p')?.textContent===expected[i].text);})()
-            """
+            // The host fixture carries the page functions the Linux case evaluates too (tests/support/recordedCards.ts).
+            val page = recorded.getJSONObject("page")
+            fun pageCall(name: String, argument: JSONArray, observe: Boolean = false) = "(${page.getString(name)})($argument,$observe)"
+            fun exactMessages(): String = pageCall("messages", messages)
+            fun awaitPage(stage: String, name: String, argument: JSONArray) {
+                try {awaitDocument(scenario, stage, pageCall(name, argument))}
+                catch (failure: Throwable) {
+                    runCatching {failure.addSuppressed(AssertionError("Recorded page observation: " + evaluate(scenario, pageCall(name, argument, true))))}
+                    throw failure
+                }
+            }
+            val cards = recorded.getJSONArray("cards")
+            require(cards.length() == 8)
             var primary: Throwable? = null
             try {
                 terminalProof(false)
@@ -3786,7 +3802,7 @@ class NativeWorkspaceTest {
                         if (index > 0) ".chat-panel input[required]:not([placeholder])" to source.getString("sessionId") else null)
                     for ((selector, value) in fields) replaceNativeText(scenario, selector, value)
                     closeSoftKeyboard();clickButton("Open transcript")
-                    awaitDocument(scenario, "exact synthetic recorded source $index", exactMessages())
+                    awaitPage("exact synthetic recorded source $index", "messages", messages)
                     owner()
                 }
                 val draft = "Owned unsent Android recorded Conversation draft"
@@ -3845,8 +3861,24 @@ class NativeWorkspaceTest {
                 // Clear it so the fresh proof below types into an empty draft.
                 clickButton("Clear draft")
                 awaitDocument(scenario, "cleared staged draft", "document.querySelector('.terminal-compose textarea')?.value===''")
+                // Plans, questions, turn state, Markdown and thinking from the companion's real pages.
+                sessionView(scenario, "Transcript")
+                for (index in 0 until cards.length()) {
+                    val card = cards.getJSONObject(index)
+                    val agent = card.getString("agent")
+                    require(agent in setOf("claude", "codex", "opencode") && card.getString("view") in setOf("conversation", "records"))
+                    require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/recorded-conversations/cards/[a-z0-9-]+[.](jsonl|db)").matches(card.getString("path")))
+                    selectOwnedOption(".chat-panel select:has(option[value='codex'])", agent)
+                    selectOwnedOption(".chat-panel select:has(option[value='conversation'])", card.getString("view"))
+                    replaceNativeText(scenario, path, card.getString("path"))
+                    if (agent == "opencode") replaceNativeText(scenario, ".chat-panel input[required]:not([placeholder])", card.getString("sessionId"))
+                    closeSoftKeyboard();clickButton("Open transcript")
+                    awaitPage("recorded cards: ${card.getString("label")}", "cards", card.getJSONArray("checks"))
+                    owner()
+                }
+                sessionView(scenario, "Terminal")
                 terminalProof(true);owner()
-                println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage and fresh original SSH proof completed")
+                println("lazysh recorded Conversation: synthetic Codex and OpenCode V1/V2 exact; overflowing Home/Refresh, reader return, unsent Stage, ${cards.length()} recorded card pages and fresh original SSH proof completed")
             } catch (failure: Throwable) {primary = failure;throw failure}
             finally {
                 try {assertEquals("Remove only the owned recorded observation", "true", evaluate(scenario,

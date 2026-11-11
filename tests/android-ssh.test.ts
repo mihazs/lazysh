@@ -2440,7 +2440,7 @@ test('native toolbar paint observation distinguishes latched Shift from released
 });
 
 test('recorded companion preflight compares full protocol values independently of JSON object key order',async()=>{
-  const owner=await readFile(join(import.meta.dir,'support/androidSsh.ts'),'utf8');
+  const owner=await readFile(join(import.meta.dir,'support/recordedConversation.ts'),'utf8');
   const expression=owner.split("const page=JSON.parse(await control.finish('synthetic recorded companion preflight',5000));")[1].split('\n  }')[0];
   const {isDeepStrictEqual}=await import('node:util');
   const source={agent:'codex',sessionId:'owned-session',messages:[{role:'user',text:'Original question\nwith interior whitespace'},{role:'assistant',text:'Original complete answer'}]};
@@ -2477,14 +2477,13 @@ test('recorded Android routing preserves the ordinary owner and uses its own rep
   expect(new Set([specification.codexThreadId,...Object.values(specification.opencodeSessions)]).size).toBe(3);
   const texts=Object.values(specification.labels).map(label=>specification.messages.map((message:{text:string})=>`${label}: ${message.text}`));
   for(let i=0;i<texts.length;i++)for(let j=0;j<i;j++)for(let message=0;message<2;message++)expect(texts[i][message]).not.toBe(texts[j][message]);
-  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const body=kotlin.split('fun verifyRecordedConversations()')[1].split('fun verifyCompanionInstallation()')[0];
-  const expression=body.match(/fun exactMessages\(\): String = """([\s\S]+?)"""/)![1];
+  // The shared page function both native cases evaluate, against a minimal Chat panel.
+  const {recordedPageCall}=await import('./support/recordedCards');
   const {english:en}=await import('../apps/client/src/i18n/en');
   const check=(expected:string[],actual:string[],paragraphs=1,firstRole=en.chatRoleUser)=>{
-    const source=expression.replace('$messages',JSON.stringify(expected.map((text,index)=>({role:index?'assistant':'user',text}))));
+    const source=recordedPageCall('messages',expected.map((text,index)=>({role:index?'assistant':'user',text})));
     const cards=actual.map((text,index)=>({querySelectorAll:()=>Array.from({length:paragraphs},()=>({})),querySelector:(selector:string)=>({textContent:selector==='h4'?(index?en.chatRoleAssistant:firstRole):text})}));
-    return Function('document',`return (${source});`)({querySelectorAll:()=>cards});
+    return Function('document',`return (${source});`)({querySelector:()=>({querySelectorAll:()=>cards})});
   };
   for(let i=0;i<texts.length;i++){
     expect(check(texts[i],texts[i])).toBe(true);
