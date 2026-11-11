@@ -2099,6 +2099,7 @@ export const english = {
   agentImageOverLimit: "This image cannot be previewed here: only PNG and JPEG images up to 48 KiB and about one megapixel are shown. View it in the terminal.",
   agentViewStageOnly: "This session cannot take confirmed input. Use Stage in terminal to send a draft.",
   agentViewTurn: "Turn",
+  agentPlanProgress: "{{done}} of {{total}}",
   agentViewActivity: "Activity ({{count}})",
   agentViewElapsed: "Time since this turn started",
   agentViewOptions: "Agent view options",

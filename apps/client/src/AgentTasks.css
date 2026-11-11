@@ -1,0 +1,6 @@
+.agent-plan-chip { display: grid; gap: 6px; margin-inline: 12px; min-width: 0; }
+.agent-plan-chip > button { display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0; padding: 6px 12px; text-align: start; border: 1px solid var(--border); border-radius: 999px; background: var(--theme-control, transparent); color: inherit; }
+.agent-plan-chip > button > span:first-of-type { flex: none; font-weight: 600; }
+.agent-plan-chip .agent-plan-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.agent-plan-chip > div { max-height: 40vh; overflow-y: auto; }
+.agent-plan-chip .chat-card { margin-block: 0; }
