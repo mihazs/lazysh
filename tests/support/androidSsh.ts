@@ -219,6 +219,32 @@ export function gradleFailureClasses(stdout:string,stderr:string) {
   return {scope:'last-output-window-only',...flags,unclassified:!Object.values(flags).some(Boolean)};
 }
 
+// Gradle writes one JUnit file per device under <results>/connected/debug/flavors/<flavor>/. Its failure text
+// is the test's own assertion message (stage names, closed states, geometry), not fixture output. At most four
+// cases are reported, each as the first message line and the first app frame, 400 printable characters each,
+// with 32-digit hex nonces masked.
+const xmlText=(value:string)=>value.replace(/&(lt|gt|amp|quot|apos);/g,(_,name:string)=>({lt:'<',gt:'>',amp:'&',quot:'"',apos:"'"}[name as 'lt']));
+const failureLine=(line:string)=>xmlText(line).trim().replace(/[^\x20-\x7e]/g,'?').replace(/\b[0-9a-f]{32}\b/g,'<nonce>').slice(0,400);
+export function instrumentationFailures(xml:string) {
+  const failures:{test:string;failure:string;at?:string}[]=[];
+  for(const match of xml.matchAll(/<testcase\b[^>]*?\sname="([^"]*)"[^>]*>\s*<(?:failure|error)\b[^>]*>([\s\S]*?)<\/(?:failure|error)>/g)) {
+    if(failures.length===4)break;
+    const lines=match[2].split('\n'),frame=lines.find(line=>/^\s*at app\.lazysh\.client\./.test(line));
+    failures.push({test:failureLine(match[1]).slice(0,120),failure:failureLine(lines[0]),...(frame?{at:failureLine(frame)}:{})});
+  }
+  return failures;
+}
+export async function reportInstrumentationFailures(directory:string) {
+  try {
+    const failures:ReturnType<typeof instrumentationFailures>=[];
+    for(const name of (await readdir(directory,{recursive:true})).filter(name=>/(^|\/)TEST-[^/]+\.xml$/.test(name)).slice(0,4)) {
+      const path=join(directory,name),metadata=await lstat(path);
+      if(metadata.isFile() && metadata.size<=262144)failures.push(...instrumentationFailures(await readFile(path,'utf8')));
+    }
+    if(failures.length)console.error('Owned instrumentation failure '+JSON.stringify(failures.slice(0,4)));
+  } catch {/* The report never replaces the primary failure, and absent results are not an error. */}
+}
+
 type AndroidCleanupStage='reverse'|'control'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
@@ -710,6 +736,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?'tmux-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
+      await reportInstrumentationFailures(directory);
       const crash=await crashes?.stop();
       const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;
       // Sample before an inspection adb command could implicitly restart its server.

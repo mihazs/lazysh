@@ -1,5 +1,8 @@
 import {expect,spyOn,test} from 'bun:test';
-import {androidBiometricAcceptance,touchRequest,type BiometricCommand,type BiometricInstrumentation} from './support/androidBiometric';
+import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {androidBiometricAcceptance,instrument,touchRequest,type BiometricCommand,type BiometricInstrumentation} from './support/androidBiometric';
 
 const nonce='c'.repeat(32),secrets={nonce,pin:'482915'},env={ANDROID_SERIAL:'emulator-5580',ANDROID_HOME:'/sdk'};
 const adb='/sdk/platform-tools/adb',noPause=async()=>{};
@@ -89,3 +92,17 @@ test('touch requests accept only this run, a positive sequence and the two fixtu
 test.skipIf(process.env.LAZYSH_ANDROID_UI_BIOMETRIC!=='1')('actual Android enrolled fingerprint unlock, resume lock, export and host deletion',async()=>{
   await androidBiometricAcceptance();
 },660_000);
+
+test('a failed biometric instrumentation names its failed case in the job log and keeps the original error',async()=>{
+  const android=await mkdtemp(join(tmpdir(),'lazysh-biometric-report-')),logged=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    const results=join(android,'app/build/outputs/androidTest-results/biometric-vault/connected/debug/flavors/universal');
+    const gradlew=join(android,'gradlew');
+    await writeFile(gradlew,`#!/bin/sh\nmkdir -p '${results}'\ncat > '${results}/TEST-device-_app-universal.xml' <<'XML'\n<testsuites><testsuite><testcase name="null"><failure>java.lang.IllegalStateException: Fingerprint enrollment did not complete after 311 touches\nat app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)\n</failure></testcase></testsuite></testsuites>\nXML\nexit 1\n`,{mode:0o700});
+    const run=instrument(gradlew,[]);
+    await expect(run.result).rejects.toThrow('Owned fixture failed: actual Android enrolled-fingerprint vault instrumentation; exit=1');
+    expect(logged).toHaveBeenCalledWith('Owned instrumentation failure '+JSON.stringify([{test:'null',
+      failure:'java.lang.IllegalStateException: Fingerprint enrollment did not complete after 311 touches',
+      at:'at app.lazysh.client.NativeBiometricVaultTest$Companion.enroll(NativeBiometricVaultTest.kt:130)'}]));
+  } finally {logged.mockRestore();await rm(android,{recursive:true,force:true});}
+});

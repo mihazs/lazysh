@@ -5555,7 +5555,7 @@ class NativeWorkspaceTest {
             fun received(expectedMoves: Int, ended: Boolean) {
                 while(true) {
                     val sample=JSONObject(evaluate(scenario,"(()=>{const owned=window[$key];return owned?.token===$token?owned.read():null;})()",remaining()))
-                    assertTrue("Original trusted contact must reach the actual scroll owner",sample.getBoolean("available")&&sample.getBoolean("retained")&&sample.getBoolean("trusted")&&sample.getBoolean("sameContact")&&sample.getBoolean("insideOwner")&&sample.getBoolean("monotonicUp")&&!sample.getBoolean("overflow"))
+                    assertTrue("Original trusted contact must reach the actual scroll owner: receipt=$sample",sample.getBoolean("available")&&sample.getBoolean("retained")&&sample.getBoolean("trusted")&&sample.getBoolean("sameContact")&&sample.getBoolean("insideOwner")&&sample.getBoolean("monotonicUp")&&!sample.getBoolean("overflow"))
                     assertEquals("No cancel may qualify an upward stroke",0,sample.getInt("cancels"))
                     assertTrue("Touch counts remain one start/two moves/one end",sample.getInt("starts")<=1&&sample.getInt("moves")<=2&&sample.getInt("ends")<=1)
                     if(sample.getInt("starts")==1&&sample.getInt("moves")==expectedMoves&&sample.getInt("ends")== (if(ended)1 else 0)) {
