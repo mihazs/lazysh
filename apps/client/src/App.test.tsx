@@ -798,6 +798,20 @@ it('tears down known pending bootstrap IDs on lock while retaining an adopted te
   expect(mocks.api.adoptSession).toHaveBeenCalledTimes(1);
 });
 
+it('asks for Android notification permission only after the connected session is adopted',async()=>{
+  const userAgent=vi.spyOn(navigator,'userAgent','get').mockReturnValue('Android');
+  try {
+    mocks.api.connect.mockResolvedValue({sessionId:'android-prompt'});
+    let adopted!:()=>void;
+    mocks.api.adoptSession.mockReturnValue(new Promise<void>(resolve=>{adopted=resolve;}));
+    const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+    await screen.findByText('Live SSH terminal');await waitFor(()=>expect(mocks.api.adoptSession).toHaveBeenCalledWith('android-prompt'));
+    expect(mocks.invoke).not.toHaveBeenCalledWith('request_notification_permission',undefined,expect.anything());
+    await act(async()=>adopted());
+    await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('request_notification_permission',undefined,expect.anything()));
+  } finally {userAgent.mockRestore();}
+});
+
 it('closes known pending restoration IDs when lock revokes the old mount',async()=>{
   enableTransports();
   vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home',mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000}}]):null);

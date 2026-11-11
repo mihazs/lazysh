@@ -3006,6 +3006,10 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedRecordedConversationsThroughRealUi() = ownedSshUi(false, requireRecorded = true)
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
+    @Test fun ownedSshSurvivesDeniedNotificationPermission() {
+        org.junit.Assume.assumeTrue(Build.VERSION.SDK_INT >= 33)
+        ownedSshUi(false, requireDeniedNotification = true)
+    }
     @Test fun ownedSshDpadPanThroughRealUi() = ownedSshUi(false, requireDpad = true)
     @Test fun ownedSshImeTransactionsThroughRealUi() = ownedSshUi(false, requireIme = true)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
@@ -3578,6 +3582,47 @@ class NativeWorkspaceTest {
                 context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
         }
     }
+    /** A first install that has never answered the prompt: no grant, no remembered request, no user flags. */
+    private fun denyOwnedNotifications() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+            instrumentation.uiAutomation.revokeRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+        instrumentation.uiAutomation.executeShellCommand("pm clear-permission-flags ${context.packageName} android.permission.POST_NOTIFICATIONS user-set user-fixed")
+            .use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes() }
+        context.getSharedPreferences("lazysh-session-notification", Context.MODE_PRIVATE).edit().clear().commit()
+    }
+
+    /** The prompt appears once the first session is adopted; denying it must leave the session running. */
+    private fun denyFirstNotificationPrompt() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val deny = device.wait(Until.findObject(By.res("com.android.permissioncontroller", "permission_deny_button")), 60_000)
+        assertNotNull("First connection must show notification permission", deny)
+        deny!!.click()
+        assertEquals(PackageManager.PERMISSION_DENIED,
+            InstrumentationRegistry.getInstrumentation().targetContext.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
+    }
+
+    /** Denied: no notification reaches the shade, and the app's own Settings row opens the system page and returns. */
+    private fun openNotificationSettingsAfterDenial(scenario: ActivityScenario<MainActivity>) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val device = UiDevice.getInstance(instrumentation)
+        assertFalse("Denied notifications must not be visible", context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled())
+        assertTrue("Notification shade must open", device.openNotification())
+        assertFalse("Denied connection notification must stay out of the shade", device.hasObject(By.text(context.getString(R.string.session_notification_title))))
+        assertTrue(device.pressBack())
+        // A phone-width connected workspace keeps Preferences in its tools menu.
+        if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        else workspaceMenuAction(scenario, "Preferences")
+        preferencesCategory(scenario, "android-notifications")
+        webButton("Open Android notification settings")
+        assertTrue("Android notification settings must open", device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
+        assertTrue(device.pressBack())
+        awaitDocument(scenario, "returned to application preferences", "Boolean(document.querySelector(\"button[aria-label='Close Preferences']\"))")
+        closePreferences()
+    }
 
     /** Cancels an open connection or trust dialog; an already-visible error does not abort the wait. */
     private fun dismissOwnedAuthentication(scenario: ActivityScenario<MainActivity>) {
@@ -3679,7 +3724,7 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false) {
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
         require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
@@ -3716,7 +3761,7 @@ class NativeWorkspaceTest {
         // grants it first, so no system prompt covers the WebView. The Mosh background case
         // proves the granted-permission notification record.
         val context = instrumentation.targetContext
-        grantOwnedNotifications()
+        if (requireDeniedNotification) denyOwnedNotifications() else grantOwnedNotifications()
         val scenario = NativeActivityFixture.scenario
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
@@ -4087,10 +4132,15 @@ class NativeWorkspaceTest {
             closeSoftKeyboard()
             clickButton("Connect")
             trustOwnedHostKey(scenario, fixture.getString("fingerprint"), (if (useMosh) "10.0.2.2:" else "127.0.0.1:") + fixture.getInt("port"))
+            if (requireDeniedNotification) denyFirstNotificationPrompt()
             if (requireMoshBackground) {
                 verifyMoshBackground(scenario, fixture, name, label)
             } else if (!requireHerdrMosh && !requireAttachments) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
+            }
+            if (requireDeniedNotification) {
+                openNotificationSettingsAfterDenial(scenario)
+                awaitDocument(scenario, "returned to the connected workspace", screenContains(fixture.getString("prompt")))
             }
             if (requireRecorded) verifyRecordedConversations() else if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
                 awaitDocument(scenario, "saved default Herdr entered through Mosh", """

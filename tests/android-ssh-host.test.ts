@@ -102,6 +102,10 @@ test.skipIf(process.platform!=='linux')('owned server teardown retires an admitt
   } finally {await client.stop();await fixture.stop();}
 },10_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('Android denied notification permission preserves SSH and opens system settings',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,undefined,true);
+},610_000);
+
 test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH preserves host groups and rejects lost supervisor ownership',async()=>{
   const groups=await readFile('/etc/group');
   await verifyCompanionFixture(true);

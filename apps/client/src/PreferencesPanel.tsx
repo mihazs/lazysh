@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import FontDownloadPanel from "./FontDownloadPanel";
 import AppIconPanel from "./AppIconPanel";
-import {useMountedAccess} from './access';
+import {useMountedAccess,useProtectedInvoke} from './access';
+import {isAndroidApp} from './isAndroidApp';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
@@ -32,6 +33,7 @@ const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):
 export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[];footer?:string}={}) {
   useUi();
   const preferences = usePreferences();
+  const invoke = useProtectedInvoke();
   const locale=useNativeLocale();
   const owner=useMountedAccess();
   const current=()=>owner.mounted.current && owner.access.current();
@@ -156,6 +158,10 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
       }} />
 
 </>},
+...(isAndroidApp() ? [{id:"android-notifications",section:"general",title:t("androidNotificationTitle"),content:<>
+    <p>{t("androidNotificationSettingsHelp")}</p>
+    <button onClick={() => void invoke('open_notification_settings').catch(() => setError(t("androidNotificationSettingsError")))}>{t("inboxAndroidSettings")}</button>
+</>}] : []) as SettingsPage[],
 {id:"language",section:"general",title:t("preferencesCategoryLanguage"),value:t(languageLabels[preferences.uiLanguage]),content:<>
 
     <fieldset className="language-picker" aria-disabled={languageBusy || undefined}>

@@ -24,6 +24,7 @@ import {
 import { bindProtectedApi, bindProtectedInvoke, captureAccess, useProtectedInvoke, type AccessLease } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
 import ThemeLinkPanel from './ThemeLinkPanel';
+import {isAndroidApp} from './isAndroidApp';
 import {captureLaunchError, ownedLaunchError, useDesktopLaunch, type DesktopHostLaunch, type DesktopMuxRequest} from './useDesktopLaunch';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
@@ -2003,7 +2004,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function adoptRetained(session: LiveSession) {
     // The persistent registry owns the terminal before native adoption can succeed or become stale.
     retainSession(session.id);
-    void api.adoptSession(session.id).catch(() => {
+    void api.adoptSession(session.id).then(() => {
+      // Android's one-time prompt pauses the WebView, so it waits until no connect can be cancelled by it.
+      if (isAndroidApp()) void invoke('request_notification_permission').catch(() => {});
+    }, () => {
       // Native revokes pending sessions itself. Never tear down an already-adopted terminal on a stale acknowledgement.
       if (mounted.current) setError(t("appCouldNotConfirmTheConnectionCheckThisTerminalBefore"));
     });
