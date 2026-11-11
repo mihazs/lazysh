@@ -5,7 +5,7 @@
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path Cargo.toml --locked",
-    "test:mosh": "cargo test --manifest-path Cargo.toml --test official_server --locked official_server_utf8_input_resize_shutdown_and_parallel_isolation -- --ignored",
+    "test:mosh": "cargo test --manifest-path Cargo.toml --test official_server --locked -- --ignored --exact official_server_utf8_input_resize_shutdown_and_parallel_isolation official_server_redraws_question_after_keyboard_resize",
     "test:android-mosh": "cargo test --manifest-path Cargo.toml --test official_server --locked android_emulator_official_server_interoperability -- --ignored",
     "test:ios-mosh": "cargo test --manifest-path Cargo.toml --test official_server --locked ios_simulator_official_server_interoperability -- --ignored --show-output",
     "lint": "cargo clippy --manifest-path Cargo.toml --locked --all-targets -- -D warnings",
