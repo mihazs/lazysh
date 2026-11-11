@@ -4,12 +4,31 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 
 type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>};
-declare global {interface Window {agentView:Fixture}}
+declare global {interface Window {agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
+
+/** The commands every synthetic host answers the same way; each fixture adds its own on top. */
+async function installBaseHost(page:Page) {
+  await installNativeBridge(page);
+  await page.addInitScript(()=>{
+    let connections=0;
+    window.agentViewBase=command=>{
+      switch(command) {
+        case 'list_hosts':return {value:[{id:'fixture',name:'Fixture',hostname:'fixture.invalid',username:'owner',port:22}]};
+        case 'local_capability':return {value:{available:false,reason:'Synthetic Agent view fixture.'}};
+        case 'transport_capabilities':return {value:{mosh:false,et:false}};
+        case 'has_credentials':return {value:false};
+        case 'connect':return {value:{sessionId:`ssh-${++connections}`}};
+        case 'apple_status_capability':return {value:{available:false,reason:'Synthetic fixture.'}};
+        default:return command.startsWith('plugin:event|') || ['resize','ack_output','disconnect','cancel_credential_auth'].includes(command)?{value:undefined}:undefined;
+      }
+    };
+  });
+}
 
 /** Two restored tmux terminals; hook reports tie a running Codex conversation to pane %3 of `work` only. */
 async function open(page:Page) {
-  await installNativeBridge(page);
+  await installBaseHost(page);
   await page.addInitScript(({snapshot,bound,transcript})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'tmux',name:'work'}},{hostId:'fixture',attached:{kind:'tmux',name:'other'}}]));
     const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{}};
@@ -17,13 +36,8 @@ async function open(page:Page) {
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
     // The synthetic agent answers each submitted prompt; the terminal echoes it once, as a TUI would.
     const submit=(text:string)=>{echo('display-work',`\r\n> ${text}\r\n`);fixture.turns.push({prompt:text,answer:`Answered: ${text}`});};
-    let connections=0;
     window.nativeFixtureInvoke=async(command,args)=>{
-      if(command==='list_hosts')return [{id:'fixture',name:'Fixture',hostname:'fixture.invalid',username:'owner',port:22}];
-      if(command==='local_capability')return {available:false,reason:'Synthetic Agent view fixture.'};
-      if(command==='transport_capabilities')return {mosh:false,et:false};
-      if(command==='has_credentials')return false;
-      if(command==='connect')return {sessionId:`ssh-${++connections}`};
+      const base=window.agentViewBase(command);if(base)return base.value;
       if(command==='attach_tmux'){
         fixture.attachments++;const session=`display-${String(args.name)}`;
         fixture.channels[session]=args.events as Fixture['channels'][string];
@@ -55,8 +69,6 @@ async function open(page:Page) {
         ])};
       }
       if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
-      if(command==='apple_status_capability')return {available:false,reason:'Synthetic fixture.'};
-      if(command.startsWith('plugin:event|') || ['resize','ack_output','disconnect','cancel_credential_auth'].includes(command))return;
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
   },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,transcript});
@@ -203,4 +215,71 @@ test('phone never offers Both',async({page},testInfo)=>{
   await expect(page.locator('.terminal-pane:visible .xterm-rows')).toContainText('work scrollback 40');
   await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
   expect(await page.evaluate(()=>Boolean(document.activeElement?.closest('.terminal-pane')))).toBe(false);
+});
+
+/** Stock Herdr host: six live agents, fifty ended hook reports without pane identity, and a companion that may predate conversation reading. */
+async function openHerdr(page:Page,companion:boolean) {
+  await installBaseHost(page);
+  await page.addInitScript(companion=>{
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
+    const sessions=['claude-0','claude-1','claude-2','claude-3','claude-4','claude-5'];
+    const panes=sessions.map((id,index)=>({workspace_id:`w${index}`,tab_id:`w${index}:t1`,pane_id:`w${index}:p1`,terminal_id:`term-${index}`,cwd:`/home/owner/dev/project-${index}`,focused:false,agent_status:index===1?'working':'idle'}));
+    const tree={workspaces:panes.map((pane,index)=>({workspace_id:pane.workspace_id,label:`[${index+1}] project-${index}`,focused:false,agent_status:pane.agent_status})),
+      tabs:panes.map((pane,index)=>({workspace_id:pane.workspace_id,tab_id:pane.tab_id,label:`tab ${index}`,number:1,focused:false,agent_status:pane.agent_status})),panes,
+      agents:panes.map((pane,index)=>({terminal_id:pane.terminal_id,workspace_id:pane.workspace_id,tab_id:pane.tab_id,pane_id:pane.pane_id,name:null,agent:'claude',agent_status:pane.agent_status,
+        agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
+    const reports=Array.from({length:50},(_,index)=>({sessionId:`ended-${index}`,agent:'Claude Code',project:`/home/owner/old-${index}`,state:'done',updatedAt:new Date().toISOString(),summary:'Session ended',paneId:null,eventCount:3}));
+    (window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture={conversations:[],entered:[]};
+    const record=(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture;
+    window.nativeFixtureInvoke=async(command,args)=>{
+      const base=window.agentViewBase(command);if(base)return base.value;
+      if(command==='attach_multiplexer')return {sessionId:'display-owned'};
+      if(command==='multiplexer_sessions')return [{name:'owned'}];
+      if(command==='herdr_tree')return tree;
+      if(command==='herdr_action'){record.entered.push(args.action);return;}
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
+      if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
+      if(command==='agent_herdr_conversation'){
+        const target=args.target as {agentSessionId:string};record.conversations.push(target.agentSessionId);
+        if(!companion)throw {kind:'herdr_conversation_companion_required',message:'Update the companion'};
+        return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+          {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'t',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'ls'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
+      }
+      if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.3',support:'full',missing:[]}],sessions:[]};
+      throw new Error(`Unexpected Agent view fixture command: ${command}`);
+    };
+  },companion);
+  await page.goto('/');
+  await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+}
+const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture);
+
+test('stock Herdr: the Agent view lists the live agents, and selecting one opens its native chat',async({page})=>{
+  await openHerdr(page,true);
+  const agent=agentView(page);
+  // The live rows are reachable on screen and the fifty ended hook reports are not listed.
+  const row=agent.locator('article.agent-card').filter({hasText:'project-5'});
+  await expect(agent.locator('article.agent-card')).toHaveCount(6);
+  await expect(agent.getByRole('region',{name:'Last-reported agent sessions',exact:true})).toHaveCount(0);
+  await row.scrollIntoViewIfNeeded();await expect(row).toBeInViewport();
+  await expect(row).toContainText('claude');await expect(row).toContainText('/home/owner/dev/project-5');await expect(row).toContainText('[6] project-5');
+  await row.getByRole('button',{name:/Open conversation/}).click();
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(agent.getByRole('region',{name:'Turn',exact:true})).toHaveCount(1);
+  await expect(agent.locator('header')).toContainText('Claude Code · project-5');
+  expect([...new Set((await herdrFixture(page)).conversations)]).toEqual(['00000005-0000-4000-8000-000000000000']);
+  await agent.getByRole('button',{name:'Enter session',exact:true}).click();
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'}]);
+});
+
+test('stock Herdr with an old companion: the Agent view says to update it and still enters the pane',async({page})=>{
+  await openHerdr(page,false);
+  const agent=agentView(page);
+  await agent.locator('article.agent-card').filter({hasText:'project-0'}).getByRole('button',{name:/Open conversation/}).click();
+  await expect(agent.getByRole('alert')).toContainText('too old to read agent conversations');
+  await expect(agent.getByRole('alert')).toBeInViewport();
+  await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
+  await agent.getByRole('button',{name:'Enter session',exact:true}).click();
+  await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w0:p1'}]);
 });

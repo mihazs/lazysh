@@ -182,7 +182,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,allowStage=true,onBoundInvalid }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;allowStage?:boolean;onBoundInvalid?:()=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,allowStage=true,onBoundInvalid,onOpenCompanion }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -640,6 +640,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           {uiErrorText(error)}
         </p>
       )}
+      {error instanceof LocalUiError && error.key === "herdrConversationCompanion" && onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t("companionInstallTitle")}</button>}
+      {bound && busy && !opened && !error && <p role="status">{t("chatReading")}</p>}
       {opened && !bound && (
         <p>
           <code>{opened.path}</code> ·{" "}

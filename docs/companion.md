@@ -80,6 +80,16 @@ and offers **Show terminal** and **Choose transcript**, the manual picker. A pan
 is server-scoped; the binding is a display convenience, not proof that the agent is
 still running, and it grants no input authority.
 
+In a session attached to Herdr there is no `TMUX_PANE`, so the Agent view lists the
+attached server's live agents instead (agent kind, status, folder, workspace and tab)
+and never the last-reported sessions. Selecting a row opens the conversation behind
+the session ID Herdr reports for that pane, resolved on the host by
+`lazysh-agent herdr-conversation` and re-checked against the live Herdr tree before
+and after the read. It is labelled unverified for that pane and cannot stage or send
+input. A row with no single reported Claude Code or Codex conversation says so, and
+**Enter session** opens the exact pane. A host companion without
+`herdr-conversation` makes the view ask you to update it from Agents.
+
 The companion's metadata lookup is
 `lazysh-agent reported-history --session-id=OPAQUE_ID`; use the exact reported
 session identifier, not an inferred filename. It obeys the host's transcript

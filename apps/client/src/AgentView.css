@@ -7,6 +7,15 @@
 .agent-view-header > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-inline-start: auto; flex-shrink: 0; }
 .agent-view-header > button + button { margin-inline-start: 0; }
 .agent-view-fallback, .agent-view > :is(p, [role="status"]) { margin: 12px 18px; }
+/* A long list scrolls inside the view; it must never push the live agents out of reach. */
+.agent-view > :is(.agent-view-picker, .herdr-agents) { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.agent-view-picker { display: grid; gap: 8px; align-content: start; margin: 12px 18px; }
+.agent-view-picker > button { min-height: 44px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.agent-view > .button-row { margin: 8px 18px; flex-shrink: 0; }
+.agent-view .agent-card-summary { display: grid; gap: 4px; width: 100%; min-height: 44px; margin: 0 0 8px; padding: 0; text-align: start; background: transparent; border: 0; color: inherit; font: inherit; white-space: normal; }
+.agent-view .agent-card-summary > :is(span, small) { font-size: 12px; line-height: 1.5; }
+.agent-view .agent-card-summary > code { margin-bottom: 0; }
+.agent-view .agent-card-summary > .agent-row-action { color: var(--accent); font-weight: 600; }
 .agent-view-fallback .button-row button { min-height: 44px; }
 .agent-view .agent-turn { display: grid; gap: 8px; align-content: start; }
 /* Prompt and answer read as chat bubbles: the prompt on the trailing side, the answer as plain text. */
@@ -23,6 +32,7 @@
 .agent-view > .chat-panel[data-bound] > .chat-draft { flex-shrink: 0; max-height: 45%; overflow: auto; margin-block: 8px 12px; }
 .agent-view > .chat-panel[data-bound] > .chat-follow-controls { flex-shrink: 0; margin-inline: 18px; }
 .agent-view > .chat-panel[data-bound] .chat-draft-header { padding: 0; }
+.agent-view > .chat-panel[data-bound] > :is(.inline-error, .subtle-button) { margin-inline: 18px; }
 .agent-view > .chat-panel[data-bound] .chat-composer { padding-top: 12px; }
 .agent-view > .chat-panel[data-bound] .chat-draft-commands { flex-wrap: nowrap; }
 .agent-view > .chat-panel[data-bound] > .chat-messages { align-content: start; }

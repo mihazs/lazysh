@@ -1,23 +1,25 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {List,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
-import HerdrAgentsPanel from './HerdrAgentsPanel';
+import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, reportedTones} from './AgentStatus';
+import {formatRelativeTime, pathBasename} from './relativeTime';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {t, useUi} from './i18n/core';
 import './AgentView.css';
 
 const conversationAgents: Record<string, BoundConversation['agent']> = {'Claude Code': 'claude', Codex: 'codex'};
+const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex'};
 type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: AgentSession} | {kind: 'bound'; row: AgentSession; conversation: BoundConversation};
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, herdrSession, terminalInput, onShowTerminal, onEnterHerdr}: {
+export default function AgentView({sessionId, shown, tmux, herdrSession, terminalInput, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
   sessionId: string; shown: boolean; tmux: boolean; herdrSession?: string; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
-  onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;
+  onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
   useAccessSnapshot();
@@ -25,7 +27,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
   const invoke = useMemo(() => bindProtectedInvoke(access), [access]);
   const [binding, setBinding] = useState<Binding>({kind: 'finding'});
   const [sessions,setSessions] = useState<AgentSession[]>([]);
-  const [selected,setSelected] = useState<{row?:AgentSession;conversation:BoundConversation}>();
+  const [selected,setSelected] = useState<{row?:AgentSession;conversation:BoundConversation;title?:string;enter?:{server:string;target:HerdrNavigationTarget}}>();
   const [selecting,setSelecting] = useState(false);
   const [choosing,setChoosing] = useState(false);
   const [unavailable,setUnavailable] = useState(false);
@@ -34,6 +36,8 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
   const retained = useRef<{id:string;conversation:BoundConversation} | undefined>(undefined);
   useEffect(() => {
     if (!shown) {setSelecting(false);return;}
+    // Under Herdr the live agents are the evidence; stale hook reports (no pane identity) are not listed.
+    if (herdrSession) {setSessions([]);setBinding({kind:'none'});return;}
     let alive = true, flight = false;
     async function bind() {
       if (flight || document.visibilityState === 'hidden' || !access.current()) return;
@@ -63,7 +67,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
     void bind();
     const timer = setInterval(() => void bind(), 5000);
     return () => {alive = false; request.current++; clearInterval(timer);};
-  }, [shown, sessionId, tmux, invoke, access]);
+  }, [shown, sessionId, tmux, herdrSession, invoke, access]);
   async function openSession(chosen:AgentSession) {
     if(selecting || !shown || !access.current())return;
     const id=++request.current;setSelecting(true);setUnavailable(false);
@@ -90,24 +94,30 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, termina
         <StatusRing tone={reportedTones[row.state]} />
         <strong>{row.agent}</strong>
         <span>{t('agentViewLastReportedState', {state:t(reportedStateNames[row.state])})}</span>
-      </> : <strong>{t('agentViewTitle')}</strong>}
+      </> : <strong>{selected?.title ?? t('agentViewTitle')}</strong>}
       {!selected && reader && <button type="button" className="icon-button" aria-label={t('agentViewSessions')} title={t('agentViewSessions')} aria-expanded={choosing} onClick={()=>setChoosing(value=>!value)}><List size={18} aria-hidden="true"/></button>}
       <button type="button" className="subtle-button" onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true" />{t('agentViewTerminal')}</button>
     </header>
     {binding.kind === 'finding' && !selected && <p role="status">{t('agentViewFinding')}</p>}
-    {!reader && binding.kind !== 'finding' && <div className="agent-view-fallback">
-      {!herdrSession && <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>}
+    {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">
+      <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
       <div className="button-row">
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
       </div>
     </div>}
-    {!selected && (!reader || choosing) && access.current() && sessions.length>0 && <section aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>{sessions.map(session=><button type="button" key={session.sessionId} disabled={selecting} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {t('agentViewLastReportedState', {state:t(reportedStateNames[session.state])})} · {session.sessionId}</button>)}</section>}
-    {unavailable && <p role="status">{t('agentViewSessionUnavailable')}</p>}
-    {herdrSession && !selected && (!reader || choosing) && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} onEnterHerdr={onEnterHerdr} onChooseSession={(agent,id,server,paneId,terminalId)=>{request.current++;setSelecting(false);setUnavailable(false);setSelected({conversation:Object.freeze({agent,path:id,herdr:{herdrSession:server,paneId,terminalId}})});}} />}
-    {selected && <button type="button" onClick={()=>{request.current++;setSelected(undefined);setChoosing(true);setUnavailable(false);}}>{t('agentViewBackSessions')}</button>}
+    {!selected && !herdrSession && (!reader || choosing) && access.current() && sessions.length>0 && <section className="agent-view-picker" aria-label={t('agentViewSessions')}><h3>{t('agentViewSessions')}</h3>
+      {unavailable && <p role="alert">{t('agentViewSessionUnavailable')}</p>}
+      {sessions.map(session=><button type="button" key={session.sessionId} disabled={selecting} onClick={()=>void openSession(session)}>{session.agent} · {session.project} · {t('agentViewLastReportedState', {state:t(reportedStateNames[session.state])})} · {formatRelativeTime(session.updatedAt)}</button>)}</section>}
+    {herdrSession && !selected && (!reader || choosing) && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} onEnterHerdr={onEnterHerdr} onChooseSession={(row,server)=>{
+      request.current++;setSelecting(false);setUnavailable(false);
+      const agent=row.agent_session.agent as BoundConversation['agent'];
+      setSelected({title:[agentNames[agent],row.cwd && pathBasename(row.cwd)].filter(Boolean).join(' · '),enter:{server,target:{kind:'pane',workspace:row.workspace_id,tab:row.tab_id,pane:row.pane_id,terminal:row.terminal_id}},
+        conversation:Object.freeze({agent,path:row.agent_session.value,herdr:{herdrSession:server,paneId:row.pane_id,terminalId:row.terminal_id}})});}} />}
+    {selected && <div className="button-row"><button type="button" onClick={()=>{request.current++;setSelected(undefined);setChoosing(true);setUnavailable(false);}}>{t('agentViewBackSessions')}</button>
+      {selected.enter && onEnterHerdr && <EnterSessionButton server={selected.enter.server} target={selected.enter.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}</div>}
     {reader && selected && <p className="agent-view-note">{t('agentViewSelectedNoStage')}</p>}
     {reader && !selected && !terminalInput && <p className="agent-view-note">{t('agentViewStageOnly')}</p>}
     {kept && <ChatPanel key={selected ? JSON.stringify(selected.conversation) : retained.current?.id} sessionId={sessionId} shown={shown && reader}
-      bound={kept} allowStage={!selected} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} terminalInput={!selected && reader ? terminalInput : undefined} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={!selected} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} terminalInput={!selected && reader ? terminalInput : undefined} />}
   </section>;
 }

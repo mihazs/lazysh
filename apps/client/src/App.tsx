@@ -2433,7 +2433,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <AgentView key={session.id} sessionId={session.id} shown={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "terminal"}
                     tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} terminalInput={terminalInputFor(session,muxTools[session.id])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
-                    onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} />
+                    onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                 ))}
                 {active.connected && view === "usage" && (
                   <>

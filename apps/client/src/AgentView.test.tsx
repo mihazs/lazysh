@@ -145,7 +145,7 @@ it('opens a unique Herdr session through the revalidated host resolver without i
   render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);
   expect(calls('agent_herdr_conversation')).toEqual([]);
-  fireEvent.click(screen.getByRole('button',{name:'Open conversation'}));await advance(0);
+  fireEvent.click(screen.getByRole('button',{name:/Open conversation/}));await advance(0);
   expect(screen.getByText('Herdr reports this session. Its association with this pane is unverified.')).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
   expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
@@ -248,7 +248,7 @@ it('does not open a session with ambiguous IDs or missing history',async()=>{
   host('codex',[row('Codex',null)],'missing',[[]]);
   view.rerender(<AgentView key="other" sessionId="ssh" shown tmux={false} onShowTerminal={()=>{}}/>);
   await advance(0);fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));await advance(0);
-  expect(screen.getByText(/This session's conversation is unavailable/)).toBeTruthy();
+  expect(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getByRole('alert').textContent).toMatch(/This session's conversation is unavailable/);
   expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByLabelText('Transcript path')).toBeNull();
 });
 
@@ -267,22 +267,74 @@ it('drops a pending session choice when the view is hidden',async()=>{
   expect(screen.getByRole('button',{name:/Codex · \/work/})).toHaveProperty('disabled',false);
 });
 
-it('does not let a late reported-history lookup replace a newer Herdr choice',async()=>{
-  const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'session-one'}};
-  let resolve!:(value:unknown)=>void;
-  vi.mocked(invoke).mockImplementation(async command=>{
-    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[row('Codex',null)]};
-    if(command==='agent_reported_history')return new Promise(done=>{resolve=done;});
-    if(command==='multiplexer_sessions')return [{name:'owned'}];
-    if(command==='herdr_tree')return {...herdrNavigationTree,agents:[first]};
-    if(command==='agent_herdr_conversation')return page('codex',turn('Prompt','Herdr answer'));
-    throw new Error('Unexpected command');
+const claude={...herdrNavigationTree.agents[0],agent:'claude',name:null,agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:'session-one'}};
+const stock=(...agents:unknown[])=>vi.mocked(invoke).mockImplementation(async command=>{
+  if(command==='multiplexer_sessions')return [{name:'owned'}];
+  if(command==='herdr_tree')return {...herdrNavigationTree,agents};
+  if(command==='agent_snapshot')return {schemaVersion:1,sessions:[row('Claude Code',null),row('Codex',null,'done')]};
+  throw new Error('unavailable');
+});
+
+it('lists only the live Herdr agents, never the last-reported sessions of the host',async()=>{
+  stock(claude);
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={vi.fn()} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByRole('region',{name:'Live Herdr agents'})).toBeTruthy();
+  expect(screen.queryByRole('region',{name:'Last-reported agent sessions'})).toBeNull();
+  expect(screen.queryByText(/Claude Code-session|Codex-session/)).toBeNull();
+  expect(calls('agent_snapshot')).toEqual([]);expect(calls('agent_reported_history')).toEqual([]);
+  // The row says what it is: agent kind, folder, status, workspace and tab by name.
+  const card=screen.getByText('/work/codex').closest('article')!;
+  expect(within(card).getByText('claude')).toBeTruthy();expect(within(card).getByText('Working')).toBeTruthy();
+  expect(within(card).getByText('owned · Work · Code')).toBeTruthy();
+});
+
+it('opens the agent chat when its row is clicked anywhere and still offers the exact pane',async()=>{
+  stock(claude);
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='agent_herdr_conversation'?page('claude',turn('Prompt','Native answer')):command==='multiplexer_sessions'?[{name:'owned'}]:{...herdrNavigationTree,agents:[claude]});
+  const enter=vi.fn(async()=>{});
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  fireEvent.click(screen.getByText('/work/codex'));await advance(0);
+  const header=screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
+  expect(within(header).getByText('Claude Code · codex')).toBeTruthy();
+  expect(screen.getByText('Native answer')).toBeTruthy();
+  expect(within(screen.getByRole('region',{name:'Turn'})).getByRole('article',{name:'user'})).toBeTruthy();
+  expect(screen.getByText('Herdr reports this session. Its association with this pane is unverified.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Enter session'}));
+  expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
+});
+
+it('tells the user to update an old companion and still lets them enter the pane',async()=>{
+  stock(claude);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+    if(command==='agent_herdr_conversation')throw {kind:'herdr_conversation_companion_required',message:'Update the companion'};
+    return fallback(command,args,options);
   });
-  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onShowTerminal={()=>{}}/>);await advance(0);
-  fireEvent.click(screen.getByRole('button',{name:/Codex · \/work/}));
-  fireEvent.click(screen.getByRole('button',{name:'Open conversation'}));await advance(0);
-  await act(async()=>resolve({schemaVersion:1,sessionId:'Codex-session',status:'available',path:'/private/history',reportedAt:'2026-11-09T10:00:00Z',paneId:null}));
-  expect(screen.getByText('Herdr answer')).toBeTruthy();expect(calls('agent_transcript')).toEqual([]);
+  const enter=vi.fn(async()=>{throw new Error('Pane is gone');});const setup=vi.fn();
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onOpenCompanion={setup} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  fireEvent.click(screen.getByRole('button',{name:/Open conversation/}));await advance(0);
+  expect(screen.getByRole('alert').textContent).toMatch(/companion on this host is too old to read agent conversations/);
+  fireEvent.click(screen.getByRole('button',{name:'Host companion installation'}));expect(setup).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'Enter session'}));await advance(0);
+  expect(enter).toHaveBeenCalledTimes(1);expect(screen.getAllByRole('alert').map(alert=>alert.textContent)).toContain('Pane is gone');
+  // Going back returns to the live list instead of leaving a dead view.
+  fireEvent.click(screen.getByRole('button',{name:'Back to sessions'}));await advance(0);
+  expect(screen.getByText('/work/codex')).toBeTruthy();
+});
+
+it('explains a row without one reported conversation instead of hiding its action',async()=>{
+  const shared={...claude,agent_session:{...claude.agent_session}};
+  stock(shared,{...shared,pane_id:'w2E:pG',terminal_id:'term-two'},{...herdrNavigationTree.agents[0],agent:'codex',name:null,pane_id:'w2E:pH',terminal_id:'term-three'});
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='herdr_tree'?{...herdrNavigationTree,agents:[shared,{...shared,pane_id:'w2E:pG',terminal_id:'term-two'},{...herdrNavigationTree.agents[0],agent:'codex',name:null,pane_id:'w2E:pH',terminal_id:'term-three'}],panes:[...herdrNavigationTree.panes,{...herdrNavigationTree.panes[0],pane_id:'w2E:pG',terminal_id:'term-two'},{...herdrNavigationTree.panes[0],pane_id:'w2E:pH',terminal_id:'term-three'}]}:fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={vi.fn()} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getAllByText(/^No single conversation is reported for this agent/)).toHaveLength(3);
+  expect(screen.queryByRole('button',{name:/Open conversation/})).toBeNull();
+  expect(screen.getAllByRole('button',{name:'Enter session'})).toHaveLength(3);
 });
 
 it('binds on the next poll once a conversation missing at first is reported',async()=>{
