@@ -1,6 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import {historyLines,historyView,mountHistory,rowHeight,scrollHistory,settle} from './fixtures/terminalHistory';
+import {pressMore} from './fixtures/toolbarMore';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 const id=(text:string)=>Number(/HISTORY_(\d{4})/.exec(text)?.[1]);
@@ -143,7 +144,7 @@ test('History lines bounds local scrollback, applies live and Find reports trimm
   // Find stays open: opening it later would shrink the rows and trim more history.
   const toolbar=page.getByRole('button',{name:'Show keys',exact:true});
   if(await toolbar.isVisible())await toolbar.click();
-  await page.getByRole('button',{name:'Find',exact:true}).click();
+  await pressMore(page,'Find');
   const search=page.locator('.terminal-search input'),status=page.locator('.terminal-search [role="status"]');
   await expect(search).toBeVisible();await settle(page);
   const rows=(await historyView(page)).rows;

@@ -1,5 +1,6 @@
 import {expect,test,type Page} from '@playwright/test';
 import {openClipboardTerminal} from './fixtures/localTerminal';
+import {pressMore} from './fixtures/toolbarMore';
 
 const screen=(page:Page)=>page.locator('.terminal-canvas:visible .xterm-screen');
 const output=(page:Page,text:string)=>page.evaluate(text=>window.simpleShortcutOutput(text),text);
@@ -104,7 +105,7 @@ test.describe('touch selection',()=>{
     await openClipboardTerminal(page);
     await output(page,`\x1b[2J\x1b[H${rows.join('\r\n')}`);
     await expect(screen(page)).toContainText('LAST_WORD');
-    const copy=page.locator('.terminal-keys').getByRole('button',{name:'Copy',exact:true});
+    const copy={click:()=>pressMore(page,'Copy')};
     await hold(page,await cellPoint(page,0,9));
     await expect.poll(()=>selection(page)).toBeGreaterThan(0);
     await copy.click();

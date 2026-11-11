@@ -70,6 +70,11 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+/** Find, Copy and the saved snippets and chords sit behind the More key; the list closes after each press. */
+function pressMore(name:string){
+  if(!screen.queryByRole('group',{name:'More keys'}))fireEvent.click(screen.getByRole('button',{name:'More keys'}));
+  fireEvent.click(screen.getByRole('button',{name}));
+}
 function installCompositionHelper(){Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});}
 function skipLocalCorrection(textarea:HTMLTextAreaElement){act(()=>{
   textarea.value='local correction';textarea.setSelectionRange(16,16);
@@ -95,7 +100,7 @@ it.each([[undefined,2],[false,0]] as const)('returns toolbar keys and chord butt
   mount();
   Object.assign(terminal.options,{scrollOnUserInput});
   fireEvent.click(screen.getByRole('button',{name:'enter'}));
-  fireEvent.click(screen.getByRole('button',{name:'Confirm'}));
+  pressMore('Confirm');
   expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\r']);
   expect(mocks.writeSequence.mock.calls.map(call=>call[1])).toEqual([['\r']]);
   expect(terminal.scrollToBottom).toHaveBeenCalledTimes(follows);
@@ -381,7 +386,7 @@ it.each(['terminal','composer','search'])('keeps a credential dialog focused whe
   const owner=mountInputOwner();
   screen.getByLabelText('Terminal for Host').append(owner.textarea);
   if(mode==='composer')fireEvent.click(screen.getByRole('button',{name:'Compose'}));
-  if(mode==='search')fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  if(mode==='search')pressMore('Find');
   const dialog=document.createElement('div'),password=document.createElement('input');
   dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');password.type='password';
   dialog.append(password);document.body.append(dialog);password.focus();terminal.focus.mockClear();
@@ -413,6 +418,8 @@ it.each(['terminal-user','terminal-nonuser','named-key','chord','gesture'] as co
     };
     for(const [kind,cause,message] of [['backpressure','queue-full','Terminal input queue is full'],['input_closed','channel-closed','Terminal input channel is closed'],['transport_error','other','private native failure']]) {
       mocks[caller==='chord'?'writeSequence':'write'].mockRejectedValueOnce({kind,message,hostId:'private-host',sessionId:'private-session'});
+      // The saved chord sits behind the More key, which must be open before the act scope below.
+      if(caller==='chord')fireEvent.click(screen.getByRole('button',{name:'More keys'}));
       await act(async()=>send());
       const raw=warn.mock.calls.at(-1)!;
       expect(raw).toHaveLength(1);
@@ -651,7 +658,7 @@ describe("terminal interactions", () => {
     const reportError=vi.fn();
     render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
     if(source==='custom D-pad')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
-    const send=()=>fireEvent.click(screen.getByRole('button',{name:source==='toolbar'?'Timed':'D-pad left corner'}));
+    const send=()=>{if(source==='toolbar')pressMore('Timed');else fireEvent.click(screen.getByRole('button',{name:'D-pad left corner'}));};
     send();expect(mocks.writeSequence).toHaveBeenCalledTimes(1);
     access(true);access();
     await act(async()=>reject(new Error('old request failure')));
@@ -698,11 +705,11 @@ describe("terminal interactions", () => {
     const reportError=vi.fn();
     render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
     fireEvent.click(screen.getByRole('button',{name:'paste'}));
-    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    pressMore('Copy');
     expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected');
     access(true);access();
     fireEvent.click(screen.getByRole('button',{name:'paste'}));
-    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    pressMore('Copy');
     expect(navigator.clipboard.readText).toHaveBeenCalledTimes(1);
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
     await act(async()=>{rejectRead(new Error('old read'));rejectWrite(new Error('old write'));});
@@ -1262,7 +1269,7 @@ describe("terminal interactions", () => {
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100});
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0});
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "Next window"}));
+    pressMore("Next window");
     expect(mocks.writeSequence).toHaveBeenCalledWith("ssh", ["\x02","n"]);
   });
   it("requires one explicit approval per remote clipboard write and ignores read requests", () => {
@@ -1319,14 +1326,14 @@ describe("terminal interactions", () => {
   it("keeps snippets editable and uses xterm paste for composition, then searches retained history", () => {
     savePreferences({...defaults, snippets: [{label: "project", text: "cd hello"}]});
     mount();
-    fireEvent.click(screen.getByRole("button", {name: "project"}));
+    pressMore("project");
     expect(terminal.paste).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Compose text") as HTMLTextAreaElement).value).toBe("cd hello");
     fireEvent.change(screen.getByLabelText("Compose text"), {target: {value: "你好"}});
     fireEvent.click(screen.getByRole("button", {name: "Send"}));
     expect(terminal.paste).toHaveBeenCalledWith("你好");
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "Find"}));
+    pressMore("Find");
     fireEvent.change(screen.getByLabelText("Search terminal history"), {target: {value: "world"}});
     fireEvent.click(screen.getByRole("button", {name: "Next"}));
     expect(terminal.scrollToLine).toHaveBeenCalledWith(1);
@@ -1382,7 +1389,7 @@ it.each([
 it('retains search result, modifier state and exact input bytes across language changes',async()=>{
   render(<LocaleTerminal/>);
   const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.click(ctrl);fireEvent.click(ctrl);
-  fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  pressMore('Find');
   const input=screen.getByRole('textbox',{name:'Search terminal history'});
   fireEvent.change(input,{target:{value:'world'}});input.focus();fireEvent.submit(input.closest('form')!);
   expect(screen.getByText('Match on line 2')).toBeTruthy();
@@ -1393,7 +1400,7 @@ it('retains search result, modifier state and exact input bytes across language 
   expect(terminal.select).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
   await act(async()=>{await uiI18n.changeLanguage('es');});
   expect(screen.getByText('Coincidencia en la línea 2')).toBeTruthy();
-  expect(ctrl.textContent).toBe('ctrl · bloqueado');
+  expect(ctrl.getAttribute('aria-label')).toBe('ctrl · bloqueado');
   fireEvent.click(screen.getByRole('button',{name:'c'}));expect(mocks.write).toHaveBeenCalledWith('ssh','\x03');
   fireEvent.change(input,{target:{value:'raw-no-match'}});fireEvent.submit(input.closest('form')!);
   await act(async()=>{await uiI18n.changeLanguage('en');});
@@ -1466,7 +1473,7 @@ it.each(['key','chord'] as const)('retains a synchronous %s parser cause without
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw new LocalUiError('validationUnknownKeyValue1','{{<literal>}}');});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Parser fixture'}));
+    if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'tab'}));else pressMore('Parser fixture');
     expect(parse).toHaveBeenCalledTimes(1);
     for(const locale of ['pt-BR','es','en']){
       await act(async()=>{await uiI18n.changeLanguage(locale);});
@@ -1481,7 +1488,7 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw raw;});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Raw parser fixture'}));
+    if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'tab'}));else pressMore('Raw parser fixture');
     await act(async()=>{await uiI18n.changeLanguage('es');});
     expect(screen.getByRole('alert').textContent).toBe(branch==='key'?String(raw):raw.message);
   }finally{parse.mockRestore();}

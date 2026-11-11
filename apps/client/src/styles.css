@@ -781,6 +781,10 @@ button svg {
 .workspace-footer span:last-child {
   gap: 9px;
 }
+/* A phone with little height left (soft keyboard open, or landscape) gives the terminal the strip above the keys. */
+@media (max-width: 600px) and (max-height: 700px) {
+  .workspace-footer[data-view="terminal"] { display: none; }
+}
 .session-notice {
   background: var(--theme-control, #2a3322);
   color: var(--theme-text, #bdcfae);

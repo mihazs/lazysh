@@ -1,90 +1,65 @@
-/* Terminal toolbar rows: each configured row is its own horizontal line. */
+/* Terminal toolbar: every configured row is a fixed grid of equal-width keys, so nothing pages or slides.
+   The key height is a variable so the size can be tuned in one place. */
 .terminal-keys[data-rows] {
+  --terminal-key-height: 32px;
+  --terminal-key-min-width: 28px;
+  --terminal-key-max-width: 64px;
+  position: relative;
   flex-direction: column;
+  gap: 3px;
+  margin-top: 0;
+  padding: 3px 6px calc(3px + env(safe-area-inset-bottom));
   overflow-x: visible;
 }
 .terminal-keys-row {
-  display: flex;
-  gap: inherit;
-  min-width: 0;
-  flex-shrink: 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
-.terminal-keys-row > button {
-  flex-shrink: 0;
-}
-
-/* Toolbar pages: the configured key rows and the saved snippets slide horizontally. */
-.terminal-keys-pages {
-  position: relative;
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 100%;
-  gap: inherit;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-}
-.terminal-keys-pages::-webkit-scrollbar,
-.terminal-keys-page::-webkit-scrollbar { display: none; }
-.terminal-keys-page {
-  display: flex;
-  flex-direction: column;
-  gap: inherit;
+  /* Equal columns share the width on a phone; a wide screen caps them and leaves the grid at the left, as the keys always were. */
+  grid-template-columns: repeat(var(--toolbar-columns), minmax(var(--terminal-key-min-width), var(--terminal-key-max-width)));
+  gap: 3px;
   min-width: 0;
-  /* At most three rows, and less when a docked keyboard leaves little height; the rest scrolls. */
-  max-height: min(152px, max(52px, 24dvh));
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
+  flex-shrink: 0;
+  /* A row with more keys than fit stays reachable by scrolling it, as before. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
-/* Rows inside a page hand an edge swipe to the carousel instead of stopping it. */
-.terminal-keys-page > .terminal-keys-row { overscroll-behavior-x: auto; }
-/* The key rows set the toolbar height; snippets wrap and scroll within it. */
-.terminal-keys-page[data-toolbar-page="snippets"] { contain: size; }
-.terminal-keys-snippets {
+.terminal-keys-row::-webkit-scrollbar { display: none; }
+.terminal-keys[data-rows] .terminal-keys-row > button,
+.terminal-keys[data-rows] .terminal-keys-row > button:hover {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: var(--terminal-key-height);
+  height: var(--terminal-key-height);
+  padding: 0 2px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-keys .terminal-key-lock { position: absolute; top: 2px; right: 2px; }
+
+/* Find, Copy and the saved snippets and chords open over the terminal above the keys. */
+.terminal-keys-more {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 100%;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
-  gap: inherit;
+  gap: 6px;
+  max-height: 40dvh;
+  padding: 8px;
+  overflow-y: auto;
+  border: 1px solid var(--ui-hairline);
+  border-radius: 12px;
+  background: var(--theme-panel);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
 }
-.terminal-keys-snippets > button { flex-shrink: 0; }
-/* Each indicator is a thumb-sized target around a small dot; the negative margins tuck the
-   targets into the row gap and the toolbar's bottom padding, so the toolbar barely grows. */
-.terminal-keys .terminal-keys-pager {
-  display: flex;
-  justify-content: center;
-  margin: -4px 0 -8px;
-}
-.terminal-keys .terminal-keys-pager button,
-.terminal-keys .terminal-keys-pager button:hover {
-  display: grid;
-  place-items: center;
-  min-width: 48px;
-  min-height: 36px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.terminal-keys .terminal-keys-pager span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: .35;
-  transition: width .2s ease, opacity .2s ease;
-}
-.terminal-keys .terminal-keys-pager button[aria-selected="true"] span {
-  width: 16px;
-  border-radius: 3px;
-  opacity: .9;
-}
-@media (prefers-reduced-motion: reduce) {
-  .terminal-keys .terminal-keys-pager span { transition: none; }
-}
+.terminal-keys .terminal-keys-more > button { flex: 0 0 auto; min-width: 44px; min-height: 44px; }
