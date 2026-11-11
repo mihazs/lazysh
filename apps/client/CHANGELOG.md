@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.34.0
+
+### Minor Changes
+
+- d5a8ca9: Update the Agent view in real time. A bound Claude Code or Codex conversation now streams over one host companion channel (`lazysh-agent transcript-watch`) instead of a full page read every 2 seconds: new messages, a reply that grows and a tool result that lands on an older turn change their card in place, without a page replace or a jump of the reading position. The thread shows Agent is working or waiting from the recorded turn state, polls every 2 seconds with a note when the stream cannot open, marks the thread stale while it reconnects, and asks you to update an older host companion.
+
+### Patch Changes
+
+- d455f37: Restore sliding between the toolbar pages in the compact terminal toolbar without making it taller: swipe sideways, or use the page indicator, between the keys, a Tools page with Find and Copy, and a Snippets page with saved snippets and chords. Changed default: the More keys key is removed and the default toolbar's second row gains an enter key in its place; saved layouts keep every key.
+- @lazysh/account-usage@1.34.0
+  - @lazysh/common@1.34.0
+  - @lazysh/display-idle@1.34.0
+  - @lazysh/et-transport@1.34.0
+  - @lazysh/mosh-transport@1.34.0
+
 ## 1.33.4
 
 ### Patch Changes
