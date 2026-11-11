@@ -442,6 +442,13 @@ it.each(['inactive','disconnect','replacement','dispose'] as const)('captures di
     expect(warn.mock.calls.at(-1)![0]).not.toContain('private');
   } finally {warn.mockRestore();}
 });
+/** A Herdr host whose history requests fail as unavailable; `guarded` is what its status answers. */
+function herdrHistoryUnavailable(guarded:boolean) {
+  mocks.invoke.mockImplementation(async(_command,args)=>{
+    if(args.action.kind==='status')return {kind:'status',available:guarded};
+    throw {kind:'herdr_chat_unavailable',message:'Herdr history unavailable'};
+  });
+}
 function touchScrollFixture(height?:number, herdr=false, reportError=vi.fn()) {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
@@ -1118,10 +1125,22 @@ describe("terminal interactions", () => {
     await act(async()=>observe({kind:'observed',destination:{pane:'owned'}}));
     expect(mocks.invoke).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
   });
-  it.each(['tracking','alternate'])('reports unsupported Herdr history in %s mode without forwarding the swipe into the menu',async mode=>{
+  it.each(['tracking','alternate'])('scrolls a stock Herdr host in %s mode like a wheel after its first swipe and reports nothing',async mode=>{
     if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
     else Object.assign(terminal.buffer.active,{type:'alternate'});
-    mocks.invoke.mockRejectedValue({kind:'herdr_chat_unavailable',message:'Herdr history unavailable'});
+    herdrHistoryUnavailable(false);
+    const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    expect(wheels).toHaveLength(0);
+    await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
+    expect(reportError).not.toHaveBeenCalled();
+    expect(wheels.length).toBeGreaterThan(0);
+    expect(mocks.invoke.mock.calls.map(([,args])=>args.action)).toEqual([{kind:'observe'},{kind:'status'}]);
+  });
+  it.each(['tracking','alternate'])('reports unavailable Herdr history on a guarded host in %s mode without forwarding the swipe into the menu',async mode=>{
+    if(mode==='tracking')terminal.modes.mouseTrackingMode='vt200';
+    else Object.assign(terminal.buffer.active,{type:'alternate'});
+    herdrHistoryUnavailable(true);
     const reportError=vi.fn(),{wheels,touch}=touchScrollFixture(480,true,reportError);
     await act(async()=>{touch('touchstart',100,100);touch('touchmove',100,60);touch('touchend',100,60);});
     expect(reportError).toHaveBeenCalledWith(expect.objectContaining({key:'unavailable'}));
