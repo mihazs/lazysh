@@ -6169,8 +6169,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd; run explicitly for interoperability"]
     async fn openssh_sftp_and_command_interoperability() {
-        // Boxed: the whole check is too large for a debug test thread's stack otherwise.
-        Box::pin(openssh_interoperability(OpenSshCheck::Files)).await;
+        openssh_interoperability(OpenSshCheck::Files).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -6280,8 +6279,14 @@ mod tests {
         )
     }
 
+    /// Boxed: the whole check is too large for a debug test thread's stack otherwise.
     #[cfg(unix)]
-    async fn openssh_interoperability(check: OpenSshCheck) {
+    fn openssh_interoperability(check: OpenSshCheck) -> impl std::future::Future<Output = ()> {
+        Box::pin(openssh_check(check))
+    }
+
+    #[cfg(unix)]
+    async fn openssh_check(check: OpenSshCheck) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let mosh = matches!(check, OpenSshCheck::Mosh);
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
