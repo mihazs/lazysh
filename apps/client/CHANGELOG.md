@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.33.0
+
+### Minor Changes
+
+- d837a6b: Let you resize the terminal toolbar with a Toolbar key height slider (28 to 56 px, default 32 px) in Preferences, saved on this device and applied live.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.33.0
+  - @lazysh/common@1.33.0
+  - @lazysh/display-idle@1.33.0
+  - @lazysh/et-transport@1.33.0
+  - @lazysh/mosh-transport@1.33.0
+
 ## 1.32.0
 
 ### Minor Changes
