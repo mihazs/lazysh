@@ -282,6 +282,9 @@ Tests assert behaviour, not source text.
 
 ## References
 
+[Agent view parity](reference/agent-view-parity.md) lists every screen element of Claude Code and
+Codex against the reference apps and the open gaps.
+
 Interaction patterns were studied from public projects and documentation (Collie,
 Warp, herdr-app, Orca, and the Claude Code, Codex, OpenCode and Agent Client Protocol
 docs). lazysh re-implements behaviour only; it copies no code, assets, names or UI
