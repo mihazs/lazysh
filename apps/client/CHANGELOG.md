@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.31.2
+
+### Patch Changes
+
+- 8be56c4: Make Android notification settings reachable after notification permission is denied, and ask for the permission after the first session opens instead of during its connection.
+- @lazysh/account-usage@1.31.2
+  - @lazysh/common@1.31.2
+  - @lazysh/display-idle@1.31.2
+  - @lazysh/et-transport@1.31.2
+  - @lazysh/mosh-transport@1.31.2
+
 ## 1.31.1
 
 ### Patch Changes
