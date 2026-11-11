@@ -53,6 +53,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Agent view parity: every agent screen element, reference apps, status and open gaps | [Agent view parity](reference/agent-view-parity.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
+| Planned host browser: requirements, opt-in and launch model, threat model, input mapping and milestones | [Host browser](host-browser.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
 | Theme QR evidence and pending native acceptance | [Theme QR acceptance](theme-qr-acceptance.md) |
@@ -90,6 +91,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | F-Droid metadata, inclusion and distribution status | [F-Droid listing](fdroid-listing.md) |
 | ET interoperability research | [ET research](et-research.md) |
 | Remaining agent-format investigation | [Agent format research](remaining-agent-format-research.md) |
+| Measured Chrome and Firefox remote-control feasibility for the host browser | [Host browser feasibility](reference/host-browser-feasibility.md) |
 | Recorded visual benchmarks and candidate-specific refinements | [Android workspace benchmark](ux/android-workspace-benchmark.md) · [Workspace redesign 1.5.1](ux/workspace-redesign-1-5-1.md) · [Connected workspace refinement 1.7.1](ux/connected-workspace-refinement-1-7-1.md) |
 
 Apple application distribution, physical Samsung/SwiftKey behavior, Rex beta compatibility, ordinary-user Windows GUI qualification and full native parity remain separate unresolved limits. A passing source build, emulator case or installer check does not establish them. Notification enrollment does not establish delivery, and an old usage report does not establish a current quota.
