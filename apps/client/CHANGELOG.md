@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.31.1
+
+### Patch Changes
+
+- ad04578: Keep the verified stable tag and GitHub release writable when other workflow changes merge while a release builds.
+- @lazysh/account-usage@1.31.1
+  - @lazysh/common@1.31.1
+  - @lazysh/display-idle@1.31.1
+  - @lazysh/et-transport@1.31.1
+  - @lazysh/mosh-transport@1.31.1
+
 ## 1.31.0
 
 ### Minor Changes
