@@ -6,4 +6,3 @@ tasks:
   test-et:
     type: test
     command: 'cargo test --locked --test official -- --ignored'
-    options: {runInCI: false}

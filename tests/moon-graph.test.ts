@@ -72,12 +72,11 @@ const legacy: Record<string, string> = {
 };
 const cached = new Set(['client:check', 'client:test', 'client:check-native-gui']);
 
-test.each(Object.entries(legacy))('legacy task %s resolves to %s with the old caching and CI posture', async (_, target) => {
+test.each(Object.entries(legacy))('legacy task %s resolves to %s with the old caching and CI eligibility', async (_, target) => {
   const task = await moonTask(target);
   expect(task.options.cache).toBe(cached.has(target));
-  // Only the web gate (build, check, test) and the Rust gates run in CI; every integration task is opt-in.
-  const ci = ['client:build', 'agent:test-hooks', ...cached, ...['check-rust', 'test-rust', 'lint', 'format-check'].map(name => `${target.split(':')[0]}:${name}`)];
-  expect(task.options.runInCI).toBe(ci.includes(target));
+  // `moon run` filters out tasks that opt out of CI, so every task a workflow names must stay eligible.
+  expect(task.options.runInCI).toBe(!task.options.persistent); // dev servers are the only local-only tasks
 });
 
 test('release builds, ordering and inline environment survive the port', async () => {
@@ -87,7 +86,6 @@ test('release builds, ordering and inline environment survive the port', async (
   expect(commandLine(await moonTask('client-native:lint'))).toBe('cargo clippy --locked --all-targets -- -D warnings');
   const emulator = await moonTask('client:test-android-herdr-navigation');
   expect(emulator.deps!.map(dependency => dependency.target)).toEqual(['client:build-android-emulator']);
-  expect(emulator.options.runInCI).toBe(false);
   const android = await moonTask('client:build-android-emulator');
   expect(android.options.envOverride).toBe(true);
   expect(android.env).toEqual({ WHISPER_DONT_GENERATE_BINDINGS: '1', CMAKE_ANDROID_NDK: expect.any(String) });

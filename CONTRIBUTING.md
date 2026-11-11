@@ -54,8 +54,9 @@ Conventions:
 - moon reads Cargo `[dependencies]` and `package.json` workspace dependencies. It does not read
   `[target.'cfg(..)'.dependencies]` or `[patch]`, so declare those in `dependsOn`.
   `tests/moon-graph.test.ts` fails when a Cargo path dependency is missing from the graph.
-- Task ids use `-` where script names used `:` (`test-android-ssh`). Tasks that need a device, simulator,
-  browser or real service set `runInCI: false`; only the client web gate and the Rust gates run in `moon ci`.
+- Task ids use `-` where script names used `:` (`test-android-ssh`). Do not set `runInCI: false` on a task a workflow runs: `moon run` skips such a task when `CI` is set.
+  Workflows always pass explicit targets to `moon ci`/`moon run`; never run `moon ci` unfiltered, since that selects the
+  device, simulator and browser tasks too.
 - moon does not filter the environment, so every task sees the whole process environment. A task `env` constant
   loses to a conflicting process value unless the task sets `options.envOverride: true`; use it for flags such
   as `LAZYSH_ANDROID_UI_QR=1`.

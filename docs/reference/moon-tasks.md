@@ -61,19 +61,19 @@ so `apps/client/src-tauri/moon.yml` declares `agent`, `mosh-transport`, `portabl
 
 ## Client tasks (`apps/client`)
 
-| Task | Runs | Cached | In CI |
-| --- | --- | --- | --- |
-| `build` | `bun run build` (`tsc -b && vite build`; Tauri's `beforeBuildCommand` calls the same script) | no: Vite embeds the Git revision | yes |
-| `check` | `bun run check` | yes | yes |
-| `test` | `bun run test` (Vitest) | yes | yes |
-| `check-native-gui` | `tsc --project tsconfig.native-gui.json` | yes | no |
-| `dev`, `dev-native` | Vite, or `tauri dev` | server presets | no |
-| `test-e2e`, `test-install-browser` | Playwright | no | no |
-| `test-native-gui` | namespaced Vitest GUI run, Linux only; builds `build-native` first | no | no |
-| `build-native` | `tauri build --no-bundle` | no | no |
-| `build-android`, `-emulator`, `-fdroid`, `-fdroid-emulator` | `tauri android build` | no | no |
-| `test-android`, `-theme-links`, `-ssh`, `-ssh-parity`, `-herdr-navigation`, `-tmux`, `-qr`, `-biometric`, `-fdroid`, `-ntfy`, `-push-artifact` | Gradle or `bun test` acceptance, each depending on the build it needs | no | no |
-| `init-ios`, `build-ios`, `test-ios-workspace` | Tauri and Xcode, macOS only | no | no |
+| Task | Runs | Cached |
+| --- | --- | --- |
+| `build` | `bun run build` (`tsc -b && vite build`; Tauri's `beforeBuildCommand` calls the same script) | no: Vite embeds the Git revision |
+| `check` | `bun run check` | yes |
+| `test` | `bun run test` (Vitest) | yes |
+| `check-native-gui` | `tsc --project tsconfig.native-gui.json` | yes |
+| `dev`, `dev-native` | Vite, or `tauri dev` | server presets |
+| `test-e2e`, `test-install-browser` | Playwright | no |
+| `test-native-gui` | namespaced Vitest GUI run, Linux only; builds `build-native` first | no |
+| `build-native` | `tauri build --no-bundle` | no |
+| `build-android`, `-emulator`, `-fdroid`, `-fdroid-emulator` | `tauri android build` | no |
+| `test-android`, `-theme-links`, `-ssh`, `-ssh-parity`, `-herdr-navigation`, `-tmux`, `-qr`, `-biometric`, `-fdroid`, `-ntfy`, `-push-artifact` | Gradle or `bun test` acceptance, each depending on the build it needs | no |
+| `init-ios`, `build-ios`, `test-ios-workspace` | Tauri and Xcode, macOS only | no |
 
 Android `build-*` and `test-android-*` tasks set their constants (`WHISPER_DONT_GENERATE_BINDINGS`,
 `CMAKE_ANDROID_NDK`, `LAZYSH_ANDROID_UI_*`) in `env` with `options.envOverride: true`.

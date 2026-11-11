@@ -19,8 +19,9 @@ bun run check                         # the root alias: moon run :check :check-r
 ```
 
 `bunx moon run client:build client:check client:test -c 1` runs several targets one at a time.
-Tasks that need a device, a simulator or a real SSH server are opt-in (`runInCI: false`); the root
-aliases such as `bun run test:android-tmux` start them with their prerequisites.
+Tasks that need a device, a simulator or a real SSH server run only when you name them; the root
+aliases such as `bun run test:android-tmux` start them with their prerequisites. CI always passes explicit targets
+to `moon ci` and `moon run`, so never run `moon ci` with no targets.
 
 ## See what will run
 
@@ -44,8 +45,8 @@ The `client` and `agent` pull request jobs do this. `main` and every native job 
 
 1. Put a task shared by every Cargo crate in `.moon/tasks/cargo.yml`; put a task for one project in its `moon.yml`.
 2. Use the task id with `-` where a script name used `:` (ids cannot contain `:`).
-3. Set `options.runInCI: false` on a task that needs an emulator, simulator, browser or real service, and on every
-   task in its dependency chain. Leave `cache` off unless the inputs and outputs are fully declared.
+3. Leave `runInCI` at its default for a task a workflow runs: `moon run` skips a task with `runInCI: false` when `CI` is
+   set. Leave `cache` off unless the inputs and outputs are fully declared.
 4. A task that sets a constant already present in the environment (`LAZYSH_ANDROID_UI_QR=1`) needs
    `options.envOverride: true`, otherwise the process value wins.
 5. Add the project's Cargo dependencies that moon cannot infer (`cfg` targets, `[patch]`) to its `dependsOn`.
