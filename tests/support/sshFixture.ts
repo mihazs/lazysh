@@ -162,7 +162,8 @@ export class SshFixture {
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
     if((options.tmux || options.tmuxBinary) && (tools || options.privateTtyGroup!==true || options.companion || options.moshBinary || options.sharedNavigation || options.ownedReceiverRoot))throw new Error('Owned tmux requires its isolated private namespace fixture');
     if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
-    const ownedRoot=!!tools || options.ownedReceiverRoot===true;
+    // A namespaced companion validates its private state ancestors, which an unmapped host root fails.
+    const ownedRoot=!!tools || options.ownedReceiverRoot===true || (options.companion===true && options.privateTtyGroup===true);
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
