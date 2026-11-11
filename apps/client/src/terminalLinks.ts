@@ -6,11 +6,11 @@ type Line = {readonly isWrapped: boolean; getCell(x: number): Cell | undefined};
 export type Rows = {readonly length: number; getLine(y: number): Line | undefined};
 
 /** One rendered character: a wide character is one glyph and its second cell is skipped. */
-type Glyph = {text: string; x: number; width: number; y: number};
+export type Glyph = {text: string; x: number; width: number; y: number};
 /** Content bounds of a row as glyph indices, and where its usable width ends (a box border or the last column). */
 type Span = {first: number; end: number; edge: number; border: boolean};
 /** Soft-wrapped rows joined into one line of glyphs. `offset[i]` is the index of glyph `i` in `text`. */
-type Logical = {glyphs: Glyph[]; text: string; offset: number[]; head: Span; tail: Span};
+export type Logical = {glyphs: Glyph[]; text: string; offset: number[]; head: Span; tail: Span};
 export type UrlLink = {text: string; range: {start: {x: number; y: number}; end: {x: number; y: number}}};
 
 const BORDER = '│┃║';
@@ -97,13 +97,23 @@ function trimmed(text: string): string {
   return text.slice(0, end);
 }
 
-/** Every http(s) URL that touches 1-based buffer line `line`, joined across soft wraps and conservative hard wraps. */
-export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
-  const y = line - 1, found: UrlLink[] = [];
+/** The logical lines around 1-based buffer line `line`: whole soft-wrapped lines, a few rows either side. */
+export function logicalWindow(rows: Rows, cols: number, line: number): Logical[] {
+  const y = line - 1;
   let from = Math.max(0, y - WINDOW), to = Math.min(rows.length - 1, y + WINDOW);
   for (let n = 0; from > 0 && rows.getLine(from)?.isWrapped && n < SOFT_LIMIT; n++) from--;
   for (let n = 0; to + 1 < rows.length && rows.getLine(to + 1)?.isWrapped && n < SOFT_LIMIT; n++) to++;
-  const lines = logicalLines(rows, cols, from, to);
+  return logicalLines(rows, cols, from, to);
+}
+/** The 1-based buffer range covering UTF-16 units `[from, to)` of a logical text, each unit mapped to its glyph. */
+export function unitRange(units: Glyph[], from: number, to: number): UrlLink['range'] {
+  const start = units[from], end = units[to - 1];
+  return {start: {x: start.x + 1, y: start.y + 1}, end: {x: end.x + end.width, y: end.y + 1}};
+}
+
+/** Every http(s) URL that touches 1-based buffer line `line`, joined across soft wraps and conservative hard wraps. */
+export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
+  const found: UrlLink[] = [], lines = logicalWindow(rows, cols, line);
   lines.forEach((logical, index) => {
     for (const match of logical.text.matchAll(URL_RE)) {
       if (match.index > 0 && /[A-Za-z0-9]/.test(logical.text[match.index - 1])) continue;
@@ -126,8 +136,7 @@ export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
       }
       const url = trimmed(text);
       if (!/^https?:\/\/[^/?#]/i.test(url)) continue;
-      const start = units[0], end = units[url.length - 1];
-      const range = {start: {x: start.x + 1, y: start.y + 1}, end: {x: end.x + end.width, y: end.y + 1}};
+      const range = unitRange(units, 0, url.length);
       if (range.start.y <= line && line <= range.end.y) found.push({text: url, range});
     }
   });
