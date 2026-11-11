@@ -104,22 +104,46 @@ impl Controller {
 #[cfg(target_os = "android")]
 struct NotificationSettings(tauri::plugin::PluginHandle<tauri::Wry>);
 
-#[tauri::command]
-pub async fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
+async fn notification_command(
+    app: tauri::AppHandle,
+    command: &'static str,
+    failure: &'static str,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use tauri::Manager;
         app.state::<NotificationSettings>()
             .0
-            .run_mobile_plugin_async("openNotificationSettings", serde_json::json!({}))
+            .run_mobile_plugin_async(command, serde_json::json!({}))
             .await
-            .map_err(|_| "Could not open notification settings".into())
+            .map_err(|_| failure.into())
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = app;
+        let _ = (app, command, failure);
         Err("Notification settings are unavailable".into())
     }
+}
+
+#[tauri::command]
+pub async fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
+    notification_command(
+        app,
+        "openNotificationSettings",
+        "Could not open notification settings",
+    )
+    .await
+}
+
+/// Asked by the renderer once a session is adopted, so the system prompt never covers a connect.
+#[tauri::command]
+pub async fn request_notification_permission(app: tauri::AppHandle) -> Result<(), String> {
+    notification_command(
+        app,
+        "requestNotificationPermission",
+        "Could not request notification permission",
+    )
+    .await
 }
 
 pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {

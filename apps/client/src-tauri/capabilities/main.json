@@ -53,6 +53,8 @@
     "allow-resolve-agent-approval",
     "allow-notify-agent-attention",
     "allow-notification-test",
+    "allow-open-notification-settings",
+    "allow-request-notification-permission",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-register-action-types",

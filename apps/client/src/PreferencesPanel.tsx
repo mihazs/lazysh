@@ -5,7 +5,7 @@ import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import FontDownloadPanel from "./FontDownloadPanel";
 import AppIconPanel from "./AppIconPanel";
 import {useMountedAccess,useProtectedInvoke} from './access';
-import {isTauri} from '@tauri-apps/api/core';
+import {isAndroidApp} from './isAndroidApp';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
@@ -158,7 +158,7 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
       }} />
 
 </>},
-...(isTauri() && /Android/i.test(navigator.userAgent) ? [{id:"android-notifications",section:"general",title:t("androidNotificationTitle"),content:<>
+...(isAndroidApp() ? [{id:"android-notifications",section:"general",title:t("androidNotificationTitle"),content:<>
     <p>{t("androidNotificationSettingsHelp")}</p>
     <button onClick={() => void invoke('open_notification_settings').catch(() => setError(t("androidNotificationSettingsError")))}>{t("inboxAndroidSettings")}</button>
 </>}] : []) as SettingsPage[],

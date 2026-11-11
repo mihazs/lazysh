@@ -83,6 +83,8 @@ fn main() {
         "resolve_agent_approval",
         "notify_agent_attention",
         "notification_test",
+        "open_notification_settings",
+        "request_notification_permission",
         "voice_models",
         "voice_model_catalog",
         "voice_download_model",

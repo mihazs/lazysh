@@ -40,7 +40,7 @@ internal class SessionBackgroundState {
 
 /**
  * Android 13+ hides a foreground service notification without POST_NOTIFICATIONS. lazysh asks
- * once per install, from the visible workspace when a first session starts; a denial only
+ * once per install, from the visible workspace once a first session is connected; a denial only
  * hides the notification and never blocks or stops a connection.
  */
 internal object SessionNotificationPermission {
@@ -122,8 +122,16 @@ class SessionBackgroundPlugin(private val owner: Activity) : Plugin(owner) {
             val args = invoke.getArgs()
             val sessions = args.getInt("sessions")
             SessionBackgroundRuntime.update(owner.applicationContext, args.getLong("revision"), sessions, invoke)
-            if (sessions > 0) requestNotificationPermission()
         } catch (_: Exception) { invoke.reject("background_execution_unavailable") }
+    }
+
+    /**
+     * The renderer asks once a connected session is adopted: the system prompt pauses the WebView,
+     * which cancels credential operations, so it must never cover a connection still in flight.
+     */
+    @Command fun requestNotificationPermission(invoke: Invoke) = owner.runOnUiThread {
+        if (SessionBackgroundRuntime.state.active) promptForNotifications()
+        invoke.resolve()
     }
 
     @Command fun openNotificationSettings(invoke: Invoke) = owner.runOnUiThread {
@@ -138,7 +146,7 @@ class SessionBackgroundPlugin(private val owner: Activity) : Plugin(owner) {
 
     override fun onResume(activity: AppCompatActivity) = SessionBackgroundRuntime.refresh()
 
-    private fun requestNotificationPermission() {
+    private fun promptForNotifications() {
         if (Build.VERSION.SDK_INT < 33) return
         val preferences = owner.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         val granted = owner.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
