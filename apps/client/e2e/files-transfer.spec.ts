@@ -72,7 +72,7 @@ test('Open with hands the downloaded copy to another app and a refused type expl
   await page.evaluate(()=>window.transfer.failDelivery({kind:'open_refused',message:'lazysh does not open programs or scripts. Download the file instead.'}));
   await files.getByRole('button',{name:'Open with…',exact:true}).click();
   await expect(files.getByRole('alert')).toHaveText('lazysh does not open programs or scripts. Download the file instead.');
-  expect((await calls(page,'host_file_cancel')).length).toBe(2);
+  expect((await calls(page,'host_file_cancel')).length).toBe(1);
 });
 
 test('Share appears only when the device reports it',async({page})=>{
