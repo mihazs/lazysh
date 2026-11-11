@@ -17,7 +17,8 @@ const BORDER = '│┃║';
 /** Rows examined around the requested one; a hard-wrapped URL rarely spans more than a handful. */
 const WINDOW = 16;
 const SOFT_LIMIT = 128;
-const URL_RE = /(?<![A-Za-z0-9])https?:\/\/[^\s<>"'`│┃║]+/gi;
+// No lookbehind: the bundle targets Safari 15, which cannot parse one.
+const URL_RE = /https?:\/\/[^\s<>"'`│┃║]+/gi;
 const URL_TAIL = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
 const BULLET = /^(?:[-*+>]|\d{1,2}[.)])$/;
 const OPENERS: Record<string, string> = {')': '(', ']': '[', '}': '{', '>': '<'};
@@ -105,6 +106,7 @@ export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
   const lines = logicalLines(rows, cols, from, to);
   lines.forEach((logical, index) => {
     for (const match of logical.text.matchAll(URL_RE)) {
+      if (match.index > 0 && /[A-Za-z0-9]/.test(logical.text[match.index - 1])) continue;
       // Characters outside the BMP take two UTF-16 units; each unit points at its glyph.
       const units: Glyph[] = [];
       let text = '', last = logical.offset.findIndex(offset => offset >= match.index + match[0].length);
