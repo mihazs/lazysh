@@ -653,6 +653,72 @@ it.each(['pane','report','history'] as const)('discards a tmux transcript if its
   expect(screen.queryByText('Stale answer')).toBeNull();expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
 });
 
+describe('reading tools',()=>{
+  const markdown='Use this:\n\n```sh\nbun run build\n```\n';
+  const messages=[
+    {id:'p',role:'user',blocks:[{type:'text',text:'How do I build?'}]},
+    {id:'t',role:'assistant',blocks:[{type:'tool_use',id:'c',name:'Bash',text:'ls dist'}]},
+    {id:'r',role:'tool',blocks:[{type:'tool_result',id:'c',text:'needle-in-output'}]},
+    {id:'a',role:'assistant',blocks:[{type:'text',text:markdown}]},
+  ];
+  const mount=async()=>{
+    host('claude',[row('Claude Code','%3')],'available',[messages]);
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);
+  };
+  beforeEach(()=>{localStorage.clear();});
+
+  it('copies the original Markdown of a message and the exact text of a code block',async()=>{
+    const writeText=vi.fn(async()=>{});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}});
+    await mount();
+    const answer=screen.getAllByRole('article',{name:'assistant'}).at(-1)!;
+    await act(async()=>{fireEvent.click(within(answer).getByRole('button',{name:'Copy message'}));});
+    expect(writeText).toHaveBeenLastCalledWith(markdown);
+    expect(within(answer).getByRole('button',{name:'Copied'})).toBeTruthy();
+    await act(async()=>{fireEvent.click(within(answer).getByRole('button',{name:'Copy code'}));});
+    expect(writeText).toHaveBeenLastCalledWith('bun run build');
+  });
+
+  it('says so when the clipboard is unavailable',async()=>{
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:vi.fn(async()=>{throw new Error('denied');})}});
+    await mount();
+    const answer=screen.getAllByRole('article',{name:'assistant'}).at(-1)!;
+    await act(async()=>{fireEvent.click(within(answer).getByRole('button',{name:'Copy message'}));});
+    expect(within(answer).getByRole('button',{name:'Clipboard unavailable'})).toBeTruthy();
+  });
+
+  it('finds a match inside a folded tool row, opens it, and steps between matches',async()=>{
+    Element.prototype.scrollIntoView=vi.fn();
+    await mount();
+    const activity=document.querySelector('details.agent-turn-activity')!;
+    expect(activity.hasAttribute('open')).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'Search conversation'}));
+    const search=screen.getByRole('search',{name:'Search conversation'});
+    fireEvent.change(within(search).getByRole('searchbox'),{target:{value:'NEEDLE'}});
+    expect(within(search).getByRole('status').textContent).toBe('1 of 1');
+    expect(activity.hasAttribute('open')).toBe(true);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    fireEvent.change(within(search).getByRole('searchbox'),{target:{value:'build'}});
+    expect(within(search).getByRole('status').textContent).toBe('2 of 2');
+    fireEvent.click(within(search).getByRole('button',{name:'Previous match'}));
+    expect(within(search).getByRole('status').textContent).toBe('1 of 2');
+    fireEvent.change(within(search).getByRole('searchbox'),{target:{value:'absent'}});
+    expect(within(search).getByRole('status').textContent).toBe('No matches');
+    fireEvent.click(within(search).getByRole('button',{name:'Close search'}));
+    expect(screen.queryByRole('search')).toBeNull();
+  });
+
+  it('hides tool work in Conversation only and remembers the choice for this terminal',async()=>{
+    await mount();
+    expect(document.querySelector('details.agent-turn-activity')).toBeTruthy();
+    const toggle=within(options()).getByRole('button',{name:'Conversation only'});
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');fireEvent.click(toggle);
+    expect(screen.getByRole('region',{name:'Agent view'}).getAttribute('data-history')).toBe('conversation');
+    cleanup();
+    await mount();
+    expect(screen.getByRole('region',{name:'Agent view'}).getAttribute('data-history')).toBe('conversation');
+  });
+});
+
 describe('waiting for the user',()=>{
   const reported=(summary:string,state:string,minutes:number,pane:string|null=null)=>({...row('Claude Code',pane,state),sessionId:`s-${summary}`,summary,updatedAt:new Date(Date.now()-minutes*60_000).toISOString()});
   const header=()=>screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
