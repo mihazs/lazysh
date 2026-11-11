@@ -148,8 +148,8 @@ least 3*t*, which keeps a very large transcript below about a quarter of one cor
 | Frame | Fields | Meaning |
 | --- | --- | --- |
 | `hello` | `protocol`, `agent`, `intervalMs`, `limit`, `companion` | First line. A client that does not know `protocol` stops. |
-| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `branchId`, `truncated` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
-| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` appears only when it changed; `null` means unknown. |
+| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `branchId`, `truncated`, `work` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
+| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?`, `work?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` and `work` appear only when they changed; `null` means unknown or none. |
 | `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet conversation from a dead channel. |
 | `end` | `reason` | The source failed 20 checks in a row (about 5 s), or could not be read at all; the exit status is 1. |
 
@@ -276,6 +276,15 @@ Conversation (`active_branch`) responses for Claude, Codex and OpenCode V1 can i
 - OpenCode V1: the latest message's `time.completed`, `finish` and `MessageAbortedError`, plus a running `question` part.
 
 When `activity` is absent, the state is unknown. Records pages never carry it. A crashed agent can leave a recorded turn reading `working`. Provenance and sample shapes are in `apps/agent/tests/fixtures/interaction-cards/README.md`.
+
+Claude conversation responses can also include `work`: the sub-agents, background commands and monitors the conversation recorded, read from the whole active branch and not only from the returned messages. Each item is `{id, kind, title, state, events[], subtitle?, command?, taskId?, startedAt?, endedAt?, last?, summary?, timeoutMs?}` with `kind` `agent`, `shell` or `monitor` and `state` `running`, `done`, `failed`, `stopped` or `unknown`. `id` is the `tool_use` id of the launching call (an `Agent` or `Task` call, a `Bash` call with `run_in_background`, a `Monitor`), so a client can show the task where its call is. The state comes only from records:
+
+- a task is `running` from its launch; a launch result such as `Async agent launched`, `Command running in background with ID: …` or `Monitor started (task …)` gives its `taskId` and does not end it;
+- a synchronous call ends with its result (`done`, or `failed` when the result is an error);
+- a `<task-notification>` user record ends the task it names by `tool-use-id` or `task-id` (`completed` is `done`, `failed`, `killed`/`stopped`/`cancelled` is `stopped`, any other status is `unknown`); a notice with an `<event>` and no status only adds to `events` (a monitor line);
+- a successful `TaskStop` result ends the task whose id it names as `stopped`.
+
+The companion never decides that an old launch is dead: a task with no recorded end stays `running` and carries `startedAt` and `timeoutMs`, and the client shows it as not confirmed once it is older than it could run. A turn that ended while `turn_duration.pendingBackgroundAgentCount` is above zero reads `working` in `activity`. Other agents report no `work`. Items are capped at 100 and `events` at 50 lines. Test fixtures are synthetic: `apps/agent/tests/work_tasks.rs`.
 
 ### Claude current branch
 

@@ -1,0 +1,15 @@
+.agent-work { display: grid; gap: 6px; margin-inline: 12px; min-width: 0; }
+.agent-work > button { display: flex; align-items: center; gap: 8px; justify-self: start; min-height: 44px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--theme-control, transparent); color: inherit; }
+.agent-work > button[data-running] svg { color: var(--accent); }
+.agent-work > div { display: grid; gap: 8px; max-height: 40vh; overflow-y: auto; }
+.agent-work section { display: grid; gap: 4px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.agent-work h5 { margin: 0; font-size: 0.9rem; }
+.agent-work ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-work summary, .agent-work-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.agent-work pre { max-height: 30vh; margin: 4px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-work small, .agent-work-last { color: var(--muted); }
+.agent-work-last { flex-basis: 100%; }
+.agent-work-state { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; color: var(--muted); }
+.agent-work-state[data-state="running"] { color: var(--accent); border-color: var(--accent); }
+.agent-work-state[data-state="failed"] { color: var(--danger); border-color: var(--danger); }
+.agent-work-inline { margin: 0; padding: 6px 10px; list-style: none; border: 1px solid var(--border); border-radius: 10px; }

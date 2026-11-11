@@ -133,6 +133,7 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         truncated: false,
         checkpoint: None,
         activity: None,
+        work: None,
     })
 }
 

@@ -25,6 +25,7 @@ mod grok_checkpoint;
 mod grok_conversation;
 mod herdr_session;
 mod inline_image;
+mod work;
 pub use herdr_session::read_herdr_conversation;
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
@@ -161,6 +162,9 @@ pub struct TranscriptPage {
     /// Recorded turn state: working, waiting, idle or stopped. Absent is unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<&'static str>,
+    /// Sub-agents, background commands and monitors recorded in the conversation (Claude Code only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<Vec<Value>>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -330,6 +334,7 @@ fn read_records(
         truncated: false,
         checkpoint: None,
         activity: None,
+        work: None,
     })
 }
 

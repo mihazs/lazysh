@@ -450,5 +450,6 @@ fn project(history: codex_lineage::History, limit: u8) -> Result<TranscriptPage>
             Some("working") if !asked.is_empty() => Some("waiting"),
             other => other,
         },
+        work: None,
     })
 }

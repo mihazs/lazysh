@@ -15,6 +15,7 @@ fn page(messages: Vec<Value>) -> TranscriptPage {
         truncated: false,
         checkpoint: None,
         activity: None,
+        work: None,
     }
 }
 fn now() -> chrono::DateTime<Utc> {

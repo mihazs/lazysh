@@ -17,6 +17,8 @@ import {recordedImage,type RecordedImage} from './recordedImage';
 import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {projectMessages,type InjectedEvent} from './chatInjected';
+import AgentWorkPill,{WorkInline} from './AgentWorkPill';
+import {parseWork,type WorkItem} from './agentWork';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -49,6 +51,7 @@ type Page = {
   checkpoint?: string;
   branchId?: string;
   activity?: Activity;
+  work?: WorkItem[];
 };
 
 
@@ -75,6 +78,7 @@ export function parseTranscript(value: unknown): Page {
     || new TextEncoder().encode(page.branchId).length > 256
   )) throw new LocalUiError('chatUnsupportedResponse');
   page.activity = parseActivity(page.activity, page.agent, page.view);
+  page.work = parseWork(page.work);
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -237,6 +241,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activity, setActivity] = useState<Activity>();
+  const [work, setWork] = useState<WorkItem[]>();
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
@@ -300,7 +305,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     if (!shown) request.current++;
     if (bound && (path !== bound.path || agent !== bound.agent)) {
       request.current++; setFollowing(false); followRef.current = false;
-      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined);
+      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined); setWork(undefined);
       setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
     }
   }, [shown, bound, path, agent]);
@@ -308,7 +313,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setActivity(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setActivity(undefined); setWork(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -451,7 +456,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace) setActivity(page.activity);
+      if (replace) {setActivity(page.activity);setWork(page.work);}
       setMessages((previous) => {
         const combined = replace
           ? page.messages
@@ -477,6 +482,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
   const flow = useMemo(() => opened?.view === 'conversation' || timeline ? projectMessages(messages) : messages, [opened?.view, timeline, messages]);
   const turns = useMemo(() => timeline ? groupTurns(flow) : [], [timeline, flow]);
+  const workByCall = useMemo(() => new Map((timeline ? work ?? [] : []).map(item => [item.id, item])), [timeline, work]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
@@ -508,6 +514,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
       </p>}
       {message.blocks.map((block, index) => {
+        const task = timeline && block.type === 'tool_use' && block.id ? workByCall.get(block.id) : undefined;
+        if (task) return <WorkInline key={index} item={task} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
         return block.type === "text" ? (
           <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
@@ -696,6 +704,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         </section>) : flow.map(renderMessage)}
       </div>
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
+      {timeline && bound && <AgentWorkPill work={work} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">
