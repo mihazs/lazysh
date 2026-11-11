@@ -23,13 +23,13 @@ type Load<T>={state:'loading'}|{state:'ready';value:T}|{state:'failed';cause:UiE
 
 const stageKeys={worktree:'herdrCreateStageWorktree',workspace:'herdrCreateStageWorkspace',agentCheck:'herdrCreateStageAgentCheck',agent:'herdrCreateStageAgent'} as const;
 
-/** Opens the "New workspace" flow; nothing runs before the reviewed commands are confirmed. */
-export function HerdrWorkspaceCreate(props:Shared) {
+/** Opens the "New workspace" flow; nothing runs before the reviewed commands are confirmed. `agentFirst` opens it with "start an agent" already chosen. */
+export function HerdrWorkspaceCreate({label,agentFirst,...props}:Shared&{label?:string;agentFirst?:boolean}) {
   useUi();
   const [open,setOpen]=useState(false);
   return <>
-    <button className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><FolderPlus size={16} aria-hidden="true"/>{t('herdrCreateWorkspace')}</button>
-    {open && <CreateFlow {...props} close={()=>setOpen(false)}/>}
+    <button className="subtle-button herdr-create-trigger" disabled={props.disabled} onClick={()=>setOpen(true)}><FolderPlus size={16} aria-hidden="true"/>{label??t('herdrCreateWorkspace')}</button>
+    {open && <CreateFlow {...props} agentFirst={agentFirst} close={()=>setOpen(false)}/>}
   </>;
 }
 /** A space's overflow menu, opened by its button or a long press; "New worktree" needs a reported directory, which the dialog checks is in a Git repository. Escape is handled while capturing so the phone sidebar's own Escape (close the sidebar) never sees it. */
@@ -93,7 +93,7 @@ function Modal({title,close,step,children}:{title:string;close:()=>void;step:str
   </div>,document.body);
 }
 
-function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close}:Shared&{source?:Source;close:()=>void}) {
+function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close,agentFirst}:Shared&{source?:Source;close:()=>void;agentFirst?:boolean}) {
   useUi();
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const alive=useRef(true);
@@ -110,7 +110,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close}
   const [base,setBase]=useState('');
   const [path,setPath]=useState('');
   const [pathEdited,setPathEdited]=useState(false);
-  const [startAgent,setStartAgent]=useState(false);
+  const [startAgent,setStartAgent]=useState(!!agentFirst);
   const [kinds,setKinds]=useState<Load<AgentKind[]>>();
   const [kind,setKind]=useState('');
   const [prompt,setPrompt]=useState('');
@@ -137,6 +137,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,source,onCreated,close}
     setKinds({state:'loading'});
     void invoke<AgentKind[]>('herdr_agent_kinds',{sessionId}).then(value=>{if(owns())setKinds({state:'ready',value});},error=>{if(owns())setKinds({state:'failed',cause:captureUiError(error)});});
   }
+  useEffect(()=>{if(agentFirst)chooseAgent(true);},[]);
   function openDirectory(target:string) {
     setBrowse({path:target,entries:{state:'loading'}});
     void invoke<{name:string;isDir:boolean}[]>('list_directory',{sessionId,path:target}).then(rows=>{

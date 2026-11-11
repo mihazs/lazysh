@@ -80,14 +80,24 @@ and offers **Show terminal** and **Choose transcript**, the manual picker. A pan
 is server-scoped; the binding is a display convenience, not proof that the agent is
 still running, and it grants no input authority.
 
-In a session attached to Herdr there is no `TMUX_PANE`, so the Agent view lists the
-attached server's live agents instead (agent kind, status, folder, workspace and tab)
-and never the last-reported sessions. Selecting a row opens the conversation behind
-the session ID Herdr reports for that pane, resolved on the host by
-`lazysh-agent herdr-conversation` and re-checked against the live Herdr tree before
-and after the read. It is labelled unverified for that pane and cannot stage or send
-input. A row with no single reported Claude Code or Codex conversation says so, and
-**Enter session** opens the exact pane. A host companion without
+In a session attached to Herdr there is no `TMUX_PANE`, so the Agent view follows the
+pane Herdr reports as focused on the attached server (`panes[].focused`, read from the
+same cheap `herdr api snapshot` the Live agents list uses, every 3 seconds while the view
+is shown). When that pane runs a Claude Code or Codex agent for which Herdr reports exactly
+one session ID, the view opens that conversation by itself, resolved on the host by
+`lazysh-agent herdr-conversation` and re-checked against the live Herdr tree before and
+after the read, and re-links when focus moves to another pane, tab or workspace or the
+agent in the pane changes. The header names the agent, its folder and its state; the
+options button names the workspace and tab. If the focused pane runs no agent while others
+run, the view lists the attached server's live agents (agent kind, status, folder,
+workspace and tab) and never the last-reported sessions; a row you pick is labelled
+**Not this pane** and is dropped as soon as focus moves. If no agent runs on the server,
+the view offers **Start Claude Code**, **Start Codex** (each stages `claude` or `codex` in
+the terminal composer for you to review and send; nothing is sent from the Agent view)
+and, on hosts with full Herdr support, **Start an agent**, the Herdr workspace launcher
+with "start an agent" already chosen. A row with no single reported Claude Code or Codex
+conversation says so, and **Enter session** opens the exact pane. A linked conversation can
+**Stage in terminal** but never sends input by itself. A host companion without
 `herdr-conversation` makes the view ask you to update it from Agents.
 
 While a bound Claude Code or Codex conversation is followed, the Agent view opens one

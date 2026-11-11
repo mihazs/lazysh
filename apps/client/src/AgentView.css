@@ -21,7 +21,8 @@
 .agent-view .agent-card-summary > :is(span, small) { font-size: 12px; line-height: 1.5; }
 .agent-view .agent-card-summary > code { margin-bottom: 0; }
 .agent-view .agent-card-summary > .agent-row-action { color: var(--accent); font-weight: 600; }
-.agent-view-fallback .button-row button { min-height: 44px; }
+.agent-view-fallback .button-row { flex-wrap: wrap; }
+.agent-view-fallback .button-row button { min-height: 44px; white-space: nowrap; }
 .agent-view .agent-turn { display: grid; gap: 8px; align-content: start; }
 /* Prompt and answer read as chat bubbles: the prompt on the trailing side, the answer as plain text. */
 .agent-view .agent-bubble { border: 0; padding: 0; }
