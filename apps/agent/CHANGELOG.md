@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.34.0
+
+### Minor Changes
+
+- 95968a2: Add the `lazysh-agent transcript-watch` companion command: one long-lived stream of upserts for a Claude Code or Codex conversation, checked every 250 ms on the host, for the Agent view's live updates.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.34.0
+  - @lazysh/common@1.34.0
+  - @lazysh/notification-client@1.34.0
+
 ## 1.33.4
 
 ### Patch Changes
