@@ -50,6 +50,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Generic lifecycle protocol, retention and SQLite/WAL safety | [Companion events and storage](reference/companion-events.md) |
 | Provider-specific transcript formats and reader limits | [Companion contracts](companion.md) |
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
+| Agent view parity: every agent screen element, reference apps, status and open gaps | [Agent view parity](reference/agent-view-parity.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
