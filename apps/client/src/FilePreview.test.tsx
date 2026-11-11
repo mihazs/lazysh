@@ -5,7 +5,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {FilesPanel} from './SessionTools';
 
 vi.mock('@tauri-apps/api/core', () => ({invoke: vi.fn()}));
-vi.mock('./bridge', () => ({api: {listDirectory: vi.fn(), readFile: vi.fn()}}));
+vi.mock('./bridge', () => ({api: {listDirectory: vi.fn(), readFile: vi.fn(), hostFileStat: vi.fn(async () => { throw new Error('transfer actions are not under test'); })}}));
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4" onload="window.svgRan=1"><script>window.svgRan=1</script><rect width="4" height="4"/></svg>';
 const markdown = '# Release notes\n\n<img src=x onerror="window.markdownRan=1"><script>window.markdownRan=1</script>\n\n[active](javascript:alert(1)) ![remote](https://example.invalid/a.png)';
 const blobs: Blob[] = [];
