@@ -316,15 +316,16 @@ mod local {
             .is_err());
     }
 
-    #[tokio::test]
-    async fn cancelling_a_local_download_stops_it_and_removes_the_partial_copy() {
+    /// Downloads an 8 MiB file while `interfere` runs at every progress report with the bytes copied so far.
+    async fn interrupted(
+        interfere: impl Fn(&crate::file_transfer::Transfers, &Path, &str, u64),
+    ) -> (tempfile::TempDir, String, SshError) {
         let (temp, _app, _id, host) = resolved().await;
         let (transfers, _) = staging(temp.path()).await;
         let source = temp.path().join("big.bin");
         fs::write(&source, vec![7u8; 8 * 1024 * 1024]).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
-        let progress = std::sync::atomic::AtomicU64::new(0);
-        let result = crate::file_transfer::download(
+        let error = crate::file_transfer::download(
             &transfers,
             &host,
             &lease(),
@@ -333,18 +334,30 @@ mod local {
                 let bytes = serde_json::to_value(value).unwrap()["bytes"]
                     .as_u64()
                     .unwrap();
-                progress.store(bytes, std::sync::atomic::Ordering::SeqCst);
-                // The user pressed Cancel once data was flowing.
-                if bytes > 0 {
-                    transfers.cancel(&id, "local", &lease());
-                }
+                interfere(&transfers, &source, &id, bytes);
             },
         )
-        .await;
-        assert_eq!(result.unwrap_err().kind(), "transfer_cancelled");
-        assert!(progress.load(std::sync::atomic::Ordering::SeqCst) < 8 * 1024 * 1024);
+        .await
+        .unwrap_err();
         assert!(!temp.path().join("staging").join(&id).exists());
+        (temp, id, error)
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_local_download_stops_it_and_removes_the_partial_copy() {
+        // The user pressed Cancel once data was flowing.
+        let (_temp, _id, error) = interrupted(|transfers, _, id, bytes| {
+            if bytes > 0 {
+                transfers.cancel(id, "local", &lease());
+            }
+        })
+        .await;
+        assert_eq!(error.kind(), "transfer_cancelled");
         // A finished download is discarded by the same call.
+        let (temp, _app, _id, host) = resolved().await;
+        let (transfers, _) = staging(temp.path()).await;
+        let source = temp.path().join("done.bin");
+        fs::write(&source, b"done").unwrap();
         let kept = uuid::Uuid::new_v4().to_string();
         crate::file_transfer::download(
             &transfers,
@@ -358,6 +371,22 @@ mod local {
         assert!(temp.path().join("staging").join(&kept).exists());
         transfers.cancel(&kept, "local", &lease());
         assert!(!temp.path().join("staging").join(&kept).exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_that_shrinks_during_a_local_download_fails_and_leaves_nothing() {
+        let (_temp, _id, error) = interrupted(|_, source, _, bytes| {
+            if bytes > 0 && bytes < 8 * 1024 * 1024 {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(source)
+                    .unwrap()
+                    .set_len(bytes)
+                    .unwrap();
+            }
+        })
+        .await;
+        assert_eq!(error.kind(), "file_changed");
     }
 
     #[tokio::test]
