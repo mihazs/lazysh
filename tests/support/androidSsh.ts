@@ -434,7 +434,13 @@ export async function checkRawReceiverIdentity(current:Awaited<ReturnType<typeof
   return current;
 }
 
-/** Deliberately raw wire bytes: DEL erases only two committed ASCII characters. */
+/**
+ * The fixed OwnedImeService transactions, in order: correction, extension, ASCII erase, repeated word, then the
+ * SwiftKey-shaped predictive word, gesture word, composing Backspace, erase-and-commit autocorrect, a Backspace
+ * after the toolbar Esc key, and a word typed as letter commits and rewritten through a composing region. A lost, repeated or skipped edit changes these bytes.
+ */
+export const IME_TRANSACTION_WIRE='there\x7f\x7fthe'+'owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f'+'web ';
+/** Deliberately raw wire bytes: DEL erases only committed ASCII characters. */
 export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
   const expected=imeExpectedWire(nonce);
   if(!Buffer.from(bytes).equals(expected))throw new Error('Owned IME receiver bytes differ');
@@ -442,7 +448,7 @@ export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
 
 function imeExpectedWire(nonce:string) {
   if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
-  return Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  return Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
 }
 export async function readRawReceiverBytes(path:string) {
   const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);

@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncate,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
@@ -478,7 +478,7 @@ test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMES
         }
         expect(owned).toBe(true);
         expect(createHash('sha256').update(await readFile(`/proc/${saved!.pid}/exe`)).digest('hex')===hash).toBe(true);
-        const wire=Buffer.from(`there\x7f\x7fthe\x1b[13;2u\r\x1b[13;2uowned-current-${fixture.nonce}`);
+        const wire=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${fixture.nonce}`);
         client.child.stdin!.write(wire);
         await wait('delivery',()=>client!.stdout.includes(delivered));
         expect((await readFile(join(output,'received-bytes'))).equals(wire)).toBe(true);

@@ -3,6 +3,12 @@ import {version} from '@xterm/xterm/package.json';
 
 export type UnappliedTerminalEdit = {text: string; truncated: boolean};
 
+/** A wheel notch in xterm's SGR (1006) or X10 mouse report: button 64-67, no motion. It moves no cursor. */
+const wheelReport = (data: string) => {
+  const code = /^\x1b\[<(\d+);\d+;\d+M$/.exec(data)?.[1] ?? (/^\x1b\[M[\s\S]{3}$/.test(data) ? data.charCodeAt(3) - 32 : undefined);
+  return code !== undefined && (+code & 96) === 64;
+};
+
 /** Keep the editable IME suffix separate from terminal control input. */
 export function observeTerminalIme(terminal: Terminal, userInput: () => boolean, acceptsInput: () => boolean, onUnappliedEdit: (edit: UnappliedTerminalEdit | null) => void = () => {}) {
   const area = terminal.textarea, element = terminal.element;
@@ -34,6 +40,12 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   const foreground = () => acceptsInput() && document.hasFocus() && !document.hidden;
   const focused = () => foreground() && document.activeElement === area && !area.readOnly;
   const ownedDelta = (value: string) => {
+    // Erasing the end of the editor is a Backspace press, even over text that a key or a
+    // toolbar key made unowned since it was typed: a DEL keeps the remote cursor's own
+    // meaning. Only an insertion or a replacement needs the remote text to match, so only
+    // those are held to the owned suffix below.
+    if (value.length < previous.length && previous.startsWith(value) && /^[ -~]+$/.test(previous.slice(value.length)))
+      return '\x7f'.repeat(previous.length - value.length);
     // InputConnection selection is independent of its composing range. The
     // native caret may remain inside a corrected word; our remote cursor stays
     // at the end of this owned suffix, so translate the text change from there.
@@ -45,6 +57,8 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (old.slice(common).some(character => !/^[ -~]$/.test(character))) return;
     return '\x7f'.repeat(old.length - common) + next.slice(common).join('');
   };
+  // Deleting into text that ownership already left must not leave the owned start past the end.
+  const adopt = (value: string) => {previous = value; start = Math.min(start, value.length);};
   const stage = (value: string) => {
     // This is local IME context, not an editable remote command line. Never log or persist it.
     let end = Math.min(value.length, 65536);
@@ -72,8 +86,9 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     // This edit already passed the owned-prefix and ASCII-erasure checks.
     send(pending.delta);
   };
-  const output = terminal.onData(() => {
-    if (userInput() && !sending && !composing && !ending) {
+  const output = terminal.onData(data => {
+    // Scrolling a mouse-tracking program only reports the wheel; the command line stays as typed.
+    if (userInput() && !sending && !composing && !ending && !wheelReport(data)) {
       const physical = hardware || !!keypressEvent?.eventPhase; reset(); hardware = physical;
     }
   });
@@ -90,7 +105,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     const value = ownedDelta(area.value), key = deferred;
     if (value === undefined) {stage(area.value); return;}
     cancelComposition(); clearTimeout(completion);
-    composing = false; ending = false; deferred = undefined; previous = area.value;
+    composing = false; ending = false; deferred = undefined; adopt(area.value);
     send(value);
     if (key) {if (focused()) replay(key); reset();}
   };
@@ -159,7 +174,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
       const blocked = key229, ownedStart = start;
       reset();
       if (blocked) {
-        start = ownedStart;
+        start = Math.min(ownedStart, previous.length);
         event.stopImmediatePropagation();
         const owner = generation;
         fallbackPending = {owner,delta};
@@ -169,12 +184,12 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     const delta = ownedDelta(value);
     if (delta === undefined) {event.stopImmediatePropagation(); stage(value); return;}
     if (event.inputType === 'insertLineBreak' && delta === '\n' && !key229) {
-      event.stopImmediatePropagation(); previous = value; send('\r'); return;
+      event.stopImmediatePropagation(); adopt(value); send('\r'); return;
     }
     if (!/^(insertText|insertReplacementText|deleteContentBackward)$/.test(event.inputType)
       && (event.inputType !== 'deleteContentForward' || key229)
       && (event.inputType !== 'insertCompositionText' || key229 || !keyless)) {fallback(delta); return;}
-    event.stopImmediatePropagation(); key229 = false; previous = value;
+    event.stopImmediatePropagation(); key229 = false; adopt(value);
     send(delta);
   };
   const begin = (event: CompositionEvent) => {

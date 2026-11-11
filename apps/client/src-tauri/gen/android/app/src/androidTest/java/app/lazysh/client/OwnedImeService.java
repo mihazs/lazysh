@@ -56,6 +56,14 @@ public final class OwnedImeService extends InputMethodService {
     @Override public void onFinishInput() { current = null; super.onFinishInput(); }
     @Override public void onDestroy() { current = null; service = null; super.onDestroy(); }
 
+    /** The live editor, which must still be the connection the test captured. */
+    private static InputConnection capturedConnection(Snapshot active) {
+        Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
+        if (saved == null || saved.connection != target.connection)
+            throw new IllegalStateException("Owned IME captured terminal required");
+        return target.connection;
+    }
+
     private static Bundle operation(String method, String nonce) {
         if ("arm".equals(method)) {
             if (owner != null && !owner.equals(nonce)) throw new IllegalStateException("Owned IME already armed");
@@ -86,10 +94,7 @@ public final class OwnedImeService extends InputMethodService {
         // Fixed ASCII transactions only; the host raw receiver is the delivery oracle.
         if ("composeCorrection".equals(method) || "extendTail".equals(method)
                 || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)) {
-            Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
-            if (saved == null || saved.connection != target.connection)
-                throw new IllegalStateException("Owned IME captured terminal required");
-            InputConnection connection = target.connection;
+            InputConnection connection = capturedConnection(active);
             boolean accepted = connection.beginBatchEdit();
             try {
                 if ("composeCorrection".equals(method)) {
@@ -116,6 +121,50 @@ public final class OwnedImeService extends InputMethodService {
                 CharSequence after = connection.getTextAfterCursor(256, 0);
                 result.putBoolean("suffixMatched", after != null && "there".contentEquals(after));
             }
+        }
+        // SwiftKey-shaped transactions (shipped 9.13.18.4: setComposingText per key, finishComposingText or
+        // commitText to end a word, deleteSurroundingText to replace or erase). Fixed ASCII, continuing the
+        // text the transactions above left in the editor.
+        if ("predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
+                || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)) {
+            InputConnection connection = capturedConnection(active);
+            boolean accepted = connection.beginBatchEdit();
+            try {
+                if ("predictWord".equals(method)) {
+                    // Typed letter by letter; the accepted prediction replaces the composing word and adds the separator.
+                    for (String typed : new String[] {"o", "ow", "own", "owned"}) accepted &= connection.setComposingText(typed, 1);
+                    accepted &= connection.commitText("owned ", 1);
+                } else if ("swipeWord".equals(method)) {
+                    // A gesture: the whole word and its separator are committed with no composing region.
+                    accepted &= connection.commitText("swipe ", 1);
+                } else if ("composingBackspace".equals(method)) {
+                    // Backspace inside the composing region shortens the word; typing goes on from there.
+                    for (String typed : new String[] {"t", "te", "tex", "te", "ten"}) accepted &= connection.setComposingText(typed, 1);
+                    accepted &= connection.commitText("ten ", 1);
+                } else if ("replacePrevious".equals(method)) {
+                    // Autocorrect of the word before the caret: erase it, then commit the correction.
+                    accepted &= connection.deleteSurroundingText(4, 0);
+                    accepted &= connection.commitText("tan ", 1);
+                } else if ("webWord".equals(method)) {
+                    // SwiftKey's profile for a Chromium editor: each letter is a plain commit, and the word end
+                    // rewrites the same word through a composing region before the separator is committed.
+                    for (String letter : new String[] {"w", "e", "b"}) accepted &= connection.commitText(letter, 1);
+                    accepted &= connection.setComposingRegion(21, 24);
+                    accepted &= connection.setComposingText("web", 1);
+                    accepted &= connection.finishComposingText();
+                    accepted &= connection.commitText(" ", 1);
+                } else {
+                    accepted &= connection.deleteSurroundingText(1, 0);
+                }
+            } finally { accepted &= connection.endBatchEdit(); }
+            result.putBoolean("accepted", accepted);
+            CharSequence read = connection.getTextBeforeCursor(256, 0);
+            String expected = "predictWord".equals(method) ? "thetheowned "
+                    : "swipeWord".equals(method) ? "thetheowned swipe "
+                    : "composingBackspace".equals(method) ? "thetheowned swipe ten "
+                    : "replacePrevious".equals(method) ? "thetheowned swipe tan "
+                    : "eraseOne".equals(method) ? "thetheowned swipe tan" : "thetheowned swipe tanweb ";
+            result.putBoolean("readMatched", read != null && expected.contentEquals(read));
         }
         if ("lineBreak".equals(method)) {
             Snapshot target = Objects.requireNonNull(active, "Owned IME editor unavailable");
@@ -145,6 +194,8 @@ public final class OwnedImeService extends InputMethodService {
                     || !("arm".equals(method) || "state".equals(method) || "capture".equals(method)
                     || "composeCorrection".equals(method) || "extendTail".equals(method)
                     || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)
+                    || "predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
+                    || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)
                     || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
