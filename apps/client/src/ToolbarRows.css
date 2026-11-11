@@ -1,9 +1,12 @@
 /* Terminal toolbar: every configured row is a fixed grid of equal-width keys, so nothing pages or slides.
    The key height is a variable so the size can be tuned in one place. */
 .terminal-keys[data-rows] {
+  /* The terminal sets the height from the Toolbar key height preference; the text and icons scale with it. */
   --terminal-key-height: 32px;
+  /* The chosen height, shrunk on a short window (a docked keyboard) so the rows never take more than about a third of it. */
+  --terminal-key-size: max(24px, min(var(--terminal-key-height), calc((34dvh - 12px) / var(--toolbar-rows, 2))));
   --terminal-key-min-width: 28px;
-  --terminal-key-max-width: 64px;
+  --terminal-key-max-width: 72px;
   position: relative;
   flex-direction: column;
   gap: 3px;
@@ -31,16 +34,20 @@
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: var(--terminal-key-height);
-  height: var(--terminal-key-height);
+  min-height: var(--terminal-key-size);
+  height: var(--terminal-key-size);
   padding: 0 2px;
   border-radius: 8px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: clamp(10px, calc(var(--terminal-key-size) * .375), 16px);
   line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.terminal-keys[data-rows] .terminal-keys-row > button > svg:not(.terminal-key-lock) {
+  width: clamp(14px, calc(var(--terminal-key-size) * .5), 24px);
+  height: clamp(14px, calc(var(--terminal-key-size) * .5), 24px);
 }
 .terminal-keys .terminal-key-lock { position: absolute; top: 2px; right: 2px; }
 

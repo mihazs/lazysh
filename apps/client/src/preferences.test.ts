@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions, toolbarFromRows, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
+import { defaults, decodeClipboardRequest, keepDevicePreferences, parseChord, parseChordSteps, parsePreferences, parseTheme, syncablePreferences, terminalOptions, toolbarFromRows, toolbarKeyHeights, toolbarKeys, toolbarRowBreak, toolbarRows } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
   it('keeps past-bottom keyboard dismissal opt-in for old, invalid and stored settings',()=>{
@@ -137,6 +137,26 @@ describe("OSC52 clipboard requests", () => {
   const hostile = parsePreferences({...defaults, toolbar: ["esc", toolbarRowBreak, "esc", "run", "tab", toolbarRowBreak, "c", toolbarRowBreak, "d", toolbarRowBreak]});
   expect(hostile.toolbar).toEqual(["esc", toolbarRowBreak, "tab", toolbarRowBreak, "c", "d"]);
   expect(toolbarRows(hostile.toolbar)).toEqual([["esc"], ["tab"], ["c", "d"]]);
+ });
+ it("keeps the toolbar key height within its bounds and stores it only when it differs from the default", () => {
+  const stored = (toolbarKeyHeight: unknown) => parsePreferences({...defaults, toolbarKeyHeight}).toolbarKeyHeight;
+  expect(Object.hasOwn(parsePreferences({...defaults}), "toolbarKeyHeight")).toBe(false);
+  expect(Object.hasOwn(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarKeyHeight: toolbarKeyHeights.default}))), "toolbarKeyHeight")).toBe(false);
+  for (const height of [toolbarKeyHeights.min, 44, toolbarKeyHeights.max]) expect(stored(height)).toBe(height);
+  // Anything else (out of range, fractional, not a number) falls back to the default, which is not stored.
+  for (const height of [toolbarKeyHeights.min - 1, toolbarKeyHeights.max + 1, 0, -40, 40.5, NaN, "44", null, [], {}]) expect(stored(height)).toBeUndefined();
+  expect(stored(44)).toBe(parsePreferences(JSON.parse(JSON.stringify({...defaults, toolbarKeyHeight: 44}))).toolbarKeyHeight);
+ });
+ it("keeps the toolbar key height on this device when settings sync", () => {
+  const mine = parsePreferences({...defaults, toolbarKeyHeight: 44, snippets: [{label: "a", text: "b"}]});
+  // Uploading leaves the height out, so a peer that predates it still accepts the snapshot.
+  const uploaded = syncablePreferences(mine);
+  expect(Object.hasOwn(uploaded, "toolbarKeyHeight")).toBe(false);
+  expect(uploaded.snippets).toEqual(mine.snippets);
+  // A download from a device with another height, or none, keeps this device's.
+  expect(parsePreferences(keepDevicePreferences({...defaults, toolbarKeyHeight: 56, fontSize: 20}, mine))).toMatchObject({toolbarKeyHeight: 44, fontSize: 20});
+  expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, parsePreferences({...defaults}))).toolbarKeyHeight).toBeUndefined();
+  expect(keepDevicePreferences(null, mine)).toBeNull();
  });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);

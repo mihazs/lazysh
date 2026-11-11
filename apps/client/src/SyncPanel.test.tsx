@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import SyncPanel, { parseSyncPreview } from "./SyncPanel";
+import { defaults, getPreferences, savePreferences } from "./preferences";
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(() => { cleanupNativeMocks(); localStorage.clear(); });
 
@@ -69,4 +70,28 @@ it("requires explicit preview and apply, and never automatically uploads", async
   ).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("sync_apply", { token: "review-one" }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(changed).toHaveBeenCalledOnce();
+});
+
+it("keeps this device's toolbar key height out of uploads and out of reach of downloads", async () => {
+  savePreferences({ ...defaults, toolbarKeyHeight: 44, fontSize: 18 });
+  vi.mocked(invoke).mockImplementation(async (command) =>
+    command === "sync_status"
+      ? { configured: true, endpoint: "https://dav.example/", username: "dev", settingsEnabled: true, credentialsEnabled: false }
+      : command === "sync_preview"
+        ? preview
+        : command === "sync_apply"
+          // Another device's settings, with its own key height.
+          ? { hostsAdded: 0, credentialsAdded: 0, preferences: { ...defaults, fontSize: 22, toolbarKeyHeight: 56 } }
+          : undefined,
+  );
+  render(<SyncPanel onHostsChanged={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Upload settings" }));
+  await vi.waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "sync_push")).toBe(true));
+  const pushed = vi.mocked(invoke).mock.calls.find(([name]) => name === "sync_push")![1] as { preferences: Record<string, unknown> };
+  expect(pushed.preferences.fontSize).toBe(18);
+  expect(Object.hasOwn(pushed.preferences, "toolbarKeyHeight")).toBe(false);
+  fireEvent.click(await screen.findByRole("button", { name: "Preview remote settings" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Apply reviewed changes" }));
+  await vi.waitFor(() => expect(getPreferences().fontSize).toBe(22));
+  expect(getPreferences().toolbarKeyHeight).toBe(44);
 });

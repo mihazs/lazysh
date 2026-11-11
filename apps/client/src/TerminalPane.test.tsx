@@ -44,6 +44,18 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+it('sizes the toolbar keys from the saved key height and follows a change without remounting',()=>{
+  savePreferences({...defaults});
+  mount();
+  const keys=screen.getByLabelText('Terminal keys');
+  const height=()=>keys.style.getPropertyValue('--terminal-key-height');
+  expect(height()).toBe('32px');
+  act(()=>savePreferences({...getPreferences(),toolbarKeyHeight:48}));
+  expect(screen.getByLabelText('Terminal keys')).toBe(keys);
+  expect(height()).toBe('48px');
+  act(()=>savePreferences({...getPreferences(),toolbarKeyHeight:undefined}));
+  expect(height()).toBe('32px');
+});
 it.each(['write','resize'] as const)('keeps structured native and localized %s failures readable',async operation=>{
   let receive!:(data:string)=>void, resized!:(size:{cols:number;rows:number})=>void;
   terminal.onData=listener=>{receive=listener;return{dispose(){}};};
