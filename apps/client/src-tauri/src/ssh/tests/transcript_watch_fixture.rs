@@ -11,11 +11,10 @@ use tauri::Manager;
 
 type App = tauri::App<tauri::test::MockRuntime>;
 
-fn record(id: &str, parent: Option<&str>, role: &str, text: &str) -> String {
-    format!(
-        "{}\n",
-        json!({"type":role,"uuid":id,"parentUuid":parent,"message":{"content":text}})
-    )
+/// One synthetic Claude Code transcript line.
+fn line(uuid: &str, parent: Option<&str>, kind: &str) -> String {
+    let body = json!({"uuid": uuid, "parentUuid": parent, "message": {"content": "synthetic text"}, "type": kind});
+    body.to_string() + "\n"
 }
 
 /// Events reach the test in the order the companion sent them.
@@ -70,11 +69,7 @@ fn running(directory: &Path) -> bool {
 
 pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let transcript = directory.join("session.jsonl");
-    fs::write(
-        &transcript,
-        record("m0", None, "user", "synthetic question"),
-    )
-    .unwrap();
+    fs::write(&transcript, line("m0", None, "user")).unwrap();
     let target = || WatchTarget::Path {
         agent: "claude".into(),
         path: transcript.display().to_string(),
@@ -99,18 +94,13 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let mut latencies = Vec::new();
     for index in 1..=10 {
         let parent = format!("m{}", index - 1);
-        let line = record(
-            &format!("m{index}"),
-            Some(&parent),
-            "assistant",
-            "synthetic answer",
-        );
+        let text = line(&format!("m{index}"), Some(&parent), "assistant");
         let appended = Instant::now();
         fs::OpenOptions::new()
             .append(true)
             .open(&transcript)
             .unwrap()
-            .write_all(line.as_bytes())
+            .write_all(text.as_bytes())
             .unwrap();
         let (delta, _) = until(&seen, |event| {
             event["type"] == "frame"
