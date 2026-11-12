@@ -1,5 +1,7 @@
 import {memo} from 'react';
 import Markdown from 'react-markdown';
+import QuestionAnswers, {answerable} from './AgentQuestionAnswer';
+import type {DialogAnswerer} from './ChatTerminalInput';
 import {t} from './i18n/core';
 import {LocalUiError} from './i18n/localError';
 import './ChatInteraction.css';
@@ -91,7 +93,8 @@ export function ChatActivity({activity}:{activity?:Activity}) {
   </p>;
 }
 
-export function ChatCard({card,body,answered,onOpenTerminal}:{card:Card;body?:string;answered?:boolean;onOpenTerminal?:()=>void}) {
+/** `answerer` makes a single-question card answerable here; without it the card only shows the question. */
+export function ChatCard({card,body,answered,onOpenTerminal,answerer}:{card:Card;body?:string;answered?:boolean;onOpenTerminal?:()=>void;answerer?:DialogAnswerer}) {
   if(card.kind==='plan')return <section className="chat-card chat-plan-card" aria-label={t('chatPlanTitle')}>
     <h5>{t('chatPlanTitle')}</h5>
     {card.explanation && <p>{card.explanation}</p>}
@@ -117,7 +120,9 @@ export function ChatCard({card,body,answered,onOpenTerminal}:{card:Card;body?:st
       </ul> : <p>{t('chatQuestionFreeform')}</p>}
       {question.multiple && <p>{t('chatQuestionMultiple')}</p>}
     </fieldset>)}
-    <p role="note">{t(answered ? 'chatQuestionAnswered' : 'chatQuestionUnanswered')} {t('chatQuestionTerminal')}</p>
+    {answerer && !answered && answerable(card.questions)
+      ? <QuestionAnswers questions={card.questions} answerer={answerer}/>
+      : <p role="note">{t(answered ? 'chatQuestionAnswered' : 'chatQuestionUnanswered')} {t('chatQuestionTerminal')}</p>}
     {onOpenTerminal && !answered && <button type="button" onClick={onOpenTerminal}>{t('chatOpenTerminal')}</button>}
   </section>;
 }

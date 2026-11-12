@@ -65,6 +65,8 @@ exposes no public format guard for that mode. This is not a guaranteed atomic
 agent message or provider identity proof. The existing explicit destination
 confirmation and visible explanation apply; Stage remains the default.
 
+The Agent view answers a Claude Code `AskUserQuestion` dialog through the same receipt with two more bounded inputs: `select` (`option`, `of`; 1 to 9, option within `of`) sends the option's digit alone, and `submit` (`of`) sends Down for each of the `of` options plus the "Type something" row, then Enter, which is how Claude Code 2.1.318 confirms a multi-select list (checked live; a digit selects at once, no Enter). The review page's "Submit answers" is `select` 1, and a typed answer is `select` of the free-text row then an ordinary `send`. There is no other key path. Herdr's guard rejects both, so those questions stay in the terminal. Before every key the client re-reads the hook report of the pane and sends nothing unless the same session still needs attention; the dialog is recorded as answered only when the transcript shows its tool result.
+
 Every payload byte is encoded as fixed octal inside a quoted argument in one
 generated ASCII control line, capped at 32 KiB before dispatch. The original
 context guard precedes creation of a UUID named buffer, then runs again before

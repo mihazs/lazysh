@@ -647,6 +647,78 @@ describe('permission requests of the agent in this pane',()=>{
   });
 });
 
+describe('answering the open question of the agent',()=>{
+  const question=(questions:object[],id='q1')=>[
+    {id:'p',role:'user',blocks:[{type:'text',text:'Ask me'}]},
+    {id:'a',role:'assistant',blocks:[{type:'tool_use',id,name:'AskUserQuestion',text:'{}',card:{kind:'question',questions}}]},
+  ];
+  const single={question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]};
+  const multi={question:'Pick fruits',multiple:true,options:[{label:'Apple'},{label:'Pear'},{label:'Plum'}]};
+  async function open(messages:object[],state='needs_attention',agent='claude',label='Claude Code') {
+    host(agent,[row(label,'%3',state)],'available',[[]]);
+    const fallback=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='agent_transcript'?{...page(agent,messages),activity:'waiting'}:fallback(command,args,options));
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+  }
+  // The composer binds the pane the hook report names by itself; the dialog is answered through that same receipt.
+  const bind=async()=>{await advance(0);await advance(0);};
+  const sent=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(action=>action.input);
+  const card=()=>screen.getByRole('region',{name:'Question'});
+  const click=async(name:string|RegExp)=>{await act(async()=>{fireEvent.click(within(card()).getByRole('button',{name}));await vi.advanceTimersByTimeAsync(0);});};
+  it('sends the digit of the chosen option exactly once, after 400 ms, with the pane re-checked first',async()=>{
+    await open(question([single]));await bind();
+    const blue=within(card()).getByRole('button',{name:'Blue'});
+    expect(blue.hasAttribute('disabled')).toBe(true);await advance(400);
+    await click('Blue');await click('Blue');
+    expect(sent()).toEqual([{kind:'select',option:2,of:2}]);
+    expect(within(card()).getByRole('status').textContent).toContain('Sent to the terminal');
+    expect(calls('agent_snapshot').length).toBeGreaterThan(1);
+  });
+  it('toggles each fruit, confirms the list, then the review page',async()=>{
+    await open(question([multi]));await bind();await advance(400);
+    fireEvent.click(within(card()).getByLabelText('Plum'));fireEvent.click(within(card()).getByLabelText('Apple'));
+    await act(async()=>{fireEvent.click(within(card()).getByRole('button',{name:'Send answer'}));await vi.advanceTimersByTimeAsync(800);});
+    expect(sent()).toEqual([{kind:'select',option:1,of:3},{kind:'select',option:3,of:3},{kind:'submit',of:3},{kind:'select',option:1,of:2}]);
+  });
+  it('goes through several questions in order and ends on the review page',async()=>{
+    await open(question([single,{...single,question:'Pick a size',options:[{label:'Small'},{label:'Large'}]}]));await bind();await advance(400);
+    expect(within(card()).getByText(/1\/2/)).toBeTruthy();await click('Red');
+    await advance(400);expect(within(card()).getByText(/2\/2/)).toBeTruthy();
+    await act(async()=>{fireEvent.click(within(card()).getByRole('button',{name:'Large'}));await vi.advanceTimersByTimeAsync(800);});
+    expect(sent()).toEqual([{kind:'select',option:1,of:2},{kind:'select',option:2,of:2},{kind:'select',option:1,of:2}]);
+  });
+  it('picks the free-text row and types the answer',async()=>{
+    await open(question([single]));await bind();await advance(400);
+    fireEvent.change(within(card()).getByLabelText('Or type your own answer'),{target:{value:'Green'}});
+    await click('Send typed answer');
+    expect(sent()).toEqual([{kind:'select',option:3,of:3},{kind:'send',text:'Green'}]);
+  });
+  it('sends nothing when the agent no longer waits, and says so',async()=>{
+    await open(question([single]));await bind();await advance(400);
+    const fallback=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='agent_snapshot'?{schemaVersion:1,sessions:[row('Claude Code','%3','working')]}:fallback(command,args,options));
+    await click('Red');
+    expect(sent()).toEqual([]);expect(within(card()).getByRole('alert').textContent).toContain('not sent');
+  });
+  it('keeps the question read-only while the pane is not bound and for agents without verified keys',async()=>{
+    await open(question([single]));
+    const bound=vi.mocked(invoke).getMockImplementation()!;
+    cleanup();vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>command==='tmux_chat' && (args as {action:{kind:string}}).action.kind==='bind'?Promise.reject(new Error('refused')):bound(command,args,options));
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);await advance(0);
+    expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();expect(within(card()).getByText(/Answer in the terminal/)).toBeTruthy();
+    cleanup();vi.mocked(invoke).mockReset();
+    await open(question([single]),'needs_attention','codex','Codex');await bind();await advance(400);
+    expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();expect(within(card()).getByText(/Answer in the terminal/)).toBeTruthy();
+  });
+  it('shows no answer controls for a question the agent already got an answer to',async()=>{
+    await open([...question([single]),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]}]);await bind();await advance(400);
+    expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();
+  });
+});
+
 it('shows a message typed while the agent works as a queued card until the agent takes it, then once as the person\'s message',async()=>{
   const queued=[{text:'then run the tests',timestamp:new Date(Date.now()-90_000).toISOString()},{text:'and update the docs'}];
   const first={...page('claude',turn('First prompt','First answer')),queued};

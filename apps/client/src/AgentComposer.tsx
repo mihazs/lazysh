@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useId,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,Paperclip,SendHorizontal,Square} from 'lucide-react';
+import {publishComposerControl} from './agentDialogAnswer';
 import AttachmentPanel from './AttachmentPanel';
 import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalDraft,validTerminalSource,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalSource} from './ChatTerminalInput';
@@ -44,6 +45,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const [attachmentOpen,setAttachmentOpen]=useState(false);
   const [control,setControl]=useState<TerminalControl>();
   const [staged,setStaged]=useState(false);
+  // The view answers dialogs through the same bound input.
+  useEffect(()=>{publishComposerControl(sessionId,control);return()=>publishComposerControl(sessionId,undefined);},[sessionId,control]);
   const field=useRef<HTMLTextAreaElement>(null);
   const paletteId=useId();
   const walk=useRef<Recall>({index:null,text:''});
