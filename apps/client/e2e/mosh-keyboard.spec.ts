@@ -1,6 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {historyLines,historyView,mountHistory,settle} from './fixtures/terminalHistory';
 import {openMoshApp} from './fixtures/moshApp';
+import {shrinkVisualViewport} from './fixtures/visualViewport';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
@@ -47,11 +48,7 @@ for(const mosh of [false,true])test(`${mosh?'Mosh':'SSH'} fits and restores when
   test.skip(testInfo.project.name!=='phone');
   await mountHistory(page,mosh,true,true);
   const before=await historyView(page);
-  await page.evaluate(()=>{
-    const viewport=window.visualViewport!;
-    Object.defineProperty(viewport,'height',{configurable:true,value:viewport.height-320});
-    viewport.dispatchEvent(new Event('resize'));
-  });
+  await shrinkVisualViewport(page,320);
   await expect.poll(async()=>(await historyView(page)).rows).toBeLessThan(before.rows);
   const reduced=(await historyView(page)).rows;
   await page.evaluate(()=>{const viewport=window.visualViewport!;Object.defineProperty(viewport,'scale',{configurable:true,value:2});viewport.dispatchEvent(new Event('resize'));});
