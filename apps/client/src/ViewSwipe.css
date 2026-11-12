@@ -1,0 +1,6 @@
+/* While a swipe moves a session between its Terminal and Agent views, the two pages sit side by side and the finger moves the strip.
+   --view-pos is 0 on the terminal and 1 on the Agent view; --view-settle is the release animation (0 under reduced motion). */
+.session-body[data-view-swipe] > :is(.terminal-pane-swiping, .agent-view:not([hidden])) { position: absolute; inset: 0; will-change: transform; }
+.session-body[data-view-swipe] > .terminal-pane-swiping { transform: translateX(calc(var(--view-pos) * -100%)); }
+.session-body[data-view-swipe] > .agent-view:not([hidden]) { transform: translateX(calc((1 - var(--view-pos)) * 100%)); }
+.session-body[data-view-swipe="settle"] > :is(.terminal-pane-swiping, .agent-view:not([hidden])) { transition: transform var(--view-settle) ease-out; }

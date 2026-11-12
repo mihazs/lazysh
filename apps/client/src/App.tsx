@@ -101,6 +101,8 @@ import { dictationInput, type DirectDictation } from './voiceDelivery';
 import type {UploadedAttachment} from "./AttachmentPanel";
 import {stageComposerAttachment} from "./composerTokens";
 import {bothMinWidth,readSessionViews,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
+import {useEdgeGestureMode} from "./edgeGestures";
+import {useViewSwipe} from "./useViewSwipe";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
@@ -1311,8 +1313,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [agentMounted,setAgentMounted]=useState<string[]>([]);
   const [wideSession,setWideSession]=useState(false);
   const sessionBodyObserver=useRef<ResizeObserver|null>(null);
+  const sessionBody=useRef<HTMLDivElement|null>(null);
   const measureSessionBody=useCallback((element:HTMLDivElement|null)=>{
     sessionBodyObserver.current?.disconnect();sessionBodyObserver.current=null;
+    sessionBody.current=element;
     if(!element)return;
     const measure=()=>setWideSession(element.clientWidth>=bothMinWidth);
     measure();
@@ -1482,6 +1486,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
 
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  // Phones in a connected session swipe between the terminal and the Agent view; the Terminal|Agent buttons stay.
+  const swipeEnabled=useEdgeGestureMode('viewSwitch')==='gesture' && !!active && active.connected && !active.local && view==='terminal' && !wideSidebar && !sidebar && !navigationCovered;
+  const swipeFrom=useViewSwipe({enabled:swipeEnabled,scope:active?.id??'',page:activeSessionView==='terminal'?'terminal':'agent',body:sessionBody,onSwitch:page=>{if(active)chooseSessionView(active,page);}});
+  // The Agent view is fetched before the first swipe, so it arrives with the finger.
+  useEffect(()=>{if(swipeEnabled)void import("./AgentView");},[swipeEnabled]);
+  useEffect(()=>{if(active && swipeFrom)setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,swipeFrom]);
   const remoteActive=!!active?.connected && !active.local;
   const agentSection=agentSections[activeId??'']??'live';
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
@@ -2443,6 +2453,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={session.id}
                     session={session}
                     active={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "agent"}
+                    swiping={swipeFrom!==null && activeId === session.id}
                     typingActivation={typingTerminal === session.id}
                     herdrNavigationOnly={!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')}
                     reportError={setError}
@@ -2453,9 +2464,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   />
                 ))}
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
-                  <AgentView key={session.id} sessionId={session.id} shown={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "terminal"}
+                  <Suspense key={session.id} fallback={null}>
+                  <AgentView sessionId={session.id} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
                     tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
+                  </Suspense>
                 ))}
                 {active.connected && view === "usage" && (
                   <>
