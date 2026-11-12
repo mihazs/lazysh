@@ -12,3 +12,5 @@ __pycache__/
 *.pyc
 *.tsbuildinfo
 *.egg-info/
+dist-bench/
+apps/client/bench-results/
