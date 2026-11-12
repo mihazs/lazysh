@@ -36,6 +36,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Enroll a notification device or configure relay delivery (webhook, Gotify, Apprise) | [Notifications](notifications.md) · [Push registration](push-registration.md) · [UnifiedPush enrollment](unifiedpush-enrollment.md) · [Notification relay](notification-relay.md) · [Web push server](web-push-server.md) |
 | Inspect/control an owned Android device or iOS simulator | [Devices](devices.md) |
 | Build and validate native client interfaces | [Native GUI testing](native-gui-testing.md) · [Android testing](android-testing.md) · [iOS testing](ios-testing.md) |
+| Write or run an Appium test, or add a regression test for a bug | [Write and run Appium tests](how-to/write-and-run-appium-tests.md) · [Regression test index](regression-tests.md) |
 | Verify exact published APKs or startup CPU evidence | [Published APK qualification](android-published-apk.md) · [Android startup CPU budget](android-startup-cpu-budget.md) |
 | Localize UI or produce platform icon assets | [Localization](localization.md) · [App icons](app-icons.md) |
 | Prepare versions and release artifacts | [Versioning](versioning.md) · [Release artifacts](release-artifacts.md) · [Release tag gate](release-tag-gate.md) |
@@ -72,6 +73,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Explicit live account collectors and unsupported/unknown states | [AI account usage](ai-account-usage.md) |
 | Native local-speech models, inference and interop limits | [Voice native interop](voice-native-interop.md) |
 | Native UI locale support and delivery boundaries | [Native UI locale](native-ui-locale.md) |
+| Appium and WebdriverIO suite layout, naming, selectors, waits, flake policy and test placement | [Mobile end-to-end conventions](reference/mobile-e2e-conventions.md) |
 | Release history | [Changelog](../CHANGELOG.md) |
 
 ## Explanation
@@ -82,6 +84,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Why does public sharing use a separate service? | [Sharing design](explanation/sharing.md) |
 | Why does local inbox monitoring not provide background push? | [Notification delivery](explanation/notification-delivery.md) |
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
+| Why Appium and WebdriverIO drive the Android app, and where the suite sits in the test pyramid | [ADR 0002](architecture/adr-0002-appium-webdriverio-android-e2e.md) |
 | Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery
