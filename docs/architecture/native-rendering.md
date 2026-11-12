@@ -1,6 +1,6 @@
 # Native rendering
 
-Status: **proposed; nothing here is implemented or measured**. The repository contains no `SurfaceView`, `TextureView`, `MTKView`, `wgpu` or Skia code (searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed; nothing here is implemented or measured**. The repository contains no `MTKView`, `wgpu` or Skia code and, apart from the debug-only [Android composition PoC](android-surface-composition-poc.md), no `SurfaceView` or `TextureView` code (searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## What must be decided by evidence
 
@@ -43,7 +43,7 @@ Required before any production surface work. Each item is recorded pass or fail 
 | Destroy and recreate | Surface loss and activity recreation rebuild the view from core state. |
 | Accessibility feasibility | A route to screen-reader content exists ([accessibility](#accessibility)). |
 
-Proof-of-concept issues: Android [#1310](https://github.com/mihazs/lazysh/issues/1310), iOS [#1311](https://github.com/mihazs/lazysh/issues/1311). Desktop PoCs are the first step of [#1331](https://github.com/mihazs/lazysh/issues/1331), [#1332](https://github.com/mihazs/lazysh/issues/1332) and [#1333](https://github.com/mihazs/lazysh/issues/1333). A platform that fails its gate keeps xterm.js, or uses the documented alternative.
+Android emulator results: [Android surface composition PoC](android-surface-composition-poc.md). Proof-of-concept issues: Android [#1310](https://github.com/mihazs/lazysh/issues/1310), iOS [#1311](https://github.com/mihazs/lazysh/issues/1311). Desktop PoCs are the first step of [#1331](https://github.com/mihazs/lazysh/issues/1331), [#1332](https://github.com/mihazs/lazysh/issues/1332) and [#1333](https://github.com/mihazs/lazysh/issues/1333). A platform that fails its gate keeps xterm.js, or uses the documented alternative.
 
 Android strategies in order of trial: `SurfaceView` first (lowest compositing cost where it works; z-order and clipping against a WebView are the risk), then `TextureView` if clipping, z-order or transitions demand it. What the WebView host does today: `MainActivity` extends `TauriActivity`, registers Kotlin plugins in `onWebViewCreate`, and applies system-bar, cutout and IME insets as padding on the content view so the WebView itself is resized.
 
@@ -89,6 +89,6 @@ xterm.js offers `screenReaderMode` (wired to `preferences.screenReader`). A GPU 
 
 ## Unresolved questions
 
-- Can a `SurfaceView` be z-ordered with a transparent hole in the Tauri WebView, or is `TextureView` required? Open until the PoC.
+- Can a `SurfaceView` be z-ordered with a transparent hole in the Tauri WebView, or is `TextureView` required? On an API 36 emulator a `SurfaceView` below a transparent WebView works and keeps DOM overlays on top, and `TextureView` works too ([result](android-surface-composition-poc.md)). Still open: the real, currently opaque page, and a physical device.
 - Does iOS allow a Metal view at the required z-order without interfering with WKWebView scrolling and hit testing?
 - How are Wayland subsurfaces handled by the WebKitGTK window Tauri uses?

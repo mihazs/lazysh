@@ -80,7 +80,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Why does public sharing use a separate service? | [Sharing design](explanation/sharing.md) |
 | Why does local inbox monitoring not provide background push? | [Notification delivery](explanation/notification-delivery.md) |
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
-| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
+| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery
 
