@@ -3604,9 +3604,15 @@ class NativeWorkspaceTest {
     /** The prompt appears once the first session is adopted; denying it must leave the session running. */
     private fun denyFirstNotificationPrompt() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        val deny = device.wait(Until.findObject(By.res("com.android.permissioncontroller", "permission_deny_button")), 60_000)
-        assertNotNull("First connection must show notification permission", deny)
-        deny!!.click()
+        val denyButton = By.res("com.android.permissioncontroller", "permission_deny_button")
+        assertNotNull("First connection must show notification permission", device.wait(Until.findObject(denyButton), 60_000))
+        // A click sent while the dialog's window is still starting is dropped by the input dispatcher; click again until it closes.
+        val closeBy = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (true) {
+            device.findObject(denyButton)?.click()
+            if (device.wait(Until.gone(denyButton), 3_000)) break
+            assertTrue("Notification permission prompt must close after Deny", System.nanoTime() < closeBy)
+        }
         assertEquals(PackageManager.PERMISSION_DENIED,
             InstrumentationRegistry.getInstrumentation().targetContext.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
     }
@@ -5529,10 +5535,11 @@ class NativeWorkspaceTest {
               return inputs.length===1&&typeof inputs[0].checked==='boolean'?inputs[0].checked:null;})()
         """.trimIndent()
         val receiptSource = """
+            // Monotonic upward motion is read in screen coordinates: clientY shifts with the visual viewport (keyboard insets), screenY is the contact itself.
             function ownedPastBottomTouchReceipt(owner) {
               const root=owner.ownerDocument,area=owner.querySelector('.xterm-helper-textarea');
               let starts=0,moves=0,ends=0,cancels=0,unavailable=!area,overflow=false;
-              let trusted=true,sameContact=true,insideOwner=true,monotonicUp=true,distance48=false,id=null,startY=0,lastY=0;
+              let trusted=true,sameContact=true,insideOwner=true,monotonicUp=true,distance48=false,id=null,startY=0,lastScreenY=0,lastClientY=0,screenBack=-Infinity,clientBack=-Infinity;
               const record=(kind,event)=>{try{
                 trusted=trusted&&event.isTrusted===true;
                 insideOwner=insideOwner&&event.currentTarget===owner&&event.composedPath().includes(owner);
@@ -5540,10 +5547,10 @@ class NativeWorkspaceTest {
                 const touches=Array.from(kind==='touchend'?event.changedTouches:event.touches),touch=touches[0];
                 sameContact=sameContact&&touches.length===1&&(kind!=='touchend'||event.touches.length===0);
                 if(!touch||!Number.isInteger(touch.identifier)||!Number.isFinite(touch.clientY)){unavailable=true;return;}
-                if(kind==='touchstart'){starts++;id=touch.identifier;startY=touch.clientY;lastY=startY;}
+                if(kind==='touchstart'){starts++;id=touch.identifier;startY=touch.clientY;lastScreenY=touch.screenY;lastClientY=startY;}
                 else {
                   sameContact=sameContact&&touch.identifier===id&&starts===1;
-                  monotonicUp=monotonicUp&&touch.clientY<=lastY;lastY=touch.clientY;
+                  screenBack=Math.max(screenBack,touch.screenY-lastScreenY);clientBack=Math.max(clientBack,touch.clientY-lastClientY);monotonicUp=monotonicUp&&touch.screenY<=lastScreenY;lastScreenY=touch.screenY;lastClientY=touch.clientY;
                   if(kind==='touchmove'){moves++;distance48=distance48||startY-touch.clientY>=48;}else ends++;
                 }
                 overflow=overflow||starts>8||moves>8||ends>8||cancels>8;
@@ -5551,7 +5558,7 @@ class NativeWorkspaceTest {
               const hooks=['touchstart','touchmove','touchend','touchcancel'].map(kind=>[kind,event=>record(kind,event)]);
               for(const [kind,handler] of hooks)owner.addEventListener(kind,handler,{capture:true,passive:true});
               return {read:()=>({available:!unavailable,retained:owner.isConnected&&owner.ownerDocument===root&&root===document&&document.querySelector('.terminal-canvas')===owner,
-                starts:Math.min(starts,8),moves:Math.min(moves,8),ends:Math.min(ends,8),cancels:Math.min(cancels,8),overflow,trusted,sameContact,insideOwner,monotonicUp,distance48,
+                starts:Math.min(starts,8),moves:Math.min(moves,8),ends:Math.min(ends,8),cancels:Math.min(cancels,8),overflow,trusted,sameContact,insideOwner,monotonicUp,distance48,screenBack:Number.isFinite(screenBack)?screenBack:null,clientBack:Number.isFinite(clientBack)?clientBack:null,
                 focused:!!area&&document.activeElement===area&&!area.readOnly}),
                 dispose:()=>{for(const [kind,handler] of hooks)owner.removeEventListener(kind,handler,true);}};
             }
