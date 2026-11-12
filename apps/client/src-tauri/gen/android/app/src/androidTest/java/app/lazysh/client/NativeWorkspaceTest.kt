@@ -2313,11 +2313,10 @@ class NativeWorkspaceTest {
         val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
         awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
         val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        // Wait for the scheduled terminal focus before dismissing its keyboard.
-        awaitDocument(scenario, "owned history terminal focus settled", """
+        // Returning to the terminal is navigation: it neither focuses the terminal input nor raises the keyboard.
+        awaitDocument(scenario, "owned history terminal shown without input focus", """
             (()=>{const screens=$screens;return screens.length===1 &&
-              screens[0].parentElement?.classList.contains('focus') &&
-              screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+              screens[0].parentElement.querySelector('.xterm-helper-textarea')!==document.activeElement;})()
         """, deadline = geometryDeadline)
         closeSoftKeyboard()
         val fingerSource = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-herdr-finger.js")
@@ -2597,9 +2596,10 @@ class NativeWorkspaceTest {
             val question = """(()=>{const screens=$screens;const text=screens.length===1?screens[0].textContent:'';
                 return text.includes('OWNED_QUESTION') && text.includes('> OPTION_ONE') && text.includes('OPTION_TWO');})()"""
             awaitDocument(scenario, "owned agent question and selection", question)
-            awaitDocument(scenario, "owned agent terminal focus settled", """
-                (()=>{const screens=$screens;return screens.length===1 && screens[0].parentElement?.classList.contains('focus') &&
-                  screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+            // Focusing the original tab returns to the Terminal view, which is navigation and leaves the terminal input unfocused.
+            awaitDocument(scenario, "owned agent terminal shown without input focus", """
+                (()=>{const screens=$screens;return screens.length===1 &&
+                  screens[0].parentElement.querySelector('.xterm-helper-textarea')!==document.activeElement;})()
             """)
             closeSoftKeyboard()
             fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

@@ -2,7 +2,7 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -22,6 +22,8 @@ import { applyTerminalTheme } from "./terminalBold";
 import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
+import { carryKeyboard, keyboardCarried, mayFocusOnActivation, touchScreen } from "./softKeyboard";
+import { herdrNavigationCell } from "./herdrNavigationCells";
 import "@xterm/xterm/css/xterm.css";
 import { toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
 import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
@@ -52,12 +54,12 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, quietActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
+export default function TerminalPane({ session, active, typingActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
   session: LiveSession;
   active: boolean;
   herdrNavigationOnly?: boolean;
-  /** Activated by a navigation switch rather than a typing request: touch input keeps the soft keyboard closed. */
-  quietActivation?: boolean;
+  /** Activated by the user opening this terminal to type, which may raise the soft keyboard; navigating to a terminal never does. */
+  typingActivation?: boolean;
   reportError: (message: UiErrorCause) => void;
   /** Opens the attachment tool; `composer` asks for the upload to return as a draft token. */
   onOpenAttachments?: (target?: 'composer') => void;
@@ -91,9 +93,9 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const activeRef = useRef(active);
   const inputOwner = useRef<InputOwner | null>(null);
   activeRef.current = active;
-  // Released once focus enters this terminal, so later focus restores behave as before; each activation re-reads it.
-  const quiet = useRef(quietActivation);
-  useEffect(() => {quiet.current = quietActivation;}, [quietActivation, active]);
+  // Released once focus enters this terminal, so later activations are navigation again; each activation re-reads it.
+  const typing = useRef(typingActivation);
+  useEffect(() => {typing.current = typingActivation;}, [typingActivation, active]);
   const zellijBusy = useRef(false);
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
@@ -206,6 +208,11 @@ export default function TerminalPane({ session, active, quietActivation = false,
   const [composing, setComposing] = useState(false);
   const composingRef = useRef(composing);
   composingRef.current = composing;
+  // Leaving this terminal while an input holds focus keeps the soft keyboard up for what takes over; so does closing the composer, which the user opened to type.
+  const was = useRef({active, composing});
+  if (was.current.active && !active) carryKeyboard();
+  else if (was.current.composing && !composing) carryKeyboard(true);
+  was.current = {active, composing};
   const [draft, setDraft] = useState("");
   // Uploads stay known for the life of the draft, so undo or an IME correction
   // that restores a deleted token restores its attachment; only tokens still in
@@ -643,6 +650,20 @@ export default function TerminalPane({ session, active, quietActivation = false,
     return () => {element.removeEventListener('mousedown', down, true); document.removeEventListener('mouseup', up, true);};
   }, [session.id, session.terminal]);
 
+  // A press on Herdr's own switch button or switcher navigates; xterm would also focus its input and raise the soft keyboard.
+  useEffect(() => {
+    const element = container.current, terminal = session.terminal;
+    if (!element || multiplexer !== 'herdr') return;
+    const press = (event: MouseEvent) => {
+      const input = terminal.textarea, cell = terminalCellAt(terminal, event.clientX, event.clientY);
+      if (!input || !cell || document.activeElement === input || !touchScreen()) return;
+      // The press still reaches Herdr as a click; only the focus xterm gives its input on a press is refused.
+      if (herdrNavigationCell(terminal, cell.x, cell.y - terminal.buffer.active.viewportY)) {input.disabled = true; setTimeout(() => {input.disabled = false;});}
+    };
+    element.addEventListener('mousedown', press, true);
+    return () => element.removeEventListener('mousedown', press, true);
+  }, [session.id, session.terminal, multiplexer]);
+
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
     if (!query) return;
@@ -806,13 +827,15 @@ export default function TerminalPane({ session, active, quietActivation = false,
 
   // Covered output keeps its size and session but leaves focus and the accessibility tree.
   useEffect(() => {container.current?.toggleAttribute('inert', composing);}, [composing]);
+  // A carried keyboard moves to this terminal in the commit that shows it, before any frame lets it close.
+  useLayoutEffect(() => {if (active && !composing && keyboardCarried()) focusTerminal();}, [active]);
   useEffect(() => {
     if (active) requestAnimationFrame(() => { fit.current?.(); if (composing) focusTerminal(composerInput.current); else focusActivatedTerminal(); });
   }, [active, session, composing]);
 
   // A soft keyboard opens for focused terminal input; tapping the terminal or the keyboard key still requests it.
   function focusActivatedTerminal() {
-    if (!quiet.current || !window.matchMedia?.('(pointer: coarse)').matches) focusTerminal();
+    if (mayFocusOnActivation(typing.current)) focusTerminal();
   }
 
   function focusTerminal(target?: HTMLElement | null) {
@@ -1117,7 +1140,7 @@ export default function TerminalPane({ session, active, quietActivation = false,
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
   </div>;
-  return <div ref={pane} className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {quiet.current = false;}}>
+  return <div ref={pane} className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
