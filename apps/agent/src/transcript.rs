@@ -712,6 +712,7 @@ fn normalize_options(
     }
     if matches!(agent, TranscriptAgent::Claude | TranscriptAgent::Codex) {
         interaction::annotate(agent, &mut blocks);
+        interaction::error_card(agent, record, &mut blocks);
     }
     let mut message =
         json!({"id":id.unwrap_or_else(||format!("record-{offset}")),"role":role,"blocks":blocks});

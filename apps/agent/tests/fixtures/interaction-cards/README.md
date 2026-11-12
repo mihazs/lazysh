@@ -30,3 +30,7 @@ The tests in `tests/interaction_cards.rs` load these files into temporary direct
 ## `claude-markdown.jsonl` (Claude Code 2.1.317 envelopes)
 
 - One completed turn whose assistant record carries a `thinking` block and a Markdown `text` block (heading, strong and inline code, a fenced code block and a list), then the `turn_duration` record. The native Chat cases in `tests/support/recordedCards.ts` read it, with the files above and the in-progress, waiting and stopped variants derived from them, through the source-built companion over real SSH.
+
+## `claude-errors.jsonl` (Claude Code 2.1.318 envelopes)
+
+- Assistant records the agent writes for a failed API call carry `isApiErrorMessage: true`, an `error` string and a single `text` block (model `<synthetic>`, `stop_reason` `stop_sequence`). Recorded 2.1.318 sessions on the maintainer's machine, read for structure only, show the `error` values `rate_limit`, `server_error`, `invalid_request` and `unknown`; the texts here are synthetic and copy nothing. Only those four become error cards. A record with another `error` value, or a message that only mentions an error without `isApiErrorMessage`, stays an ordinary assistant message.

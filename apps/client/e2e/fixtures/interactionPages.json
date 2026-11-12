@@ -1,4 +1,114 @@
 {
+  "claudeErrors": {
+    "agent": "claude",
+    "branchId": "e-a6",
+    "hasMore": false,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "text": "Summarize the fixture layout",
+            "type": "text"
+          }
+        ],
+        "id": "e-u1",
+        "role": "user",
+        "timestamp": "2026-11-11T10:00:00.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "cause": "rate_limit",
+              "kind": "error"
+            },
+            "text": "You've hit your usage limit · resets 7pm (Synthetic/Zone)",
+            "type": "text"
+          }
+        ],
+        "id": "e-a1",
+        "parentId": "e-u1",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:01.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "cause": "server_error",
+              "kind": "error"
+            },
+            "text": "API Error: Can't reach the API server — check your connection",
+            "type": "text"
+          }
+        ],
+        "id": "e-a2",
+        "parentId": "e-a1",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:02.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "cause": "invalid_request",
+              "kind": "error"
+            },
+            "text": "Prompt is too long",
+            "type": "text"
+          }
+        ],
+        "id": "e-a3",
+        "parentId": "e-a2",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:03.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "card": {
+              "cause": "unknown",
+              "kind": "error"
+            },
+            "text": "API Error: 400 Synthetic unclassified failure",
+            "type": "text"
+          }
+        ],
+        "id": "e-a4",
+        "parentId": "e-a3",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:04.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "text": "API Error: 529 Synthetic overload",
+            "type": "text"
+          }
+        ],
+        "id": "e-a5",
+        "parentId": "e-a4",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:05.000Z"
+      },
+      {
+        "blocks": [
+          {
+            "text": "Prompt is too long is a message the API can return.",
+            "type": "text"
+          }
+        ],
+        "id": "e-a6",
+        "parentId": "e-a5",
+        "role": "assistant",
+        "timestamp": "2026-11-11T10:00:09.000Z"
+      }
+    ],
+    "nextOffset": 2234,
+    "schemaVersion": 1,
+    "truncated": false,
+    "view": "active_branch"
+  },
   "claudeIdle": {
     "activity": "idle",
     "agent": "claude",
