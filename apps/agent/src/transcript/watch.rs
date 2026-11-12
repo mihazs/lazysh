@@ -83,6 +83,7 @@ pub struct Watcher {
     entries: Vec<Entry>,
     activity: Option<&'static str>,
     queued: Vec<Value>,
+    work: Option<Vec<Value>>,
     seen: Option<Fingerprint>,
     located: Option<PathBuf>,
     /// Duration of the last projection; the next check waits at least three times as long.
@@ -127,6 +128,7 @@ impl Watcher {
             entries: Vec::new(),
             activity: None,
             queued: Vec::new(),
+            work: None,
             seen: None,
             located: None,
             cost: Duration::ZERO,
@@ -211,6 +213,8 @@ impl Watcher {
         self.activity = page.activity;
         let queued_changed = self.queued != page.queued;
         self.queued = page.queued;
+        let work_changed = self.work != page.work;
+        self.work.clone_from(&page.work);
         let dropped = if rewritten || self.generation == 0 {
             None
         } else {
@@ -247,8 +251,14 @@ impl Watcher {
                 "type":"snapshot","gen":self.generation,"seq":self.sequence,
                 "entries":entries.iter().map(upsert).collect::<Vec<_>>(),
                 "activity":self.activity,"queued":self.queued,"branchId":page.branch_id,"truncated":page.truncated,
+                "work":self.work,
             }))
-        } else if !upserts.is_empty() || !drops.is_empty() || activity_changed || queued_changed {
+        } else if !upserts.is_empty()
+            || !drops.is_empty()
+            || activity_changed
+            || queued_changed
+            || work_changed
+        {
             self.sequence += 1;
             let mut frame = json!({
                 "type":"delta","gen":self.generation,"seq":self.sequence,
@@ -260,6 +270,9 @@ impl Watcher {
             }
             if queued_changed {
                 frame["queued"] = json!(self.queued);
+            }
+            if work_changed {
+                frame["work"] = json!(self.work);
             }
             Some(frame)
         } else {
@@ -533,6 +546,21 @@ mod tests {
         assert!(frames[0]["upserts"].as_array().unwrap().is_empty());
         append(&path, &queue("dequeue", "next please"));
         assert_eq!(watch.poll().unwrap()[0]["queued"], json!([]));
+    }
+
+    #[test]
+    fn background_work_rides_the_snapshot_and_a_change_alone_is_a_delta() {
+        let (_directory, path) = fixture(&chain(2));
+        let mut watch = watcher(&path, 50);
+        assert_eq!(watch.poll().unwrap()[0]["work"], Value::Null);
+        let launch = json!({"type":"assistant","uuid":"w1","parentUuid":"m1","timestamp":"2026-11-11T10:00:00Z",
+            "message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"sleep 9","run_in_background":true}}]}});
+        append(&path, &format!("{launch}\n"));
+        let frame = &watch.poll().unwrap()[0];
+        assert_eq!(frame["work"][0]["state"], "running");
+        let notice = json!({"type":"user","uuid":"w2","parentUuid":"w1","message":{"content":"<task-notification>\n<tool-use-id>b1</tool-use-id>\n<status>completed</status>\n</task-notification>"}});
+        append(&path, &format!("{notice}\n"));
+        assert_eq!(watch.poll().unwrap()[0]["work"][0]["state"], "done");
     }
 
     #[test]

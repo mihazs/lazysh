@@ -3,6 +3,7 @@ import {cleanup, fireEvent, render, screen, within} from '@testing-library/react
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import AgentStatusPanel from './AgentStatusPanel';
 import {deriveStatus} from './agentBackgroundWork';
+import {parseWork, type WorkItem} from './agentWork';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 10, 11, 12, 0, seconds)).toISOString();
 const use = (id: string, name: string, input: object, seconds: number) => ({role: 'assistant', timestamp: at(seconds), blocks: [{type: 'tool_use', id, name, text: JSON.stringify(input)}]});
@@ -67,5 +68,55 @@ describe('AgentStatusPanel', () => {
     cleanup();
     const {container} = render(<AgentStatusPanel messages={[use('x', 'Bash', {command: 'ls'}, 0)]} />);
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe('AgentStatusPanel from the companion work list', () => {
+  afterEach(() => {cleanup(); vi.useRealTimers();});
+  const clock = Date.parse(at(600));
+  const agoIso = (ms: number) => new Date(clock - ms).toISOString();
+  const work: WorkItem[] = [
+    {id: 'sh', kind: 'shell', title: 'Wait for CI', command: 'gh run watch 1', state: 'running', startedAt: agoIso(300_000), events: [], last: 'checks pending'},
+    {id: 'mo', kind: 'monitor', title: 'PR checks', command: 'gh pr checks 1', state: 'running', startedAt: agoIso(240_000), timeoutMs: 1_800_000, events: ['lint: pass', 'tests: pass'], last: 'tests: pass'},
+    {id: 'ag', kind: 'agent', title: 'Review the diff', subtitle: 'general-purpose', state: 'done', startedAt: agoIso(500_000), endedAt: agoIso(400_000), events: [], tokens: 131015, durationMs: 182_903},
+    {id: 'old', kind: 'shell', title: 'Forgotten server', state: 'running', startedAt: agoIso(13 * 3600_000), events: []},
+  ];
+  it('shows the command and recorded output of a shell or monitor, and an old launch as not confirmed instead of running', () => {
+    vi.useFakeTimers({now: clock});
+    render(<AgentStatusPanel messages={[]} work={work} />);
+    const panel = screen.getByRole('region', {name: 'Background work'});
+    expect(within(panel).getByRole('button', {name: '2 running'})).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', {name: '2 shells'}));
+    const shells = within(panel).getByRole('list', {name: '2 shells'});
+    const old = within(shells).getByText('Forgotten server').closest('li')!;
+    expect(old.textContent).toContain('Not confirmed');
+    fireEvent.click(within(shells).getByText('Wait for CI'));
+    expect(within(shells).getByText('gh run watch 1')).toBeTruthy();
+    expect(within(shells).getByLabelText('Recorded output').textContent).toBe('checks pending');
+    fireEvent.click(within(panel).getByRole('button', {name: '1 monitor'}));
+    fireEvent.click(within(panel).getByText('PR checks'));
+    expect(within(panel).getByLabelText('Recorded output').textContent).toBe('lint: pass\ntests: pass');
+  });
+  it('takes a sub-agent run time and tokens from the notice and falls back to the loaded messages without a work list', () => {
+    vi.useFakeTimers({now: clock});
+    const {rerender} = render(<AgentStatusPanel messages={[]} work={work} />);
+    fireEvent.click(screen.getByRole('button', {name: '2 running'}));
+    expect(screen.getByText('Review the diff').closest('li')!.textContent).toContain('Done · 3:03 · 131K tokens');
+    rerender(<AgentStatusPanel messages={session} />);
+    expect(screen.getByRole('button', {name: '4 running'})).toBeTruthy();
+  });
+  it('shows no panel while nothing is running or unconfirmed, and says not confirmed when only that is left', () => {
+    vi.useFakeTimers({now: clock});
+    const {container, rerender} = render(<AgentStatusPanel messages={[]} work={[work[2]]} />);
+    expect(container.firstChild).toBeNull();
+    rerender(<AgentStatusPanel messages={[]} work={[work[3]]} />);
+    expect(screen.getByRole('button', {name: '1 not confirmed'})).toBeTruthy();
+  });
+  it('refuses a work list that is not what the companion sends', () => {
+    expect(parseWork(undefined)).toBeUndefined();
+    expect(parseWork(work)).toEqual(work);
+    expect(() => parseWork([{...work[0], state: 'paused'}])).toThrow();
+    expect(() => parseWork([{...work[0], events: [1]}])).toThrow();
+    expect(() => parseWork([{...work[0], tokens: -1}])).toThrow();
   });
 });

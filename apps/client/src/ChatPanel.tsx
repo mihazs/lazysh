@@ -25,6 +25,7 @@ import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './history
 import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
+import {parseWork,type WorkItem} from './agentWork';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -60,6 +61,7 @@ type Page = {
   branchId?: string;
   activity?: Activity;
   queued?: Queued[];
+  work?: WorkItem[];
 };
 
 
@@ -88,6 +90,7 @@ export function parseTranscript(value: unknown): Page {
   if (page.hasNewer !== undefined && (typeof page.hasNewer !== 'boolean' || page.view !== 'active_branch')) throw new LocalUiError('chatUnsupportedResponse');
   page.activity = parseActivity(page.activity, page.agent, page.view);
   page.queued = parseQueued(page.queued);
+  page.work = parseWork(page.work);
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -264,6 +267,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const historyRef = useRef(history); historyRef.current = history;
   const [activity, setActivity] = useState<Activity>();
   const [queued, setQueued] = useState<Queued[]>([]);
+  const [work, setWork] = useState<WorkItem[]>();
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
@@ -330,7 +334,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     if (!shown) request.current++;
     if (bound && (path !== bound.path || agent !== bound.agent)) {
       request.current++; setFollowing(false); followRef.current = false;
-      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]);
+      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setWork(undefined);
       setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
     }
   }, [shown, bound, path, agent]);
@@ -338,7 +342,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setWork(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -381,6 +385,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if(historyRef.current.paging && op.kind==='replace')place({kind:'tail'},op.messages);
       else setMessages(previous=>applyWatchOp(previous,op,WINDOW_CAP));
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
+      if(op.kind==='replace')setWork(op.work);else if(op.work)setWork(op.work.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
       setUpdated(Date.now());
     }});
@@ -535,7 +540,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);}
+      if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);setWork(page.work);}
       if (source.view === 'conversation') place(slice ?? {kind: 'tail'}, page.messages, {older: page.truncated === true, newer: page.hasNewer === true}, reset && !slice);
       else setMessages((previous) => {
         const combined = replace
@@ -813,7 +818,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      {timeline && bound && <AgentStatusPanel messages={messages} />}
+      {timeline && bound && <AgentStatusPanel messages={messages} work={work} />}
       {timeline && bound && <AgentPlanChip messages={flow} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">

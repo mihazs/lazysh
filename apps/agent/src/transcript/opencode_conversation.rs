@@ -219,6 +219,7 @@ pub fn conversation_window(
         has_newer: selected.has_newer,
         activity,
         queued: Vec::new(),
+        work: None,
     })
 }
 
@@ -586,6 +587,7 @@ pub(super) fn records(
         has_newer: false,
         activity: None,
         queued: Vec::new(),
+        work: None,
     })
 }
 

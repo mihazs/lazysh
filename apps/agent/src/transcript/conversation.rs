@@ -136,6 +136,7 @@ pub(super) fn project_claude_bounded(
                                     | "subtype"
                                     | "isSidechain"
                                     | "isMeta"
+                                    | "pendingBackgroundAgentCount"
                                     | "teamName"
                                     | "agentId"
                                     | "sourceToolAssistantUUID"
@@ -170,6 +171,7 @@ pub(super) fn project_claude_bounded(
         .collect();
     let (chain, leaf) = active_chain(&records)?;
     let activity = leaf.and_then(|leaf| activity(&records, leaf));
+    let work = super::work::tasks(chain.iter().map(|index| &records[*index].1));
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
@@ -199,6 +201,7 @@ pub(super) fn project_claude_bounded(
         checkpoint: None,
         activity,
         queued,
+        work: (!work.is_empty()).then_some(work),
     })
 }
 
@@ -375,7 +378,14 @@ fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
             && record["subtype"] == "turn_duration"
             && record["isSidechain"] != true
         {
-            return Some("idle");
+            // The turn ended, but a sub-agent it started is still recorded as running.
+            return Some(
+                if record["pendingBackgroundAgentCount"].as_u64() > Some(0) {
+                    "working"
+                } else {
+                    "idle"
+                },
+            );
         }
         if let Some(id) = record["uuid"].as_str() {
             pending.extend(children.get(id).into_iter().flatten());

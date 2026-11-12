@@ -135,6 +135,7 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         has_newer: false,
         activity: None,
         queued: Vec::new(),
+        work: None,
     })
 }
 

@@ -198,6 +198,7 @@ pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<Tr
         has_newer: selected.has_newer,
         activity: None,
         queued: Vec::new(),
+        work: None,
     })
 }
 
