@@ -18,3 +18,7 @@
 .agent-composer-receipt[data-state="notSent"] { color: var(--danger, inherit); }
 .agent-composer-receipt > button { min-height: 32px; }
 .agent-composer-row > .icon-button[data-armed] { outline: 2px solid var(--danger, currentColor); }
+.agent-composer-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-composer-chips > li { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 4px 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-chips > li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-composer-chips > li > button { min-width: 32px; min-height: 32px; padding: 0; }

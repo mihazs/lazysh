@@ -193,6 +193,17 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   a file inserts `@path ` and picking a folder goes one level deeper; nothing is sent by it.
   A conversation without a known folder, or a listing that fails, offers no picker and the
   text is still sent as typed.
+- Files join a message as the terminal composer does. The paperclip, a paste of a file or
+  image from the clipboard, or a drop on the composer uploads it through the existing
+  attachment path (a private copy under the host's `/tmp`, at most 10 MiB) and inserts a
+  numbered `[Image #n]` or `[File #n]` token at the caret, with one chip per file to remove
+  it. A token is never split: an edit that touches part of it removes the whole token and
+  the file, and numbering restarts with each draft. On send each token becomes the
+  shell-quoted host path the upload returned, so the agent reads the file by its path (typed
+  text, not an attachment drop: the agent decides whether to open it). The expanded text is
+  what must fit the 4096 byte guarded input; Send is disabled while an upload runs. Pasting
+  text is unchanged. On desktop builds the webview must deliver HTML drops: where the shell
+  swallows file drops, use the paperclip.
 
 ### Desktop
 

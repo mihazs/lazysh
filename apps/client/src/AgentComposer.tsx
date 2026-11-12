@@ -1,8 +1,10 @@
-import {useCallback,useEffect,useId,useMemo,useRef,useState} from 'react';
+import {useCallback,useEffect,useId,useMemo,useRef,useState,type DragEvent} from 'react';
 import {ArrowLeft,Paperclip,SendHorizontal,Square} from 'lucide-react';
 import {publishComposerControl} from './agentDialogAnswer';
 import AttachmentPanel from './AttachmentPanel';
-import {shellPath} from './attachment';
+import AgentComposerChips from './AgentComposerChips';
+import {useAgentAttachments} from './useAgentAttachments';
+import {uiErrorText} from './i18n/localError';
 import ChatTerminalInput,{validTerminalDraft,validTerminalSource,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalSource} from './ChatTerminalInput';
 import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
@@ -67,6 +69,9 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     current.current=key;revision.current++;composing.current=false;
     setCompositionActive(false);setAttachmentOpen(false);setStaged(false);setDraft(drafts.get(key)??'');setReceipt(undefined);setStopArmed(false);walk.current={index:null,text:''};
   },[key]);
+  const attach=useAgentAttachments({key,sessionId,draft,caret,limit:LIMIT,edit,place:position=>{wantCaret.current=position;}});
+  // What the agent receives: every token already replaced by the path of its uploaded file.
+  const text=attach.expanded;
   const source=useMemo<TerminalSource|undefined>(()=>{
     const value={agent:conversation.agent,path:conversation.path,view:'conversation' as const,inlineImages:false};
     return validTerminalSource(value)?Object.freeze(value):undefined;
@@ -76,8 +81,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const proofCheck=useMemo(()=>automatic?proves(proof!):undefined,[automatic,proofKey]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
-  const sendable=ready && validTerminalDraft(draft) && !control!.busy && !compositionActive;
-  const tooLong=ready && !!draft && !validTerminalDraft(draft);
+  const sendable=ready && validTerminalDraft(text) && !control!.busy && !compositionActive && !attach.busy;
+  const tooLong=ready && !!text && !validTerminalDraft(text);
   const agent=conversation.agent;
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
@@ -101,38 +106,41 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   function submit() {
     if(composing.current)return;
     if(sendable){
-      setReceipt({text:draft,phase:'pending',at:Date.now(),before:promptsLike(prompts,draft)});
+      setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text)});
       control!.send();return;
     }
-    if(staging && draft.trim() && draft.length<=LIMIT){
-      window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:draft}}));setStaged(true);
+    if(staging && text.trim() && text.length<=LIMIT){
+      window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
     }
   }
   const coarse=()=>!!window.matchMedia?.('(pointer: coarse)').matches;
   // Automatic binding is given a chance first; Stage is the way out once it was refused or lost.
   const bindingPending=live && automatic && !control?.failed;
   const staging=!ready && stage && !bindingPending;
-  const canSubmit=sendable || (staging && !!draft.trim() && draft.length<=LIMIT);
+  const canSubmit=sendable || (staging && !!text.trim() && text.length<=LIMIT && !attach.busy);
   // A conversation that can neither take input nor be staged has nothing to compose; the options menu says why.
   if(!labels && !stage)return null;
-  return <section className="agent-composer" data-attachment-open={attachmentOpen || undefined} aria-label={t('agentComposerTitle')}>
+  const dropping=(event:DragEvent)=>event.dataTransfer.types.includes('Files');
+  return <section className="agent-composer" data-attachment-open={attachmentOpen || undefined} aria-label={t('agentComposerTitle')}
+    onDragOver={event=>{if(dropping(event))event.preventDefault();}} onDrop={event=>{if(!dropping(event))return;event.preventDefault();void attach.upload([...event.dataTransfer.files]);}}>
     {attachmentOpen && access.current() && <div className="agent-composer-attach">
       <button type="button" className="subtle-button" onClick={()=>setAttachmentOpen(false)}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
       <p>{t('chatAttachmentScope')}</p>
-      <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={path=>{
+      <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={(path,uploaded)=>{
         if(!access.current() || current.current!==key || composing.current)return;
-        const next=draft?`${draft}\n${shellPath(path)}`:shellPath(path);
-        if(next.length>LIMIT)return;
-        edit(next);setAttachmentOpen(false);field.current?.focus({preventScroll:true});
+        attach.add({path,...uploaded});setAttachmentOpen(false);field.current?.focus({preventScroll:true});
       }}/>
     </div>}
     {popup && <AgentComposerPalette id={paletteId} label={popup.label} items={popup.items} active={Math.min(slashIndex,popup.items.length-1)} onPick={popup.pick} onHover={setSlashIndex}/>}
     {mode && <span className="agent-composer-mode" data-mode={mode}>{t(mode==='bash'?'agentModeBash':'agentModeMemory')}</span>}
+    {attach.list.length>0 && <AgentComposerChips attachments={attach.list} onRemove={attach.remove}/>}
     <form className="agent-composer-row" aria-label={t('chatDraft')} onSubmit={event=>{event.preventDefault();submit();}}>
       <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
       <textarea ref={field} rows={Math.max(1,Math.min(6,draft.split('\n').length))} maxLength={LIMIT} value={draft} aria-label={t('chatDraftLabel')} placeholder={t('agentComposerLabel')}
-        onChange={event=>{setCaret(event.target.selectionStart);edit(event.target.value);}} onSelect={event=>setCaret(event.currentTarget.selectionStart)}
-        onCompositionStart={()=>{composing.current=true;setCompositionActive(true);}} onCompositionEnd={()=>{composing.current=false;setCompositionActive(false);}}
+        onChange={event=>{setCaret(event.target.selectionStart);attach.change(event.target.value,composing.current);}}
+        onSelect={event=>{if(!composing.current)attach.snap(event.currentTarget);setCaret(event.currentTarget.selectionStart);}}
+        onCompositionStart={()=>{composing.current=true;setCompositionActive(true);attach.compose.begin();}} onCompositionEnd={event=>{composing.current=false;setCompositionActive(false);attach.compose.end(event.currentTarget.value);}}
+        onPaste={event=>{const files=[...event.clipboardData?.files ?? []];if(files.length){event.preventDefault();void attach.upload(files);}}}
         // Enter sends with a hardware keyboard; a touch keyboard keeps Enter as a new line and sends with the button.
         aria-controls={popup?paletteId:undefined} aria-activedescendant={popup?`${paletteId}-${Math.min(slashIndex,popup.items.length-1)}`:undefined}
         onKeyDown={event=>{
@@ -154,7 +162,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}><SendHorizontal size={18} aria-hidden="true"/></button>}
     </form>
     {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} access={access} invoke={invoke}
-      draft={draft} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
+      draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
       proves={proofCheck} onControl={proofCheck?setControl:undefined}
       onSent={(text,sentRevision)=>{
         rememberPrompt(key,text);walk.current={index:null,text:''};
@@ -165,6 +173,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     {picker && <p className="agent-composer-note">{t('agentComposerPickerNote',{command:`/${picker.name}`})}</p>}
     {state && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
       {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={()=>{if(draft!==receipt!.text){edit(receipt!.text);return;}setReceipt({...receipt!,phase:'pending',at:Date.now()});control.retry();}}>{t('agentReceiptRetry')}</button></>}</p>}
+    {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
+    {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
     {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong')}</p>}
     {staged && <p role="status" className="agent-composer-note">{t('chatDraftStaged')}</p>}
     {!labels && stage && <p className="agent-composer-note">{t('agentViewStageOnly')}</p>}
