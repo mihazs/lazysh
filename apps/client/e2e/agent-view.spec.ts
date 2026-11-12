@@ -874,6 +874,7 @@ test('shows model, plan mode and context left in one header row without taking c
   await expect(sheet.getByText('app',{exact:true})).toBeVisible();
   // Wide panes also draw the branch in the header; a narrow phone leaves it to the sheet so the row does not grow.
   await expect(header.getByTitle('Git branch')).toBeVisible({visible:(page.viewportSize()?.width??0)>=520});
+});
 
 /** A host with Zellij 0.45.1 and one Claude Code agent in pane 7 of session `work`. Zellij is never restored, so the session is attached from Sessions. */
 async function openZellij(page:Page,testInfo:{project:{name:string}}) {
