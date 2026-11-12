@@ -350,6 +350,19 @@ Conversation (`active_branch`) responses for Claude Code and Codex can also incl
 
 Only bounded identifiers, names and numbers are copied; the folder is the last path component, never the full path. The values are what the agent last wrote, not a live reading. The `session` object carries no per-field timestamp; the Agent view treats it as current as of the page it arrived with.
 
+### Session info
+
+Claude Code conversation responses can also carry `session.info`, what the session has loaded, for the Agent view's **Session info** sheet. It is read from the attachment records in file order, so a later record replaces or extends an earlier one; a sidechain's records are ignored. Every list is omitted when nothing was recorded, and only bounded names are copied (never instruction text, skill descriptions, error messages or full paths):
+
+| Field | Source |
+| --- | --- |
+| `mcp[{name,state,toolCount?}]` | server names from `mcp_instructions_delta` (`addedNames`, `removedNames`); `state` is `failed` or `pending` while the latest `deferred_tools_delta` lists the server in `failedMcpServers` or `pendingMcpServers`, else `connected`; `toolCount` counts the server's `mcp__<server>__*` names in `deferred_tools_delta` and `deferred_tools_record`, and is absent when none were recorded or the server is not connected |
+| `skills[]` | `skill_listing.names` (an `isInitial` listing replaces the earlier ones) and `invoked_skills` |
+| `agents[]` | `agent_listing_delta` (`addedTypes`, `removedTypes`; `isInitial` resets) |
+| `instructionFiles[{name,kind?}]` | the latest `instructions` record and any `nested_memory` records: the folder and file name (`app/CLAUDE.md`) and the kind (`User`, `Project`) |
+
+Codex rollouts record no equivalent, so Codex pages have no `info`. `session.info` rides in the same `session` object as the other facts (and in the same watch frames), so a client or companion that does not know it ignores it.
+
 ### Claude current branch
 
 Use `lazysh-agent transcript --agent claude --view conversation --path /absolute/path/session.jsonl --limit 100` to reconstruct the current main conversation branch. This reads a bounded complete snapshot, picks the latest main user/assistant leaf, follows `parentUuid`, and recovers sibling tool calls and results belonging to responses on that branch. A compaction boundary (`compact_boundary`) restarts the parent chain; the conversation before it stays reachable through `logicalParentUuid`, so a reader that pages back reaches the session's first message across compactions, and the summary record that follows the boundary marks where the model's context was cut. Duplicate UUIDs use their latest record; cycles fail closed.

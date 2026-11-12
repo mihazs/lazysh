@@ -22,7 +22,7 @@ fn label(value: &Value) -> Option<&str> {
 }
 
 /// A folder or branch name: printable text, bounded, since names are not limited to a safe alphabet.
-fn name(value: &Value) -> Option<&str> {
+pub(super) fn name(value: &Value) -> Option<&str> {
     value.as_str().filter(|text| {
         !text.is_empty() && text.len() <= MAX_NAME && !text.chars().any(char::is_control)
     })
@@ -46,6 +46,12 @@ impl Session {
             Some(value) => self.0.insert(key.into(), value),
             None => self.0.remove(key),
         };
+    }
+
+    /// What the session has loaded (MCP servers, skills, agents, instruction files), under `info`.
+    pub(super) fn with_info(mut self, info: Option<Value>) -> Self {
+        self.set("info", info);
+        self
     }
 
     pub(super) fn into_value(self) -> Option<Value> {

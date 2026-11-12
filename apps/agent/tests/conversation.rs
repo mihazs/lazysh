@@ -1002,3 +1002,55 @@ fn history_command_lists_one_folder_and_honors_the_discovery_setting() {
     );
     assert!(!run("/work/app").status.success());
 }
+
+#[test]
+fn claude_page_lists_what_the_session_loaded_without_copying_any_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let attachment = |id: &str, parent: &str, value: Value| json!({"type":"attachment","uuid":id,"parentUuid":parent,"attachment":value});
+    write(
+        &path,
+        &[
+            message("root", None, "user", "hello"),
+            attachment(
+                "a1",
+                "root",
+                json!({"type":"mcp_instructions_delta","addedNames":["ai-memory"],"addedBlocks":["PRIVATE instructions"]}),
+            ),
+            attachment(
+                "a2",
+                "a1",
+                json!({"type":"deferred_tools_delta","addedNames":["mcp__ai-memory__memory_query"],"failedMcpServers":[{"name":"codegraph","error":"PRIVATE error"}]}),
+            ),
+            attachment(
+                "a3",
+                "a2",
+                json!({"type":"skill_listing","isInitial":true,"names":["handoff"],"content":"PRIVATE descriptions"}),
+            ),
+            attachment(
+                "a4",
+                "a3",
+                json!({"type":"instructions","files":[{"path":"/home/me/.claude/CLAUDE.md","type":"User","content":"PRIVATE rules"}]}),
+            ),
+            message("answer", Some("a4"), "assistant", "hi"),
+        ],
+    );
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(
+        page.session.as_ref().unwrap()["info"],
+        json!({
+            "mcp":[{"name":"ai-memory","state":"connected","toolCount":1},{"name":"codegraph","state":"failed"}],
+            "skills":["handoff"],
+            "instructionFiles":[{"name":".claude/CLAUDE.md","kind":"User"}],
+        })
+    );
+    assert!(!serde_json::to_string(&page.session)
+        .unwrap()
+        .contains("PRIVATE"));
+    // A session with no such records has no `info`.
+    write(&path, &[message("root", None, "user", "hello")]);
+    assert!(conversation(&path, TranscriptAgent::Claude, 50)
+        .unwrap()
+        .session
+        .is_none());
+}

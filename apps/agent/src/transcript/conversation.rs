@@ -98,6 +98,7 @@ pub(super) fn project_claude_bounded(
     let mut permission_mode = None;
     let mut cost_usd = None;
     let mut worktree = None;
+    let mut roster = super::session_roster::Roster::default();
     let mut offset = 0;
     while offset < size {
         let line = super::read_record_line_bounded(&mut reader, line_limit)?;
@@ -119,6 +120,7 @@ pub(super) fn project_claude_bounded(
             }
             match record["type"].as_str() {
                 Some("queue-operation") => queue.apply(&record),
+                Some("attachment") => roster.apply(&record),
                 Some("permission-mode") => permission_mode = record.get("permissionMode").cloned(),
                 Some("cost-state") => cost_usd = record["totalCostUSD"].as_f64(),
                 Some("worktree-state") => {
@@ -209,6 +211,7 @@ pub(super) fn project_claude_bounded(
         cost_usd,
         worktree.map(Value::from).as_ref(),
     )
+    .with_info(roster.into_value())
     .into_value();
     let branch_id = chain
         .last()
