@@ -169,7 +169,14 @@ pub enum Input {
     Submit {
         of: u8,
     },
+    /// Moves the highlight of a list dialog by `rows` (negative is up) and, with `enter`, presses Enter: how a person chooses a row.
+    Pick {
+        rows: i8,
+        enter: bool,
+    },
 }
+/// Rows one `pick` may move: far more than any dialog list shows at once.
+const PICK_ROWS: i8 = 30;
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::Send { text } = self {
@@ -189,6 +196,11 @@ impl Input {
                 return Err(invalid())
             }
             Self::Submit { of } if !(1..=8).contains(of) => return Err(invalid()),
+            Self::Pick { rows, enter }
+                if !(-PICK_ROWS..=PICK_ROWS).contains(rows) || (*rows == 0 && !enter) =>
+            {
+                return Err(invalid())
+            }
             _ => {}
         }
         Ok(())
@@ -220,6 +232,13 @@ impl Input {
                 "send-keys -t {pane} {}Enter",
                 "Down ".repeat(usize::from(*of) + 1)
             ),
+            Self::Pick { rows, enter } => format!(
+                "send-keys -t {pane} {}{}",
+                if *rows < 0 { "Up " } else { "Down " }.repeat(usize::from(rows.unsigned_abs())),
+                if *enter { "Enter" } else { "" }
+            )
+            .trim_end()
+            .to_owned(),
         };
         Ok(command)
     }
@@ -754,6 +773,36 @@ mod tests {
         for of in [0, 9] {
             assert!(Input::Submit { of }.keys("%12").is_err(), "{of}");
         }
+        for (rows, enter, keys) in [
+            (2, true, "send-keys -t %12 Down Down Enter"),
+            (-1, true, "send-keys -t %12 Up Enter"),
+            (0, true, "send-keys -t %12 Enter"),
+            (3, false, "send-keys -t %12 Down Down Down"),
+            (-2, false, "send-keys -t %12 Up Up"),
+        ] {
+            assert_eq!(Input::Pick { rows, enter }.keys("%12").unwrap(), keys);
+        }
+        // Nothing to send, or further than any list is long, is refused.
+        for (rows, enter) in [
+            (0, false),
+            (-31, true),
+            (31, false),
+            (i8::MIN, true),
+            (i8::MAX, true),
+        ] {
+            assert!(
+                Input::Pick { rows, enter }.keys("%12").is_err(),
+                "{rows} {enter}"
+            );
+        }
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"pick","rows":128,"enter":true}"#).is_err()
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"pick","rows":1}"#).is_err());
+        assert!(serde_json::from_str::<Input>(
+            r#"{"kind":"pick","rows":1,"enter":true,"keys":"x"}"#
+        )
+        .is_err());
         assert!(
             serde_json::from_str::<Input>(r#"{"kind":"select","option":1,"of":2,"keys":"x"}"#)
                 .is_err()
@@ -764,9 +813,8 @@ mod tests {
         );
     }
 
-    /// The generated command, run by a real tmux, gives a program reading the pane exactly one digit and no Enter.
-    #[test]
-    fn select_reaches_a_real_pane_as_one_digit_without_enter() {
+    /// The bytes a program reading raw input in a real tmux pane receives when `input` is sent to it.
+    fn bytes_received_by_a_real_pane(input: Input, expected: usize) -> Option<String> {
         use std::{
             process::Command,
             time::{Duration, Instant},
@@ -782,7 +830,7 @@ mod tests {
         };
         let (ready, output) = (dir.path().join("ready"), dir.path().join("keys.txt"));
         let program = format!(
-            "stty raw -echo; touch {}; head -c 1 | od -An -tx1 > {}; sleep 2",
+            "stty raw -echo; touch {}; head -c {expected} | od -An -tx1 > {}; sleep 2",
             ready.display(),
             output.display()
         );
@@ -798,7 +846,10 @@ mod tests {
             &program,
         ]) {
             Ok(started) if started.status.success() => {}
-            _ => return eprintln!("tmux is not available; skipped"),
+            _ => {
+                eprintln!("tmux is not available; skipped");
+                return None;
+            }
         }
         let wait = |path: &std::path::Path| {
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -815,7 +866,7 @@ mod tests {
             }
         };
         wait(&ready);
-        let keys = Input::Select { option: 2, of: 3 }.keys("%0").unwrap();
+        let keys = input.keys("%0").unwrap();
         let sent = tmux(&keys.split(' ').collect::<Vec<_>>()).unwrap();
         assert!(
             sent.status.success(),
@@ -825,7 +876,39 @@ mod tests {
         wait(&output);
         let received = std::fs::read_to_string(&output).unwrap();
         let _ = tmux(&["kill-server"]);
-        assert_eq!(received.trim(), "32", "the option digit and nothing else");
+        Some(received.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    /// The generated command, run by a real tmux, gives a program reading the pane exactly one digit and no Enter.
+    #[test]
+    fn select_reaches_a_real_pane_as_one_digit_without_enter() {
+        if let Some(received) = bytes_received_by_a_real_pane(Input::Select { option: 2, of: 3 }, 1)
+        {
+            assert_eq!(received, "32", "the option digit and nothing else");
+        }
+    }
+
+    /// Arrows, then Enter only when asked, and nothing else: the keys a person presses to choose a row of a list dialog.
+    #[test]
+    fn pick_reaches_a_real_pane_as_arrows_then_enter() {
+        if let Some(received) = bytes_received_by_a_real_pane(
+            Input::Pick {
+                rows: 2,
+                enter: true,
+            },
+            7,
+        ) {
+            assert_eq!(received, "1b 5b 42 1b 5b 42 0d");
+        }
+        if let Some(received) = bytes_received_by_a_real_pane(
+            Input::Pick {
+                rows: -1,
+                enter: false,
+            },
+            3,
+        ) {
+            assert_eq!(received, "1b 5b 41");
+        }
     }
 
     #[test]

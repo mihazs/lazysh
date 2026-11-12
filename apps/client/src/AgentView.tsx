@@ -6,6 +6,7 @@ import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
+import AgentPickerDock, {type ScreenSource} from './AgentPickerDock';
 import {publishAnswerGuard} from './agentDialogAnswer';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
@@ -41,8 +42,8 @@ type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: Agent
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLaunch, terminalInput, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; tmux: boolean; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; tmux: boolean; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -150,13 +151,15 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const reader=!!conversation;
   // The composer's bound input also answers the open dialog. Before every key the pane is read again, and nothing is sent
   // unless the same reported session still needs the user, so a dialog answered in the terminal first gets no stray key.
-  const answerGuard = useCallback(async () => {
+  const paneGuard = useCallback(async () => {
     const paneId = row?.paneId;
-    if (!paneId || !shown || !access.current()) return false;
-    if (parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId !== paneId) return false;
-    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === paneId);
-    return rows.length === 1 && rows[0].sessionId === row.sessionId && rows[0].state === 'needs_attention' && access.current();
-  }, [row?.paneId, row?.sessionId, shown, access, invoke, sessionId]);
+    return !!paneId && shown && access.current() && parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId === paneId;
+  }, [row?.paneId, shown, access, invoke, sessionId]);
+  const answerGuard = useCallback(async () => {
+    if (!await paneGuard()) return false;
+    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === row?.paneId);
+    return rows.length === 1 && rows[0].sessionId === row?.sessionId && rows[0].state === 'needs_attention' && access.current();
+  }, [paneGuard, row?.paneId, row?.sessionId, access, invoke, sessionId]);
   const answerable = tmux && !selected && row?.state === 'needs_attention';
   useEffect(() => {publishAnswerGuard(sessionId, answerable ? answerGuard : undefined); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, answerable, answerGuard]);
   if (!selected && binding.kind==='bound') retained.current={id:binding.row.sessionId,conversation:binding.conversation};
@@ -236,6 +239,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
+    {reader && !selected && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} answerable={tmux && row?.agent === 'Claude Code' && !!row.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} />}
     {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} />}

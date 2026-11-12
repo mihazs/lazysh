@@ -8,8 +8,9 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   {agent:Exclude<TranscriptAgentId,'hermes'|'opencode'>;transcriptSessionId?:never}
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
-/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, and a free-text answer. */
-export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}>;
+/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, a free-text answer,
+ * a move of a list dialog's highlight (with Enter to take the row) and Escape to leave it. */
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'pick';rows:number;enter:boolean}|{kind:'request_stop'}>;
 export type DialogAnswerer=(answer:DialogAnswer)=>Promise<boolean>;
 export type TerminalInputLabels=Readonly<{backend:'tmux'|'herdr';hostLabel:string;terminalLabel:string}>;
 type Destination=Readonly<{generation:string;sessionId:string;windowId:string;paneId:string}>;

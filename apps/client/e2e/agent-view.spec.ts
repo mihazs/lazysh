@@ -4,7 +4,7 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
 type Fixture={watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
-  channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
+  channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
@@ -59,6 +59,7 @@ async function open(page:Page) {
         if(action.kind==='snapshot')return {...snapshot,destination:{...snapshot.destination,paneId:args.sessionId==='display-work'?'%3':'%4'}};
         if(action.kind==='bind')return bound;
         if(action.kind==='release')return {kind:'released'};
+        if(action.input)fixture.onKeys?.(action.input);
         if(action.input?.kind==='send')submit(action.input.text!);
         return {kind:'delivered',nextOperation:action.operation!+1};
       }
@@ -175,20 +176,30 @@ test('names what the agent waits for in the header and opens the Agent view from
   const row=await list.getByRole('button').first().boundingBox();expect(row!.x+row!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
+async function asClaude(page:Page) {
+  await page.evaluate(()=>{
+    const base=window.nativeFixtureInvoke!;
+    window.nativeFixtureInvoke=async(command,args)=>{
+      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
+      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread'}))};
+      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
+      if(command==='agent_transcript')return {...(result as object),agent:'claude'};
+      return result;
+    };
+  });
+}
+
 test('answers a Claude permission request from the Agent view through the approval hook and writes no key to the terminal',async({page})=>{
   await open(page);
   // The same pane now runs Claude Code, which has one pending permission request.
+  await asClaude(page);
   await page.evaluate(()=>{
     const base=window.nativeFixtureInvoke!;
     window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[]};
     window.nativeFixtureInvoke=async(command,args)=>{
       if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
       if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
-      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
-      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread'}))};
-      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
-      if(command==='agent_transcript')return {...(result as object),agent:'claude'};
-      return result;
+      return base(command,args);
     };
   });
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
@@ -231,6 +242,67 @@ test('answers the open Claude question with the digit of the chosen option and t
   const fixture=await page.evaluate(()=>window.agentView.inputs);
   expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
   const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
+/** Claude Code answers in the same pane, which has a dialog open on its screen (drawn narrow: a phone terminal is about 45 columns). */
+async function showDialog(page:Page,highlighted:number|undefined) {
+  await page.evaluate(highlighted=>{
+    const rule='─'.repeat(32);
+    const names=['Default (recommended)','Opus','Sonnet','Haiku'];
+    const draw=(rows:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${rows.join('\r\n')}`)]});
+    const dialog=(at:number)=>[rule,'  Select model','  Pick the model.','',...names.map((name,index)=>`${index===at?'  ❯ ':'    '}${index+1}. ${name}`),'','  Enter to confirm · Esc to cancel'];
+    let at=highlighted ?? 0;
+    // The TUI reacts to the keys the guarded input delivers: arrows move the highlight, Enter closes the dialog.
+    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['> /model','Set model','$ ']);else{at+=input.rows as number;draw(dialog(at));}};
+    draw(highlighted===undefined?['  Permissions','  Esc to cancel']:dialog(at));
+  },highlighted);
+}
+test('answers a list dialog open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
+  await open(page);await asClaude(page);
+  const agent=await showAgent(page);
+  await showDialog(page,3);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
+  await expect(dialog.getByRole('button',{name:/^Haiku/})).toHaveAttribute('aria-current','true');
+  const sonnet=dialog.getByRole('button',{name:/^Sonnet/});
+  await expect(sonnet).toBeEnabled();
+  expect((await sonnet.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await sonnet.click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
+  expect(sent).toEqual([{kind:'pick',rows:-1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  // The terminal is untouched by the view switch and shows what the keys did.
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  expect(await terminalText(page)).toContain('Set model');
+  expect((await fixture(page)).stdin).toEqual([]);
+});
+
+test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='phone','Hardware digits are covered on desktop.');
+  await open(page);await asClaude(page);
+  const agent=await showAgent(page);
+  await showDialog(page,0);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('button',{name:/^Opus/})).toBeEnabled({timeout:8000});
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await page.keyboard.press('2');
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
+});
+
+test('says the agent waits in the terminal for a dialog it cannot read exactly, offers the terminal and sends no key',async({page})=>{
+  await open(page);await asClaude(page);
+  const agent=await showAgent(page);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await showDialog(page,undefined);
+  const notice=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(notice.getByRole('status')).toHaveText('The agent is waiting for you in the terminal.',{timeout:8000});
+  expect(await notice.getByRole('button').allTextContents()).toEqual(['Show terminal']);
+  await notice.getByRole('button',{name:'Show terminal',exact:true}).click();
+  await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{

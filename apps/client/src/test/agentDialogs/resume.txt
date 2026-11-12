@@ -1,0 +1,34 @@
+
+
+❯ /model
+  ⎿  Kept model as Haiku 5.5
+
+❯ /resume
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Resume session
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ Search…                                                                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+    probe-claude
+
+  ❯ AskUserQuestion tool color picker
+    17 hours ago · HEAD · 417.9KB
+
+    AskUserQuestion tool demo
+    17 hours ago · HEAD · 419.3KB
+
+    AskUserQuestion multi-select fruit test
+    17 hours ago · HEAD · 434.5KB
+
+    AskUserQuestion color picker test
+    17 hours ago · HEAD · 418.3KB
+
+    x.txt probe file
+    17 hours ago · HEAD · 424.8KB
+
+    x.txt creation in probe-claude
+    18 hours ago · HEAD · 291.6KB
+
+    Ctrl+A to show all projects · Ctrl+B to only show current branch · Space to preview · Ctrl+R
+    to rename · Type to search · Esc to cancel

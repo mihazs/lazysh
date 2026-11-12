@@ -175,7 +175,8 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   Typing `/` as the first word opens a palette of the agent's common slash commands
   (`agentSlashCommands.ts`; the agent's own `/help` stays the authority). Choosing one
   inserts its text and does not send it; a command that opens a dialog in the terminal UI
-  (for example `/model`) says so, and its dialog is answered in the terminal. A leading `!`
+  (for example `/model`) says so, and its dialog is answered in the dialog card above the
+  composer when the screen lift can read it exactly, otherwise in the terminal. A leading `!`
   or `#` shows a **Shell command** or **Memory note** chip; the text is sent unchanged.
   Up and Down recall the prompts sent from this conversation, only from an empty field or
   while the text is still exactly the recalled prompt. Each sent message has a receipt
@@ -245,7 +246,7 @@ the PTY directly.
 | Interrupt | Live protocol interrupt. Else guarded `request_stop`. Two taps on phone. |
 | Approval | Agent's own decision channel (Claude hook decision, Codex/OpenCode protocol reply). Else keys. |
 | Question or menu option | Live protocol answer. Else a new guarded `select` input that sends the profile's keys for that option. |
-| Slash command | Guarded `send` of the command text, picked from a palette built from the agent's documented commands. Commands that open TUI pickers leave the result in the terminal. |
+| Slash command | Guarded `send` of the command text, picked from a palette built from the agent's documented commands. A command that opens a TUI list dialog is answered through the dialog card (see **List dialogs** below). |
 | Attachment | Existing upload, then `[Image #n]`/`[File #n]` tokens in the sent text. |
 
 Per-agent keys (option selection, submit, queue, steer, interrupt, cancel) live in a
@@ -258,6 +259,30 @@ Every answer carries the pending item's `id` and `revision`. A stale revision, a
 item answered in the terminal first, an expired approval or a closed dialog fails
 closed and shows a note ("Answered in the terminal", "Expired"). The terminal stays
 usable for the same answer at all times; the first answer wins.
+
+### List dialogs
+
+A TUI list dialog the agent opens (Claude Code's `/model`, `/resume`, `/rewind` lists, the folder trust prompt, the plan decision) is
+shown above the composer as a **dialog card**: its title, the text that explains it, each option and the footer that says what Enter does,
+with the highlighted option marked. It is read from the rows of the session's own terminal screen (`agentDialogLift.ts`), not from the
+transcript, so it works for dialogs no hook or transcript record describes.
+
+- **Fail closed.** The lift returns a dialog only for one whole, simple list that has a full-width rule above it, exactly one highlighted
+  row, a footer that says Enter takes the highlighted row and how to leave, and no check boxes, second list or tabs. Anything else (a tabbed
+  dialog, a multi-select, a text field, a dialog whose footer this profile does not know) shows **The agent is waiting for you in the
+  terminal** with **Show terminal**, and sends nothing. The view never switches by itself.
+- **Choosing is what a person presses.** The card reads the screen again, checks the bound pane is still the one the agent's report names,
+  then sends the guarded `pick` input: arrow keys that move the highlight to the chosen option. It reads the screen back and presses Enter
+  (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog
+  that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
+- **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
+  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**). A dialog an approval or question card
+  already answers shows no second card.
+- **Profile and corpus.** The Claude Code 2.1.x footers and layout are data in `agentDialogLift.ts`, verified against screens captured from
+  Claude Code 2.1.318 in a real tmux pane (`apps/client/src/test/agentDialogs`). Other agents' dialogs (Codex, OpenCode, Grok, Gemini)
+  have no captured corpus yet and fall back to the banner.
+- **Not covered.** `/rewind`'s confirmation page has no footer line, so it is not provable as a list dialog: after the choice that opens it
+  the card says **The agent is waiting for you in the terminal**. Dialogs that read text (login codes, the "Tell Claude what to change" field) stay in the terminal.
 
 ## Security and privacy
 
@@ -312,7 +337,7 @@ Tests assert behaviour, not source text.
 - Launching agents in headless, SDK, stream-json or ACP mode to drive the Agent
   view. These run a separate process and would break the co-existence contract.
 - Claude Code channels and peer-message sockets as an input path.
-- Rewind, fork and resume-into-a-new-session.
+- Rewind, fork and resume-into-a-new-session logic of lazysh. The agent's own `/rewind` and `/resume` lists are shown and answered as list dialogs; lazysh adds no fork or resume of its own.
 - Line-comment review of diffs sent back as prompts.
 - Pixel-level re-rendering of arbitrary TUI screens. Anything the model cannot
   represent stays in the terminal.

@@ -2512,7 +2512,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <Suspense key={session.id} fallback={null}>
                   <AgentView sessionId={session.id} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
-                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
+                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id])} terminal={session.terminal} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                   </Suspense>
                 ))}

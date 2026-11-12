@@ -1,6 +1,6 @@
 import type {BoundConversation} from './ChatPanel';
 
-/** A command of an agent's own prompt box. `picker` ones open a dialog in the terminal UI that the Agent view cannot drive. */
+/** A command of an agent's own prompt box. `picker` ones open a dialog in the terminal UI, which the Agent view answers when `liftDialog` can read it and leaves to the terminal otherwise. */
 export type SlashCommand = Readonly<{name: string; picker?: true}>;
 type Agent = BoundConversation['agent'];
 

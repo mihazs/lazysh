@@ -18,6 +18,10 @@ function update(sessionId: string, change: Partial<Entry>) {
 }
 export const publishComposerControl = (sessionId: string, control?: TerminalControl) => update(sessionId, {control});
 export const publishAnswerGuard = (sessionId: string, guard?: () => Promise<boolean>) => update(sessionId, {guard});
+/** The composer's bound input as it is now, for a surface that checks the dialog itself before and after each key. */
+export function useComposerControl(sessionId: string): TerminalControl | undefined {
+  return useSyncExternalStore(listener => {listeners.add(listener); return () => {listeners.delete(listener);};}, () => entries.get(sessionId)?.control);
+}
 export function useDialogAnswerer(sessionId: string): DialogAnswerer | undefined {
   return useSyncExternalStore(listener => {listeners.add(listener); return () => {listeners.delete(listener);};}, () => entries.get(sessionId)?.answerer);
 }
