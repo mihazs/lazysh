@@ -160,8 +160,8 @@ jobs:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
           MOON_BASE: origin/${{ github.base_ref }}
         run: |
-          # Pull requests run only the affected crates and their dependents (-g); main runs all.
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g'; else verb=run; fi
+          # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g --downstream none'; else verb=run; fi
           bunx moon $verb '#companion:build' '#companion:check-rust' '#companion:test-rust' '#companion:test-hooks' '#companion:lint' '#companion:format-check'
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
