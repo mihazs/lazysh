@@ -97,17 +97,19 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend']):unk
 
 export type TerminalDestination=Destination|HerdrDestination;
 /** What an automatically bound input offers its caller; `send` and `stop` do nothing while `ready` is false. */
-export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void}>;
+export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void}>;
 
 /** `notes` false keeps the heading and disclaimer behind the composer's info button.
  * `proves` turns on automatic binding: the destination is chosen on mount and confirmed without a click only when it
  * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
  * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
  * Confirm steps stay. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,proves,onControl}:{
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,proves,onControl,onFailed}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
   proves?:(destination:TerminalDestination)=>boolean;onControl?:(control:TerminalControl|undefined)=>void;
+  /** A send ended without delivery: `refused` when nothing was written, `unknown` once writing began. */
+  onFailed?:(kind:'refused'|'unknown')=>void;
 }) {
   useUi();
   const accessState=useAccessSnapshot();
@@ -187,8 +189,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   useEffect(()=>{if(auto && sourceValid && !snapshot && !binding && !error && !busy && !flight.current)void choose();});
   useEffect(()=>{if(proven && !binding && !busy && !error)void confirm();});
   const latestInput=useRef<(kind:'send'|'request_stop')=>void>(()=>{});
+  // Retry is one explicit request: bind again, and send the draft once as soon as that binding exists.
+  const retrying=useRef(false);
+  useEffect(()=>{if(retrying.current && binding && !busy){retrying.current=false;void input('send');}});
+  useEffect(()=>{if(retrying.current && error)retrying.current=false;},[error]);
   const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
-  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>latestInput.current('send'),stop:()=>latestInput.current('request_stop')});},[onControl,ready,busy,refused]);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>latestInput.current('send'),stop:()=>latestInput.current('request_stop'),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
   async function input(kind:'send'|'request_stop') {
     const permission=owned.current;
@@ -203,7 +209,10 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
       setStatus(labels.backend==='herdr'?(kind==='send'?'chatHerdrSent':'chatHerdrStopRequested'):(kind==='send'?'chatTerminalSent':'chatTerminalStopRequested'));
       if(kind==='send')onSent(text,revision);
-    } catch(error) {failed(error,original,true,labels.backend==='tmux' && kind==='send' && /[\n\t]/.test(text));}
+    } catch(error) {
+      failed(error,original,true,labels.backend==='tmux' && kind==='send' && /[\n\t]/.test(text));
+      if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)?'refused':'unknown');
+    }
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
   latestInput.current=kind=>void input(kind);
@@ -224,7 +233,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     {!sourceValid && <p>{t('chatTerminalInvalid')}</p>}
     {binding && !auto && !validTerminalDraft(draft) && <p>{t('chatTerminalInvalidDraft')}</p>}
     {busy && (!auto || binding) && <p role="status">{t('chatTerminalPending')}</p>}
-    {status && <p role="status">{t(status)}</p>}
+    {status && !(auto && (status==='chatTerminalSent' || status==='chatHerdrSent')) && <p role="status">{t(status)}</p>}
     {mismatch && !error && <p role="alert">{t('agentComposerWrongPane')}</p>}
     {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
     <p hidden={!notes}>{t('chatTerminalCloseHint')}</p>

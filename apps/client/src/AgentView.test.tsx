@@ -633,6 +633,7 @@ describe('permission requests of the agent in this pane',()=>{
     await act(async()=>{fireEvent.click(deny);await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'%3',decision:'deny'}]);
     // Nothing was typed into the terminal: the decision is the hook's, not a key. The composer binds the pane but sends no input.
+    // Nothing was typed into the terminal: the decision is the hook's, not a key.
     expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
     expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });

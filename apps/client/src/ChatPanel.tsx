@@ -194,7 +194,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -526,6 +526,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
   const flow = useMemo(() => opened?.view === 'conversation' || timeline ? projectMessages(messages) : messages, [opened?.view, timeline, messages]);
   const turns = useMemo(() => timeline ? groupTurns(flow) : [], [timeline, flow]);
+  // What the person typed, for the composer's receipts: harness events and tool results are not prompts.
+  const promptTexts = useMemo(() => flow.filter(message => message.role === 'user' && !message.event).map(message => message.blocks.filter(block => block.type === 'text' && !block.card).map(block => block.text ?? '').join('\n')).filter(Boolean), [flow]);
+  useEffect(() => onPrompts?.(promptTexts), [onPrompts, promptTexts]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
