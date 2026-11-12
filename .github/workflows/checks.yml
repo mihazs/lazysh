@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+env:
+  MOON_TOOLCHAIN_FORCE_GLOBALS: 'true'
+  # Shallow jobs have no base branch to diff, and `moon run` on a pull request would fail resolving it.
+  # Only the two `moon ci` steps need changed files; they override MOON_BASE with the pull request base.
+  MOON_BASE: HEAD
+  MOON_HEAD: HEAD
+
 # A newer pull request push supersedes its older checks; main runs always finish so every
 # merged commit gets a complete native verification (GitHub still keeps one pending run).
 concurrency:
@@ -74,19 +81,36 @@ jobs:
   client:
     runs-on: ubuntu-24.04
     steps:
-      - &source-checkout
-        uses: actions/checkout@v4
+      # moon derives the pull request's affected tasks from the merge base, so it needs history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - &source-bun
         uses: ./.github/actions/setup-bun
-      - uses: actions/cache@v4
+      # Pull requests restore main's moon cache but never save their own, like the Rust caches.
+      - id: moon-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .turbo
-          key: turbo-client-${{ runner.os }}-${{ github.sha }}
-          restore-keys: turbo-client-${{ runner.os }}-
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-${{ github.sha }}
+          restore-keys: |
+            moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-
+            moon-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run test:hooks
       - run: bun run test:ci
-      - run: bunx turbo run build check test --filter=@lazysh/client --concurrency=1
+      # Pull requests run only the tasks the diff can affect, followed through project relations
+      # (-g). Pushes to main always run everything: it is the full parity evidence.
+      - name: Build, type-check and test the client (affected tasks)
+        if: github.event_name == 'pull_request'
+        env:
+          MOON_BASE: origin/${{ github.base_ref }}
+        run: bunx moon ci client:build client:check client:test -g -c 1
+      - name: Build, type-check and test the client
+        if: github.event_name != 'pull_request'
+        run: bunx moon run client:build client:check client:test -c 1
       - name: Resolve the locked Playwright version
         id: playwright
         working-directory: apps/client
@@ -101,13 +125,23 @@ jobs:
       # Still installs the system dependencies; a cached browser only skips its download.
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
-      - run: bun run test:e2e
+      - run: bunx moon run client:test-e2e
+      - name: Save the moon cache from main
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: ${{ steps.moon-cache.outputs.cache-primary-key }}
 
   agent:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - *source-bun
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -124,7 +158,11 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/account-usage --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
+          MOON_BASE: origin/${{ github.base_ref }}
+        run: |
+          # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g --downstream none'; else verb=run; fi
+          bunx moon $verb '#companion:build' '#companion:check-rust' '#companion:test-rust' '#companion:test-hooks' '#companion:lint' '#companion:format-check'
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
@@ -446,7 +484,7 @@ jobs:
           prefix-key: v0-rust-ubuntu-22.04
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - run: bunx moon run client:build client-native:verify-native
       # A skipped or failed producer publishes no ID; fail before the download guesses one.
       - name: Validate producer artifact ID
         env:
@@ -482,9 +520,9 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
       - name: Check standalone Parakeet runtime and native ownership boundary
-        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+        run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Check combined native voice startup and clean shutdown without models
-        run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
+        run: bunx moon run client-native:test-voice-interop-smoke
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -530,7 +568,7 @@ jobs:
           if-no-files-found: warn
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
-        run: bunx turbo run test:tmux --filter=@lazysh/client
+        run: bunx moon run client-native:test-tmux
       - name: Exercise original-display Chat input and retirement on supported tmux
         shell: bash
         run: |
@@ -631,9 +669,9 @@ jobs:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
       - name: Exercise account quota collectors and process ownership
-        run: bunx turbo run test:rust --filter=@lazysh/account-usage
+        run: bunx moon run account-usage:test-rust
       - run: bun run build:native
-      - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - run: bunx moon run credential-vault:test-rust
       - name: Exercise the actual Windows Credential Manager round trip and chunked deletion
         if: runner.os == 'Windows'
         shell: bash
@@ -663,7 +701,7 @@ jobs:
         run: bun run test:storage
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
         if: runner.os == 'macOS'
-        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+        run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Exercise native desktop launch parsing and original-lease admission
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
       - name: Exercise multiplexer version gates, command building and tree parsing
@@ -672,16 +710,16 @@ jobs:
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
       - name: Exercise native local PTY and ConPTY lifecycle
-        run: bunx turbo run test:local --filter=@lazysh/client
+        run: bunx moon run client-native:test-local
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
           LAZYSH_TEST_OWNED_MAC_CLIPBOARD: "1"
-        run: bunx turbo run test:host-clipboard --filter=@lazysh/client
+        run: bunx moon run client-native:test-host-clipboard
       - name: Exercise native display-idle ownership and platform API release
-        run: bunx turbo run test:rust --filter=@lazysh/display-idle
+        run: bunx moon run display-idle:test-rust
       - name: Exercise native resume policy persistence and cancellation
-        run: bunx turbo run test:resume-policy --filter=@lazysh/client
+        run: bunx moon run client-native:test-resume-policy
 
   native-android:
     needs: changes
@@ -712,7 +750,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:android
       - name: Inspect normal Android Google push graph and packaged classes
-        run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client
+        run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx moon run client:test-android-push-artifact
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - name: Exercise native Android ingress and compiled startup log policy
@@ -742,7 +780,8 @@ jobs:
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-runtime-results
       GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
     steps: &android-owned-runtime-steps
-      - *source-checkout
+      - &source-checkout
+        uses: actions/checkout@v4
       - *source-bun
       - *android-toolchains
       - &android-owned-rust
@@ -1071,7 +1110,7 @@ jobs:
             'host::tests::local::local_exec_over_its_deadline_times_out_and_reaps_the_child: test' \
             'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
             'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' | diff -u - <(printf '%s\n' "$actual")
-          bunx turbo run test:local --filter=@lazysh/client
+          bunx moon run client-native:test-local
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH
         if: ${{ !cancelled() }}
@@ -1089,7 +1128,7 @@ jobs:
         run: |
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::connection_loss_fixture::openssh_ -- --list --ignored | grep -c ': test$' | grep -Fx 1
-          bun run --cwd apps/client test:connection-loss
+          bunx moon run client-native:test-connection-loss
       - name: Exercise real tmux, Herdr and Zellij lifecycle actions
         if: ${{ !cancelled() }}
         # Exact Herdr pane focus runs the current-source companion.
@@ -1138,7 +1177,7 @@ jobs:
       - name: Exercise the real Parakeet manager install, warm reuse and removal
         if: ${{ !cancelled() }}
         timeout-minutes: 20
-        run: bunx turbo run test:parakeet-product --filter=@lazysh/client
+        run: bunx moon run client-native:test-parakeet-product
       # Official caronc/apprise-api 2.0.2 image (Docker Hub caronc/apprise), pinned by its
       # multi-arch index digest. Host networking lets its json:// service reach the test's
       # loopback receiver; the relay reaches it only through the test's owned TLS proxy.
@@ -1246,7 +1285,7 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
           script: |
-            if [ '${{ matrix.push-variant }}' = 'google' ]; then LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run --cwd apps/client test:android-ntfy; else LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy; fi
+            if [ '${{ matrix.push-variant }}' = 'google' ]; then LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy; else LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy; fi
       - name: Retain finite ntfy acceptance receipts only
         uses: actions/upload-artifact@v4
         if: always()
@@ -1401,7 +1440,7 @@ jobs:
         run: cargo test -p lazysh-mosh-transport --target aarch64-apple-ios --lib --no-run --locked
       - name: Compile watchOS companion and complications
         timeout-minutes: 8
-        run: bunx turbo run build:watchos --filter=@lazysh/apple-status
+        run: bunx moon run apple-status:build-watchos
       - name: Create isolated status test simulator
         id: ios-simulator
         run: |
@@ -1409,13 +1448,13 @@ jobs:
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
       - name: Run native status lifecycle tests
         timeout-minutes: 8
-        run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
+        run: bunx moon run apple-status:test-apple-status
       - name: Run native APNs registration state tests
         timeout-minutes: 8
-        run: bunx turbo run test:apns --filter=@lazysh/push-registration
+        run: bunx moon run push-registration:test-apns
       - name: Run native resume cover and lifecycle tests
         timeout-minutes: 8
-        run: bunx turbo run test:resume --filter=@lazysh/credential-vault
+        run: bunx moon run credential-vault:test-resume
       - name: Upload native resume results
         if: always()
         uses: actions/upload-artifact@v4

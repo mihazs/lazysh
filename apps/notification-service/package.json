@@ -6,12 +6,5 @@
   "dependencies": {
     "@lazysh/common": "workspace:*",
     "@lazysh/notification-client": "workspace:*"
-  },
-  "scripts": {
-    "build": "cargo build --release --locked --package lazysh-notifications",
-    "check": "cargo check --locked --package lazysh-notifications",
-    "test": "cargo test --locked --package lazysh-notifications",
-    "lint": "cargo clippy --locked --package lazysh-notifications --all-targets -- -D warnings",
-    "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
   }
 }

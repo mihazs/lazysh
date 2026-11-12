@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { gitFixtureRoots, project } from './support/gitFixture';
 import { document, executedSteps, interpolate, type Context } from './support/workflowGraph';
+import { moonJson, plannedTargets } from './support/moon';
 
 const script = join(project, '.github', 'scripts', 'pinned-download.sh');
 const pinned = 'pinned fixture bytes';
@@ -97,32 +98,34 @@ test('the ORT action fails and exports nothing when the archive does not match i
   expect(result).toMatchObject({ cached: undefined, env: '' });
 });
 
-// Resolve `bun run` and `turbo run` to package scripts, then find Cargo or Tauri invocations
-// that compile the Linux client or the Parakeet runtime and so run its native build script.
-const workspaces = new Map<string, { dir: string; scripts: Record<string, string>; deps: string[] }>();
+// Resolve `bun run` to package scripts and `moon run` to moon's own resolved task graph, then find
+// Cargo or Tauri invocations that compile the Linux client or the Parakeet runtime and so run its
+// native build script.
+const workspaces = new Map<string, { dir: string; scripts: Record<string, string> }>();
 for (const dir of ['.', ...[...new Bun.Glob('{apps,packages}/*/package.json').scanSync(project)].map(path => path.slice(0, -'/package.json'.length))]) {
   const manifest = await Bun.file(join(project, dir, 'package.json')).json();
-  workspaces.set(manifest.name, { dir, scripts: manifest.scripts ?? {}, deps: Object.keys(manifest.dependencies ?? {}) });
+  workspaces.set(manifest.name, { dir, scripts: manifest.scripts ?? {} });
 }
 const parakeetCrates = new Set(['apps/client/src-tauri', 'packages/parakeet-runtime']);
+
+// Every task moon can run, with its project directory and shell-visible command line.
+const moonSources = new Map<string, string>(((await moonJson(['query', 'projects'])).projects as any[]).map(entry => [entry.id, entry.source]));
+const moonTasks = new Map<string, { dir: string; line: string }>();
+for (const [id, tasks] of Object.entries<Record<string, any>>((await moonJson(['query', 'tasks'])).tasks))
+  for (const task of Object.values(tasks)) moonTasks.set(task.target, { dir: moonSources.get(id)!, line: task.script ?? [task.command, ...(task.args ?? [])].join(' ') });
+const moonTargets = (words: string) => words.split(/\s+/).filter(word => /^[#\w-]*:[\w-]+$/.test(word));
+// The tasks a `moon run` or `moon ci` command line schedules, dependencies included, planned up front by moon itself.
+const moonPlans = new Map<string, string[]>();
+const moonInvocations = [await Bun.file(join(project, 'package.json')).text(), ...await Promise.all(
+  [...new Bun.Glob('.github/workflows/*.yml').scanSync({ cwd: project, dot: true })].map(path => Bun.file(join(project, path)).text()))].join('\n');
+await Promise.all([...new Set([...moonInvocations.matchAll(/\bmoon (?:run|ci) ([^\n&|;"']+)/g)].map(match => moonTargets(match[1]).join(' ')).filter(Boolean))]
+  .map(async targets => { moonPlans.set(targets, await plannedTargets(...targets.split(' '))); }));
 
 /** Whether running `script` from package directory `dir` executes a named script that compiles Parakeet. */
 function runsScript(dir: string, name: string, seen: Set<string>) {
   const key = `${dir}#${name}`;
   const body = [...workspaces.values()].find(entry => entry.dir === dir)?.scripts[name];
   return body !== undefined && !seen.has(key) && compilesParakeet(body, dir, new Set([...seen, key]));
-}
-
-function turboPackages(filters: string[]) {
-  const selected = new Set<string>();
-  const add = (name: string, deps: boolean) => {
-    if (selected.has(name) || !workspaces.has(name)) return;
-    selected.add(name);
-    if (deps) for (const dep of workspaces.get(name)!.deps) add(dep, true);
-  };
-  if (filters.length === 0) for (const name of workspaces.keys()) add(name, false);
-  for (const filter of filters) add(filter.replace(/\.\.\.$/, ''), filter.endsWith('...'));
-  return [...selected].map(name => workspaces.get(name)!.dir);
 }
 
 function compilesParakeet(command: string, dir: string, seen = new Set<string>()): boolean {
@@ -132,11 +135,11 @@ function compilesParakeet(command: string, dir: string, seen = new Set<string>()
     if (/\btauri build\b/.test(part)) return true;
     const bun = /\bbun run (?:--cwd (\S+) )?([\w:.-]+)/.exec(part);
     if (bun) return runsScript(bun[1] ? join(dir, bun[1]) : dir, bun[2], seen);
-    const turbo = /\bturbo run (.+)/.exec(part);
-    if (turbo) {
-      const tasks = turbo[1].split(/\s+/).filter(word => !word.startsWith('-'));
-      const filters = words.filter(word => word.startsWith('--filter=')).map(word => word.slice('--filter='.length));
-      return turboPackages(filters).some(cwd => tasks.some(task => runsScript(cwd, task, seen)));
+    const moon = /\bmoon (?:run|ci) (.+)/.exec(part);
+    if (moon) {
+      const planned = moonPlans.get(moonTargets(moon[1]).join(' '));
+      if (planned === undefined) throw new Error(`Unplanned moon command: ${part}`);
+      return planned.some(target => compilesParakeet(moonTasks.get(target)!.line, moonTasks.get(target)!.dir, seen));
     }
     const cargo = words.indexOf('cargo');
     if (cargo < 0 || /android|ios/.test(at('--target') ?? '')) return false;

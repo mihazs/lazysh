@@ -1,0 +1,13 @@
+$schema: 'https://moonrepo.dev/schemas/toolchain.json'
+javascript:
+  packageManager: bun
+  # Tasks are explicit; moon never rewrites package.json or bun.lock.
+  inferTasksFromScripts: false
+  syncProjectWorkspaceDependencies: false
+  syncPackageManagerField: false
+  installDependencies: false
+# Version comes from .prototools; CI sets MOON_TOOLCHAIN_FORCE_GLOBALS to use setup-bun.
+bun: {}
+rust:
+  # No version: CI uses dtolnay/rust-toolchain and herdr-native its own rust-toolchain.toml.
+  installDependencies: false

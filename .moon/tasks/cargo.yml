@@ -1,0 +1,33 @@
+$schema: 'https://moonrepo.dev/schemas/tasks.json'
+inheritedBy:
+  tags: ['cargo']
+taskOptions:
+  # The repo norm is uncached; tasks opt in explicitly.
+  cache: false
+implicitInputs: ['/Cargo.toml', '/Cargo.lock', '/.cargo/config.toml']
+fileGroups:
+  rustSources: ['src/**/*', 'tests/**/*', 'examples/**/*', 'build.rs', 'Cargo.toml']
+tasks:
+  # No-op marker: `moon ci -g` follows `^:sources` edges to select dependent crates.
+  sources:
+    command: noop
+    inputs: ['@group(rustSources)']
+  check-rust:
+    type: test
+    command: cargo check --locked
+    inputs: ['@group(rustSources)']
+    deps: ['^:sources']
+  test-rust:
+    type: test
+    command: cargo test --locked
+    inputs: ['@group(rustSources)']
+    deps: ['^:sources']
+  lint:
+    type: test
+    command: cargo clippy --locked --all-targets -- -D warnings
+    inputs: ['@group(rustSources)']
+    deps: ['^:sources']
+  format-check:
+    type: test
+    command: cargo fmt -- --check
+    inputs: ['@group(rustSources)']

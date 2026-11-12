@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {OwnedProcess} from './support/ownedProcess';
+import {commandLine,moonScript,moonTask} from './support/moon';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
@@ -55,7 +56,7 @@ test.skipIf(process.platform!=='linux').each([['google',0],['fdroid',0],['google
   expect(lines).toHaveLength(1);
   expect((await readFile(receipt,'utf8')).split('\n')).toEqual([
     join(runnerTemp,'lazysh-ntfy-emulator.pid'),variant==='google'?'google':'',
-    ...(variant==='google'?['run','--cwd','apps/client','test:android-ntfy']:['run','test:android-ntfy']),'',
+    'run','test:android-ntfy','',
   ]);
 });
 
@@ -174,8 +175,7 @@ test.skipIf(process.platform!=='linux').each([undefined,'private-secret-mode'])(
 test('packaged companion UI acceptance has an explicit owned Android invocation',async()=>{
   expect(workflow.jobs['native-android-runtime'].env?.LAZYSH_ANDROID_UI_COMPANION).toBe('1');
   expect(decoded).toContain('test:android-ssh');
-  const pkg=await Bun.file(new URL('../apps/client/package.json',import.meta.url)).json();
-  expect(pkg.scripts['test:android']).toContain('NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi');
+  expect(commandLine(await moonTask('client:test-android'))).toContain('NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi');
   const gradle=await Bun.file(new URL('../apps/client/src-tauri/gen/android/app/build.gradle.kts',import.meta.url)).text();
   expect(gradle).toContain('lazyshCompanionAcceptance');
   expect(gradle).toContain('outputs/androidTest-results/companion-ui');
@@ -198,33 +198,32 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   expect(producer.run).toContain('LAZYSH_NATIVE_MOSH_SERVER=$mosh_root/install/bin/mosh-server');
   expect(producer.run).toContain('echo "$mosh_root/install/bin" >> "$GITHUB_PATH"');
   expect(android.find(step=>step.name==='Install native Mosh fixture dependencies')!.run).toContain('libncurses-dev');
-  const tasks=(await Bun.file(new URL('../turbo.json',import.meta.url)).json()).tasks;
-  for(const task of ['test:android-ssh','test:native-gui'])expect(tasks[task].passThroughEnv).toContain('LAZYSH_NATIVE_MOSH_SERVER');
+  expect((await moonTask('client:test-native-gui')).options).toMatchObject({cache:false,os:['linux']});
 });
 
-for(const {taskName,keys,values,required} of [
-  {taskName:'test:multiplexers',keys:['LAZYSH_TEST_AGENT_BIN'],values:['/owned/current-source/lazysh-agent'],required:['LAZYSH_TEST_AGENT_BIN']},
-  {taskName:'test:android-ssh',keys:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'],values:['1','/owned/pinned/mosh-server','true','github-hosted'],required:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER']},
-  {taskName:'test:native-gui',keys:['LAZYSH_NATIVE_GUI_SECRET_SERVICE'],values:['/owned/pinned/gnome-keyring-daemon'],required:['LAZYSH_NATIVE_GUI_SECRET_SERVICE']},
-])test(`actual Turbo ${taskName} forwards admitted native fixture environment and filters unrelated values`,async()=>{
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
-  const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
-  const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
-  const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
-  await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
-  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{[taskName]:'bun env-probe.ts'}}));
-  await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
-  for(const admitted of [true,false]) {
-    const task={...config.tasks[taskName]};
-    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!required.includes(key));
-    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,[taskName]:task}}));
-    await rm(join(directory,'observed.json'),{force:true});
-    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run',taskName,'--filter=@lazysh/client','--only'],directory,
-      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',...Object.fromEntries(keys.map((key,index)=>[key,values[index]])),LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
-    await child.finish('actual Turbo task environment',10_000);
-    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:values.map((value,index)=>admitted||!required.includes(keys[index])?value:null),unrelatedFiltered:true});
+// moon forwards the whole process environment, so there is no allow-list to keep in sync. The one
+// subtlety is that a task env constant loses to a conflicting process value unless envOverride is set.
+test('actual moon forwards admitted native fixture environment and applies task constants with envOverride',async()=>{
+  const real=await moonTask('client:test-android-ssh');
+  expect(real.options.envOverride).toBe(true);
+  expect(real.env).toMatchObject({LAZYSH_ANDROID_UI_SSH:'1',LAZYSH_ANDROID_UI_DPAD:'1'});
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-moon-'));temporary.push(directory);
+  await mkdir(join(directory,'.moon'));await mkdir(join(directory,'probe'));
+  await writeFile(join(directory,'.moon/workspace.yml'),JSON.stringify({projects:{probe:'probe'}}));
+  const probe={env:real.env};
+  await writeFile(join(directory,'probe/moon.yml'),JSON.stringify({tasks:{
+    override:{...probe,command:'bun env-probe.ts override',options:{cache:false,envOverride:true}},plain:{...probe,command:'bun env-probe.ts plain',options:{cache:false}}}}));
+  const keys=['LAZYSH_TEST_AGENT_BIN','LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT','LAZYSH_NATIVE_GUI_SECRET_SERVICE'];
+  const values=['/owned/current-source/lazysh-agent','1','/owned/pinned/mosh-server','true','github-hosted','/owned/pinned/gnome-keyring-daemon'];
+  await writeFile(join(directory,'probe/env-probe.ts'),`await Bun.write('observed-'+process.argv[2]+'.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),flag:process.env.LAZYSH_ANDROID_UI_SSH??null}));`);
+  const git=Bun.spawnSync(['git','init','-q'],{cwd:directory});expect(git.exitCode).toBe(0);
+  for(const name of ['override','plain']) {
+    const child=new OwnedProcess(process.execPath,[moonScript,'run',`probe:${name}`],directory,
+      {PATH:process.env.PATH,HOME:process.env.HOME,CI:'true',MOON_TELEMETRY:'false',...Object.fromEntries(keys.map((key,index)=>[key,values[index]])),LAZYSH_ANDROID_UI_SSH:'conflicting-process-value'});
+    await child.finish('actual moon task environment',20_000);
+    expect(JSON.parse(await readFile(join(directory,`probe/observed-${name}.json`),'utf8'))).toEqual({values,flag:name==='override'?'1':'conflicting-process-value'});
   }
-},25_000);
+},40_000);
 
 test.each([
   { owner:'mosh', mosh:0, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:false },

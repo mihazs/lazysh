@@ -105,6 +105,8 @@ test.each([
   ['the Cargo lockfile', ['Cargo.lock']],
   ['the Bun lockfile', ['bun.lock']],
   ['the root manifest', ['package.json']],
+  ['the moon workspace and inherited tasks', ['.moon/tasks/cargo.yml']],
+  ['the proto toolchain pins', ['.prototools']],
   ['release tooling', ['.changeset/release-policy.json']],
   ['a nested changeset path', ['.changeset/notes/extra.md']],
   ['an unrecognised path', ['scripts/new-tool.sh']],
@@ -136,6 +138,7 @@ test.each([
   ['a client sub-package changelog', ['apps/client/CHANGELOG.md'], clientRun],
   ['a client-only shared package', ['packages/et-transport/src/lib.rs'], clientRun],
   ['client configuration shared with iOS', ['apps/client/src-tauri/tauri.conf.json'], { ...clientRun, ...iosRun }],
+  ['the client moon tasks', ['apps/client/moon.yml'], { ...clientRun, ...iosRun }],
   ['agent', ['apps/agent/src/main.rs'], agentRun],
   ['documentation plus agent', ['docs/connections.md', 'apps/agent/src/main.rs'], agentRun],
   ['Android project', ['apps/client/src-tauri/gen/android/app/build.gradle.kts'], androidRun],
@@ -151,7 +154,7 @@ test.each([
   ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
     `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2 }] as const),
-  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts',
+  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts',
     'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
 ] as const)('a pull request changing %s runs exactly the jobs it can affect', async (_, paths, expected) => {
   const outputs = await classify([...paths]);

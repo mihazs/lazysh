@@ -48,7 +48,7 @@ An uncached real-manager acceptance task uses an explicitly supplied public mode
 
 ```sh
 LAZYSH_PARAKEET_TEST_ARCHIVE=/private/cache/parakeet-v3-int8.tar.bz2 \
-  bunx turbo run test:parakeet-product --filter=@lazysh/client
+  bunx moon run client-native:test-parakeet-product
 ```
 
 It downloads nothing, installs through the manager's verified preparation and

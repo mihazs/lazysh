@@ -1,6 +1,6 @@
 # lazysh implementation boundary
 
-The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
+The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/moon**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
 
 ## Components
 
@@ -14,7 +14,7 @@ The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**
 - `packages/push-registration`: explicit Android FCM enrollment/revocation with native token ownership. An unconfigured build remains unavailable; registration alone does not provide delivery.
 - `apps/share-service`: separately deployed optional HTTPS-facing upload service behind a loopback reverse proxy. The native client keeps management credentials in the OS vault; browser IPC uploads use bounded chunks. Expiring public links are created only after explicit user action.
 
-The Bun workspace has app- and package-owned tasks coordinated by Turbo; Cargo owns the native crates and one root lockfile. The client declares its vault package dependency in both graphs. The client owns TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass Turbo artifact/test caching. Frontend outputs use an explicit `dist/**` cache boundary. There is no custom test runner or `scripts/` directory.
+The Bun workspace has app- and package-owned tasks coordinated by [moon](reference/moon-tasks.md); Cargo owns the native crates and one root lockfile. The client declares its vault package dependency in both graphs. The client owns TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass moon artifact/test caching. Only the frontend `check`, `test` and `check-native-gui` tasks are cached. There is no custom test runner or `scripts/` directory.
 
 ```mermaid
 flowchart LR

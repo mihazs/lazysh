@@ -46,7 +46,7 @@ classify() {
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
-    apps/client/package.json | apps/client/turbo.json | apps/client/src-tauri/Cargo.toml | \
+    apps/client/package.json | apps/client/moon.yml | apps/client/src-tauri/Cargo.toml | \
       apps/client/src-tauri/build.rs | apps/client/src-tauri/tauri.conf.json | \
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
       apps/client/src-tauri/src/apple_*) add client ios ;;
@@ -64,7 +64,7 @@ classify() {
     # Checked only by the always-running client and agent jobs, or by fdroid.yml.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/native-changes.test.ts | \
-      tests/pinned-download.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
+      tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs) add none ;;
     */*) add all ;;
     *.md) add docs ;;
     *) add all ;;

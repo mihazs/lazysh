@@ -94,7 +94,7 @@ and packaged desktop cold/warm OS delivery remain platform acceptance checks.
 
 ### Android intent acceptance
 
-On an isolated, unlocked API 36 emulator, run `bun run test:android`. Turbo first
+On an isolated, unlocked API 36 emulator, run `bun run test:android`. moon first
 builds the emulator APK, runs the single native theme-link method through
 `test:android-theme-links`, then runs the ordinary instrumentation suite with
 that method excluded. `bun run test:android-theme-links` also runs the focused

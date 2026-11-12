@@ -165,7 +165,7 @@ The application source is licensed under GPL-3.0-or-later and does not require a
 | --- | --- |
 | Native clients and connectivity | Rust, Tauri 2, direct SSH, Mosh and ET integrations |
 | UI and terminal | React, TypeScript, xterm.js |
-| Workspace tooling | Bun, Turborepo, Cargo |
+| Workspace tooling | Bun, moon, Cargo |
 | Optional host integrations | Rust agent companion and separately deployed services |
 
 Main paths:

@@ -28,11 +28,43 @@ include unverified testimonials. The maintainer preparing a release owns this ch
 
 ## Validation
 
-Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
+Run checks relevant to the change using the project's Cargo, Bun, moon, Vitest,
 Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.
+
+### Task runner (moon)
+
+[moon](https://moonrepo.dev) orchestrates the Bun and Cargo workspaces as one project graph; the root
+`bun run` scripts are thin aliases for `moon run`. `bun install --frozen-lockfile` installs the pinned CLI.
+
+```sh
+bunx moon run client:check              # one task      bunx moon run :lint    # one task everywhere
+bunx moon task client:build --json      # what moon resolved: command, env, deps, options
+bunx moon query projects                # the project graph (tags, layers, dependsOn)
+bunx moon ci -g client:check            # only what the diff affects, plus dependents
+```
+
+Conventions:
+
+- Every `apps/*` and `packages/*` project has a `moon.yml` with `language`, `layer`, `stack` and `tags`.
+  Cargo workspace members carry the `cargo` tag and inherit `check-rust`, `test-rust`, `lint` and
+  `format-check` from `.moon/tasks/cargo.yml`; `companion` selects the crates the `agent` CI job verifies.
+- moon reads Cargo `[dependencies]` and `package.json` workspace dependencies. It does not read
+  `[target.'cfg(..)'.dependencies]` or `[patch]`, so declare those in `dependsOn`.
+  `tests/moon-graph.test.ts` fails when a Cargo path dependency is missing from the graph.
+- Task ids use `-` where script names used `:` (`test-android-ssh`). Do not set `runInCI: false` on a task a workflow runs: `moon run` skips such a task when `CI` is set.
+  Workflows always pass explicit targets to `moon ci`/`moon run`; never run `moon ci` unfiltered, since that selects the
+  device, simulator and browser tasks too.
+- moon does not filter the environment, so every task sees the whole process environment. A task `env` constant
+  loses to a conflicting process value unless the task sets `options.envOverride: true`; use it for flags such
+  as `LAZYSH_ANDROID_UI_QR=1`.
+- Most tasks are uncached; only `client:check`, `client:test` and `client:check-native-gui` are cached.
+  There is no remote cache.
+
+The tables are in the [moon task reference](docs/reference/moon-tasks.md) and the procedures in
+[Run tasks with moon](docs/how-to/run-tasks-with-moon.md).
 
 ### Which CI jobs a pull request runs
 

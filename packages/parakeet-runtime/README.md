@@ -35,7 +35,7 @@ From the repository root:
 ```sh
 cargo test -p lazysh-parakeet-runtime --locked
 cargo clippy -p lazysh-parakeet-runtime --all-targets --locked -- -D warnings
-bunx turbo run test:parakeet-native --filter=@lazysh/parakeet-runtime
+bunx moon run parakeet-runtime:test-parakeet-native
 ```
 
 On macOS, Cargo also builds a standard CTest fixture that exercises real filesystem ACL creation/retrieval, mode-masked grants, inheritance, safe deny entries, private file handles and create-only ancestor classification without loading a model. The macOS CI task separately builds and links the pinned runtime and exercises its version check.
@@ -50,12 +50,12 @@ Explicitly supply the manually downloaded, hash-pinned archive; these tasks neve
 
 ```sh
 LAZYSH_PARAKEET_TEST_ARCHIVE=/private/cache/parakeet-v3-int8.tar.bz2 \
-  bunx turbo run test:parakeet-inference --filter=@lazysh/parakeet-runtime
+  bunx moon run parakeet-runtime:test-parakeet-inference
 LAZYSH_PARAKEET_TEST_ARCHIVE=/private/cache/parakeet-v3-int8.tar.bz2 \
-  bunx turbo run test:parakeet-inference:release --filter=@lazysh/parakeet-runtime
+  bunx moon run parakeet-runtime:test-parakeet-inference-release
 ```
 
-Both tasks disable Turbo caching. Normal `test:rust` runs the inexpensive WAV/provenance and metric fixtures but leaves real inference ignored; normal CI exercises actual ORT startup without a model.
+Both tasks disable moon caching. Normal `test:rust` runs the inexpensive WAV/provenance and metric fixtures but leaves real inference ignored; normal CI exercises actual ORT startup without a model.
 
 ### Observed desktop results
 

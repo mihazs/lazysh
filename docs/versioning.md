@@ -119,8 +119,8 @@ main-based worktree or let the release workflow run it. It deliberately fails
 when no fragments remain or initial versions disagree. If a later command
 fails, it does not publish or roll back files: inspect the failure and recreate
 the release worktree from main instead of repeatedly applying a partial plan.
-Version mutations run directly, outside Turbo's task cache. The installed Turbo
-documentation requires uncached treatment for tasks with external side effects.
+Version mutations run directly, outside moon's task cache, because a task with
+external side effects must stay uncached.
 
 ## GitHub prerequisites and review
 

@@ -1,0 +1,8 @@
+language: rust
+layer: library
+stack: systems
+tags: [cargo]
+tasks:
+  check-rust: {args: --all-features}
+  test-rust: {args: --all-features}
+  lint: {args: [clippy, --locked, --all-features, --all-targets, --, -D, warnings], options: {mergeArgs: replace}}

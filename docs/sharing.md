@@ -10,10 +10,10 @@ Image history offers an explicit **Load thumbnail** action for PNG, JPEG, GIF an
 
 ## Run the optional Rust service
 
-`apps/share-service` is a standalone Rust application in the Bun/Turborepo and Cargo workspaces. Native tasks use Cargo; there is no custom test runner or service deployment script.
+`apps/share-service` is a standalone Rust application in the Bun/moon and Cargo workspaces. Native tasks use Cargo; there is no custom test runner or service deployment script.
 
 ```sh
-bunx turbo run build --filter=@lazysh/share-service
+bunx moon run share-service:build
 target/release/lazysh-share keygen
 ```
 
