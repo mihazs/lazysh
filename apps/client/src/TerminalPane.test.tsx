@@ -1785,3 +1785,21 @@ describe('soft keyboard on a touch screen', () => {
     expect(first.focus).toHaveBeenCalled();
   });
 });
+
+describe('the Herdr switch in the session header', () => {
+  const session = (attached?: {kind: string; name: string}) => ({id: 'ssh', name: 'Host', connected: true, terminal, ...(attached ? {attached} : {})}) as unknown as LiveSession;
+  it('opens Spaces for a Herdr terminal and is absent from any other terminal', () => {
+    const action = vi.fn(); window.addEventListener('lazysh-terminal-action', action);
+    try {
+      const view = render(<TerminalPane session={session()} active reportError={vi.fn()} />);
+      expect(screen.queryByRole('button', {name: 'Switch Herdr workspace, tab or pane'})).toBeNull();
+      view.rerender(<TerminalPane session={session({kind: 'tmux', name: 'work'})} active reportError={vi.fn()} />);
+      expect(screen.queryByRole('button', {name: 'Switch Herdr workspace, tab or pane'})).toBeNull();
+      view.rerender(<TerminalPane session={session({kind: 'herdr', name: 'work'})} active reportError={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', {name: 'Switch Herdr workspace, tab or pane'}));
+      expect(action.mock.calls.map(([event]) => (event as CustomEvent).detail)).toEqual([{sessionId: 'ssh', action: 'openWorkspaces'}]);
+      // Opening Spaces is navigation: it writes nothing to the terminal.
+      expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
+    } finally {window.removeEventListener('lazysh-terminal-action', action);}
+  });
+});

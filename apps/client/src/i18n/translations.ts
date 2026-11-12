@@ -67,6 +67,7 @@ const translations = {
   terminalEditDismiss: ['Dispensar', 'Descartar'],
   herdrNavigationTitle: ["Navegação Herdr", "Navegación Herdr"],
   herdrNavigationBack: ["Voltar ao terminal", "Volver al terminal"],
+  herdrSwitchHandle: ["Alternar espaço, aba ou painel do Herdr", "Cambiar espacio, pestaña o panel de Herdr"],
   herdrNavigationSpaces: ["Espaços", "Espacios"],
   herdrNavigationSearch: ["Buscar espaços, abas e painéis", "Buscar espacios, pestañas y paneles"],
   herdrNavigationCollapse: ["Expandir ou recolher {{name}}", "Expandir o contraer {{name}}"],

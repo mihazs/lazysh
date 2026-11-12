@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import type {Terminal} from '@xterm/xterm';
-import {herdrNavigationCell} from './herdrNavigationCells';
+import {herdrNavigationCell,herdrOnScreen} from './herdrNavigationCells';
 
 /** A 46-column buffer of `above` rows of history and then `rows`, read from `viewportY`. */
 function screen(rows:string[],viewportY=0,above=viewportY) {
@@ -25,6 +25,15 @@ describe("Herdr's own navigation inside the terminal",()=>{
   it('is not an agent that merely prints the word',()=>{
     expect(herdrNavigationCell(screen(['claude','please switch',`${' '.repeat(40)}switch`]),40,1)).toBe(false);
     expect(herdrNavigationCell(screen(['switch to close']),3,0)).toBe(false);
+  });
+  it('is on screen while Herdr draws it on the live screen, wherever the reader is scrolled to',()=>{
+    const live=(rows:string[])=>{const terminal=screen(rows);Object.assign(terminal.buffer.active,{baseY:0});return terminal;};
+    expect(herdrOnScreen(live(header))).toBe(true);
+    expect(herdrOnScreen(live(switcher))).toBe(true);
+    expect(herdrOnScreen(live(['dev@box:~$ ','ls']))).toBe(false);
+    const scrolled=screen(header,0,5);
+    Object.assign(scrolled.buffer.active,{baseY:5});
+    expect(herdrOnScreen(scrolled)).toBe(true);
   });
   it('follows the visible rows, not the live screen, once the reader has scrolled up into history',()=>{
     expect(herdrNavigationCell(screen(header,5),40,1)).toBe(true);

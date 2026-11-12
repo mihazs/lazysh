@@ -101,6 +101,7 @@ export const english = {
 
   herdrNavigationTitle: "Herdr navigation",
   herdrNavigationBack: "Back to terminal",
+  herdrSwitchHandle: "Switch Herdr workspace, tab or pane",
   herdrNavigationSpaces: "Spaces",
   herdrNavigationSearch: "Search spaces, tabs and panes",
   herdrNavigationCollapse: "Expand or collapse {{name}}",
