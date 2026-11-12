@@ -93,6 +93,9 @@ pub(super) fn project_claude_bounded(
     let mut records = Vec::new();
     let mut queue = Queue::default();
     let mut session_seen = false;
+    let mut permission_mode = None;
+    let mut cost_usd = None;
+    let mut worktree = None;
     let mut offset = 0;
     while offset < size {
         let line = super::read_record_line_bounded(&mut reader, line_limit)?;
@@ -112,8 +115,16 @@ pub(super) fn project_claude_bounded(
                 }
                 session_seen = true;
             }
-            if record["type"] == "queue-operation" {
-                queue.apply(&record);
+            match record["type"].as_str() {
+                Some("queue-operation") => queue.apply(&record),
+                Some("permission-mode") => permission_mode = record.get("permissionMode").cloned(),
+                Some("cost-state") => cost_usd = record["totalCostUSD"].as_f64(),
+                Some("worktree-state") => {
+                    worktree = record["worktreeSession"]["worktreeName"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+                _ => {}
             }
             if matches!(
                 record["type"].as_str(),
@@ -172,6 +183,18 @@ pub(super) fn project_claude_bounded(
     let (chain, leaf) = active_chain(&records)?;
     let activity = leaf.and_then(|leaf| activity(&records, leaf));
     let work = super::work::tasks(chain.iter().map(|index| &records[*index].1));
+    let session = super::session_info::Session::claude(
+        &chain
+            .iter()
+            .rev()
+            .map(|index| &records[*index].1)
+            .filter(|record| record["isSidechain"] != true)
+            .collect::<Vec<_>>(),
+        permission_mode.as_ref(),
+        cost_usd,
+        worktree.map(Value::from).as_ref(),
+    )
+    .into_value();
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
@@ -202,6 +225,7 @@ pub(super) fn project_claude_bounded(
         activity,
         queued,
         work: (!work.is_empty()).then_some(work),
+        session,
     })
 }
 

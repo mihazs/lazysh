@@ -217,5 +217,6 @@ pub(super) fn read_page(
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }

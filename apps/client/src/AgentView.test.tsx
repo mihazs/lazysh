@@ -780,3 +780,60 @@ it('ignores a malformed queue from the companion and shows no card',async()=>{
   await advance(0);
   expect(screen.getByText('First answer')).toBeTruthy();expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
 });
+
+describe('session header',()=>{
+  const withSession=(agent:string,session:unknown)=>{
+    host(agent,[row(agent==='claude'?'Claude Code':'Codex','%3')],'available',[turn('Plan the work','Here is the plan.')]);
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),session}:reply;});
+  };
+  const mount=async()=>{render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);return screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;};
+
+  it('shows model, a non-default mode and the share of context left, and the rest behind the options button',async()=>{
+    withSession('codex',{model:'gpt-6.1-terra',mode:'plan',effort:'medium',approval:'never',sandbox:'danger-full-access',usage:{usedTokens:380000,limitTokens:475000},rateLimits:[{kind:'primary',usedPercent:43,windowMinutes:10080}]});
+    const header=await mount();
+    expect(within(header).getByText('gpt-6.1-terra')).toBeTruthy();
+    expect(within(header).getByText('Plan mode')).toBeTruthy();
+    const context=within(header).getByText('20% left');expect(context.getAttribute('data-low')).toBeNull();
+    const details=within(options());
+    expect(details.getByText('gpt-6.1-terra · medium')).toBeTruthy();expect(details.getByText('never · danger-full-access')).toBeTruthy();
+    expect(details.getByText('380,000 of 475,000 tokens (20% left)')).toBeTruthy();expect(details.getByText('43% used')).toBeTruthy();
+  });
+
+  it('shows the git branch and worktree in the header and the folder too in the options, and drops names that are not printable text',async()=>{
+    withSession('claude',{model:'claude-opus-5-5',folder:'fix-login',branch:'fix/login',worktree:'fix-login'});
+    const header=await mount();
+    expect(within(header).getByTitle('Git branch').textContent).toBe(' fix/login');
+    expect(within(header).getByTitle('Worktree').textContent).toBe(' fix-login');
+    const details=within(options());
+    expect(details.getByText('Folder').nextSibling!.textContent).toBe('fix-login');
+    expect(details.getByText('Git branch').nextSibling!.textContent).toBe('fix/login');
+    cleanup();
+    withSession('claude',{folder:'proj',branch:'x\u001b[31m',worktree:'w'.repeat(129)});
+    const bare=await mount();
+    expect(within(bare).queryByTitle('Git branch')).toBeNull();expect(within(bare).queryByTitle('Worktree')).toBeNull();
+    expect(within(options()).getByText('Folder').nextSibling!.textContent).toBe('proj');
+  });
+
+  it('flags low context, and says used tokens only when the window is not recorded',async()=>{
+    withSession('claude',{model:'claude-opus-5-5',mode:'default',usage:{usedTokens:183000,limitTokens:190000},cost:{usd:3.19}});
+    let header=await mount();
+    expect(within(header).getByText('4% left').getAttribute('data-low')).toBe('danger');
+    expect(within(header).queryByText('Default')).toBeNull();
+    expect(within(options()).getByText('$3.19')).toBeTruthy();
+    cleanup();
+    withSession('claude',{usage:{usedTokens:183000}});
+    header=await mount();
+    expect(within(header).getByText('183K tokens used')).toBeTruthy();expect(within(header).queryByText(/left/)).toBeNull();
+  });
+
+  it('draws nothing and raises no error when the companion sends no session or a malformed one',async()=>{
+    for(const session of [undefined,{model:'x'.repeat(65),usage:{usedTokens:-1},cost:{usd:'free'},rateLimits:[{kind:'primary',usedPercent:120}]}]) {
+      withSession('claude',session);
+      const header=await mount();
+      expect(header.querySelector('.agent-pills')?.childElementCount ?? 0).toBe(0);
+      expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Here is the plan.')).toBeTruthy();
+      cleanup();
+    }
+  });
+});

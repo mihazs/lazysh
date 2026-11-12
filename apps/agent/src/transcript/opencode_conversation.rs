@@ -220,6 +220,7 @@ pub fn conversation_window(
         activity,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }
 
@@ -588,6 +589,7 @@ pub(super) fn records(
         activity: None,
         queued: Vec::new(),
         work: None,
+        session: None,
     })
 }
 

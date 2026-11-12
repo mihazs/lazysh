@@ -367,8 +367,10 @@ fn project(
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
+    let mut session = super::session_info::Session::default();
     for record in &history.records {
         let value = &record.value;
+        session.codex(value);
         if value["type"] == "response_item" {
             // Turn state only: model-context items never become messages here.
             pending_question(&value["payload"], &mut asked);
@@ -485,5 +487,6 @@ fn project(
         },
         queued: Vec::new(),
         work: None,
+        session: session.into_value(),
     })
 }
