@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.37.0
+
+### Minor Changes
+
+- 20f02cc: Name what an agent waits for (approval, question, plan decision or unknown) and since when: the companion records it from hook payloads, and the Agent view shows it in its header and session list, lists waiting sessions first and opens from a needs-you notification.
+
+### Patch Changes
+
+- b628dd7: Fix terminal URLs that wrap over several rows: soft-wrapped and conservatively detected hard-wrapped URLs (including inside boxed TUIs) are tapped as one whole address, trailing punctuation and unbalanced closing brackets are trimmed, OSC 8 hyperlinks use the same Open in browser / Copy URL confirmation and win over detection.
+- @lazysh/account-usage@1.37.0
+  - @lazysh/common@1.37.0
+  - @lazysh/display-idle@1.37.0
+  - @lazysh/et-transport@1.37.0
+  - @lazysh/mosh-transport@1.37.0
+
 ## 1.36.0
 
 ### Minor Changes

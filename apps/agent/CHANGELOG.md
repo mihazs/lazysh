@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.37.0
+
+### Minor Changes
+
+- 20f02cc: Name what an agent waits for (approval, question, plan decision or unknown) and since when: the companion records it from hook payloads, and the Agent view shows it in its header and session list, lists waiting sessions first and opens from a needs-you notification.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.37.0
+  - @lazysh/common@1.37.0
+  - @lazysh/notification-client@1.37.0
+
 ## 1.36.0
 
 ### Patch Changes
