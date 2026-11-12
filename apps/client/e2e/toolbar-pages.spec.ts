@@ -18,7 +18,9 @@ const indicator=(keys:Locator,name:string)=>keys.getByRole('group',{name:'Toolba
 const pager=(keys:Locator)=>keys.getByRole('group',{name:'Toolbar pages',exact:true});
 /** Activates a page button without a pointer: the dots take no touches while hidden, and a real tap on one has its own spec. */
 const choose=(keys:Locator,name:'Keys'|'Tools'|'Snippets')=>indicator(keys,name).evaluate(node=>(node as HTMLElement).click());
-const opacity=(target:Locator)=>target.evaluate(node=>Number(getComputedStyle(node).opacity));
+/** How visible the dots are: the opacity of the most visible one (the page in view), 0 while hidden. */
+const opacity=async(dots:Locator)=>{await expect(dots.locator('span')).not.toHaveCount(0);return dots.locator('span').evaluateAll(nodes=>Math.max(...nodes.map(node=>Number(getComputedStyle(node).opacity))));};
+const shown=.9;
 /** How long to wait for the indicator to fade out: longer than its delay and its fade. */
 const hideTimeout=6000;
 type Box={x:number;y:number;width:number;height:number};
@@ -242,7 +244,7 @@ test('a swipe to another page fades the dots in as reduced-opacity dots, and the
   expect(await opacity(dots)).toBe(0);
   await swipe(page,{x:330,y},{x:60,y});
   await expectPage(keys,'Tools');
-  await expect.poll(()=>opacity(dots)).toBe(1);
+  await expect.poll(()=>opacity(dots)).toBe(shown);
   expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
   // Dots, not lines: round marks of one size, the page in view a little longer, none fully opaque.
   const marks=await dots.locator('span').evaluateAll(nodes=>nodes.map(node=>{const style=getComputedStyle(node),box=node.getBoundingClientRect();return {width:box.width,height:box.height,opacity:Number(style.opacity),radius:parseFloat(style.borderTopLeftRadius)};}));
@@ -254,6 +256,7 @@ test('a swipe to another page fades the dots in as reduced-opacity dots, and the
   expect(marks[2].width).toBe(marks[0].width);
   await expect.poll(async()=>(await dots.locator('span').nth(1).evaluate(node=>node.getBoundingClientRect().width))).toBeGreaterThan(marks[0].width);
   for(const mark of marks)expect(mark.opacity).toBeLessThan(1);
+  expect(Math.max(...marks.map(mark=>mark.opacity))).toBe(shown);
   expect(marks[0].opacity).toBeGreaterThanOrEqual(.55);
   expect(marks[0].opacity).toBeLessThanOrEqual(.7);
   expect(marks[1].opacity).toBeGreaterThan(marks[0].opacity);
@@ -263,10 +266,10 @@ test('a swipe to another page fades the dots in as reduced-opacity dots, and the
   expect((await keys.boundingBox())!.height).toBe(74);
   await page.screenshot({path:testInfo.outputPath('pager-visible.png')});
   // Then it goes, fading rather than snapping.
-  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBeLessThan(1);
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBeLessThan(shown);
   await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
   expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('none');
-  expect(await dots.evaluate(node=>getComputedStyle(node).transitionProperty+' '+getComputedStyle(node).transitionDuration)).toBe('opacity 0.22s');
+  expect(await dots.locator('span').first().evaluate(node=>getComputedStyle(node).transitionProperty+' '+getComputedStyle(node).transitionDuration)).toBe('width, opacity 0.22s, 0.22s');
   await expectPage(keys,'Tools');
 });
 
@@ -275,7 +278,7 @@ test('a shown indicator takes the pointer: pressing a dot switches page and keep
   const dots=pager(keys);
   await choose(keys,'Tools');
   await expectPage(keys,'Tools');
-  await expect.poll(()=>opacity(dots)).toBe(1);
+  await expect.poll(()=>opacity(dots)).toBe(shown);
   await page.waitForTimeout(1200);
   await press(testInfo,indicator(keys,'Snippets'));
   await expectPage(keys,'Snippets');
@@ -283,7 +286,7 @@ test('a shown indicator takes the pointer: pressing a dot switches page and keep
   expect(await terminalFocused(page)).toBe(true);
   // 1.2 s after the first change the first delay would be nearly over; the press started a new one.
   await page.waitForTimeout(1200);
-  expect(await opacity(dots)).toBe(1);
+  expect(await opacity(dots)).toBe(shown);
   await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
 });
 
@@ -292,13 +295,13 @@ test('keyboard focus on a page button shows the indicator at once and keeps it w
   const dots=pager(keys);
   expect(await opacity(dots)).toBe(0);
   await indicator(keys,'Tools').focus();
-  await expect.poll(()=>opacity(dots)).toBe(1);
+  await expect.poll(()=>opacity(dots)).toBe(shown);
   expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
   await page.keyboard.press('Enter');
   await expectPage(keys,'Tools');
   // Well past the delay of a page change: the focused dots stay.
   await page.waitForTimeout(3000);
-  expect(await opacity(dots)).toBe(1);
+  expect(await opacity(dots)).toBe(shown);
   await expectClear(page,keys);
   await page.evaluate(()=>(document.activeElement as HTMLElement).blur());
   await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
@@ -310,23 +313,22 @@ test('with reduced motion the dots appear and go without a fade, after the same 
   const dots=pager(keys);
   expect(await opacity(dots)).toBe(0);
   await choose(keys,'Tools');
-  await expect.poll(()=>opacity(dots)).toBe(1);
-  expect(await dots.evaluate(node=>getComputedStyle(node).transitionDuration)).toBe('0s');
+  await expect.poll(()=>opacity(dots)).toBe(shown);
   expect(await dots.locator('span').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).transitionDuration))).toEqual(['0s','0s','0s']);
   await page.waitForTimeout(800);
-  expect(await opacity(dots)).toBe(1);
+  expect(await opacity(dots)).toBe(shown);
   await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
 });
 
 test('screen-reader mode keeps the indicator shown',async({page},testInfo)=>{
   const keys=await openToolbar(page,testInfo,{screenReader:true});
   const dots=pager(keys);
-  await expect.poll(()=>opacity(dots)).toBe(1);
+  await expect.poll(()=>opacity(dots)).toBe(shown);
   expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
   await choose(keys,'Tools');
   await expectPage(keys,'Tools');
   await page.waitForTimeout(3000);
-  expect(await opacity(dots)).toBe(1);
+  expect(await opacity(dots)).toBe(shown);
   await expectClear(page,keys);
   await page.screenshot({path:testInfo.outputPath('pager-screen-reader.png')});
 });
@@ -342,7 +344,7 @@ for(const [kind,keyboard] of [
   expect(await opacity(pager(keys))).toBe(0);
   await choose(keys,'Tools');
   await expectPage(keys,'Tools');
-  await expect.poll(()=>opacity(pager(keys))).toBe(1);
+  await expect.poll(()=>opacity(pager(keys))).toBe(shown);
   await expectClear(page,keys);
   expect((await keys.boundingBox())!.height).toBe(74);
   await page.screenshot({path:testInfo.outputPath(`pager-keyboard-${kind.replace(/\W+/g,'-')}.png`)});

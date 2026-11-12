@@ -93,8 +93,9 @@
   padding: 0 14px;
 }
 /* The page indicator is a row of dots in the strip reserved at the bottom of the toolbar's padding: below the keys
-   and above the status bar, so it covers neither and adds no height. It is invisible until the page changes, then
-   fades in for a moment. Hidden, it is still there for keyboard and screen readers, but it takes no touches. */
+   and above the status bar, so it covers neither and adds no height. The dots are invisible until the page changes,
+   then fade in for a moment. Hidden, they are still there for keyboard and screen readers, but take no touches.
+   The buttons themselves stay at full opacity so the contrast audit keeps measuring them. */
 .terminal-keys .terminal-keys-pager {
   position: absolute;
   left: 50%;
@@ -103,11 +104,9 @@
   display: flex;
   height: 5px;
   transform: translateX(-50%);
-  opacity: 0;
   pointer-events: none;
-  transition: opacity .22s ease;
 }
-.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) { opacity: 1; pointer-events: auto; }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) { pointer-events: auto; }
 .terminal-keys .terminal-keys-pager button,
 .terminal-keys .terminal-keys-pager button:hover {
   display: grid;
@@ -127,10 +126,12 @@
   height: 5px;
   border-radius: 3px;
   background: var(--theme-text);
-  opacity: .6;
+  opacity: 0;
   transition: width .22s ease, opacity .22s ease;
 }
-.terminal-keys .terminal-keys-pager button[aria-current] span { width: 12px; opacity: .9; }
+.terminal-keys .terminal-keys-pager button[aria-current] span { width: 12px; }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) span { opacity: .6; }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) button[aria-current] span { opacity: .9; }
 @media (prefers-reduced-motion: reduce) {
-  .terminal-keys .terminal-keys-pager, .terminal-keys .terminal-keys-pager span { transition: none; }
+  .terminal-keys .terminal-keys-pager span { transition: none; }
 }
