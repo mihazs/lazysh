@@ -16,10 +16,15 @@ type Destination=Readonly<{generation:string;sessionId:string;windowId:string;pa
 type Snapshot=Readonly<{kind:'destination';destination:Destination;sessionName:string;windowName:string;paneIndex:number}>;
 type HerdrDestination=Readonly<{workspace:string;tab:string;pane:string;terminal:string;runtimeGeneration:string;viewport:Readonly<{x:number;y:number;width:number;height:number}>}>;
 type Prepared=Readonly<{kind:'prepared';candidate:string;destination:HerdrDestination}>;
-type Binding=Readonly<{receipt:string;destination:Destination|HerdrDestination;nextOperation:number}>;
-type FailureKey='chatTerminalInvalidReply'|'chatTerminalInvalidDraft'|'chatTerminalInvalid'|'chatTerminalStale'|'chatTerminalBusy'|'chatHerdrUnavailable'|'chatHerdrUncertain';
-class InputFailure extends Error {constructor(readonly key:FailureKey){super(key);}}
-type Problem={key:FailureKey}|{raw:string};
+type Binding=Readonly<{receipt:string;destination?:Destination|HerdrDestination;nextOperation:number;/** Stock Herdr: nothing was prepared on the host, so there is no receipt to release. */stock?:true}>;
+/** The agent a stock Herdr host is asked to type into; the host re-checks that the pane still shows this session. */
+export type StockTarget=Readonly<{herdrSession:string;pane:string;terminal:string;agent:'claude'|'codex';agentSessionId:string}>;
+type FailureKey='chatTerminalInvalidReply'|'chatTerminalInvalidDraft'|'chatTerminalInvalid'|'chatTerminalStale'|'chatTerminalBusy'|'chatHerdrUnavailable'|'chatHerdrUncertain'|'chatHerdrBlocked'|'chatHerdrRejected'|'chatHerdrOffline';
+class InputFailure extends Error {constructor(readonly key:FailureKey,readonly raw?:string){super(key);}}
+type Problem={key:FailureKey;raw?:string}|{raw:string};
+/** Failures that prove nothing was written; after any other failure of a send, delivery is unknown. */
+const refusals:readonly FailureKey[]=['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy','chatHerdrBlocked','chatHerdrRejected','chatHerdrOffline'];
+const offline=['disconnected','timeout','ssh_error','ssh_host_tools_closed','ssh_open_busy','app_locked'];
 const invalid=()=>new InputFailure('chatTerminalInvalidReply');
 const wellFormed=(value:string)=>!/[\uD800-\uDFFF]/u.test(value);
 const utf8=(value:string)=>new TextEncoder().encode(value).length;
@@ -95,24 +100,31 @@ export function parseTerminalDelivered(value:unknown,operation:number):number {
   if(row.kind!=='delivered' || !uint32(operation) || operation<1 || operation>=0xffffffff || row.nextOperation!==operation+1)throw invalid();
   return row.nextOperation as number;
 }
-function nativeFailure(error:unknown,backend:TerminalInputLabels['backend']):unknown {
+function nativeFailure(error:unknown,backend:TerminalInputLabels['backend'],stock=false):unknown {
   const kind=error && typeof error==='object' && 'kind' in error?error.kind:undefined;
   if(backend==='herdr' && kind==='herdr_chat_unavailable')return new InputFailure('chatHerdrUnavailable');
   if(backend==='herdr' && kind==='herdr_chat_uncertain')return new InputFailure('chatHerdrUncertain');
+  const message=error && typeof error==='object' && 'message' in error && typeof error.message==='string'?error.message:undefined;
+  if(backend==='herdr' && kind==='herdr_chat_blocked')return new InputFailure('chatHerdrBlocked');
+  if(backend==='herdr' && kind==='herdr_chat_rejected')return new InputFailure('chatHerdrRejected',message);
+  // Stock input reports a connection failure as such only before it sent anything; later ones arrive as `herdr_chat_uncertain`.
+  if(stock && typeof kind==='string' && offline.includes(kind))return new InputFailure('chatHerdrOffline',message);
   const prefix=backend+'_chat_';
   return kind===prefix+'invalid'?new InputFailure('chatTerminalInvalid'):kind===prefix+'stale'?new InputFailure('chatTerminalStale'):kind===prefix+'busy'?new InputFailure('chatTerminalBusy'):error;
 }
 
 export type TerminalDestination=Destination|HerdrDestination;
 /** What an automatically bound input offers its caller; `send` and `stop` do nothing while `ready` is false. */
-export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void;/** One dialog key sequence through the same receipt, one guarded input at a time; false when nothing was sent. */answer:DialogAnswerer}>;
+export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void;/** One dialog key sequence through the same receipt, one guarded input at a time; false when nothing was sent. */answer:DialogAnswerer;
+  /** Why the last bind or send failed, for the caller to present; `uncertain` once writing may have begun. */problem?:TerminalProblem}>;
+export type TerminalProblem=Readonly<{key:FailureKey|'agentComposerWrongPane';raw?:string;uncertain:''|'keys'|'paste'}>;
 
 /** `notes` false keeps the heading and disclaimer behind the composer's info button.
  * `proves` turns on automatic binding: the destination is chosen on mount and confirmed without a click only when it
  * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
  * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
  * Confirm steps stay. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed}:{
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed,stock}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
   /** Let a tmux terminal take a prompt of up to 64 KiB, sent as one bounded paste past the 4 KiB `send` takes. */
@@ -120,10 +132,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   proves?:(destination:TerminalDestination)=>boolean;onControl?:(control:TerminalControl|undefined)=>void;
   /** A send ended without delivery: `refused` when nothing was written, `unknown` once writing began. */
   onFailed?:(kind:'refused'|'unknown')=>void;
+  /** Without a guarded display, input goes through the host's own Herdr commands to this agent's pane instead. */
+  stock?:StockTarget;
 }) {
   useUi();
   const accessState=useAccessSnapshot();
-  const context=JSON.stringify([sessionId,source,labels]);
+  const context=JSON.stringify([sessionId,source,labels,stock]);
   const latest=useRef(context);latest.current=context;
   const alive=useRef(false),flight=useRef(false);
   const owned=useRef<Binding|undefined>(undefined);
@@ -141,6 +155,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     return invoke(command,{sessionId,action}).catch(error=>{throw nativeFailure(error,labels.backend);});
   }
   function release(receipt:string) {
+    if(!uuid(receipt))return;
     void invoke(command,{sessionId,action:{kind:'release',receipt}}).catch(()=>{});
   }
   function retire() {
@@ -153,18 +168,30 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   },[context,access,invoke,accessState.epoch]);
   function failed(error:unknown,original:string,afterInput=false,pasted=false) {
     if(current(original)) {
-      retire();
-      setBinding(undefined);setSnapshot(undefined);setStatus('');
-      setUncertain(afterInput && !(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)) ? pasted?'paste':'keys' : '');
-      setError(error instanceof InputFailure?{key:error.key}:{raw:errorMessage(error)});
+      // Stock input holds nothing on the host, so a failed send leaves the input ready for an explicit second try.
+      if(!(afterInput && owned.current?.stock)){retire();setBinding(undefined);}
+      setSnapshot(undefined);setStatus('');
+      setUncertain(afterInput && !(error instanceof InputFailure && refusals.includes(error.key)) ? pasted?'paste':'keys' : '');
+      setError(error instanceof InputFailure?{key:error.key,raw:error.raw}:{raw:errorMessage(error)});
     }
+  }
+  /** Stock Herdr: one host call per message, addressed to the pane of the followed agent. */
+  async function stockInput(input:Record<string,unknown>) {
+    if(!stock)throw new InputFailure('chatHerdrUnavailable');
+    return invoke('herdr_agent_input',{sessionId,target:stock,input}).catch(error=>{throw nativeFailure(error,'herdr',true);});
   }
   async function choose() {
     if(flight.current || !sourceValid || !access.current())return;
     const original=context;flight.current=true;retire();setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain('');setStatus('');setBusy(true);
     try {
       if(labels.backend==='herdr') {
-        if(!available(await call({kind:'status'})))throw new InputFailure('chatHerdrUnavailable');
+        if(!available(await call({kind:'status'}))) {
+          // No guard on this host: the exact pane of the followed agent takes the input, and the host re-checks it on every send.
+          if(!stock)throw new InputFailure('chatHerdrUnavailable');
+          if(!current(original))return;
+          const next=Object.freeze({receipt:'stock',nextOperation:1,stock:true as const});owned.current=next;setBinding(next);
+          return;
+        }
         if(!current(original))return;
         const reply=await call({kind:'prepare',source});
         const candidate=reply && typeof reply==='object' && 'candidate' in reply && uuid(reply.candidate)?reply.candidate:undefined;
@@ -201,10 +228,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const latestInput=useRef<(kind:'send'|'request_stop'|DialogAnswer)=>Promise<boolean>>(async()=>false);
   // Retry is one explicit request: bind again, and send the draft once as soon as that binding exists.
   const retrying=useRef(false);
-  useEffect(()=>{if(retrying.current && binding && !busy){retrying.current=false;void input('send');}});
+  useEffect(()=>{if(retrying.current && binding && !busy){retrying.current=false;if(validTerminalDraft(draft,draftLimit(labels.backend,long)))void input('send');}});
   useEffect(()=>{if(retrying.current && error)retrying.current=false;},[error]);
   const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
-  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused]);
+  const problem:TerminalProblem|undefined=error?{key:'key' in error?error.key:'chatHerdrRejected',raw:error.raw,uncertain}:mismatch?{key:'agentComposerWrongPane',uncertain:''}:undefined;
+  const problemKey=problem&&JSON.stringify(problem);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
@@ -213,7 +242,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     const original=context,text=body.kind==='send'?body.text:'',revision=draftRevision;
     flight.current=true;setBusy(true);setError(undefined);setStatus('');
     try {
-      const nextOperation=parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body}),permission.nextOperation);
+      const nextOperation=permission.stock?(await stockInput(body),permission.nextOperation):parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body}),permission.nextOperation);
       if(!current(original))return false;
       if(nextOperation===0xffffffff){retire();setBinding(undefined);}
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
@@ -223,7 +252,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       return true;
     } catch(error) {
       failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && (utf8(text)>SEND_BYTES || /[\n\t]/.test(text)));
-      if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)?'refused':'unknown');
+      if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && refusals.includes(error.key)?'refused':'unknown');
       return false;
     }
     finally {flight.current=false;if(current(original))setBusy(false);}
@@ -232,7 +261,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
     <h4 hidden={!notes}>{t('chatTerminalTitle')}</h4><p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
     <p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>
-    {(!auto || (!binding && !busy && (!!error || mismatch))) && <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t(auto?'agentComposerReconnect':'chatTerminalChoose')}</button>}
+    {!auto && <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t('chatTerminalChoose')}</button>}
     {snapshot && !auto && <div>
       <dl><dt>{t('chatTerminalHost')}</dt><dd>{labels.hostLabel}</dd><dt>{t('chatTerminalTab')}</dt><dd>{labels.terminalLabel}</dd>{snapshot.kind==='destination'?<><dt>{t('chatTerminalSession')}</dt><dd>{snapshot.sessionName}</dd><dt>{t('chatTerminalWindow')}</dt><dd>{snapshot.windowName}</dd><dt>{t('chatTerminalPane')}</dt><dd>{formatNumber(snapshot.paneIndex)}</dd></>:<>{(['workspace','tab','pane','terminal'] as const).map(key=><div key={key}><dt>{t(key==='workspace'?'chatHerdrWorkspace':key==='tab'?'chatHerdrTab':key==='pane'?'chatTerminalPane':'chatTerminalTab')}</dt><dd>{snapshot.destination[key]}</dd></div>)}<dt>{t('chatHerdrViewport')}</dt><dd>{Object.values(snapshot.destination.viewport).map(value=>formatNumber(value)).join(' × ')}</dd></>}</dl>
       {!binding && <button type="button" disabled={busy || !access.current()} onClick={()=>void confirm()}>{t('chatTerminalConfirm')}</button>}
@@ -247,8 +276,8 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     {binding && !auto && !validTerminalDraft(draft) && <p>{t('chatTerminalInvalidDraft')}</p>}
     {busy && (!auto || binding) && <p role="status">{t('chatTerminalPending')}</p>}
     {status && !(auto && (status==='chatTerminalSent' || status==='chatHerdrSent')) && <p role="status">{t(status)}</p>}
-    {mismatch && !error && <p role="alert">{t('agentComposerWrongPane')}</p>}
-    {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
+    {!auto && mismatch && !error && <p role="alert">{t('agentComposerWrongPane')}</p>}
+    {!auto && error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
     <p hidden={!notes}>{t('chatTerminalCloseHint')}</p>
   </section>;
 }

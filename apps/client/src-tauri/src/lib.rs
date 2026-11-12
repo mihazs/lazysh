@@ -18,6 +18,7 @@ mod herdr;
 mod herdr_create;
 mod herdr_guard;
 mod herdr_path;
+mod herdr_stock_input;
 mod host;
 mod host_clipboard;
 mod identities;
@@ -255,6 +256,7 @@ pub fn run() {
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,
                 herdr_guard::herdr_chat,
+                herdr_stock_input::herdr_agent_input,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
                 transcript_watch::agent_watch_start,

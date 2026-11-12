@@ -3,9 +3,10 @@ import {ArrowLeft,Paperclip,SendHorizontal,Square} from 'lucide-react';
 import {publishComposerControl} from './agentDialogAnswer';
 import AttachmentPanel from './AttachmentPanel';
 import AgentComposerChips from './AgentComposerChips';
+import AgentComposerNotice from './AgentComposerNotice';
 import {useAgentAttachments} from './useAgentAttachments';
 import {uiErrorText} from './i18n/localError';
-import ChatTerminalInput,{draftLimit,validTerminalDraft,validTerminalSource,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalSource} from './ChatTerminalInput';
+import ChatTerminalInput,{draftLimit,validTerminalDraft,validTerminalSource,type StockTarget,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalProblem,type TerminalSource} from './ChatTerminalInput';
 import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
 import {formatNumber,t,useUi} from './i18n/core';
@@ -30,13 +31,15 @@ const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kin
 /** The message box of the Agent view: always present under a followed conversation.
  * With a proof the input binds itself to the proven pane and Send goes straight to the agent's terminal; without one
  * the explicit destination confirmation stays. Stage in terminal is the path of a session that takes no confirmed input. */
-export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],cwd}:{
+export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],cwd,onOpenTerminal}:{
   sessionId:string;conversation:BoundConversation;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;shown:boolean;
   labels?:TerminalInputLabels;proof?:ComposerProof;stage:boolean;
   /** What the conversation already holds as the person's prompts, so a receipt settles from the transcript. */
   prompts?:readonly string[];
   /** The host folder the agent works in: the root of `@` file mentions. Without it there is no file picker. */
   cwd?:string;
+  /** Switches to the terminal view, for a failure that is best looked at there. */
+  onOpenTerminal?:()=>void;
 }) {
   useUi();
   // The agent's own session names the conversation, so a transcript that moves to a new file keeps its draft.
@@ -49,6 +52,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const [staged,setStaged]=useState(false);
   // The view answers dialogs through the same bound input.
   useEffect(()=>{publishComposerControl(sessionId,control);return()=>publishComposerControl(sessionId,undefined);},[sessionId,control]);
+  const [dismissed,setDismissed]=useState<TerminalProblem>();
   const field=useRef<HTMLTextAreaElement>(null);
   const paletteId=useId();
   const walk=useRef<Recall>({index:null,text:''});
@@ -79,6 +83,12 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const automatic=!!proof && !!labels && proof.kind===labels.backend;
   const proofKey=JSON.stringify(proof);
   const proofCheck=useMemo(()=>automatic?proves(proof!):undefined,[automatic,proofKey]);
+  // A host without the guard takes input through Herdr's own commands, addressed to the pane Herdr links to this conversation.
+  const stock=useMemo<StockTarget|undefined>(()=>{
+    const host=conversation.herdr;
+    return proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal
+      ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent:conversation.agent,agentSessionId:conversation.path}) : undefined;
+  },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,conversation.agent,conversation.path]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
@@ -105,16 +115,26 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const pick=(command:SlashCommand)=>{edit(slashText(command));field.current?.focus({preventScroll:true});};
   const now=useNow(1000,receipt?.phase==='accepted');
   const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued:[],elapsedMs:now-receipt.at});
+  const stageable=stage && !!text.trim() && text.length<=LIMIT;
+  function stageDraft() {
+    window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
+  }
   function submit() {
     if(composing.current)return;
     if(sendable){
       setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text)});
       control!.send();return;
     }
-    if(staging && text.trim() && text.length<=LIMIT){
-      window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
-    }
+    if(staging && stageable)stageDraft();
   }
+  // One explicit second try: bind again and send the draft once. A draft edited since the failure is put back first.
+  function retry() {
+    if(!control)return;
+    if(receipt && draft!==receipt.text){edit(receipt.text);return;}
+    if(validTerminalDraft(text,bytes))setReceipt({text,phase:'pending',at:Date.now(),before:receipt?receipt.before:promptsLike(prompts,text)});
+    control.retry();
+  }
+  const problem=control?.problem,notice=!!problem && dismissed!==problem;
   const coarse=()=>!!window.matchMedia?.('(pointer: coarse)').matches;
   // Automatic binding is given a chance first; Stage is the way out once it was refused or lost.
   const bindingPending=live && automatic && !control?.failed;
@@ -163,7 +183,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {ready && <button type="button" className="icon-button" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}><SendHorizontal size={18} aria-hidden="true"/></button>}
     </form>
-    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke}
+    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock}
       draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
       proves={proofCheck} onControl={proofCheck?setControl:undefined}
       onSent={(text,sentRevision)=>{
@@ -173,8 +193,10 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       }}
       onFailed={kind=>setReceipt(previous=>previous?{...previous,phase:kind}:previous)}/>}
     {picker && <p className="agent-composer-note">{t('agentComposerPickerNote',{command:`/${picker.name}`})}</p>}
-    {state && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
-      {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={()=>{if(draft!==receipt!.text){edit(receipt!.text);return;}setReceipt({...receipt!,phase:'pending',at:Date.now()});control.retry();}}>{t('agentReceiptRetry')}</button></>}</p>}
+    {notice && <AgentComposerNotice problem={problem} busy={!!control?.busy} canStage={stageable} onRetry={retry} onOpenTerminal={onOpenTerminal}
+      onStage={()=>{stageDraft();setDismissed(problem);}} onDismiss={()=>setDismissed(problem)}/>}
+    {state && !(notice && (state==='notSent' || state==='uncertain')) && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
+      {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={retry}>{t('agentReceiptRetry')}</button></>}</p>}
     {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
     {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
     {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong',{limit:formatNumber(bytes)})}</p>}

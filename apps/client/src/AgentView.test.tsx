@@ -203,7 +203,7 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(screen.getByText(/does not run in this terminal pane/)).toBeTruthy();
   expect(guarded()).toEqual(['status','prepare']);
   const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
-  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});fireEvent.click(screen.getByRole('button',{name:'Stage in terminal'}));
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});fireEvent.click(within(screen.getByRole('alert')).getByRole('button',{name:'Stage in terminal'}));
   expect(staged).toHaveBeenCalledTimes(1);window.removeEventListener('lazysh-prompt-draft',staged);
   available=false;await advance(2000);expect(calls('agent_herdr_conversation')).toHaveLength(2);
   expect(screen.getAllByRole('alert').map(alert=>alert.textContent).join(' ')).toContain('Session unavailable');
