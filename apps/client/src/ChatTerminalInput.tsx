@@ -95,10 +95,19 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend']):unk
   return kind===prefix+'invalid'?new InputFailure('chatTerminalInvalid'):kind===prefix+'stale'?new InputFailure('chatTerminalStale'):kind===prefix+'busy'?new InputFailure('chatTerminalBusy'):error;
 }
 
-/** `notes` false keeps the heading and disclaimer behind the composer's info button. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true}:{
+export type TerminalDestination=Destination|HerdrDestination;
+/** What an automatically bound input offers its caller; `send` and `stop` do nothing while `ready` is false. */
+export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void}>;
+
+/** `notes` false keeps the heading and disclaimer behind the composer's info button.
+ * `proves` turns on automatic binding: the destination is chosen on mount and confirmed without a click only when it
+ * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
+ * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
+ * Confirm steps stay. */
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,proves,onControl}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
+  proves?:(destination:TerminalDestination)=>boolean;onControl?:(control:TerminalControl|undefined)=>void;
 }) {
   useUi();
   const accessState=useAccessSnapshot();
@@ -173,6 +182,14 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     } catch(error) {if(candidate)release(candidate);failed(error,original);}
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
+  const auto=!!proves,proven=!!proves && !!snapshot && proves(snapshot.destination);
+  // Automatic binding runs once per context; after a failure only the explicit Reconnect button tries again.
+  useEffect(()=>{if(auto && sourceValid && !snapshot && !binding && !error && !busy && !flight.current)void choose();});
+  useEffect(()=>{if(proven && !binding && !busy && !error)void confirm();});
+  const latestInput=useRef<(kind:'send'|'request_stop')=>void>(()=>{});
+  const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>latestInput.current('send'),stop:()=>latestInput.current('request_stop')});},[onControl,ready,busy,refused]);
+  useEffect(()=>()=>onControl?.(undefined),[onControl]);
   async function input(kind:'send'|'request_stop') {
     const permission=owned.current;
     if(flight.current || !permission || !access.current() || composing.current)return;
@@ -189,24 +206,26 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     } catch(error) {failed(error,original,true,labels.backend==='tmux' && kind==='send' && /[\n\t]/.test(text));}
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
+  latestInput.current=kind=>void input(kind);
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
     <h4 hidden={!notes}>{t('chatTerminalTitle')}</h4><p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
     <p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>
-    <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t('chatTerminalChoose')}</button>
-    {snapshot && <div>
+    {(!auto || (!binding && !busy && (!!error || mismatch))) && <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t(auto?'agentComposerReconnect':'chatTerminalChoose')}</button>}
+    {snapshot && !auto && <div>
       <dl><dt>{t('chatTerminalHost')}</dt><dd>{labels.hostLabel}</dd><dt>{t('chatTerminalTab')}</dt><dd>{labels.terminalLabel}</dd>{snapshot.kind==='destination'?<><dt>{t('chatTerminalSession')}</dt><dd>{snapshot.sessionName}</dd><dt>{t('chatTerminalWindow')}</dt><dd>{snapshot.windowName}</dd><dt>{t('chatTerminalPane')}</dt><dd>{formatNumber(snapshot.paneIndex)}</dd></>:<>{(['workspace','tab','pane','terminal'] as const).map(key=><div key={key}><dt>{t(key==='workspace'?'chatHerdrWorkspace':key==='tab'?'chatHerdrTab':key==='pane'?'chatTerminalPane':'chatTerminalTab')}</dt><dd>{snapshot.destination[key]}</dd></div>)}<dt>{t('chatHerdrViewport')}</dt><dd>{Object.values(snapshot.destination.viewport).map(value=>formatNumber(value)).join(' × ')}</dd></>}</dl>
       {!binding && <button type="button" disabled={busy || !access.current()} onClick={()=>void confirm()}>{t('chatTerminalConfirm')}</button>}
       {!binding && <button type="button" disabled={busy} onClick={()=>{retire();setSnapshot(undefined);}}>{t('chatTerminalCancel')}</button>}
     </div>}
-    {binding && <div className="button-row" style={{flexWrap:'wrap'}}>
+    {binding && !auto && <div className="button-row" style={{flexWrap:'wrap'}}>
       <button type="button" disabled={busy || !validTerminalDraft(draft) || compositionActive || !access.current()} onClick={()=>void input('send')}>{t('chatTerminalSend')}</button>
       <button type="button" disabled={busy || compositionActive || !access.current()} onClick={()=>void input('request_stop')}>{t('chatTerminalStop')}</button>
       <button type="button" disabled={busy} onClick={()=>{retire();setBinding(undefined);setSnapshot(undefined);setStatus('');}}>{t('chatTerminalClear')}</button>
     </div>}
     {!sourceValid && <p>{t('chatTerminalInvalid')}</p>}
-    {binding && !validTerminalDraft(draft) && <p>{t('chatTerminalInvalidDraft')}</p>}
-    {busy && <p role="status">{t('chatTerminalPending')}</p>}
+    {binding && !auto && !validTerminalDraft(draft) && <p>{t('chatTerminalInvalidDraft')}</p>}
+    {busy && (!auto || binding) && <p role="status">{t('chatTerminalPending')}</p>}
     {status && <p role="status">{t(status)}</p>}
+    {mismatch && !error && <p role="alert">{t('agentComposerWrongPane')}</p>}
     {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
     <p hidden={!notes}>{t('chatTerminalCloseHint')}</p>
   </section>;

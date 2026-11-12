@@ -6,6 +6,7 @@ import AgentView from './AgentView';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
+import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -56,18 +57,15 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     expect(screen.queryByLabelText('Transcript path')).toBeNull();
     // A persisted report does not establish a currently running turn.
     expect(within(header).queryByTitle('Time since this turn started')).toBeNull();
-    // The composer starts as one line; the confirmed-input disclaimer waits behind the info button.
+    // The composer is always there, one line, and bound to this pane without a confirmation step.
     expect(screen.getByRole('textbox',{name:'Draft for this terminal'}).getAttribute('rows')).toBe('1');
-    const input=screen.getByRole('region',{name:'Terminal input'});
-    expect(within(input).getByRole('button',{name:'Choose terminal destination'})).toBeTruthy();
-    expect(within(input).queryByRole('heading')).toBeNull();
-    fireEvent.click(screen.getByRole('button',{name:'How staging works'}));
-    expect(within(input).getByRole('heading',{name:'Terminal input'})).toBeTruthy();
+    expect(screen.queryByRole('button',{name:'Choose terminal destination'})).toBeNull();expect(screen.queryByRole('button',{name:'Confirm this destination'})).toBeNull();
+    expect(calls('tmux_chat').map(args=>(args as {action:{kind:string}}).action.kind)).toContain('bind');
     await advance(2000);
     expect(screen.getAllByRole('region',{name:'Turn'})).toHaveLength(2);
     expect(screen.getByText('Typed in the terminal')).toBeTruthy();expect(screen.getByText('Second answer')).toBeTruthy();
-    expect(calls('tmux_chat')).toEqual(expect.arrayContaining([expect.objectContaining({action:{kind:'snapshot'}})]));
-    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+    // Binding is not sending: no input reaches the terminal until the person sends.
+    expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
   });
 });
 
@@ -165,16 +163,22 @@ it('enters the exact selected Herdr pane without reading a conversation',async()
   expect(calls('agent_transcript')).toEqual([]);
 });
 
-it('opens the conversation of the focused Herdr pane by itself through the revalidated host resolver, with Stage but no confirmed input',async()=>{
+it('opens the conversation of the focused Herdr pane by itself through the revalidated host resolver and binds the composer to that pane only',async()=>{
   const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'session-one'}};
-  let available=true;
-  vi.mocked(invoke).mockImplementation(async command=>{
+  let available=true,guardPane='w2E:pF';
+  // The guarded Herdr terminal is the focused pane here; a second case below attaches it to another pane.
+  const guard=()=>({...herdrTarget,pane:guardPane,terminal:'term-one'});
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='multiplexer_sessions')return [{name:'owned'}];
     if(command==='herdr_tree')return {...herdrNavigationTree,agents:[first]};
+    if(command==='herdr_chat'){
+      const reply=await herdrChatReply(command,args) as {kind:string};
+      return reply.kind==='prepared'?{...herdrPrepared,destination:guard()}:reply.kind==='bound'?{...herdrBound,destination:guard()}:reply;
+    }
     if(command==='agent_herdr_conversation'){if(!available)throw new Error('Session unavailable');return page('codex',turn('Prompt','Verified answer'));}
     throw new Error('unavailable');
   });
-  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  const view=render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);
   // No click: the agent of the focused pane is the conversation, and no list is in the way.
   expect(screen.queryByRole('button',{name:/Open conversation/})).toBeNull();expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
@@ -183,14 +187,25 @@ it('opens the conversation of the focused Herdr pane by itself through the reval
   expect(within(options()).getByText(/^Herdr links this conversation to the focused pane of this terminal: Work · Code\./)).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
   expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
-  expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
-  // A linked conversation can stage a draft into this terminal, but never sends input by itself.
-  expect(screen.getByRole('button',{name:'Stage in terminal'})).toBeTruthy();
+  expect(calls('agent_transcript')).toEqual([]);
+  // The guarded terminal is the pane Herdr links the conversation to, so no destination step is shown and nothing is sent until Send.
+  const guarded=()=>calls('herdr_chat').map(args=>(args as {action:{kind:string}}).action.kind);
+  expect(guarded()).toEqual(['status','prepare','confirm']);
+  expect(screen.queryByRole('button',{name:'Choose terminal destination'})).toBeNull();
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});
+  fireEvent.click(screen.getByRole('button',{name:'Send to the agent'}));await advance(0);
+  expect(calls('herdr_chat').at(-1)).toMatchObject({action:{kind:'input',input:{kind:'send',text:'Run the tests'},source:{agent:'codex',path:'session-one',view:'conversation',inlineImages:false}}});
+  // The same conversation with the guarded terminal on another pane sends nothing and says why; Stage stays the way out.
+  view.unmount();guardPane='other-pane';vi.mocked(invoke).mockClear();
+  render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(/does not run in this terminal pane/)).toBeTruthy();
+  expect(guarded()).toEqual(['status','prepare']);
   const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
   fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});fireEvent.click(screen.getByRole('button',{name:'Stage in terminal'}));
   expect(staged).toHaveBeenCalledTimes(1);window.removeEventListener('lazysh-prompt-draft',staged);
   available=false;await advance(2000);expect(calls('agent_herdr_conversation')).toHaveLength(2);
-  expect(screen.getByRole('alert').textContent).toContain('Session unavailable');
+  expect(screen.getAllByRole('alert').map(alert=>alert.textContent).join(' ')).toContain('Session unavailable');
   expect(calls('agent_transcript')).toEqual([]);
 });
 
@@ -529,7 +544,7 @@ it('suspends a stale tmux binding and restores its draft when history returns',a
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
   expect(screen.queryByText('Stale answer')).toBeNull();
   expect(calls('agent_transcript').at(-1)).toMatchObject({sessionId:'ssh',agent:'codex',path:next});
-  expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+  expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
 });
 
 it('suspends tmux input if the pane snapshot fails after binding',async()=>{

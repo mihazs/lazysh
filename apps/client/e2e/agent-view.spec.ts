@@ -125,13 +125,13 @@ test('switches the same tmux session between Terminal and Agent mid-turn without
   await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
   const after=await fixture(page);
   expect({attachments:after.attachments,stdin:after.stdin}).toEqual({attachments:before.attachments,stdin:[]});
-  expect(after.inputs.every(input=>input.kind==='snapshot')).toBe(true);
+  // The composer binds to the proven pane by itself; binding is not sending.
+  expect(after.inputs.some(input=>input.kind==='input')).toBe(false);expect(after.inputs.some(input=>input.kind==='bind')).toBe(true);
 
   // A prompt sent from the Agent view reaches the terminal once and becomes a turn in the Agent view.
   await agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}).fill('Add a test');
-  await agent.getByRole('button',{name:'Choose terminal destination',exact:true}).click();
-  await agent.getByRole('button',{name:'Confirm this destination',exact:true}).click();
-  await agent.getByRole('button',{name:'Send to terminal',exact:true}).click();
+  await expect(agent.getByRole('button',{name:'Choose terminal destination',exact:true})).toHaveCount(0);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
   await expect(agent.getByText('Answered: Add a test',{exact:true})).toBeVisible({timeout:6000});
   await expect(agent.getByRole('region',{name:'Turn',exact:true})).toHaveCount(2);
   await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
@@ -200,7 +200,9 @@ test('remembers the chosen view per terminal across reopening, keeps new termina
   await other.getByRole('button',{name:/Codex · \/work/}).click();
   await expect(other.getByText('The build uses Vite.',{exact:true})).toBeVisible();
   await expect(other.getByLabel('Transcript path',{exact:true})).toHaveCount(0);
-  await expect(other.getByRole('region',{name:'Terminal input'})).toHaveCount(0);
+  // A conversation nothing ties to this terminal keeps the explicit destination confirmation.
+  await expect(other.getByRole('button',{name:'Choose terminal destination',exact:true})).toBeVisible();
+  await expect(other.getByRole('button',{name:'Send to the agent',exact:true})).toHaveCount(0);
   await other.getByRole('button',{name:'Terminal',exact:true}).click();
 
   await page.reload();
@@ -380,7 +382,7 @@ test('a selected conversation keeps its chrome to one compact row and shows harn
 test('the bound composer is one line with a visible Send control beside it and the conversation keeps the screen',async({page})=>{
   await open(page);
   const agent=await showAgent(page);
-  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}),stage=agent.getByRole('button',{name:'Stage in terminal',exact:true});
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}),stage=agent.getByRole('button',{name:'Send to the agent',exact:true});
   const [field,send,composer,flow]=await Promise.all([draft.boundingBox(),stage.boundingBox(),agent.getByRole('form',{name:'Transcript draft',exact:true}).boundingBox(),agent.getByRole('region',{name:'Conversation messages',exact:true}).boundingBox()]);
   expect(field!.height).toBeLessThanOrEqual(48);
   expect(send!.y).toBeLessThan(field!.y+field!.height);expect(send!.x).toBeGreaterThan(field!.x+field!.width-1);
@@ -535,4 +537,25 @@ test('Herdr: with no agent running the Agent view offers to start one through th
   await expect(dialog.getByRole('radio',{name:'Yes, start an agent'})).toBeChecked();
   await dialog.getByRole('button',{name:'Cancel'}).click();
   expect((await herdrFixture(page)).entered).toEqual([]);
+});
+
+test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await expect(agent.getByRole('button',{name:'Request stop',exact:true})).toBeVisible();
+  await draft.fill('First line');
+  await draft.press('Shift+Enter');await draft.pressSequentially('second line');
+  await expect(draft).toHaveValue('First line\nsecond line');
+  await draft.press('Enter');
+  if(testInfo.project.name==='phone') {
+    await expect(draft).toHaveValue('First line\nsecond line\n');
+    await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  }
+  await expect(agent.getByText('Answered: First line\nsecond line',{exact:false})).toBeVisible({timeout:6000});
+  await expect(draft).toHaveValue('');
+  const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
+  expect(sent).toHaveLength(1);
+  await agent.getByRole('button',{name:'Request stop',exact:true}).click();
+  await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='request_stop').length).toBe(1);
 });

@@ -160,6 +160,17 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 - New dock buttons ignore taps for 400 ms after they appear.
 - Android back from the Agent view returns to the terminal view of the same session.
   The keyboard, IME composition and attachments follow the existing composer rules.
+- The composer is always under a followed conversation (`AgentComposer`). On tmux it
+  binds itself to the pane a hook report names: the destination returned by the guarded
+  `snapshot` must carry that exact pane ID before the guarded `bind` is sent, so no
+  Choose or Confirm step is shown. A mismatch is never confirmed; the composer says the
+  agent does not run in this pane and offers Stage. Under a guarded Herdr terminal the
+  same rule applies to the conversation Herdr links to the focused pane: the prepared
+  destination must carry that pane and terminal. A conversation picked by hand keeps
+  the explicit confirmation (tmux) or has no composer (Herdr). Enter sends on a hardware keyboard, Shift+Enter inserts a
+  line, a coarse-pointer keyboard keeps Enter as a line break and sends with the button,
+  and Enter is ignored during IME composition. Drafts are kept per conversation
+  (agent session) for the lifetime of the page.
 
 ### Desktop
 

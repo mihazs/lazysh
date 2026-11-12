@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 import {Ellipsis,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
+import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
@@ -151,6 +152,12 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const waitingCount = queue.filter(session=>waitingKind(session)).length;
   const now = useNow(30000, shown && (waitingCount>0 || !!waiting));
   const counts = usage && ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].some(key=>usage[key]!==undefined) ? (key:string)=>formatNumber(Number(usage[key] ?? 0)) : undefined;
+  // The pane a hook report names, or the pane Herdr reports as focused, is the evidence the composer binds on. A conversation the person
+  // picked has none, so its destination stays an explicit confirmation (tmux) or is not offered (Herdr).
+  const isLinked = !!selected?.linked;
+  const proof:ComposerProof|undefined = tmux && !selected && row?.paneId ? {kind:'tmux',paneId:row.paneId}
+    : isLinked && selected?.conversation.herdr ? {kind:'herdr',pane:selected.conversation.herdr.paneId,terminal:selected.conversation.herdr.terminalId} : undefined;
+  const composerLabels = selected && !isLinked && terminalInput?.backend!=='tmux' ? undefined : terminalInput;
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
     request.current++;setSelecting(false);setUnavailable(false);
@@ -207,6 +214,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {kept && <ChatPanel key={held ? JSON.stringify(held.conversation) : retained.current?.id} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={!selected || !!selected.linked} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} terminalInput={(!selected || selected.linked) && reader ? terminalInput : undefined} onUsage={trackUsage} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} />}
+    {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} />}
   </section>;
 }
