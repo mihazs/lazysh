@@ -14,6 +14,8 @@ vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import
 
 // The guarded input settles over several awaited native calls; a loaded CI machine needs more than the default second.
 configure({asyncUtilTimeout:5000});
+// Several cases chain whole send cycles through awaited native calls; a loaded CI machine needs more than five seconds for them.
+vi.setConfig({testTimeout:20000});
 const conversation={agent:'claude' as const,path:'/home/owner/.claude/projects/work/a.jsonl',report:{sessionId:'s1',agent:'Claude Code',paneId:'%3'}};
 const tmuxLabels={backend:'tmux' as const,hostLabel:'host',terminalLabel:'work'};
 const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_chat'||command==='herdr_chat').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
@@ -271,7 +273,10 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   // One notice speaks for the failed send; the receipt line stays out of its way until the notice is dismissed.
   expect(screen.queryByText(t('agentReceiptNotSent'))).toBeNull();
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
-  fireEvent.click(screen.getByRole('button',{name:t('agentReceiptRetry')}));
+  // The button shows a render before the control behind it reports idle; a click on it while disabled is lost.
+  const retry=()=>screen.getByRole('button',{name:t('agentReceiptRetry')}) as HTMLButtonElement;
+  await waitFor(()=>expect(retry().disabled).toBe(false));
+  fireEvent.click(retry());
   await waitFor(()=>expect(inputs()).toHaveLength(2));
   expect((inputs()[1].input as {text:string}).text).toBe('Important');
   await waitFor(()=>expect(box().value).toBe(''));
