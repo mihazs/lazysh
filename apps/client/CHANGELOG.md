@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.48.0
+
+### Minor Changes
+
+- 16c4800: Read the Agent view's background work (sub-agents, background commands, monitors, workflows) from the host companion so the panel covers the whole conversation, shows a shell or monitor's output and flags launches with no recorded end as not confirmed.
+
+### Patch Changes
+
+- c191de9: Fix the Agent view composer on a stock Herdr host: Send now goes through Herdr's own agent prompt command to the followed agent's exact pane, and a failed send shows one compact notice that keeps the draft.
+- @lazysh/account-usage@1.48.0
+  - @lazysh/common@1.48.0
+  - @lazysh/display-idle@1.48.0
+  - @lazysh/et-transport@1.48.0
+  - @lazysh/mosh-transport@1.48.0
+
 ## 1.47.0
 
 ### Minor Changes
