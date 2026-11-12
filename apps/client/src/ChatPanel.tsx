@@ -19,6 +19,7 @@ import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from '.
 import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
 import {applyWatchOp} from './transcriptWatch';
 import {projectMessages,type InjectedEvent} from './chatInjected';
+import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -51,6 +52,7 @@ type Page = {
   checkpoint?: string;
   branchId?: string;
   activity?: Activity;
+  queued?: Queued[];
 };
 
 
@@ -77,6 +79,7 @@ export function parseTranscript(value: unknown): Page {
     || new TextEncoder().encode(page.branchId).length > 256
   )) throw new LocalUiError('chatUnsupportedResponse');
   page.activity = parseActivity(page.activity, page.agent, page.view);
+  page.queued = parseQueued(page.queued);
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
     if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
@@ -242,6 +245,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activity, setActivity] = useState<Activity>();
+  const [queued, setQueued] = useState<Queued[]>([]);
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
@@ -305,7 +309,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     if (!shown) request.current++;
     if (bound && (path !== bound.path || agent !== bound.agent)) {
       request.current++; setFollowing(false); followRef.current = false;
-      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined);
+      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined); setQueued([]);
       setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
     }
   }, [shown, bound, path, agent]);
@@ -313,7 +317,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setActivity(undefined); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setActivity(undefined); setQueued([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -351,6 +355,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       holdPosition();setError('');
       setMessages(previous=>applyWatchOp(previous,op));
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
+      if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
       setUpdated(Date.now());
     }});
   const watchLive=useRef(false);watchLive.current=watch.live;
@@ -492,7 +497,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace) setActivity(page.activity);
+      if (replace) {setActivity(page.activity);setQueued(page.queued ?? []);}
       setMessages((previous) => {
         const combined = replace
           ? page.messages
@@ -741,6 +746,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {timeline && (activity === 'working' || activity === 'waiting') && <p className="agent-working" role="status" data-activity={activity}>
           <span className="chat-activity-dot" aria-hidden="true" />{t(activity === 'working' ? 'chatActivityWorking' : 'chatActivityWaiting')}
         </p>}
+        {timeline && <AgentQueued queued={queued} />}
       </div>
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}

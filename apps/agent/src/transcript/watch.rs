@@ -79,6 +79,7 @@ pub struct Watcher {
     sequence: u64,
     entries: Vec<Entry>,
     activity: Option<&'static str>,
+    queued: Vec<Value>,
     seen: Option<Fingerprint>,
     located: Option<PathBuf>,
     /// Duration of the last projection; the next check waits at least three times as long.
@@ -121,6 +122,7 @@ impl Watcher {
             sequence: 0,
             entries: Vec::new(),
             activity: None,
+            queued: Vec::new(),
             seen: None,
             located: None,
             cost: Duration::ZERO,
@@ -186,6 +188,8 @@ impl Watcher {
         }
         let activity_changed = self.activity != page.activity;
         self.activity = page.activity;
+        let queued_changed = self.queued != page.queued;
+        self.queued = page.queued;
         let dropped = if rewritten || self.generation == 0 {
             None
         } else {
@@ -221,9 +225,9 @@ impl Watcher {
             Some(json!({
                 "type":"snapshot","gen":self.generation,"seq":self.sequence,
                 "entries":entries.iter().map(upsert).collect::<Vec<_>>(),
-                "activity":self.activity,"branchId":page.branch_id,"truncated":page.truncated,
+                "activity":self.activity,"queued":self.queued,"branchId":page.branch_id,"truncated":page.truncated,
             }))
-        } else if !upserts.is_empty() || !drops.is_empty() || activity_changed {
+        } else if !upserts.is_empty() || !drops.is_empty() || activity_changed || queued_changed {
             self.sequence += 1;
             let mut frame = json!({
                 "type":"delta","gen":self.generation,"seq":self.sequence,
@@ -232,6 +236,9 @@ impl Watcher {
             });
             if activity_changed {
                 frame["activity"] = json!(self.activity);
+            }
+            if queued_changed {
+                frame["queued"] = json!(self.queued);
             }
             Some(frame)
         } else {
@@ -487,6 +494,23 @@ mod tests {
             frame["upserts"][0]["message"]["blocks"][0]["text"],
             "complete"
         );
+    }
+
+    #[test]
+    fn a_queued_prompt_is_sent_with_the_snapshot_and_as_a_change_of_its_own() {
+        let queue = |operation: &str, content: &str| {
+            json!({"type":"queue-operation","operation":operation,"sessionId":"s","content":content}).to_string() + "\n"
+        };
+        let (_directory, path) = fixture(&chain(2));
+        let mut watch = watcher(&path, 50);
+        assert_eq!(watch.poll().unwrap()[0]["queued"], json!([]));
+        append(&path, &queue("enqueue", "next please"));
+        let frames = watch.poll().unwrap();
+        assert_eq!(frames[0]["type"], "delta");
+        assert_eq!(frames[0]["queued"], json!([{"text":"next please"}]));
+        assert!(frames[0]["upserts"].as_array().unwrap().is_empty());
+        append(&path, &queue("dequeue", "next please"));
+        assert_eq!(watch.poll().unwrap()[0]["queued"], json!([]));
     }
 
     #[test]

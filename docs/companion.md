@@ -177,8 +177,8 @@ least 3*t*, which keeps a very large transcript below about a quarter of one cor
 | Frame | Fields | Meaning |
 | --- | --- | --- |
 | `hello` | `protocol`, `agent`, `intervalMs`, `limit`, `companion` | First line. A client that does not know `protocol` stops. |
-| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `branchId`, `truncated` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
-| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` appears only when it changed; `null` means unknown. |
+| `snapshot` | `gen`, `seq`, `entries[{id,rev,message}]`, `activity`, `queued`, `branchId`, `truncated` | The whole window. Replace everything held. Sent first, and again with `gen + 1` when the file was replaced, shortened, or its recorded branch no longer continues the previous window. |
+| `delta` | `gen`, `seq`, `upserts[{id,rev,message}]`, `drops[id]`, `activity?`, `queued?` | Patch the window of the same `gen`: replace or append each upsert by `id` (a changed entry keeps its position), remove each dropped id from the head. `activity` appears only when it changed; `null` means unknown. `queued` appears only when the queue changed and replaces the held list (see below). |
 | `heartbeat` | none | Sent after 5 s without another frame so a client can tell a quiet conversation from a dead channel. |
 | `end` | `reason` | The source failed 20 checks in a row (about 5 s), or could not be read at all; the exit status is 1. |
 
@@ -189,6 +189,15 @@ paged conversation view, so one renderer serves both. A tool result that lands o
 turn arrives as an upsert of that turn's entry, not as a new row. A frame is at most 1 MiB.
 Later protocol versions only add frame types and fields; a client ignores frame types it
 does not know.
+
+`queued` is the list of prompts typed while Claude Code works and not yet taken, oldest first
+(`[{text, timestamp?}]`, at most 20 entries of at most 4096 bytes). The companion replays the
+`queue-operation` records of the session file: `enqueue` appends, `dequeue` takes the oldest,
+`remove` drops the entry with that text and `popAll` empties the queue. Text the harness
+injects (it starts with `<`, such as `<task-notification>`) is not a typed prompt and is not
+listed. The same `queued` array is part of the paged `transcript --view conversation` page for
+Claude and is omitted when empty, so an older companion or client sees the page it always saw.
+Codex records no queue, so Codex pages carry none.
 
 An older companion rejects the subcommand as a usage error (exit status 2), which a client
 treats as "update the host companion" and answers by polling `transcript` as before.

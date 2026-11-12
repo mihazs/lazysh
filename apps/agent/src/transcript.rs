@@ -161,6 +161,9 @@ pub struct TranscriptPage {
     /// Recorded turn state: working, waiting, idle or stopped. Absent is unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<&'static str>,
+    /// Messages typed while the agent works and not yet taken, oldest first (Claude Code only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<Value>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -330,6 +333,7 @@ fn read_records(
         truncated: false,
         checkpoint: None,
         activity: None,
+        queued: Vec::new(),
     })
 }
 
