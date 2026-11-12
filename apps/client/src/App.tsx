@@ -1851,9 +1851,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         return;
       const target=detail.sessionId;
       setActiveId(target);
+      setView('terminal');setInbox(false);
+      // A needs-you notification leads to the pending card in the Agent view; other events open the agents list.
+      const opened=sessionsRef.current.find(session=>session.id===target);
+      if('waiting' in detail && detail.waiting===true && opened) {setViewChoices(choices=>saveSessionView(choices,sessionViewKey(opened),'agent'));return;}
       setNavigation(previous=>({...previous,[target]:{mode:'agents',agents:true}}));
-      setView('terminal');setSidebar(true);
-      setInbox(false);
+      setSidebar(true);
     };
     window.addEventListener("lazysh-inbox-open", openInbox);
     return () => {

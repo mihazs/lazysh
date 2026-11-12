@@ -62,11 +62,12 @@ it('delivers inbox notifications to the desktop notification server, pauses them
   expect(alert.actions).toEqual(expect.arrayContaining(['open-session','Open session']));
 
   gui.stage='owned notification action';
-  const agents=await browser.$('button[data-workspace-mode="agents"]');
-  expect(await agents.getAttribute('aria-current')).not.toBe('page');
+  // A needs-you action of an agent whose pane is known leads to the Agent view of the reporting session, where its pending card shows.
+  const agentView=await browser.$('.session-view-switch button[aria-label="Agent"]');
+  expect(await agentView.getAttribute('aria-pressed')).not.toBe('true');
   server.child.stdin!.write(`invoke ${alert.id} open-session\n`);
   await inbox.waitForDisplayed({reverse:true,timeout:10_000});
-  await browser.waitUntil(async()=>await agents.getAttribute('aria-current')==='page',{timeout:10_000,timeoutMsg:'Notification action did not open the reporting session agents'});
+  await browser.waitUntil(async()=>await agentView.getAttribute('aria-pressed')==='true',{timeout:10_000,timeoutMsg:'Notification action did not open the Agent view of the reporting session'});
   expect(records(server).filter(record=>record.event==='invoked')).toEqual([{event:'invoked',id:alert.id,action:'open-session'}]);
 
   gui.stage='owned paused notifications';

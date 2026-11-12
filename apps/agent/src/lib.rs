@@ -126,7 +126,7 @@ pub enum Agent {
     Cline,
     Generic,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Working,
@@ -142,6 +142,47 @@ impl SessionState {
         }
     }
 }
+/// What a needs-attention agent waits for; absent when it needs the user for another reason (a failed turn).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Waiting {
+    Approval,
+    Question,
+    Plan,
+    Menu,
+    /// A generic notification: it never replaces a more specific wait that is still open.
+    Unknown,
+}
+impl Waiting {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Approval => "approval",
+            Self::Question => "question",
+            Self::Plan => "plan",
+            Self::Menu => "menu",
+            Self::Unknown => "unknown",
+        }
+    }
+    fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Approval,
+            Self::Question,
+            Self::Plan,
+            Self::Menu,
+            Self::Unknown,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == value)
+    }
+    /// A permission hook names the tool; the tools that ask a question or for a plan decision are not approvals.
+    fn for_tool(tool: Option<&str>) -> Self {
+        match tool {
+            Some("AskUserQuestion" | "request_user_input") => Self::Question,
+            Some("ExitPlanMode") => Self::Plan,
+            _ => Self::Approval,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
@@ -151,6 +192,8 @@ pub struct Event {
     pub state: SessionState,
     pub summary: String,
     pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
 }
 impl Event {
     fn validate(&self) -> Result<()> {
@@ -171,6 +214,9 @@ pub struct SessionSummary {
     pub event: Event,
     pub updated_at: String,
     pub event_count: u64,
+    /// When the current wait began; kept while the same wait is reported again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<String>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -337,6 +383,22 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 Some(Value::String(value)) => value,
                 _ => return Err(Error::InvalidEvent),
             };
+            let tool = payload.get("tool_name").and_then(Value::as_str);
+            let waiting = (state == SessionState::NeedsAttention).then(|| {
+                match (
+                    kind,
+                    payload.get("notification_type").and_then(Value::as_str),
+                ) {
+                    ("PermissionRequest", _) => Waiting::for_tool(tool),
+                    (_, Some("elicitation_dialog")) => Waiting::Question,
+                    // Claude also sends its PermissionRequest hook; the notification adds nothing the hook did not say.
+                    (_, Some("permission_prompt")) if matches!(agent, Agent::Claude) => {
+                        Waiting::Unknown
+                    }
+                    (_, Some("permission_prompt" | "ToolPermission")) => Waiting::Approval,
+                    _ => Waiting::Unknown,
+                }
+            });
             Event {
                 session_id: field(
                     payload,
@@ -361,6 +423,7 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 state,
                 summary: summary.into(),
                 pane_id: pane.map(str::to_owned),
+                waiting,
             }
         }
     };
@@ -485,6 +548,11 @@ fn lock_store_bootstrap(
     }
 }
 
+// Additive: a companion that predates it never reads or writes this table.
+const WAITING_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_waiting (
+    agent TEXT NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, since REAL NOT NULL,
+    PRIMARY KEY (agent,session_id));";
+
 fn apply_schema(
     transaction: &rusqlite::Transaction<'_>,
 ) -> std::result::Result<(), (StoragePhase, Error)> {
@@ -492,6 +560,7 @@ fn apply_schema(
         storage_schema::V1_SESSIONS,
         reported_history::SCHEMA,
         hooks::AIDER_HEALTH_SCHEMA,
+        WAITING_SCHEMA,
     ] {
         transaction
             .execute_batch(schema)
@@ -747,6 +816,38 @@ impl Store {
                 )
                 .optional()
                 .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
+            // An open wait keeps its specific kind and start when a generic notification repeats it.
+            let open: Option<(String, f64)> = transaction
+                .query_row(
+                    "SELECT kind,since FROM session_waiting WHERE agent=?1 AND session_id=?2",
+                    params![event.agent, event.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?
+                .filter(|_| prior.as_deref() == Some(SessionState::NeedsAttention.as_str()));
+            let waiting = match (
+                event.waiting,
+                open.as_ref().and_then(|(kind, _)| Waiting::parse(kind)),
+            ) {
+                (Some(Waiting::Unknown), Some(kept)) => Some(kept),
+                (waiting, _) => waiting,
+            };
+            let since = open
+                .filter(|(kind, _)| Some(kind.as_str()) == waiting.map(Waiting::as_str))
+                .map_or(now, |(_, since)| since);
+            match waiting {
+                Some(kind) if event.state == SessionState::NeedsAttention => transaction.execute(
+                    "INSERT INTO session_waiting VALUES (?1,?2,?3,?4)
+                    ON CONFLICT(agent,session_id) DO UPDATE SET kind=excluded.kind,since=excluded.since",
+                    params![event.agent, event.session_id, kind.as_str(), since],
+                ),
+                _ => transaction.execute(
+                    "DELETE FROM session_waiting WHERE agent=?1 AND session_id=?2",
+                    params![event.agent, event.session_id],
+                ),
+            }
+            .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
             transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
             ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
             summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
@@ -775,6 +876,9 @@ impl Store {
             .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
         transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
         transaction
+            .execute("DELETE FROM session_waiting WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent=session_waiting.agent AND sessions.session_id=session_waiting.session_id)", [])
+            .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+        transaction
             .commit()
             .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
         Ok(())
@@ -787,7 +891,7 @@ impl Store {
             "DELETE FROM sessions WHERE updated_at < ?1",
             [now.timestamp_micros() as f64 / 1_000_000.0 - RETENTION_SECONDS],
         )?;
-        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT ?1")?;
+        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since FROM sessions LEFT JOIN session_waiting USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
         let mut rows = statement.query([limit])?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next()? {
@@ -798,11 +902,21 @@ impl Store {
                 "done" => SessionState::Done,
                 _ => return Err(Error::InvalidEvent),
             };
-            let updated_at: f64 = row.get(6)?;
-            let updated_at =
-                DateTime::from_timestamp_micros((updated_at * 1_000_000.0).round() as i64)
-                    .ok_or(Error::InvalidEvent)?
-                    .to_rfc3339_opts(SecondsFormat::Micros, true);
+            let rfc3339 = |seconds: f64| {
+                DateTime::from_timestamp_micros((seconds * 1_000_000.0).round() as i64)
+                    .map(|time| time.to_rfc3339_opts(SecondsFormat::Micros, true))
+                    .ok_or(Error::InvalidEvent)
+            };
+            let updated_at = rfc3339(row.get(6)?)?;
+            // Only a report that still needs the user waits; a stale row from a later state is ignored.
+            let waiting = row
+                .get::<_, Option<String>>(8)?
+                .and_then(|kind| Waiting::parse(&kind))
+                .filter(|_| state == SessionState::NeedsAttention);
+            let waiting_since = match (waiting, row.get::<_, Option<f64>>(9)?) {
+                (Some(_), Some(since)) => Some(rfc3339(since)?),
+                _ => None,
+            };
             sessions.push(SessionSummary {
                 event: Event {
                     session_id: row.get(0)?,
@@ -811,8 +925,10 @@ impl Store {
                     state,
                     summary: row.get(4)?,
                     pane_id: row.get(5)?,
+                    waiting,
                 },
                 updated_at,
+                waiting_since,
                 event_count: u64::try_from(row.get::<_, i64>(7)?)
                     .map_err(|_| Error::InvalidEvent)?,
             });
@@ -1273,6 +1389,7 @@ mod tests {
                         state: SessionState::Done,
                         summary: "Done".into(),
                         pane_id: None,
+                        waiting: None,
                     },
                     now + chrono::TimeDelta::microseconds(i),
                 )

@@ -31,7 +31,7 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports
   const current=useRef({sessionId,visible,server:data?.server});current.current={sessionId,visible,server:data?.server};
   useEffect(()=>{current.current.visible=visible;return()=>{current.current.visible=false;};},[visible]);
   const references=reportedSessionCounts(data?.rows??[]);
-  const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase())))??[];
+  const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase()))).sort((a,b)=>Number(b.agent_status==='blocked')-Number(a.agent_status==='blocked'))??[];
   return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>
     <div className="tool-bar"><h3>{t('herdrAgentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={()=>void refresh()}>{t('herdrAgentsRefresh')}</button></div>
     {busy && !data?.loaded && failure?.host!==sessionId && <p role="status">{t('herdrReading')}</p>}
