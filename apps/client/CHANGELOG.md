@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.41.0
+
+### Minor Changes
+
+- 81297de: Add a slash-command palette, prompt-mode chips, prompt history, send receipts with Retry and a two-press Request stop to the Agent view composer.
+
+### Patch Changes
+
+- 739e91c: Run the workspace build, check, lint, test and acceptance tasks with moon instead of Turborepo. The `bun run` task names, the CI job names and the published artifacts are unchanged.
+- @lazysh/account-usage@1.41.0
+  - @lazysh/common@1.41.0
+  - @lazysh/display-idle@1.41.0
+  - @lazysh/et-transport@1.41.0
+  - @lazysh/mosh-transport@1.41.0
+
 ## 1.40.0
 
 ### Minor Changes
