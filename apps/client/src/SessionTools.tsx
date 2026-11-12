@@ -4,6 +4,7 @@ import { useProtectedApi, useProtectedInvoke } from './access';
 import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
 import {resolveHostPath} from './hostPath';
+import HostFileActions from './HostFileActions';
 import FilePreview, {type FileContent} from './FilePreview';
 import {IMAGE_PREVIEW_LIMIT, imageUrl, previewKind} from './mediaPreview';
 import { useEffect, useRef, useState } from "react";
@@ -35,6 +36,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   const [draft, setDraft] = useState(".");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [content, setContent] = useState<FileContent | null>(null);
+  const [selected, setSelected] = useState("");
   const [error, setError] = useState<FileErrorState>("");
   const [loading, setBusy] = useState(false);
   const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
@@ -61,6 +63,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       setPath(resolved);
       setDraft(resolved);
       setContent(null);
+      setSelected("");
     } catch (e) {
       if (current === request.current) setError(captureUiError(e));
     } finally {
@@ -84,6 +87,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     const current = ++request.current;
     setBusy(true);
     setError("");
+    setSelected(next);
     try {
       if (previewKind(entry.name) === 'image') {
         if (entry.size > IMAGE_PREVIEW_LIMIT) throw new LocalUiError('filesImageTooLarge');
@@ -241,12 +245,9 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           ))}
         </div>
         <div className="file-preview">
-          {content ? (
-            <>
-              <div className="preview-heading">{content.path}</div>
-              <FilePreview key={content.path} content={content}/>
-            </>
-          ) : (
+          {selected && <div className="preview-heading">{selected}</div>}
+          {selected && <HostFileActions key={selected} sessionId={sessionId} path={selected}/>}
+          {content ? <FilePreview key={content.path} content={content}/> : !selected && (
             <div className="panel-empty">
               <File size={28} />
               <h3>{t('filesReadSource')}</h3>

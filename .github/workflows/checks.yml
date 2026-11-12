@@ -1105,11 +1105,16 @@ jobs:
           # Verify the complete inventory so a renamed or missing case cannot silently pass.
           actual=$(cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib host::tests::local:: -- --list | grep ': test$' | LC_ALL=C sort)
           printf '%s\n' \
+            'host::tests::local::a_file_that_shrinks_during_a_local_download_fails_and_leaves_nothing: test' \
+            'host::tests::local::cancelling_a_local_download_stops_it_and_removes_the_partial_copy: test' \
+            'host::tests::local::local_downloads_refuse_directories_unconfirmed_links_and_unconfirmed_large_files: test' \
+            'host::tests::local::local_downloads_stage_exact_bytes_report_progress_and_never_run_or_overwrite: test' \
             'host::tests::local::local_exec_checks_revoked_lease_and_closed_session_before_spawn: test' \
             'host::tests::local::local_exec_is_cancelled_by_closing_the_session: test' \
             'host::tests::local::local_exec_over_its_deadline_times_out_and_reaps_the_child: test' \
             'host::tests::local::local_files_list_and_read_with_remote_bounds: test' \
-            'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' | diff -u - <(printf '%s\n' "$actual")
+            'host::tests::local::local_repository_shows_changes_history_and_diffs_through_git_argv: test' \
+            'host::tests::local::only_the_three_newest_finished_copies_stay_staged_for_other_apps: test' | diff -u - <(printf '%s\n' "$actual")
           bunx moon run client-native:test-local
       # Each suite runs even when an earlier one fails, so a red suite hides none of the others.
       - name: Exercise SFTP, previews, teardown and Git diff over real OpenSSH

@@ -21,3 +21,28 @@
   white-space: pre;
   overflow: auto;
 }
+.file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 18px;
+}
+.file-transfer {
+  display: grid;
+  gap: 8px;
+  margin: 0 18px 10px;
+}
+.file-transfer p,
+.file-actions ~ p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.file-actions ~ p {
+  padding: 0 18px 10px;
+}
+.file-transfer progress {
+  width: 100%;
+}
+.file-actions ~ .upload-confirm {
+  margin: 0 18px 10px;
+}
