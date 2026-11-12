@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
 import {installTerminalLinks} from "./terminalLinks";
-import { Keyboard, KeyboardOff, Lock, SquarePen } from "lucide-react";
+import { Keyboard, KeyboardOff, Layers, Lock, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
@@ -23,7 +23,7 @@ import { nextTouchSelection, selectTerminalRange, terminalCellAt, terminalWordAt
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import { carryKeyboard, keyboardCarried, mayFocusOnActivation, touchScreen } from "./softKeyboard";
-import { herdrNavigationCell } from "./herdrNavigationCells";
+import { herdrNavigationCell, herdrOnScreen } from "./herdrNavigationCells";
 import "@xterm/xterm/css/xterm.css";
 import { toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
 import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
@@ -652,10 +652,19 @@ export default function TerminalPane({ session, active, typingActivation = false
     return () => {element.removeEventListener('mousedown', down, true); document.removeEventListener('mouseup', up, true);};
   }, [session.id, session.terminal]);
 
+  // Herdr running in this terminal, attached by lazysh or not, shows its own phone navigation on the live screen.
+  const [herdrScreen, setHerdrScreen] = useState(false);
+  useEffect(() => {
+    const terminal = session.terminal, check = () => setHerdrScreen(herdrOnScreen(terminal));
+    check();
+    const parsed = terminal.onWriteParsed?.(check);
+    return () => parsed?.dispose();
+  }, [session.terminal]);
+
   // A press on Herdr's own switch button or switcher navigates; xterm would also focus its input and raise the soft keyboard.
   useEffect(() => {
     const element = container.current, terminal = session.terminal;
-    if (!element || multiplexer !== 'herdr') return;
+    if (!element) return;
     const press = (event: MouseEvent) => {
       const input = terminal.textarea, cell = terminalCellAt(terminal, event.clientX, event.clientY);
       if (!input || !cell || document.activeElement === input || !touchScreen()) return;
@@ -664,7 +673,7 @@ export default function TerminalPane({ session, active, typingActivation = false
     };
     element.addEventListener('mousedown', press, true);
     return () => element.removeEventListener('mousedown', press, true);
-  }, [session.id, session.terminal, multiplexer]);
+  }, [session.id, session.terminal]);
 
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
@@ -1154,6 +1163,8 @@ export default function TerminalPane({ session, active, typingActivation = false
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const keyRows = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer);
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
+    {/* Herdr draws its own switch button inside the terminal, where scrolled history and a resized grid can take it away; this one sits in the session header, which neither scrolls nor shrinks with the soft keyboard. */}
+    {(multiplexer === 'herdr' || herdrScreen) && <button type="button" className="icon-button herdr-switch-handle" title={t('herdrSwitchHandle')} aria-label={t('herdrSwitchHandle')} onClick={() => runGesture('openWorkspaces')}><Layers size={18} aria-hidden="true" /></button>}
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
   </div>;
