@@ -2134,7 +2134,7 @@ const translations = {
   agentNoticeChanged: ["O painel não mostra mais este agente, ou mais de um painel o reivindica. Nada foi enviado.", "El panel ya no muestra a este agente, o más de un panel lo reclama. No se envió nada."],
   agentNoticeBusy: ["Outra mensagem ainda está sendo entregue. Nada foi enviado duas vezes. Tente de novo em instantes.", "Otro mensaje aún se está entregando. No se envió nada dos veces. Inténtalo de nuevo en un momento."],
   agentNoticeOffline: ["O host não respondeu. Nada foi enviado. Verifique a conexão e tente de novo.", "El host no respondió. No se envió nada. Revisa la conexión y vuelve a intentarlo."],
-  agentNoticeRejected: ["O Herdr no host recusou a mensagem. Nada foi enviado.", "Herdr en el host rechazó el mensaje. No se envió nada."],
+  agentNoticeRejected: ["O multiplexador de terminal no host recusou a mensagem. Nada foi enviado.", "El multiplexor de terminal en el host rechazó el mensaje. No se envió nada."],
   agentNoticeInvalid: ["A mensagem está vazia, passa de 4.096 bytes ou tem caracteres de controle. Encurte-a ou prepare-a no terminal.", "El mensaje está vacío, supera 4.096 bytes o tiene caracteres de control. Acórtalo o prepáralo en el terminal."],
   agentNoticeUnconfirmed: ["A mensagem pode ter chegado ao terminal. Confira lá antes de enviar de novo, para não enviá-la duas vezes.", "El mensaje puede haber llegado al terminal. Compruébalo allí antes de enviarlo de nuevo, para no enviarlo dos veces."],
   agentNoticeOther: ["Algo inesperado interrompeu a mensagem. Não se sabe se algo foi enviado.", "Algo inesperado detuvo el mensaje. No se sabe si se envió algo."],

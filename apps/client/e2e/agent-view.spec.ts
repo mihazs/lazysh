@@ -1,5 +1,7 @@
-import {expect,test,type Page} from '@playwright/test';
+import {expect,test,type Locator,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
+import {workspaceControl} from './fixtures/workspaceControl';
+import {connectHost} from './fixtures/connectHost';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
@@ -112,6 +114,21 @@ async function open(page:Page) {
   await expect(page.getByRole('tab')).toHaveCount(2);
   await page.getByRole('tab',{name:'Fixture / work',exact:true}).click();
   await expect(page.locator('.terminal-pane:visible .xterm-rows')).toContainText('work scrollback 40');
+}
+/** A notice stays inside the screen's width, below a modest height, and the page never scrolls sideways. */
+async function expectInViewport(page:Page,notice:Locator) {
+  const [box,viewport]=await Promise.all([notice.boundingBox(),page.viewportSize()]);
+  expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(viewport!.width);expect(box!.height).toBeLessThan(220);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+}
+/** Makes the host refuse the next send and sends 'Next step': exactly one notice says the message was not sent. */
+async function sendRefused(page:Page,agent:Locator,fixture:'herdrFixture'|'zellijFixture',refusal:unknown) {
+  await page.evaluate(({fixture,refusal})=>{(window as unknown as Record<string,{inputError:unknown}>)[fixture].inputError=refusal;},{fixture,refusal});
+  await agent.getByRole('textbox',{name:'Draft for this terminal',exact:true}).fill('Next step');
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  const notice=agent.getByRole('alert');
+  await expect(notice).toHaveCount(1);await expect(notice).toContainText('Message not sent');
+  return notice;
 }
 const switcher=(page:Page)=>page.getByRole('group',{name:'Session view',exact:true});
 const agentView=(page:Page)=>page.getByRole('region',{name:'Agent view',exact:true}).and(page.locator(':visible'));
@@ -449,18 +466,12 @@ test('stock Herdr: the composer sends through Herdr\'s own agent input, and a re
   await expect(field).toHaveValue('');
   await expect(agent.getByRole('alert')).toHaveCount(0);
   // The agent waits for an approval: one notice, the draft is kept, and nothing else is shown under the composer.
-  await page.evaluate(()=>{(window as unknown as {herdrFixture:{inputError:unknown}}).herdrFixture.inputError={kind:'herdr_chat_blocked',message:'blocked'};});
-  await field.fill('Next step');
-  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
-  const notice=agent.getByRole('alert');
-  await expect(notice).toHaveCount(1);
-  await expect(notice).toContainText('Message not sent');await expect(notice).toContainText('waiting for an answer or approval');
+  const notice=await sendRefused(page,agent,'herdrFixture',{kind:'herdr_chat_blocked',message:'blocked'});
+  await expect(notice).toContainText('waiting for an answer or approval');
   await expect(notice.getByRole('button',{name:'Open terminal',exact:true})).toBeVisible();
   await expect(agent.getByText('Reconnect to the terminal')).toHaveCount(0);
   await expect(field).toHaveValue('Next step');
-  const [box,viewport]=await Promise.all([notice.boundingBox(),page.viewportSize()]);
-  expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(viewport!.width);expect(box!.height).toBeLessThan(220);
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  await expectInViewport(page,notice);
   await notice.getByRole('button',{name:'Dismiss',exact:true}).click();
   await expect(agent.getByRole('alert')).toHaveCount(0);await expect(field).toHaveValue('Next step');
   expect((await herdrFixture(page)).inputs).toHaveLength(1);
@@ -863,6 +874,61 @@ test('shows model, plan mode and context left in one header row without taking c
   await expect(sheet.getByText('app',{exact:true})).toBeVisible();
   // Wide panes also draw the branch in the header; a narrow phone leaves it to the sheet so the row does not grow.
   await expect(header.getByTitle('Git branch')).toBeVisible({visible:(page.viewportSize()?.width??0)>=520});
+
+/** A host with Zellij 0.45.1 and one Claude Code agent in pane 7 of session `work`. Zellij is never restored, so the session is attached from Sessions. */
+async function openZellij(page:Page,testInfo:{project:{name:string}}) {
+  await installBaseHost(page);
+  await page.addInitScript(()=>{
+    type Zellij={inputs:unknown[];tmuxCalls:number;inputError?:unknown};
+    const record:Zellij=(window as unknown as {zellijFixture:Zellij}).zellijFixture={inputs:[],tmuxCalls:0};
+    const path='/home/owner/.claude/projects/work/a.jsonl';
+    window.nativeFixtureInvoke=async(command,args)=>{
+      const base=window.agentViewBase(command);if(base)return base.value;
+      if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:false,zellijAvailable:true,tools:[{kind:'zellij',version:'0.45.1',support:'full',missing:[]}],sessions:[]};
+      if(command==='multiplexer_sessions')return [{name:'work'}];
+      if(command==='attach_multiplexer')return {sessionId:'display-work'};
+      if(command==='tmux_chat'||command==='herdr_chat'){record.tmuxCalls++;throw new Error('Zellij never uses a tmux or Herdr input');}
+      if(command==='zellij_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'claude-thread',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'zellij:work:7',eventCount:4},
+        {sessionId:'other-thread',agent:'Codex',project:'/other',state:'done',updatedAt:new Date().toISOString(),summary:'Done',paneId:'zellij:another:1',eventCount:2}]};
+      if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'available',path,reportedAt:'2026-11-09T10:00:00Z',paneId:'zellij:work:7'};
+      if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+        {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
+      if(command==='agent_watch_start')throw new Error('The channel could not open');
+      if(command==='agent_watch_stop')return;
+      if(command==='list_directory')return [];
+      throw new Error(`Unexpected Zellij fixture command: ${command}`);
+    };
+  });
+  await connectHost(page,'Fixture',testInfo.project.name==='phone');
+  await (await workspaceControl(page,'Sessions')).click();
+  await page.getByRole('button',{name:'List zellij sessions',exact:true}).click();await page.getByRole('button',{name:'Attach zellij work',exact:true}).click();
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+}
+const zellijFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {zellijFixture:{inputs:unknown[];tmuxCalls:number}}).zellijFixture);
+
+test('Zellij: the Agent view follows the agent of the attached session and sends and stops through Zellij, and a pane that no longer runs it shows one notice',async({page},testInfo)=>{
+  await openZellij(page,testInfo);
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(agent.locator('header')).toContainText('Claude Code');
+  const field=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await field.fill('Run the tests');
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect.poll(async()=>(await zellijFixture(page)).inputs).toEqual([{target:{zellijSession:'work',pane:7,agent:'claude'},input:{kind:'send',text:'Run the tests'}}]);
+  await expect(field).toHaveValue('');await expect(agent.getByRole('alert')).toHaveCount(0);
+  // Stop needs a second press.
+  await agent.getByRole('button',{name:'Request stop',exact:true}).click();
+  expect((await zellijFixture(page)).inputs).toHaveLength(1);
+  await agent.getByRole('button',{name:'Tap again to stop the agent',exact:true}).click();
+  await expect.poll(async()=>(await zellijFixture(page)).inputs.length).toBe(2);
+  expect((await zellijFixture(page)).inputs[1]).toEqual({target:{zellijSession:'work',pane:7,agent:'claude'},input:{kind:'request_stop'}});
+  // The host found a shell in the pane: nothing is typed, the draft stays, and one notice says so.
+  const notice=await sendRefused(page,agent,'zellijFixture',{kind:'zellij_chat_stale',message:'The Zellij pane no longer runs this agent'});
+  await expect(notice).toContainText('The pane no longer shows this agent');
+  await expect(field).toHaveValue('Next step');
+  await expectInViewport(page,notice);
+  expect((await zellijFixture(page)).tmuxCalls).toBe(0);expect((await zellijFixture(page)).inputs).toHaveLength(2);
 });
 
 test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{

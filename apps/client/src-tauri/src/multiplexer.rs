@@ -330,7 +330,11 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
     let (name, missing): (_, &'static [&'static str]) = match kind {
         MultiplexerKind::Tmux => ("tmux", &["jump", "confirmedInput"]),
-        MultiplexerKind::Zellij => ("zellij", &["tree", "close", "resize", "launch"]),
+        // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
+        MultiplexerKind::Zellij => (
+            "zellij",
+            &["tree", "close", "resize", "launch", "confirmedInput"],
+        ),
         MultiplexerKind::Herdr => (
             "herdr",
             &["create", "launch", "rename", "confirmedInput", "restore"],
@@ -837,6 +841,12 @@ mod tests {
             assert_eq!(tool.missing.is_empty(), support == Support::Full, "{line}");
         }
         assert_eq!(tool(Tmux, "tmux 3.2a").missing, ["jump", "confirmedInput"]);
+        assert!(tool(Zellij, "zellij 0.44.3")
+            .missing
+            .contains(&"confirmedInput"));
+        assert!(!tool(Zellij, "zellij 0.45.1")
+            .missing
+            .contains(&"confirmedInput"));
         let tree = parse_tree("tmux\t1\ttmux 3.2a\nherdr\t0\nzellij\t1\tzellij 0.45.1\n").unwrap();
         assert_eq!(
             serde_json::to_value(&tree).unwrap()["tools"],

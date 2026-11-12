@@ -70,6 +70,57 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
   });
 });
 
+describe('a Zellij session',()=>{
+  const labels={backend:'zellij' as const,hostLabel:'host',terminalLabel:'work'};
+  // The host reports each agent's pane as `zellij:<session>:<pane>` and its history for that same pane.
+  function zellijHost(rows:ReturnType<typeof row>[]) {
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
+      if(command==='agent_reported_history'){const id=(args as {agentSessionId:string}).agentSessionId;return {schemaVersion:1,sessionId:id,status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:rows.find(item=>item.sessionId===id)?.paneId};}
+      if(command==='agent_transcript')return page('claude',turn('Explain the build','The build uses Vite.'));
+      if(command==='zellij_agent_input')return null;
+      throw new Error(`Unexpected ${command}`);
+    });
+  }
+  const send=async(text:string)=>{
+    fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:text}});await advance(0);
+    fireEvent.click(screen.getByRole('button',{name:'Send to the agent'}));await advance(0);
+  };
+
+  it('binds the one agent that reports a pane of this session and sends to that pane, never to tmux',async()=>{
+    zellijHost([row('Claude Code','zellij:work:7'),{...row('Codex','zellij:other:2'),sessionId:'elsewhere'},{...row('Other',null),sessionId:'ended'}]);
+    render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(screen.getByText('The build uses Vite.')).toBeTruthy();
+    // Only the agent that reports this session's pane is read; the other session's agent and the ended one are not.
+    expect(new Set(calls('agent_reported_history').map(args=>JSON.stringify(args)))).toEqual(new Set([JSON.stringify({sessionId:'ssh',agentSessionId:'Claude Code-session'})]));
+    await send('Run the tests');
+    expect(calls('zellij_agent_input')).toEqual([{sessionId:'ssh',target:{zellijSession:'work',pane:7,agent:'claude'},input:{kind:'send',text:'Run the tests'}}]);
+    expect(calls('tmux_chat')).toEqual([]);
+  });
+
+  it('lists the agents of the session when several run in it, and sends to the pane of the one picked',async()=>{
+    zellijHost([row('Claude Code','zellij:work:7'),{...row('Claude Code','zellij:work:9'),sessionId:'second'}]);
+    render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(calls('agent_transcript')).toEqual([]);
+    fireEvent.click(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getAllByRole('button')[1]);await advance(0);
+    expect(screen.getByText('The build uses Vite.')).toBeTruthy();
+    await send('Which one?');
+    expect(calls('zellij_agent_input')).toEqual([{sessionId:'ssh',target:{zellijSession:'work',pane:9,agent:'claude'},input:{kind:'send',text:'Which one?'}}]);
+  });
+
+  it('gives no input to a conversation whose pane another report claims, nor to one of another Zellij session',async()=>{
+    zellijHost([row('Claude Code','zellij:work:7'),{...row('Claude Code','zellij:work:7'),sessionId:'restarted'},{...row('Codex','zellij:other:2'),sessionId:'elsewhere'}]);
+    render(<AgentView sessionId="ssh" shown tmux={false} zellijSession="work" terminalInput={labels} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(calls('agent_transcript')).toEqual([]);
+    fireEvent.click(within(screen.getByRole('region',{name:'Last-reported agent sessions'})).getAllByRole('button').find(button=>/Codex/.test(button.textContent!))!);await advance(0);
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(calls('zellij_agent_input')).toEqual([]);
+  });
+});
+
 it('shows what the harness wrote as compact events and keeps token counters out of the message flow',async()=>{
   host('claude',[row('Claude Code','%3')],'available',[[
     {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},

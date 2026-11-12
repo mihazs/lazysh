@@ -1,4 +1,5 @@
 import {workspaceControl} from './fixtures/workspaceControl';
+import {connectHost} from './fixtures/connectHost';
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 
@@ -25,10 +26,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
       throw new Error(`Unexpected reported-history browser command: ${command}`);
     };
   });
-  await page.goto('/');
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Connect to History host',exact:true}).click();
-  await page.getByLabel('Password',{exact:true}).fill('synthetic-entry');await page.getByRole('button',{name:'Connect',exact:true}).click();
+  await connectHost(page,'History host',testInfo.project.name==='phone');
   await (await workspaceControl(page,'Agents')).click();
   await page.getByRole('button',{name:'Reported agent activity',exact:true}).click();
   if(testInfo.project.name==='phone') {

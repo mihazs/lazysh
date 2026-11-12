@@ -6,7 +6,7 @@ import AgentComposerChips from './AgentComposerChips';
 import AgentComposerNotice from './AgentComposerNotice';
 import {useAgentAttachments} from './useAgentAttachments';
 import {uiErrorText} from './i18n/localError';
-import ChatTerminalInput,{draftLimit,validTerminalDraft,validTerminalSource,type StockTarget,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalProblem,type TerminalSource} from './ChatTerminalInput';
+import ChatTerminalInput,{draftLimit,validTerminalDraft,validTerminalSource,type StockTarget,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalProblem,type TerminalSource,type ZellijTarget} from './ChatTerminalInput';
 import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
 import {formatNumber,t,useUi} from './i18n/core';
@@ -21,11 +21,12 @@ import {useNow} from './relativeTime';
 import './AgentComposer.css';
 
 /** Evidence, already held by the view, of the terminal pane the followed conversation runs in. */
-export type ComposerProof={kind:'tmux';paneId:string}|{kind:'herdr';pane:string;terminal:string};
+export type ComposerProof={kind:'tmux';paneId:string}|{kind:'herdr';pane:string;terminal:string}|{kind:'zellij';session:string;pane:number};
 const LIMIT=65536;
 /** Unsent drafts by conversation: they outlive the view switching to the terminal and back, never a reload. */
 const drafts=new Map<string,string>();
-const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kind==='tmux'
+// A Zellij pane is named by the report itself: there is no destination of the terminal to compare it with.
+const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kind==='zellij' ? true : proof.kind==='tmux'
   ? 'paneId' in destination && destination.paneId===proof.paneId
   : 'pane' in destination && destination.pane===proof.pane && destination.terminal===proof.terminal;
 
@@ -90,6 +91,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     return proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal
       ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent:conversation.agent,agentSessionId:conversation.path}) : undefined;
   },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,conversation.agent,conversation.path]);
+  // A Zellij host takes input to the pane the agent's report names, and only while that pane still runs this agent.
+  const zellij=useMemo<ZellijTarget|undefined>(()=>proof?.kind==='zellij' ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent:conversation.agent}) : undefined,[proofKey,conversation.agent]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
@@ -187,7 +190,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {ready && <button type="button" className="icon-button" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}><SendHorizontal size={18} aria-hidden="true"/></button>}
     </form>
-    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock}
+    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock} zellij={zellij}
       draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
       proves={proofCheck} onControl={proofCheck?setControl:undefined}
       onSent={(text,sentRevision)=>{

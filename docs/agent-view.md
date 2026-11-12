@@ -227,7 +227,8 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 | Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher) and **Show terminal**. |
 | Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
-| Session cannot accept confirmed input (Zellij, plain PTY, stock Herdr, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
 
@@ -343,3 +344,27 @@ Interaction patterns were studied from public projects and documentation (Collie
 Warp, herdr-app, Orca, and the Claude Code, Codex, OpenCode and Agent Client Protocol
 docs). lazysh re-implements behaviour only; it copies no code, assets, names or UI
 copy from them.
+
+## Zellij input
+
+Zellij has no guard on the host and no "destination of this terminal" to confirm, so the Agent view does
+not bind to what the terminal shows. The evidence is the agent's own hook report: with the updated
+companion, a hook that runs in a Zellij pane reports `zellij:<session>:<pane>` (from `ZELLIJ_SESSION_NAME`
+and `ZELLIJ_PANE_ID`; `TMUX_PANE` still wins when both exist). The Agent view of a terminal attached to
+that Zellij session follows the one report that names one of its panes, or lists them when several do, and
+a conversation another report also claims, or one of another session, gets no input.
+
+Send and Stop go through `zellij_agent_input`, one host call each, with the pane and the agent as typed
+fields (no key path and no free text besides the prompt). The host lists the session's panes as JSON and
+refuses (`stale`, nothing sent) unless the pane is a live terminal pane whose foreground command is the
+agent, so a prompt is never typed at a shell. A line is typed with `write-chars --pane-id terminal_N` and
+Enter is the byte 13; text with a line break or tab goes in as one bracketed `paste`; Stop is the byte 27.
+The first write failing is a plain refusal; a failure after it, or a lost connection, reads as unconfirmed
+and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
+the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
+
+Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
+key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
+stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
+refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
+agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.

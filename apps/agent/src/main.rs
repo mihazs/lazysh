@@ -597,7 +597,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             reported_history,
         } => {
-            let pane = std::env::var("TMUX_PANE").ok();
+            let pane = lazysh_agent::pane_identity();
             if reported_history {
                 let (event, source) = lazysh_agent::reported_history::read_hook(
                     io::stdin().lock(),

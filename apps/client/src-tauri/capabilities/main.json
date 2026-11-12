@@ -93,6 +93,7 @@
     "allow-herdr-agent-kinds",
     "allow-herdr-repository",
     "allow-zellij-action",
+    "allow-zellij-agent-input",
     "allow-generate-identity",
     "allow-inspect-identity",
     "allow-has-credentials",

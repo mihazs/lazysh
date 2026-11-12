@@ -14,7 +14,7 @@ export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:
 export const permissionModes=['default','acceptEdits','plan','auto','bypassPermissions','unconfirmed'] as const;
 export type PermissionMode=typeof permissionModes[number];
 export type DialogAnswerer=(answer:DialogAnswer)=>Promise<boolean>;
-export type TerminalInputLabels=Readonly<{backend:'tmux'|'herdr';hostLabel:string;terminalLabel:string}>;
+export type TerminalInputLabels=Readonly<{backend:'tmux'|'herdr'|'zellij';hostLabel:string;terminalLabel:string}>;
 type Destination=Readonly<{generation:string;sessionId:string;windowId:string;paneId:string}>;
 type Snapshot=Readonly<{kind:'destination';destination:Destination;sessionName:string;windowName:string;paneIndex:number}>;
 type HerdrDestination=Readonly<{workspace:string;tab:string;pane:string;terminal:string;runtimeGeneration:string;viewport:Readonly<{x:number;y:number;width:number;height:number}>}>;
@@ -22,6 +22,8 @@ type Prepared=Readonly<{kind:'prepared';candidate:string;destination:HerdrDestin
 type Binding=Readonly<{receipt:string;destination?:Destination|HerdrDestination;nextOperation:number;/** Stock Herdr: nothing was prepared on the host, so there is no receipt to release. */stock?:true}>;
 /** The agent a stock Herdr host is asked to type into; the host re-checks that the pane still shows this session. */
 export type StockTarget=Readonly<{herdrSession:string;pane:string;terminal:string;agent:'claude'|'codex';agentSessionId:string}>;
+/** The agent pane of a Zellij session: the host writes to this pane only while it still runs this agent. */
+export type ZellijTarget=Readonly<{zellijSession:string;pane:number;agent:'claude'|'codex'}>;
 type FailureKey='chatTerminalInvalidReply'|'chatTerminalInvalidDraft'|'chatTerminalInvalid'|'chatTerminalStale'|'chatTerminalBusy'|'chatHerdrUnavailable'|'chatHerdrUncertain'|'chatHerdrBlocked'|'chatHerdrRejected'|'chatHerdrOffline';
 class InputFailure extends Error {constructor(readonly key:FailureKey,readonly raw?:string){super(key);}}
 type Problem={key:FailureKey;raw?:string}|{raw:string};
@@ -111,15 +113,18 @@ export function parseTerminalCycle(value:unknown,operation:number):{nextOperatio
 }
 function nativeFailure(error:unknown,backend:TerminalInputLabels['backend'],stock=false):unknown {
   const kind=error && typeof error==='object' && 'kind' in error?error.kind:undefined;
-  if(backend==='herdr' && kind==='herdr_chat_unavailable')return new InputFailure('chatHerdrUnavailable');
-  if(backend==='herdr' && kind==='herdr_chat_uncertain')return new InputFailure('chatHerdrUncertain');
   const message=error && typeof error==='object' && 'message' in error && typeof error.message==='string'?error.message:undefined;
-  if(backend==='herdr' && kind==='herdr_chat_blocked')return new InputFailure('chatHerdrBlocked');
-  if(backend==='herdr' && kind==='herdr_chat_rejected')return new InputFailure('chatHerdrRejected',message);
-  // Stock input reports a connection failure as such only before it sent anything; later ones arrive as `herdr_chat_uncertain`.
-  if(stock && typeof kind==='string' && offline.includes(kind))return new InputFailure('chatHerdrOffline',message);
-  const prefix=backend+'_chat_';
-  return kind===prefix+'invalid'?new InputFailure('chatTerminalInvalid'):kind===prefix+'stale'?new InputFailure('chatTerminalStale'):kind===prefix+'busy'?new InputFailure('chatTerminalBusy'):error;
+  const code=typeof kind==='string' && kind.startsWith(backend+'_chat_')?kind.slice(backend.length+6):undefined;
+  // Herdr and Zellij hosts answer in the same words; only tmux has no way to refuse for a reason.
+  if(backend!=='tmux') {
+    if(code==='unavailable')return new InputFailure('chatHerdrUnavailable');
+    if(code==='uncertain')return new InputFailure('chatHerdrUncertain');
+    if(code==='blocked')return new InputFailure('chatHerdrBlocked');
+    if(code==='rejected')return new InputFailure('chatHerdrRejected',message);
+    // Stock input reports a connection failure as such only before it sent anything; later ones arrive as `uncertain`.
+    if(stock && typeof kind==='string' && offline.includes(kind))return new InputFailure('chatHerdrOffline',message);
+  }
+  return code==='invalid'?new InputFailure('chatTerminalInvalid'):code==='stale'?new InputFailure('chatTerminalStale'):code==='busy'?new InputFailure('chatTerminalBusy'):error;
 }
 
 export type TerminalDestination=Destination|HerdrDestination;
@@ -133,7 +138,7 @@ export type TerminalProblem=Readonly<{key:FailureKey|'agentComposerWrongPane';ra
  * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
  * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
  * Confirm steps stay. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed,stock}:{
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed,stock,zellij}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
   /** Let a tmux terminal take a prompt of up to 64 KiB, sent as one bounded paste past the 4 KiB `send` takes. */
@@ -143,10 +148,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   onFailed?:(kind:'refused'|'unknown')=>void;
   /** Without a guarded display, input goes through the host's own Herdr commands to this agent's pane instead. */
   stock?:StockTarget;
+  /** Zellij has no guard and no destination to confirm: input goes to this pane through the host's own Zellij commands. */
+  zellij?:ZellijTarget;
 }) {
   useUi();
   const accessState=useAccessSnapshot();
-  const context=JSON.stringify([sessionId,source,labels,stock]);
+  const context=JSON.stringify([sessionId,source,labels,stock,zellij]);
   const latest=useRef(context);latest.current=context;
   const alive=useRef(false),flight=useRef(false);
   const owned=useRef<Binding|undefined>(undefined);
@@ -184,8 +191,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       setError(error instanceof InputFailure?{key:error.key,raw:error.raw}:{raw:errorMessage(error)});
     }
   }
-  /** Stock Herdr: one host call per message, addressed to the pane of the followed agent. */
+  /** Stock Herdr and Zellij: one host call per message, addressed to the pane of the followed agent. */
   async function stockInput(input:Record<string,unknown>) {
+    if(labels.backend==='zellij') {
+      if(!zellij)throw new InputFailure('chatHerdrUnavailable');
+      return invoke('zellij_agent_input',{sessionId,target:zellij,input}).catch(error=>{throw nativeFailure(error,'zellij',true);});
+    }
     if(!stock)throw new InputFailure('chatHerdrUnavailable');
     return invoke('herdr_agent_input',{sessionId,target:stock,input}).catch(error=>{throw nativeFailure(error,'herdr',true);});
   }
@@ -193,6 +204,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     if(flight.current || !sourceValid || !access.current())return;
     const original=context;flight.current=true;retire();setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain('');setStatus('');setBusy(true);
     try {
+      if(labels.backend==='zellij') {
+        // Nothing to prepare on the host: the pane is named by the agent's own report and the host checks it on every send.
+        if(!zellij)throw new InputFailure('chatHerdrUnavailable');
+        const next=Object.freeze({receipt:'stock',nextOperation:1,stock:true as const});owned.current=next;setBinding(next);
+        return;
+      }
       if(labels.backend==='herdr') {
         if(!available(await call({kind:'status'}))) {
           // No guard on this host: the exact pane of the followed agent takes the input, and the host re-checks it on every send.

@@ -2,6 +2,7 @@ import AttachmentPanel from './AttachmentPanel';
 import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
+import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -470,7 +471,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   async function checkReport(still: () => boolean) {
     if (!bound?.report) return;
     try {
-      if(bound.report.paneId) {
+      // A Zellij pane has no tmux destination to compare; the agent report below is its only evidence.
+      if(bound.report.paneId && !zellijPane(bound.report.paneId)) {
         const snapshot=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}}));
         if (!still()) return;
         if(snapshot.destination.paneId!==bound.report.paneId) throw new LocalUiError('chatChanged');

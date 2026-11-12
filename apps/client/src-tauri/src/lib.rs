@@ -49,6 +49,7 @@ mod ui_locale;
 mod vault;
 mod voice;
 mod zellij;
+mod zellij_input;
 
 /// Exact internal collection worker mode runs before any desktop UI is initialized.
 #[cfg(desktop)]
@@ -257,6 +258,7 @@ pub fn run() {
                 tmux_jump::chat::tmux_chat,
                 herdr_guard::herdr_chat,
                 herdr_stock_input::herdr_agent_input,
+                zellij_input::zellij_agent_input,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,
                 transcript_watch::agent_watch_start,
