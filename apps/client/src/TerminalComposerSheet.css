@@ -98,7 +98,7 @@
 @media (pointer: coarse) {
   /* Touch keyboards have no shortcut; the sheet sits directly above the keyboard. */
   .terminal-composer-sheet .terminal-composer-hint { display: none; }
-  .terminal-pane:has(.terminal-composer-sheet) .terminal-keys { display: none; }
+  .terminal-pane:has(.terminal-composer-sheet:not(.terminal-composer-floating)) .terminal-keys { display: none; }
 }
 @media (max-height: 480px) {
   /* Keyboard-sized viewports give the editor the label row; the label stays for assistive tech. */
@@ -108,3 +108,33 @@
 @media (prefers-reduced-motion: reduce) {
   .terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet { animation: none; }
 }
+
+/* Floating: a movable panel over the terminal. It stays out of the layout, so the terminal keeps its size, stays interactive around it, and the panel is placed by --terminal-composer-left and --terminal-composer-bottom. */
+.terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet.terminal-composer-floating {
+  inset: auto auto var(--terminal-composer-bottom, 8px) var(--terminal-composer-left, 8px);
+  width: min(calc(100% - 16px), 440px); height: auto; max-height: min(75%, 380px); z-index: 2;
+  gap: 4px; padding: 4px 8px 8px; border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-radius: 18px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / .5); animation: none;
+}
+.terminal-pane .terminal-composer-sheet.terminal-composer-floating > .terminal-composer-head {
+  position: static; width: auto; height: auto; min-height: 36px; padding: 0; overflow: visible; clip-path: none; align-items: center; gap: 4px;
+}
+.terminal-composer-floating > .terminal-composer-head > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.terminal-composer-floating > .terminal-composer-head > .terminal-composer-count { flex: 1 1 auto; min-width: 0; text-align: center; }
+.terminal-stage > .terminal-composer-floating > .terminal-composer-head > .icon-button,
+.terminal-stage > .terminal-composer-floating.terminal-composer-sheet > .terminal-composer-expand {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 36px; height: 36px; min-width: 36px; min-height: 36px; padding: 0; margin: 0;
+  border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--theme-muted, var(--muted));
+}
+.terminal-composer-floating > .terminal-composer-head > .terminal-composer-grip { cursor: grab; touch-action: none; flex: 1 1 56px; max-width: 120px; }
+.terminal-composer-floating > .terminal-composer-head > .terminal-composer-grip:active { cursor: grabbing; }
+.terminal-stage > .terminal-composer-floating > .terminal-draft-editor { flex: 0 1 auto; min-height: 0; }
+.terminal-stage > .terminal-composer-floating > .terminal-draft-editor > textarea { padding: 10px 12px; }
+.terminal-stage > .terminal-composer-floating > .terminal-draft-actions { flex-wrap: wrap; gap: 4px 8px; }
+.terminal-stage > .terminal-composer-floating .terminal-composer-secondary > .icon-button { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+.terminal-stage > .terminal-composer-floating .terminal-draft-actions .terminal-composer-send { min-width: 0; min-height: 40px; padding: 0 12px; }
+.terminal-composer-floating .terminal-composer-hint { display: none; }
+/* Collapsed to a handle: only the round expand button remains, at the same place. */
+.terminal-stage > .terminal-compose.terminal-draft-composer.terminal-composer-sheet.terminal-composer-floating[data-collapsed] { width: auto; max-height: none; padding: 0; border-radius: 50%; background: var(--accent); }
+.terminal-composer-floating[data-collapsed] > :not(.terminal-composer-expand) { display: none; }
+.terminal-stage > .terminal-composer-floating[data-collapsed] > .terminal-composer-expand { width: 48px; height: 48px; border-radius: 50%; color: var(--theme-on-accent, var(--bg)); }

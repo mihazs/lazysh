@@ -128,6 +128,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
       <label><input type="checkbox" checked={preferences.privateKeyboard === true} aria-describedby="private-keyboard-help" onChange={e => update({privateKeyboard: e.target.checked || undefined})} />{t("preferencesPrivateKeyboard")}</label>
       <p id="private-keyboard-help">{t("preferencesPrivateKeyboardHelp")}</p>
     </>}
+    <fieldset className="cursor-picker"><legend>{t("preferencesComposerView")}</legend><div>{(["docked", "floating"] as const).map(value => <label key={value}><input type="radio" name="composer-layout" value={value} checked={(preferences.composerLayout ?? "docked") === value} onChange={() => update({composerLayout: value === "floating" ? "floating" : undefined})} /><span>{t(value === "floating" ? "preferencesComposerFloating" : "preferencesComposerDocked")}</span></label>)}</div></fieldset>
+    <p>{t("preferencesComposerViewHelp")}</p>
     <h3 className="settings-group-title">{t("settingsGroupToolbarAndShortcuts")}</h3>
 
 </>},

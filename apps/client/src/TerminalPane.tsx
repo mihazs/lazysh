@@ -228,6 +228,9 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   if (was.current.active && !active) carryKeyboard();
   else if (was.current.composing && !composing) carryKeyboard(true);
   was.current = {active, composing};
+  const floatingComposer = preferences.composerLayout === "floating";
+  const floatingComposerRef = useRef(floatingComposer);
+  floatingComposerRef.current = floatingComposer;
   const [draft, setDraft] = useState("");
   // Uploads stay known for the life of the draft, so undo or an IME correction
   // that restores a deleted token restores its attachment; only tokens still in
@@ -824,8 +827,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
         if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
       }
       if (!activeRef.current || element.clientWidth <= 0) return;
-      // The composer covers the output; its keyboard and toolbar changes never reach the PTY.
-      if (composingRef.current) return;
+      // A docked composer covers the output: its keyboard and toolbar changes never reach the PTY. A floating one leaves it in view, so it keeps fitting.
+      if (composingRef.current && !floatingComposerRef.current) return;
       // A closed Mosh screen retains its final canonical rows. A later stock
       // fit could discard its bottom rows when the final cursor is above them.
       if (session.moshResize) {
@@ -874,7 +877,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }, [preferences, fonts, session, active]);
 
   // Covered output keeps its size and session but leaves focus and the accessibility tree.
-  useEffect(() => {container.current?.toggleAttribute('inert', composing);}, [composing]);
+  useEffect(() => {container.current?.toggleAttribute('inert', composing && !floatingComposer);}, [composing, floatingComposer]);
   // A carried keyboard moves to this terminal in the commit that shows it, before any frame lets it close.
   useLayoutEffect(() => {if (active && !composing && keyboardCarried()) focusTerminal();}, [active]);
   useEffect(() => {
@@ -890,6 +893,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
     if (target !== undefined) target?.focus();
     else {imeInput.current?.resume(); session.terminal.focus();}
+  }
+  /** The terminal's cursor row in viewport coordinates, or null while nothing is measured. */
+  function cursorBand() {
+    const screen = container.current?.querySelector(".xterm-screen"), rows = session.terminal.rows;
+    if (!screen || !rows) return null;
+    const box = screen.getBoundingClientRect(), row = box.height / rows;
+    const top = box.top + session.terminal.buffer.active.cursorY * row;
+    return Number.isFinite(top) ? {top, bottom: top + row} : null;
   }
   /** The input that has focus while typing: the composer's editor while it is open, else the terminal. */
   const keyboardTarget = () => composingRef.current ? composerInput.current : session.terminal.textarea;
@@ -1216,7 +1227,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const keyRows = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer);
   // The header carries the keyboard button only where the toolbar's own key is out of reach, so a phone's header keeps its room for the session name.
-  const keyboardKeyReachable = toolbarVisible && !composing && keyRows.some(row => row.includes("keyboard"));
+  const keyboardKeyReachable = toolbarVisible && (!composing || floatingComposer) && keyRows.some(row => row.includes("keyboard"));
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     {/* Herdr draws its own switch button inside the terminal, where scrolled history and a resized grid can take it away; this one sits in the session header, which neither scrolls nor shrinks with the soft keyboard. */}
     {(multiplexer === 'herdr' || herdrScreen) && <button type="button" className="icon-button herdr-switch-handle" title={t('herdrSwitchHandle')} aria-label={t('herdrSwitchHandle')} onClick={() => runGesture('openWorkspaces')}><Layers size={18} aria-hidden="true" /></button>}
@@ -1260,7 +1271,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {active && selectionTools && createPortal(<TerminalSelectionTools terminal={session.terminal} handles={selectionTools.handles}
       onCopy={text => void copy(text)} onDone={() => setSelectionTools(null)} />, document.body)}
     {composing && <TerminalComposer value={draft} onChange={setDraft} textareaRef={composerInput} attachments={liveAttachments}
-      disabled={!session.connected} sendEnter={preferences.composerSendEnter}
+      disabled={!session.connected} sendEnter={preferences.composerSendEnter} floating={floatingComposer} onCollapse={() => focusTerminal()} cursorBand={cursorBand} keyboard={softKeyboard.open === null ? undefined : {open: softKeyboard.open, toggle: toggleKeyboard}}
       onSubmit={enter => void submitDraft(enter)}
       onClose={() => setComposing(false)}
       onAttach={attachFromComposer ? () => {if (activeRef.current && mounted.current && access.current()) onOpenAttachments?.('composer');} : undefined} />}

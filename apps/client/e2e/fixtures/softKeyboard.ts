@@ -8,3 +8,17 @@ export async function setKeyboard(page: Page, shown: boolean, height = 320) {
   full.set(page, size);
   await page.setViewportSize({width: size.width, height: shown ? size.height - Math.min(height, Math.round(size.height * 0.4)) : size.height});
 }
+
+/**
+ * Plays WebKit's keyboard, which keeps the layout viewport and only shrinks the visual viewport. Returns the
+ * function that raises a keyboard of the given height (0 lowers it).
+ */
+export async function emulateVisualViewportKeyboard(page: Page) {
+  await page.evaluate(() => {
+    const target = new EventTarget(), keyboard = {height: window.innerHeight};
+    Object.defineProperties(target, {offsetTop: {value: 0}, offsetLeft: {value: 0}, scale: {value: 1}, width: {value: window.innerWidth}, height: {get: () => keyboard.height}});
+    Object.defineProperty(window, 'visualViewport', {configurable: true, value: target});
+    Reflect.set(window, 'showKeyboard', (height: number) => {keyboard.height = window.innerHeight - height; target.dispatchEvent(new Event('resize'));});
+  });
+  return (height: number) => page.evaluate(height => (Reflect.get(window, 'showKeyboard') as (height: number) => void)(height), height);
+}
