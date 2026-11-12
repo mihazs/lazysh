@@ -1,5 +1,23 @@
 # @lazysh/client
 
+## 1.36.0
+
+### Minor Changes
+
+- 5f13c20: Add an Arrows toolbar component that draws the four arrow keys as one inverted-T cluster in the toolbar's two rows, placeable as one chip in the toolbar editor and included in the default layout, and send the unmodified cursor keys as application cursor keys (ESC O A) while a program has that mode on. Changed default: the default toolbar's four separate arrow keys are now the Arrows component; saved layouts keep their separate arrow keys.
+- e792eaa: Add an Insert button next to Send in the terminal composer: Send puts the draft on the input line and presses Enter, Insert puts it there without Enter (same bracketed-paste delivery), Ctrl+Enter sends and Ctrl+Shift+Enter inserts, and a failed write keeps the draft and the composer open.
+- 0148fc9: The Agent view follows the agent of the current pane: under Herdr it opens the focused pane's conversation by itself and re-links when focus or the agent changes, lists the live agents when the pane has none, and offers Start Claude Code, Start Codex and the Herdr launcher when nothing runs. Changed default: it opens the current pane's chat instead of the last pick.
+
+### Patch Changes
+
+- 848a370: Add a developer-only prototype of the host browser: a hidden companion command that starts a throwaway Chrome-family browser on the host and a viewer page that only the Vite development server serves, with a real-browser CI test and a protocol-client unit test. It is off by default, absent from release builds and changes no default.
+- f37cb2d: Fix moving between Herdr terminals opening the Android soft keyboard and shrinking the terminal: on touch screens no navigation focuses a terminal input any more, and a keyboard that is already open passes to the terminal you move to without closing.
+- @lazysh/account-usage@1.36.0
+  - @lazysh/common@1.36.0
+  - @lazysh/display-idle@1.36.0
+  - @lazysh/et-transport@1.36.0
+  - @lazysh/mosh-transport@1.36.0
+
 ## 1.35.0
 
 ### Minor Changes

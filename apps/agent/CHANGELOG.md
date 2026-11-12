@@ -1,5 +1,14 @@
 # @lazysh/agent
 
+## 1.36.0
+
+### Patch Changes
+
+- 848a370: Add a developer-only prototype of the host browser: a hidden companion command that starts a throwaway Chrome-family browser on the host and a viewer page that only the Vite development server serves, with a real-browser CI test and a protocol-client unit test. It is off by default, absent from release builds and changes no default.
+- @lazysh/account-usage@1.36.0
+  - @lazysh/common@1.36.0
+  - @lazysh/notification-client@1.36.0
+
 ## 1.35.0
 
 ### Patch Changes
