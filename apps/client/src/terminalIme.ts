@@ -1,7 +1,8 @@
 import type {Terminal} from '@xterm/xterm';
 import {version} from '@xterm/xterm/package.json';
 
-export type UnappliedTerminalEdit = {text: string; truncated: boolean};
+import type {UnappliedTerminalEdit} from './terminalAdapter';
+export type {UnappliedTerminalEdit};
 
 /** A wheel notch in xterm's SGR (1006) or X10 mouse report: button 64-67, no motion. It moves no cursor. */
 const wheelReport = (data: string) => {

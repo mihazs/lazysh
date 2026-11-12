@@ -1,6 +1,6 @@
 # TerminalAdapter contract
 
-Status: **proposed reference** (nothing here is implemented). The interface below was derived from what `apps/client/src` actually calls on xterm today, then adjusted from the illustrative shape in the original brief. Tracking: [#1304](https://github.com/mihazs/lazysh/issues/1304) (contract), [#1305](https://github.com/mihazs/lazysh/issues/1305) (contract tests), [#1306](https://github.com/mihazs/lazysh/issues/1306) (xterm adapter), [#1307](https://github.com/mihazs/lazysh/issues/1307) (xterm seams), [#1308](https://github.com/mihazs/lazysh/issues/1308) (decoupling), [#1309](https://github.com/mihazs/lazysh/issues/1309) (registry), [#1321](https://github.com/mihazs/lazysh/issues/1321) (native adapter). Related: [runtime](terminal-runtime.md) · [migration plan](terminal-migration-plan.md).
+Status: **contract and xterm backend implemented** (see [Implementation status](#implementation-status)); the native backend is not. The interface below was derived from what `apps/client/src` actually calls on xterm today, then adjusted from the illustrative shape in the original brief. Tracking: [#1304](https://github.com/mihazs/lazysh/issues/1304) (contract), [#1305](https://github.com/mihazs/lazysh/issues/1305) (contract tests), [#1306](https://github.com/mihazs/lazysh/issues/1306) (xterm adapter), [#1307](https://github.com/mihazs/lazysh/issues/1307) (xterm seams), [#1308](https://github.com/mihazs/lazysh/issues/1308) (decoupling), [#1309](https://github.com/mihazs/lazysh/issues/1309) (registry), [#1321](https://github.com/mihazs/lazysh/issues/1321) (native adapter). Related: [runtime](terminal-runtime.md) · [migration plan](terminal-migration-plan.md).
 
 ## Coupling inventory (current code)
 
@@ -33,110 +33,16 @@ Modules that import `@xterm/*`: `terminal.ts`, `terminalFit.ts`, `terminalBold.t
 6. **Mount target is a union**, and a native target still has a DOM anchor so layout stays in React.
 7. **Input is a string today** (`api.write(sessionId, data: string)`); the adapter's `sendInput` accepts `string | Uint8Array` so a binary-safe path can be introduced behind the same interface.
 
-## Proposed TypeScript
+## The interface
 
-```ts
-export type TerminalBackendId = 'native' | 'xterm';
+The interface is implemented; `apps/client/src/terminalAdapter.ts` is its source of truth and carries a comment for every member. In short, a `TerminalAdapter` has:
 
-export interface TerminalSize { columns: number; rows: number; pixelWidth?: number; pixelHeight?: number }
-
-export interface TerminalCapabilities {
-  readonly nativeRendering: boolean;
-  readonly selection: boolean;
-  readonly scrollback: boolean;
-  readonly mouseReporting: boolean;
-  readonly ime: boolean;
-  readonly accessibility: boolean;        // screen-reader access to content
-  readonly screenInspection: boolean;     // readRows
-  readonly canonicalMoshResize: boolean;  // transport-authoritative geometry
-  readonly customBoldColor: boolean;
-}
-
-export type TerminalMountTarget =
-  | { kind: 'dom'; element: HTMLElement }
-  | { kind: 'native'; anchorId: string }; // anchor element reports its rect; surface is native
-
-export interface TerminalPreferences {   // replaces ITerminalOptions/ITheme in preferences.ts
-  fontFamily: string; fontSize: number; lineHeight: number;
-  cursorStyle: 'block' | 'underline' | 'bar'; cursorBlink: boolean;
-  scrollbackLines: number; optionAsMeta: boolean; screenReader: boolean;
-  colors: { foreground: string; background: string; cursor?: string; selection?: string;
-            ansi: readonly string[]; extendedAnsi?: readonly string[]; bold?: string };
-}
-
-export type TerminalScrollAction =
-  | { kind: 'lines'; delta: number } | { kind: 'pages'; delta: number }
-  | { kind: 'toTop' } | { kind: 'toBottom' } | { kind: 'toRow'; row: number };
-
-export interface TerminalCell { column: number; row: number }       // row is absolute in the buffer
-export interface TerminalRange { start: TerminalCell; end: TerminalCell } // end inclusive
-export interface TerminalSelection { range: TerminalRange; text: string }
-export interface TerminalModes {
-  bracketedPaste: boolean; mouseTracking: 'none' | 'x10' | 'vt200' | 'drag' | 'any';
-  alternateScreen: boolean; applicationCursorKeys: boolean;
-}
-export interface TerminalViewport { top: number; rows: number; bottom: number; following: boolean }
-
-export type TerminalInputOrigin = 'keyboard' | 'ime' | 'paste' | 'pointer' | 'terminal-reply';
-
-export type TerminalEvent =
-  | { type: 'input'; origin: TerminalInputOrigin; data: string | Uint8Array }  // js-fed backends
-  | { type: 'resizeIntent'; size: TerminalSize }                               // tell the transport
-  | { type: 'geometry'; size: TerminalSize; authority: 'local' | 'transport' }
-  | { type: 'viewport'; viewport: TerminalViewport }
-  | { type: 'selection'; selection: TerminalSelection | undefined }
-  | { type: 'modes'; modes: TerminalModes }                                    // includes alternate screen change
-  | { type: 'clipboardWrite'; base64: string }                                 // OSC 52, bounded, consent in React
-  | { type: 'link'; uri: string }
-  | { type: 'title'; title: string } | { type: 'bell' }
-  | { type: 'unappliedEdit'; edit: { text: string; truncated: boolean } | null } // IME
-  | { type: 'failure'; reason: 'invalid-frame' | 'partial-frame' | 'renderer-lost' | 'core-error' }
-  | { type: 'surface'; state: 'lost' | 'restored' };
-
-export interface Disposable { dispose(): void }
-
-export interface TerminalAdapter {
-  readonly backend: TerminalBackendId;
-  readonly capabilities: TerminalCapabilities;
-  readonly dataPath: 'renderer' | 'runtime';        // who receives transport bytes
-
-  // lifecycle: the session outlives any view
-  attach(target: TerminalMountTarget): Promise<void>;
-  detach(): Promise<void>;
-  setActive(active: boolean): void;                 // inactive: parse, never draw
-  dispose(): Promise<void>;                         // async, idempotent
-
-  // data plane (dataPath === 'renderer' only)
-  write?(bytes: Uint8Array): Promise<void>;         // resolves after apply: the ack point
-  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin): void; // encodes paste/keys when needed
-
-  // geometry and view
-  requestSize(size: TerminalSize): void;            // UI intent; may be ignored if transport-authoritative
-  metrics(): { columns: number; rows: number; cellWidth: number; cellHeight: number };
-  applyPreferences(preferences: TerminalPreferences): void;
-  scroll(action: TerminalScrollAction): void;
-  viewport(): TerminalViewport;
-  modes(): TerminalModes;
-
-  // selection and inspection
-  cellAt(clientX: number, clientY: number): TerminalCell | undefined;
-  getSelection(): TerminalSelection | undefined;
-  select(range: TerminalRange): void;
-  selectWordAt(cell: TerminalCell): TerminalRange;
-  selectAll(): void;
-  clearSelection(): void;
-  readRows?(first: number, count: number): string[];          // capability screenInspection
-  search(query: string, direction: 1 | -1): { row: number } | undefined;
-
-  // input and focus
-  focus(): void; blur(): void;
-  ime?: { idle(): boolean; composing(): boolean; flush(): void; settle(): void; reset(): void;
-          clear(): void; resume(): void; dismiss(): void };    // capability ime
-  paste(text: string): void;                        // bracketed-paste aware
-
-  subscribe(listener: (event: TerminalEvent) => void): Disposable;
-}
-```
+- identity: `backend` (`'native' | 'xterm'`), `capabilities` (truthful flags, one per optional member group) and `dataPath` (`'renderer'` when the WebView feeds bytes through `write`, `'runtime'` when a native runtime owns the transport);
+- lifecycle: `attach`/`detach` (state survives a view), `setActive`, and an async idempotent `dispose`;
+- data plane: `write` (resolves when applied, the credit-return point), `sendInput` with an origin lane, `paste`, `observeInput` (IME) and `enableCanonicalResize` (Mosh);
+- geometry and view: `requestSize` (intent), `metrics`, `applyPreferences`, `scroll`, `viewport`, `modes`;
+- selection and inspection in absolute buffer coordinates: `cellAt`, `getSelection`, `select`, `selectWordAt`, `selectAll`, `clearSelection`, `readRows` (text only), `search`;
+- `focus`, `blur` and `subscribe` over a `TerminalEvent` union (`resizeIntent`, `geometry` with `authority`, `viewport`, `selection`, `modes`, `title`, `bell`, `failure`).
 
 Constraints encoded in the shape:
 
@@ -187,6 +93,18 @@ One parametrized suite, run against every adapter and a fake:
 - active-session switching races; capability honesty.
 
 Existing xterm-specific tests stay and are never weakened.
+
+## Implementation status
+
+The contract lives in `apps/client/src/terminalAdapter.ts`, the xterm backend in `xtermTerminalAdapter.ts`, selection in `terminalBackendRegistry.ts` (pure) and `terminalBackends.ts` (the registrations), and the behavioural suite in `terminalAdapter.contract.ts`, run by `xtermTerminalAdapter.test.ts`. The code refined the proposal above:
+
+- `ime` became `observeInput(listener, acceptsInput, onUnappliedEdit)`, returning the observer `TerminalPane` already drives. It is present exactly when the `ime` capability is claimed.
+- Canonical Mosh resize is `enableCanonicalResize()`, present exactly when `canonicalMoshResize` is claimed. It returns the controller `TerminalPane` already uses (`{cols, rows}` sizes) so the pane needed no change; the adapter also emits `resizeIntent`, `geometry` (`authority: 'transport'`) and `failure` events.
+- `TerminalPreferences` carries `scrollbackLines`, `brightBold`, `boldColor` and a theme object instead of xterm option names; `preferences.ts` produces it (`terminalPreferences`) and `xtermOptions.ts` maps it back.
+- `search(query, direction, from)` returns row, column and length; `readRows` takes an optional column span (Herdr navigation reads the right edge).
+- `setActive(false)` cannot stop the xterm DOM renderer from drawing dirty rows; it only guarantees a repaint on reactivation. A native backend is expected to suspend drawing.
+- `XtermTerminalAdapter.terminal` is a transitional escape hatch for `TerminalPane`, which still draws xterm directly ([#1308](https://github.com/mihazs/lazysh/issues/1308)). The registry offers no other backend yet, and the native backend is not auto-eligible.
+- A developer override is the `lazysh.terminal.backend` key in `localStorage` (`xterm` or `native`); it never enables a backend whose probe failed.
 
 ## Unresolved questions
 
