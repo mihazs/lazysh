@@ -46,7 +46,7 @@ The interface is implemented; `apps/client/src/terminalAdapter.ts` is its source
 
 Constraints encoded in the shape:
 
-- Capabilities are truthful: a backend that cannot inspect rows reports `screenInspection: false` and omits `readRows`; the contract suite fails if a capability is claimed without a passing test group.
+- Capabilities are truthful: a backend that cannot inspect rows reports `screenInspection: false` and omits `readRows`; the contract suite fails when `screenInspection`, `ime` or `canonicalMoshResize` is claimed without its members (or the members exist without the claim). A guard that fails when any claimed capability has no test group, and registry enforcement that a backend passed the suite before it can be registered, are not implemented yet ([#1305](https://github.com/mihazs/lazysh/issues/1305) stays open for them).
 - React never receives cells. `readRows` returns trimmed text for a bounded range.
 - `subscribe` listeners are ordered per adapter and must not outlive `dispose`.
 - `setActive(false)` stops drawing; it does not stop parsing or transport.
