@@ -1,5 +1,9 @@
 import './WorkspaceHierarchy.css';
-import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel} from './WorkspaceToolsCarousel';
+import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel, type WorkspaceToolPage} from './WorkspaceToolsCarousel';
+import {cycleFocus, focusableWithin} from './focus';
+import {SideMenu, SideMenuChoices, SideMenuSection} from './SideMenu';
+import {useSideMenuGestures} from './useSideMenuGestures';
+import {useSideMenuMode} from './sideMenuMode';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -326,32 +330,6 @@ function terminalInputFor(session:LiveSession, tools?:MultiplexerTool[]) {
   const kind=session.attached?.kind;
   return native && (kind==='tmux' || kind==='herdr') && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
 }
-function focusableWithin(container:HTMLElement|null) {
-  return Array.from(
-        container?.querySelectorAll<HTMLElement>(
-          'button, input, textarea, select, summary, a[href], [tabindex]',
-        ) ?? [],
-      ).filter(control => {
-        if (control.tabIndex < 0 || control.matches(':disabled')
-          || control.closest('[hidden], [inert]')
-          || control.getClientRects().length === 0
-          || getComputedStyle(control).visibility !== 'visible') return false;
-        // Collapsed details may retain cached layout rects after being opened.
-        for (let parent=control.parentElement; parent && parent!==container; parent=parent.parentElement) {
-          if (parent.matches('details:not([open])')
-            && !parent.querySelector(':scope > summary')?.contains(control)) return false;
-        }
-        return true;
-      })
-        .sort((a,b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
-}
-function cycleFocus(event:KeyboardEvent,items:HTMLElement[]) {
-  if(event.key!=='Tab')return;
-  const first=items[0],last=items.at(-1);
-  if(event.shiftKey && document.activeElement===first){event.preventDefault();last?.focus();}
-  else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first?.focus();}
-}
-
 function Dialog({
   title,
   children,
@@ -1199,6 +1177,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useClientAppearance();
   const {sessionLayout,usageItem='follow',usageProvider=''} = usePreferences();
   usePrivateKeyboard();
+  const shell=useRef<HTMLDivElement>(null),sideMenuRoot=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);
@@ -1468,6 +1447,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     }).catch(()=>{});
     return()=>{current=false;};
   },[active?.id,active?.connected,active?.local,invoke,lease]);
+  // Phones in a session trade the top bar for the side menu; `mobileTools` is its open state, as it is the sheet's.
+  // Switching the gesture off in Preferences, or screen-reader mode, keeps the top bar: no gesture-only access.
+  const leftMenuGesture=useEdgeGestureMode('leftMenu')==='gesture';
+  const sideMenuMode=useSideMenuMode(!!active,!wideSidebar) && leftMenuGesture;
   const activeSessionView = active ? sessionViewOf(active) : 'terminal';
   useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
   // A closed session's id never comes back.
@@ -1498,6 +1481,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useEffect(()=>{if(swipeEnabled)void import("./AgentView");},[swipeEnabled]);
   useEffect(()=>{if(active && swipeFrom)setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,swipeFrom]);
   const remoteActive=!!active?.connected && !active.local;
+  // The drawer is the Workspace tools state on phones. Another dialog or the host sidebar takes its place instead of stacking on it.
+  const sideMenuOpen=sideMenuMode && mobileTools;
+  const sideMenuBlocked=(navigationCovered && !mobileTools) || (!wideSidebar && sidebar);
+  useSideMenuGestures({shell,menu:sideMenuRoot,enabled:sideMenuMode && !sideMenuBlocked,open:sideMenuOpen,onOpen:()=>setMobileTools(true),onClose:()=>setMobileTools(false)});
+  useEffect(()=>{if(mobileTools && sideMenuMode && sideMenuBlocked)setMobileTools(false);},[mobileTools,sideMenuMode,sideMenuBlocked]);
+  const wasSideMenu=useRef(sideMenuMode);
+  // Leaving phone mode (rotation, "Show top bar") must not open the tools sheet in the drawer's place.
+  useEffect(()=>{if(wasSideMenu.current && !sideMenuMode)setMobileTools(false);wasSideMenu.current=sideMenuMode;},[sideMenuMode]);
   const agentSection=agentSections[activeId??'']??'live';
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
@@ -2119,6 +2110,20 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}
   }
 
+  const sessionViewSwitch = active && view==='terminal' && active.connected && !active.local && <div className="session-view-switch" role="group" aria-label={t('sessionViewLabel')}>
+    {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=>{
+      const [label,Icon]=mode==='terminal'?[t('sessionViewTerminal'),TerminalSquare]:mode==='agent'?[t('sessionViewAgent'),Bot]:[t('sessionViewBoth'),Columns2];
+      // Narrow headers show only the icon, so the session title keeps its room.
+      return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} aria-keyshortcuts={mode==='agent' ? shiftedChordHint('Y').keys : undefined} title={mode==='agent' ? `${label} (${shiftedChordHint('Y').label})` : label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
+    })}
+  </div>;
+  const connectionLabel = active?.connected
+    ? active.local ? t("appLocalTerminal") : active.mosh
+      ? t("appMoshConnected")
+      : active.et
+        ? t("appETConnected")
+        : t("appSSHConnected")
+    : t("appNoActiveConnection");
   const workspaceRestoreControls = <>
     <div className="workspace-restore-row">
     <button type="button"
@@ -2138,8 +2143,56 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     </div>
     {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
   </>;
+  /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */
+  const workspaceToolsPages: WorkspaceToolPage[] = [
+      ...(active?[{id:'session',title:t('appSessionViews'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('appSessionViews')}>
+        <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
+        {primaryTools.map(mobileToolButton)}
+      </nav>},
+      ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
+      {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
+        <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+        {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
+        {active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+      </div>}]:[]),
+      {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
+        <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
+        <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+        <button
+          disabled={!native}
+          onClick={() => {
+            setMobileTools(false);
+            setInbox(true);
+          }}
+        >{t("appOpenNotificationInbox")}</button>
+        <button
+          disabled={!native}
+          onClick={() => {
+            setMobileTools(false);
+            setSync(true);
+          }}
+        >{t("appOpenEncryptedSync")}</button>
+        <button
+          disabled={!native}
+          onClick={() => {
+            setMobileTools(false);
+            setSharing(true);
+          }}
+        >{t("appOpenShareableUploads")}</button>
+        <button
+          onClick={() => {
+            setMobileTools(false);
+            setPalette(true);
+          }}
+        >{t("appSearchSavedHosts")}</button>
+      </div>},
+    ];
+  const endConnection = active && <div className="workspace-tools-danger">
+              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+            </div>;
   return (
-    <div className="app-shell">
+    <div className="app-shell" ref={shell}>
       <aside
         ref={navigationRef}
         data-navigation={navigationEntry.mode}
@@ -2290,9 +2343,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
+      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}${sideMenuMode ? " workspace-side-menu" : ""}`} data-single-session={sessions.length===1} inert={(!wideSidebar && sidebar) || sideMenuOpen}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
-        <header className="workspace-header">
+        {!sideMenuMode && <header className="workspace-header">
           <button
             ref={navigationTrigger}
             className="icon-button mobile-menu"
@@ -2311,13 +2364,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             )}
           </div>
           <div className="header-right">
-            {active && view==='terminal' && active.connected && !active.local && <div className="session-view-switch" role="group" aria-label={t('sessionViewLabel')}>
-              {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=>{
-                const [label,Icon]=mode==='terminal'?[t('sessionViewTerminal'),TerminalSquare]:mode==='agent'?[t('sessionViewAgent'),Bot]:[t('sessionViewBoth'),Columns2];
-                // Narrow headers show only the icon, so the session title keeps its room.
-                return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} aria-keyshortcuts={mode==='agent' ? shiftedChordHint('Y').keys : undefined} title={mode==='agent' ? `${label} (${shiftedChordHint('Y').label})` : label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
-              })}
-            </div>}
+            {sessionViewSwitch}
             <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
               className="icon-button mobile-tools workspace-tools-trigger"
@@ -2361,13 +2408,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               <span
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
               />
-              {active?.connected
-                ? active.local ? t("appLocalTerminal") : active.mosh
-                  ? t("appMoshConnected")
-                  : active.et
-                    ? t("appETConnected")
-                    : t("appSSHConnected")
-                : t("appNoActiveConnection")}
+              {connectionLabel}
             </span>
             <button
               className="icon-button"
@@ -2377,7 +2418,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               <Command size={16} />
             </button>
           </div>
-        </header>
+        </header>}
         {!native && (
           <div className="browser-banner" role="status">{t("appBrowserPreviewSSHConnectionsRequireTheNativeLazyshApp")}{" "}
             <code>bun run dev</code>{" "}{t("appToConnect")}</div>
@@ -2575,6 +2616,20 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         )}
       </main>
+      {sideMenuMode && active && <SideMenu open={sideMenuOpen} rootRef={sideMenuRoot} onClose={()=>setMobileTools(false)}>
+        <SideMenuSection id="current" title={t('sideMenuSession')}>
+          <button type="button" className="session-switcher-trigger" title={active.name} aria-label={t("appSwitchTerminalSession")} onClick={()=>{setMobileTools(false);setSwitcher(true);}}>{active.name}</button>
+          <span className="connection-label"><span className="status-dot"/>{connectionLabel}</span>
+          {/* Choosing a view or a terminal control is the end of the visit: the drawer closes over the terminal it serves. */}
+          <SideMenuChoices onChoose={()=>setMobileTools(false)}>
+            {sessionViewSwitch}
+            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
+          </SideMenuChoices>
+          <button type="button" className="side-menu-hosts" onClick={()=>{setMobileTools(false);showNavigation('connections');}}><Server size={18} aria-hidden="true"/><span>{t('appOpenHosts')}</span></button>
+        </SideMenuSection>
+        {workspaceToolsPages.map(page=><SideMenuSection key={page.id} id={page.id} title={page.title}>{page.content}</SideMenuSection>)}
+        {endConnection}
+      </SideMenu>}
       {editor && (
         <HostEditor
           hosts={hosts}
@@ -2673,56 +2728,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </Suspense>
         </Dialog>
       )}
-      {mobileTools && (
+      {mobileTools && !sideMenuMode && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="workspace-tools-content">
-            <WorkspaceToolsCarousel initialPage={rememberedToolsPage()} onPageChange={rememberToolsPage} pages={[
-              ...(active?[{id:'session',title:t('appSessionViews'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('appSessionViews')}>
-                <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
-                {primaryTools.map(mobileToolButton)}
-              </nav>},
-              ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
-              {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
-                <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
-                {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-                {active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
-                {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
-              </div>}]:[]),
-              {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
-                <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
-                <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
-                <button
-                  disabled={!native}
-                  onClick={() => {
-                    setMobileTools(false);
-                    setInbox(true);
-                  }}
-                >{t("appOpenNotificationInbox")}</button>
-                <button
-                  disabled={!native}
-                  onClick={() => {
-                    setMobileTools(false);
-                    setSync(true);
-                  }}
-                >{t("appOpenEncryptedSync")}</button>
-                <button
-                  disabled={!native}
-                  onClick={() => {
-                    setMobileTools(false);
-                    setSharing(true);
-                  }}
-                >{t("appOpenShareableUploads")}</button>
-                <button
-                  onClick={() => {
-                    setMobileTools(false);
-                    setPalette(true);
-                  }}
-                >{t("appSearchSavedHosts")}</button>
-              </div>},
-            ]}/>
-            {active && <div className="workspace-tools-danger">
-              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
-            </div>}
+            <WorkspaceToolsCarousel initialPage={rememberedToolsPage()} onPageChange={rememberToolsPage} pages={workspaceToolsPages}/>
+            {endConnection}
           </div>
         </Dialog>
       )}

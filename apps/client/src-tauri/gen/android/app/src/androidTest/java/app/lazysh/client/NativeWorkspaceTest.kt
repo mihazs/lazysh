@@ -271,8 +271,19 @@ class NativeWorkspaceTest {
     private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
         requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
 
-    private fun awaitUnlockedWorkspace(scenario: ActivityScenario<MainActivity>, stage: String) =
+    /**
+     * Phones hide the top bar in a connected session by default (the side menu replaces it). These suites drive the top bar's
+     * controls, so the device keeps "Show top bar" on; the side menu itself is covered by the Playwright phone project.
+     */
+    private fun keepTopBar(scenario: ActivityScenario<MainActivity>) {
+        evaluate(scenario, "(()=>{localStorage.setItem('lazysh.show-top-bar.v1','true');window.dispatchEvent(new Event('storage'));return true})()")
+        awaitDocument(scenario, "top bar kept", "Boolean(document.querySelector('.workspace-header'))")
+    }
+
+    private fun awaitUnlockedWorkspace(scenario: ActivityScenario<MainActivity>, stage: String) {
         awaitDocument(scenario, stage, """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
+        keepTopBar(scenario)
+    }
 
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
         deadline: Long = System.nanoTime() + TimeUnit.SECONDS.toNanos(120),
@@ -1591,6 +1602,7 @@ class NativeWorkspaceTest {
     private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         val menu = "[role=dialog][aria-label='Workspace tools']"
+        keepTopBar(scenario)
         if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
             awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
@@ -1651,6 +1663,7 @@ class NativeWorkspaceTest {
 
     private fun selectOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
         val switcher = "[role=dialog][aria-label='Switch terminal session']"
+        keepTopBar(scenario)
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
         awaitDocument(scenario, "exact owned session choice", """
             (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
@@ -2747,6 +2760,7 @@ class NativeWorkspaceTest {
             // From the parent SSH display, the switch activates the first existing Herdr display.
             val display = if (fromParent) 1 else 2
             if (fromParent) {choose(0); closeSoftKeyboard()}
+            keepTopBar(scenario)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
@@ -2856,6 +2870,7 @@ class NativeWorkspaceTest {
         }
         fun jump(target: JSONObject, current: JSONObject) {
             sessionView(scenario, "Terminal")
+            keepTopBar(scenario)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Workspaces']")).perform(webClick())
             // The current marker must come from the live tmux binding, including a switch made by the numbered control.
@@ -3656,6 +3671,7 @@ class NativeWorkspaceTest {
     private fun revealOwnedHosts(scenario: ActivityScenario<MainActivity>) {
         val add = "button[aria-label='Add host']"
         if (evaluate(scenario, workspaceElementVisible(add, true)) == "true") return
+        keepTopBar(scenario)
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
         awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true))
     }
