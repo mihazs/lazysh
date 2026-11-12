@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.45.0
+
+### Minor Changes
+
+- 268c2da: The status bar's usage item follows the agent in the current pane (Claude Code shows Claude, Codex shows Codex, and so on), falls back to the chosen default account when no agent is detected, and can be pinned to one account or hidden in Preferences. Changed default: it follows the agent instead of showing one fixed account.
+- e88a7d1: Show a compact background-work panel above the Agent view composer for Claude Code: counts of running shells, monitors, sub-agents and workflows, a list for each counter, and a tree of sub-agents and workflows with elapsed time and tokens.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.45.0
+  - @lazysh/common@1.45.0
+  - @lazysh/display-idle@1.45.0
+  - @lazysh/et-transport@1.45.0
+  - @lazysh/mosh-transport@1.45.0
+
 ## 1.44.0
 
 ### Minor Changes
