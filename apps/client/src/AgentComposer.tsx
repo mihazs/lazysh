@@ -5,10 +5,10 @@ import AttachmentPanel from './AttachmentPanel';
 import AgentComposerChips from './AgentComposerChips';
 import {useAgentAttachments} from './useAgentAttachments';
 import {uiErrorText} from './i18n/localError';
-import ChatTerminalInput,{validTerminalDraft,validTerminalSource,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalSource} from './ChatTerminalInput';
+import ChatTerminalInput,{draftLimit,validTerminalDraft,validTerminalSource,type TerminalControl,type TerminalDestination,type TerminalInputLabels,type TerminalSource} from './ChatTerminalInput';
 import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
-import {t,useUi} from './i18n/core';
+import {formatNumber,t,useUi} from './i18n/core';
 import AgentComposerPalette,{type Suggestion} from './AgentComposerPalette';
 import {promptsOf,recall,rememberPrompt,type Recall} from './agentComposerHistory';
 import {matchSlash,pickerCommand,promptMode,slashText,type SlashCommand} from './agentSlashCommands';
@@ -81,8 +81,10 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const proofCheck=useMemo(()=>automatic?proves(proof!):undefined,[automatic,proofKey]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
-  const sendable=ready && validTerminalDraft(text) && !control!.busy && !compositionActive && !attach.busy;
-  const tooLong=ready && !!text && !validTerminalDraft(text);
+  // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
+  const bytes=draftLimit(labels?.backend??'tmux',true);
+  const sendable=ready && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
+  const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
@@ -161,7 +163,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {ready && <button type="button" className="icon-button" data-armed={stopArmed || undefined} disabled={control!.busy || compositionActive || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}><SendHorizontal size={18} aria-hidden="true"/></button>}
     </form>
-    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} access={access} invoke={invoke}
+    {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke}
       draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
       proves={proofCheck} onControl={proofCheck?setControl:undefined}
       onSent={(text,sentRevision)=>{
@@ -175,7 +177,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={()=>{if(draft!==receipt!.text){edit(receipt!.text);return;}setReceipt({...receipt!,phase:'pending',at:Date.now()});control.retry();}}>{t('agentReceiptRetry')}</button></>}</p>}
     {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
     {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
-    {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong')}</p>}
+    {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong',{limit:formatNumber(bytes)})}</p>}
     {staged && <p role="status" className="agent-composer-note">{t('chatDraftStaged')}</p>}
     {!labels && stage && <p className="agent-composer-note">{t('agentViewStageOnly')}</p>}
   </section>;

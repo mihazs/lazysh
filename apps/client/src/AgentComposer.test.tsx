@@ -351,11 +351,54 @@ it('refuses a file over the limit with its reason and uploads nothing',async()=>
   expect(sent).toEqual([]);expect(box().value).toBe('');
 });
 
-it('refuses to send a prompt whose paths push it past the guarded input size and says so',async()=>{
+it('sends a prompt whose paths push it past 4 KiB as one long send with the paths in place',async()=>{
   await bound(own());uploads();
-  fireEvent.paste(box(),{clipboardData:{files:[png(`${'n'.repeat(200)}.png`)]}});
+  const name=`${'n'.repeat(200)}.png`;
+  fireEvent.paste(box(),{clipboardData:{files:[png(name)]}});
   await waitFor(()=>expect(chips()).toHaveLength(1));
   type(`${'x'.repeat(3950)} [Image #1] `);
-  expect(await screen.findByText(t('agentComposerTooLong'))).toBeTruthy();
-  expect(sendButton().disabled).toBe(true);expect(inputs()).toHaveLength(0);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send_long',text:`${'x'.repeat(3950)} '${uploaded(name)}' `});
+});
+
+it('sends a prompt over 4 KiB to tmux as one long send, intact, and still sends a 4 KiB one as an ordinary send',async()=>{
+  await bound();
+  const exactly=`${'a'.repeat(4095)}\n`,long=`${'世界 line\n'.repeat(2000)}end`;
+  type(exactly);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send',text:exactly});
+  await waitFor(()=>expect(box().value).toBe(''));
+  type(long);await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(2));
+  expect(inputs()[1]).toMatchObject({operation:2,input:{kind:'send_long',text:long}});
+  await waitFor(()=>expect(box().value).toBe(''));
+});
+
+it('refuses a prompt past the bound with the limit, and sends nothing',async()=>{
+  await bound();
+  type('x'.repeat(65536)+'');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  type('é'.repeat(32769));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(inputs()).toHaveLength(0);
+});
+
+it('keeps a Herdr pane at the 4 KiB it can take and says so',async()=>{
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['status','prepare','confirm']));
+  type('y'.repeat(5000));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'4,096'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  type('y'.repeat(4096));await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {kind:string}).kind).toBe('send');
 });

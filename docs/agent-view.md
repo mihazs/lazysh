@@ -54,7 +54,7 @@ The Agent view is built on these; it is not a parallel implementation.
 | --- | --- | --- |
 | Recorded conversation reader | `ChatPanel.tsx`, `ChatInteraction.tsx`, `ChatMarkdown`, `transcriptSources.ts` | A **chat** tool view. The user picks agent, transcript and Records/Conversation; follow polls every 2 s and replaces the page. |
 | Transcript adapters | `apps/agent/src/transcript.rs`, `transcript/*.rs` | `TranscriptPage` schema 1: typed blocks (text, thinking, tool_use, tool_result, image), cards (plan, proposed plan, question), recorded activity. Conversation views for Claude, Codex, OpenCode and Grok; other agents are records-only. |
-| Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
+| Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes), `send_long` (tmux only, 4097 to 65,536 bytes as one bounded paste plus CR) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
 | Stage | `lazysh-prompt-draft` event, `TerminalComposer` | Puts a draft, with `[Image #n]`/`[File #n]` tokens, into the terminal composer sheet. |
 | Hooks and board | `apps/agent/src/hooks.rs`, `AgentPanel.tsx`, `AgentStatus.tsx`, `HerdrAgentsPanel` | Hook-reported state (needs attention, working, done) and Herdr live status (idle, working, blocked, done). |
 | Approvals | `ApprovalPanel.tsx`, `apps/agent/src/approvals.rs`, [Remote decisions](approvals.md) | Hash-bound allow/deny for Claude `PermissionRequest`. |
@@ -201,9 +201,13 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   the file, and numbering restarts with each draft. On send each token becomes the
   shell-quoted host path the upload returned, so the agent reads the file by its path (typed
   text, not an attachment drop: the agent decides whether to open it). The expanded text is
-  what must fit the 4096 byte guarded input; Send is disabled while an upload runs. Pasting
+  what must fit the send limit below; Send is disabled while an upload runs. Pasting
   text is unchanged. On desktop builds the webview must deliver HTML drops: where the shell
   swallows file drops, use the paperclip.
+- A message may be longer than a screen. Up to 4,096 bytes it is sent as before; on tmux a
+  longer one (up to 65,536 bytes) goes as one guarded paste and one Enter, so it is one
+  message and never several turns. Past the bound, or on a guarded Herdr pane (4,096
+  bytes), Send is disabled and the note names the limit; **Stage in terminal** remains.
 
 ### Desktop
 

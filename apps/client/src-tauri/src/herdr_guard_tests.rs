@@ -470,3 +470,18 @@ fn dialog_answers_never_reach_the_herdr_guard() {
     let stop: Action = serde_json::from_value(input(json!({"kind":"request_stop"}))).unwrap();
     assert!(stop.validate().is_ok());
 }
+
+#[test]
+fn a_long_prompt_is_a_tmux_paste_and_a_herdr_pane_refuses_it() {
+    let long = Input::SendLong {
+        text: "x".repeat(5000),
+    };
+    assert!(long.validate().is_ok());
+    assert!(guarded_input(&long).is_err());
+    assert!(guarded_input(&Input::Send { text: "ok".into() }).is_ok());
+    let action: Action = serde_json::from_value(json!({"kind":"input","receipt":"22345678-1234-4234-8234-123456789abc",
+        "source":{"agent":"claude","path":"/records/a.jsonl","view":"conversation","inlineImages":false},"operation":1,
+        "input":{"kind":"send_long","text":"y".repeat(5000)}}))
+    .unwrap();
+    assert!(action.validate().is_err());
+}

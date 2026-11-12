@@ -59,7 +59,7 @@ async function open(page:Page) {
         if(action.kind==='snapshot')return {...snapshot,destination:{...snapshot.destination,paneId:args.sessionId==='display-work'?'%3':'%4'}};
         if(action.kind==='bind')return bound;
         if(action.kind==='release')return {kind:'released'};
-        if(action.input?.kind==='send')submit(action.input.text!);
+        if(action.input?.kind==='send' || action.input?.kind==='send_long')submit(action.input.text!);
         return {kind:'delivered',nextOperation:action.operation!+1};
       }
       if(command==='write_stdin'){
@@ -768,4 +768,19 @@ test('a pasted or picked file becomes a token chip that survives edits and reach
   const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
   expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(["compare '/tmp/lazysh-fixture/before.png'  "]);
   expect((await fixture(page)).uploads).toEqual(['before.png','notes.txt']);
+});
+
+test('a prompt over 4 KiB is sent whole as one long send, and one past the bound is refused with its limit',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  const long=Array.from({length:600},(_,line)=>`line ${line} of a long brief`).join('\n');
+  await draft.fill(long);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect(draft).toHaveValue('');
+  const sent=(await fixture(page)).inputs.filter(input=>['send','send_long'].includes((input as {input?:{kind:string}}).input?.kind ?? ''));
+  expect(sent.map(input=>(input as {input:{kind:string;text:string}}).input)).toEqual([{kind:'send_long',text:long}]);
+  await draft.fill('é'.repeat(32769));
+  await expect(agent.getByText('Too long for confirmed input (65,536 bytes). Shorten it or use Stage in terminal.',{exact:true})).toBeVisible();
+  await expect(agent.getByRole('button',{name:'Send to the agent',exact:true})).toBeDisabled();
 });

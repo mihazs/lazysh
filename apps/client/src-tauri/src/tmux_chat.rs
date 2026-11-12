@@ -169,12 +169,26 @@ pub enum Input {
     Submit {
         of: u8,
     },
+    /// A prompt longer than `Send` takes: up to `LONG_MAX` bytes as one bracketed paste, then Enter.
+    SendLong {
+        text: String,
+    },
 }
+/// What `Send` takes in one tmux command.
+const SEND_MAX: usize = 4096;
+/// What `SendLong` takes: bounded, never split into several messages. Only tmux has this kind.
+pub(crate) const LONG_MAX: usize = 64 * 1024;
+/// Payload bytes one tmux command carries while a long prompt is assembled in a private paste buffer.
+const CHUNK: usize = 4096;
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Self::Send { text } = self {
-            if text.is_empty()
-                || text.len() > 4096
+        if let Self::Send { text } | Self::SendLong { text } = self {
+            let range = if matches!(self, Self::Send { .. }) {
+                1..=SEND_MAX
+            } else {
+                SEND_MAX + 1..=LONG_MAX
+            };
+            if !range.contains(&text.len())
                 || text.chars().any(|c| {
                     (c.is_control() && !matches!(c, '\n' | '\t'))
                         || matches!(c, '\u{2028}' | '\u{2029}')
@@ -199,6 +213,13 @@ impl Input {
             _ => None,
         }
     }
+    /// Only `SendLong` is assembled in chunks; it has no key form.
+    fn long_text(&self) -> Option<&str> {
+        match self {
+            Self::SendLong { text } => Some(text),
+            _ => None,
+        }
+    }
     fn keys(&self, pane: &str) -> Result<String> {
         self.validate()?;
         let command = match self {
@@ -220,11 +241,42 @@ impl Input {
                 "send-keys -t {pane} {}Enter",
                 "Down ".repeat(usize::from(*of) + 1)
             ),
+            Self::SendLong { .. } => return Err(invalid()),
         };
         Ok(command)
     }
 }
 
+/// Every payload byte is decoded once by tmux from `\ooo`, never read as a shell/control-line token.
+fn octal(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("\\{b:03o}")).collect()
+}
+fn report(marker: &str, state: &str) -> String {
+    format!(
+        "display-message -p {}",
+        ssh::quote(&format!("{marker}:{state}"))
+    )
+}
+/// A tmux command line is bounded: whatever carries payload must fit and stay one ASCII line.
+fn bounded(command: String) -> Result<String> {
+    if command.len() + 1 > 32 * 1024 || !command.is_ascii() || command.contains(['\r', '\n']) {
+        return Err(invalid());
+    }
+    Ok(command)
+}
+/// Paste the named buffer, then Enter. Both buffer hooks can change context: recheck before paste AND before CR.
+fn paste_stage(guard: &str, pane: &str, buffer: &str, marker: &str) -> String {
+    let (guard, pane) = (ssh::quote(guard), ssh::quote(pane));
+    let submit = format!(
+        "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
+        report(marker, "ok"),
+        report(marker, "partial")
+    );
+    format!(
+        "if-shell -F {guard} {{ paste-buffer -p -r -d -b {buffer} -t {pane}; {submit} }} {{ delete-buffer -b {buffer}; {} }}",
+        report(marker, "gone")
+    )
+}
 fn paste_command(
     guard: &str,
     pane: &str,
@@ -232,38 +284,35 @@ fn paste_command(
     buffer: &str,
     marker: &str,
 ) -> Result<String> {
-    let octal = text
-        .as_bytes()
-        .iter()
-        .map(|b| format!("\\{b:03o}"))
-        .collect::<String>();
-    let guard = ssh::quote(guard);
-    let pane = ssh::quote(pane);
-    let report = |state| {
-        format!(
-            "display-message -p {}",
-            ssh::quote(&format!("{marker}:{state}"))
-        )
+    bounded(format!(
+        "if-shell -F {} {{ set-buffer -b {buffer} -- \"{}\"; {} }} {{ {} }}",
+        ssh::quote(guard),
+        octal(text.as_bytes()),
+        paste_stage(guard, pane, buffer, marker),
+        report(marker, "gone")
+    ))
+}
+/// One step of a long prompt: add a chunk to the private buffer while the context still matches. Once the buffer exists a
+/// changed context deletes it, so nothing of the prompt stays behind when the terminal is no longer the destination.
+fn append_command(
+    guard: &str,
+    buffer: &str,
+    chunk: &[u8],
+    marker: &str,
+    existing: bool,
+) -> Result<String> {
+    let gone = if existing {
+        format!("delete-buffer -b {buffer}; {}", report(marker, "gone"))
+    } else {
+        report(marker, "gone")
     };
-    // Every payload byte is decoded once by tmux, never a shell/control-line token.
-    // Both buffer hooks can change context: recheck before paste AND before CR.
-    let submit = format!(
-        "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
-        report("ok"),
-        report("partial")
-    );
-    let paste = format!(
-        "if-shell -F {guard} {{ paste-buffer -p -r -d -b {buffer} -t {pane}; {submit} }} {{ delete-buffer -b {buffer}; {} }}",
-        report("gone")
-    );
-    let command = format!(
-        "if-shell -F {guard} {{ set-buffer -b {buffer} -- \"{octal}\"; {paste} }} {{ {} }}",
-        report("gone")
-    );
-    if command.len() + 1 > 32 * 1024 || !command.is_ascii() || command.contains(['\r', '\n']) {
-        return Err(invalid());
-    }
-    Ok(command)
+    bounded(format!(
+        "if-shell -F {} {{ set-buffer {}-b {buffer} -- \"{}\"; {} }} {{ {gone} }}",
+        ssh::quote(guard),
+        if existing { "-a " } else { "" },
+        octal(chunk),
+        report(marker, "ok")
+    ))
 }
 #[derive(Serialize)]
 #[serde(
@@ -447,7 +496,9 @@ impl Control {
             format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
-        let delivered = if let Some(text) = input.paste_text() {
+        let delivered = if let Some(text) = input.long_text() {
+            self.paste_long(&guard, &target.pane_id, text, budget).await
+        } else if let Some(text) = input.paste_text() {
             let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
             let command = paste_command(&guard, &target.pane_id, text, &buffer, &marker)?;
             // Partial/error/cancelled streams still retire; never resync to clean a buffer.
@@ -457,6 +508,27 @@ impl Control {
                 .await
         };
         delivered?.then_some(()).ok_or_else(stale)
+    }
+    /// Fill a private buffer chunk by chunk, each step re-checking the destination, then paste it and press Enter once.
+    /// `false` means a step found the destination changed and nothing was pasted.
+    async fn paste_long(
+        &mut self,
+        guard: &str,
+        pane: &str,
+        text: &str,
+        budget: &mut usize,
+    ) -> Result<bool> {
+        let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
+        for (index, chunk) in text.as_bytes().chunks(CHUNK).enumerate() {
+            let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
+            let command = append_command(guard, &buffer, chunk, &marker, index > 0)?;
+            if !self.marked_dispatch(&command, &marker, budget).await? {
+                return Ok(false);
+            }
+        }
+        let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
+        let command = bounded(paste_stage(guard, pane, &buffer, &marker))?;
+        self.marked_dispatch(&command, &marker, budget).await
     }
     pub(super) async fn chat_action(
         &mut self,
@@ -828,6 +900,68 @@ mod tests {
         assert_eq!(received.trim(), "32", "the option digit and nothing else");
     }
 
+    #[test]
+    fn a_long_prompt_is_bounded_chunked_and_has_no_key_form() {
+        let at = |len: usize| Input::SendLong {
+            text: "x".repeat(len),
+        };
+        for len in [4097, 4098, LONG_MAX] {
+            assert!(at(len).validate().is_ok(), "{len}");
+        }
+        // Up to 4096 bytes `send` is the kind; past the bound nothing is sent, never a part of it.
+        for len in [0, 1, 4096, LONG_MAX + 1] {
+            assert!(at(len).validate().is_err(), "{len}");
+        }
+        assert!(Input::Send {
+            text: "x".repeat(4097)
+        }
+        .validate()
+        .is_err());
+        for text in ["a\rb", "a\u{1b}b", "a\0b", "a\u{2028}b"] {
+            assert!(Input::SendLong {
+                text: format!("{}{text}", "x".repeat(5000))
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(at(5000).keys("%12").is_err());
+        assert_eq!(at(5000).long_text().map(str::len), Some(5000));
+        assert!(Input::Send { text: "hi".into() }.long_text().is_none());
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"send_long","text":"a","chunk":9}"#).is_err()
+        );
+        // Every command that carries payload stays one ASCII line below the 32 KiB command bound, even with the
+        // longest guard the format condition can reach, and only the later chunks append.
+        let guard = "g".repeat(2000);
+        let hard = "\u{ff}".repeat(2048);
+        let first = append_command(
+            &guard,
+            "lazysh-owned",
+            &hard.as_bytes()[..CHUNK],
+            "OWNED_MARKER",
+            false,
+        )
+        .unwrap();
+        let next = append_command(
+            &guard,
+            "lazysh-owned",
+            &hard.as_bytes()[..CHUNK],
+            "OWNED_MARKER",
+            true,
+        )
+        .unwrap();
+        assert!(first.len() < 32 * 1024 && next.len() < 32 * 1024 && first.is_ascii());
+        assert!(first.contains("set-buffer -b lazysh-owned --") && !first.contains("-a"));
+        assert!(
+            next.contains("set-buffer -a -b lazysh-owned --")
+                && next.contains("delete-buffer -b lazysh-owned")
+        );
+        assert!(!first.contains("delete-buffer"));
+        assert_eq!(first.matches(&guard).count(), 1);
+        assert!(
+            append_command(&guard, "lazysh-owned", &[0xff; 9000], "OWNED_MARKER", true).is_err()
+        );
+    }
     #[test]
     fn multiline_paste_is_one_bounded_octal_line_with_three_context_guards() {
         let text = "é\n\t; '$#{pane_id}\\ 界";

@@ -69,9 +69,14 @@ export function validTerminalSource(value:unknown):value is TerminalSource {
   return !database || (typeof source.transcriptSessionId==='string' && !!source.transcriptSessionId && wellFormed(source.transcriptSessionId)
     && utf8(source.transcriptSessionId)<=256 && !/[\x00-\x1f\x7f-\x9f]/.test(source.transcriptSessionId));
 }
-export function validTerminalDraft(text:string):boolean {
+/** What `send` takes in one command; a longer prompt is `send_long`, which only tmux has. */
+export const SEND_BYTES=4096;
+export const LONG_SEND_BYTES=65536;
+/** The most a draft may hold for this backend: tmux can paste a long prompt when the caller allows it, a Herdr pane cannot. */
+export const draftLimit=(backend:TerminalInputLabels['backend'],long:boolean)=>long && backend==='tmux'?LONG_SEND_BYTES:SEND_BYTES;
+export function validTerminalDraft(text:string,limit=SEND_BYTES):boolean {
   // Validate UTF-16 before TextEncoder can replace an isolated surrogate.
-  return !!text && wellFormed(text) && !/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]/.test(text) && utf8(text)<=4096;
+  return !!text && wellFormed(text) && !/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]/.test(text) && utf8(text)<=limit;
 }
 export function parseTerminalSnapshot(value:unknown):Snapshot {
   const row=record(value,['kind','destination','sessionName','windowName','paneIndex']);
@@ -107,9 +112,11 @@ export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was
  * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
  * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
  * Confirm steps stay. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,proves,onControl,onFailed}:{
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
+  /** Let a tmux terminal take a prompt of up to 64 KiB, sent as one bounded paste past the 4 KiB `send` takes. */
+  long?:boolean;
   proves?:(destination:TerminalDestination)=>boolean;onControl?:(control:TerminalControl|undefined)=>void;
   /** A send ended without delivery: `refused` when nothing was written, `unknown` once writing began. */
   onFailed?:(kind:'refused'|'unknown')=>void;
@@ -202,11 +209,11 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
     if(flight.current || !permission || !access.current() || composing.current)return false;
-    if(body.kind==='send' && !validTerminalDraft(body.text)){setError({key:'chatTerminalInvalidDraft'});return false;}
+    if(body.kind==='send' && !validTerminalDraft(body.text,draftLimit(labels.backend,long))){setError({key:'chatTerminalInvalidDraft'});return false;}
     const original=context,text=body.kind==='send'?body.text:'',revision=draftRevision;
     flight.current=true;setBusy(true);setError(undefined);setStatus('');
     try {
-      const nextOperation=parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body}),permission.nextOperation);
+      const nextOperation=parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body}),permission.nextOperation);
       if(!current(original))return false;
       if(nextOperation===0xffffffff){retire();setBinding(undefined);}
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
@@ -215,7 +222,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       if(kind==='send')onSent(text,revision);
       return true;
     } catch(error) {
-      failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && /[\n\t]/.test(text));
+      failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && (utf8(text)>SEND_BYTES || /[\n\t]/.test(text)));
       if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)?'refused':'unknown');
       return false;
     }
