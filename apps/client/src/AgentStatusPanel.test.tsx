@@ -2,7 +2,7 @@
 import {cleanup, fireEvent, render, screen, within} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import AgentStatusPanel from './AgentStatusPanel';
-import {deriveStatus} from './agentStatus';
+import {deriveStatus} from './agentBackgroundWork';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 10, 11, 12, 0, seconds)).toISOString();
 const use = (id: string, name: string, input: object, seconds: number) => ({role: 'assistant', timestamp: at(seconds), blocks: [{type: 'tool_use', id, name, text: JSON.stringify(input)}]});

@@ -1,6 +1,6 @@
 import {useId, useMemo, useState} from 'react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
-import {deriveStatus, runningOf, type StatusItem, type StatusKind} from './agentStatus';
+import {deriveStatus, runningOf, type StatusItem, type StatusKind} from './agentBackgroundWork';
 import {formatNumber, t} from './i18n/core';
 import {formatCountdown, useNow} from './relativeTime';
 import './AgentStatusPanel.css';
