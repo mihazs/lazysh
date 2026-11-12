@@ -22,6 +22,17 @@ Never idle on CI. A merged pull request is a finished checkpoint.
 - Do not poll CI, sleep on checks or merge your own pull requests when the PR driver is running (`/tmp/lazysh-driver/driver.py`, status in `/tmp/lazysh-pr-status.json`). It squash-merges a pull request when its required checks are green, reruns failed jobs up to twice, approves and merges the Changesets version pull request under its safety conditions, and records `needs-owner` or `needs-rebase`. Read the status at natural breaks and fix those states immediately. A pull request that must not merge yet is listed in `/tmp/lazysh-pr-hold.txt`.
 - Without the driver, merge your own pull request when the required checks pass, as described above, and still continue with the next slice instead of waiting.
 
+# Issue tracking
+
+Map all work to GitHub issues before implementing it, and keep the issues current.
+
+- Every request, bug report and follow-up gets an issue first: search for an existing one and extend it, otherwise create it with the issue template (problem, current and expected behavior, scope, acceptance criteria, test strategy, dependencies). Link child issues to their epic as sub-issues and add them to the project board.
+- State the priority in the issue (P0 blocks use of the app, P1 core, P2 later) and order the work by it.
+- Every pull request references its issue. Use `Closes #N` in the PR body when the change satisfies all acceptance criteria, so the issue closes when the PR merges. Use `Refs #N` only when criteria remain open (for example a real-device check), and say which ones in a comment on the issue.
+- Track progress on the issue: comment when work starts, when a PR opens or merges, and when something blocks it. Keep checklists and sub-issues accurate.
+- After a PR merges, confirm that every issue it resolves is closed (close it with a comment naming the PR and the release if the automatic close did not happen). Do not close an issue without evidence that its acceptance criteria are met, and do not leave a satisfied issue open.
+- Work discovered while implementing becomes a new linked issue, not unrecorded scope.
+
 # Continuing implementation
 
 Treat “continue”, “resume”, and “keep implementing” as requests to execute the
