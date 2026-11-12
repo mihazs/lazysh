@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.40.0
+
+### Minor Changes
+
+- 65eaa38: Show the prompts typed while Claude Code works as read-only Queued cards in the Agent view, from a new bounded `queued` list in the companion's Claude conversation page and transcript-watch frames.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.40.0
+  - @lazysh/common@1.40.0
+  - @lazysh/display-idle@1.40.0
+  - @lazysh/et-transport@1.40.0
+  - @lazysh/mosh-transport@1.40.0
+
 ## 1.39.0
 
 ### Minor Changes
