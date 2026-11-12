@@ -135,33 +135,66 @@ export function unitRange(units: Glyph[], from: number, to: number): UrlLink['ra
   return {start: {x: start.x + 1, y: start.y + 1}, end: {x: end.x + end.width, y: end.y + 1}};
 }
 
-/** Every http(s) URL that touches 1-based buffer line `line`, joined across soft wraps and conservative hard wraps. */
-export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
-  const found: UrlLink[] = [], lines = logicalWindow(rows, cols, line);
+/** Every `re` match touching 1-based buffer line `line`, joined across soft wraps; `accept` refines or rejects the joined text. */
+function scan<R extends {text: string}>(rows: Rows, cols: number, line: number, re: RegExp, accept: (text: string, before: string | undefined) => R | undefined) {
+  const found: (R & {range: UrlLink['range']})[] = [], lines = logicalWindow(rows, cols, line);
   lines.forEach((logical, index) => {
-    for (const match of logical.text.matchAll(URL_RE)) {
-      if (match.index > 0 && /[A-Za-z0-9]/.test(logical.text[match.index - 1])) continue;
+    for (const match of logical.text.matchAll(re)) {
       const last = logical.offset.findIndex(offset => offset >= match.index + match[0].length);
       const {text, units} = joinWrapped(lines, index, cols, logical.offset.indexOf(match.index), last < 0 ? logical.glyphs.length : last);
-      const url = trimmed(text);
-      if (!/^https?:\/\/[^/?#]/i.test(url)) continue;
-      const range = unitRange(units, 0, url.length);
-      if (range.start.y <= line && line <= range.end.y) found.push({text: url, range});
+      const hit = accept(trimmed(text), logical.text[match.index - 1]);
+      if (!hit) continue;
+      const range = unitRange(units, 0, hit.text.length);
+      if (range.start.y <= line && line <= range.end.y) found.push({...hit, range});
     }
   });
   return found;
 }
 
+/** Every http(s) URL that touches 1-based buffer line `line`, joined across soft wraps and conservative hard wraps. */
+export function findUrls(rows: Rows, cols: number, line: number): UrlLink[] {
+  return scan(rows, cols, line, URL_RE, (url, before) =>
+    (before && /[A-Za-z0-9]/.test(before)) || !/^https?:\/\/[^/?#]/i.test(url) ? undefined : {text: url});
+}
+
+export type PathLink = UrlLink & {path: string; line?: number; column?: number};
+// Absolute, `~/` and `./` `../` paths, or `dir/file.ext` shaped relative ones; `file:line:col` is split off afterwards.
+const PATH_RE = /(?:~\/|\.{1,2}\/|\/)[^\s<>"'`│┃║]+|[\w.@+-]+(?:\/[\w.@+-]+)+\.\w+(?::\d+){0,2}/g;
+const PATH_START = /^[\s"'`([{<=,;|]$/;
+const LOCATION = /:(\d+)(?::(\d+))?$/;
+
 /**
- * Registers URL detection on `terminal` and routes OSC 8 hyperlinks to the same handler. xterm asks its OSC 8
- * provider first and drops overlapping links of later providers, so an application's explicit hyperlink always
- * wins over a URL guessed from the same cells.
+ * Every host file path that touches 1-based buffer line `line`. A path starts a token (never the tail of a URL or a
+ * word), may carry `:line[:col]`, and is returned as printed: resolving `~` and relative paths is the caller's job.
  */
-export function installTerminalLinks(terminal: Terminal, open: (url: string) => void) {
-  const provider = terminal.registerLinkProvider({
+export function findPaths(rows: Rows, cols: number, line: number): PathLink[] {
+  return scan(rows, cols, line, PATH_RE, (text, before) => {
+    if (before && !PATH_START.test(before)) return;
+    const where = LOCATION.exec(text), path = where ? text.slice(0, where.index) : text;
+    if (!/[^/.~]/.test(path) || path.endsWith('/') || /(?:^|\/)\.{3,}(?:\/|$)/.test(path)) return;
+    return {text, path, ...(where && {line: Number(where[1]), ...(where[2] && {column: Number(where[2])})})};
+  });
+}
+
+/**
+ * Registers URL and host-path detection on `terminal` and routes OSC 8 hyperlinks to the URL handler. xterm asks
+ * its OSC 8 provider first and drops overlapping links of later providers, so an application's explicit hyperlink
+ * wins over a URL guessed from the same cells, and a URL over a path guessed inside it.
+ */
+export function installTerminalLinks(terminal: Terminal, open: (url: string) => void, hostPaths?: {exists: (link: PathLink) => Promise<boolean>; open: (link: PathLink) => void}) {
+  const urls = terminal.registerLinkProvider({
     provideLinks: (line, callback) => callback(findUrls(terminal.buffer.active, terminal.cols, line)
       .map<ILink>(({text, range}) => ({text, range, activate: (_event, uri) => open(uri)}))),
   });
+  // Only paths the host confirms are links, so prose and false positives stay plain text.
+  const paths = hostPaths && terminal.registerLinkProvider({
+    provideLinks: (line, callback) => {
+      const found = findPaths(terminal.buffer.active, terminal.cols, line).slice(0, 8);
+      void Promise.all(found.map(link => hostPaths.exists(link).catch(() => false))).then(ok => callback(found
+        .filter((_, index) => ok[index])
+        .map<ILink>(link => ({text: link.text, range: link.range, activate: () => hostPaths.open(link)}))));
+    },
+  });
   terminal.options.linkHandler = {activate: (_event, uri) => open(uri)};
-  return {dispose() { provider.dispose(); terminal.options.linkHandler = null; }};
+  return {dispose() { urls.dispose(); paths?.dispose(); terminal.options.linkHandler = null; }};
 }

@@ -30,3 +30,19 @@ export async function resolveHostPath(api: Pick<typeof nativeApi, 'hostHome'>, s
   }
   return expandHome(path, await home);
 }
+
+/** Collapses `.`, `..` and repeated slashes of an absolute path. */
+function normalized(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part && part !== '.') parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
+/** A path printed in terminal output as an absolute host path: `~` against the host's home, relative ones against the pane's working directory. */
+export async function resolveTerminalPath(api: Pick<typeof nativeApi, 'hostHome'>, sessionId: string, path: string, cwd: string | undefined): Promise<string> {
+  const absolute = /^(?:\/|~)/.test(path) ? await resolveHostPath(api, sessionId, path) : `${cwd ?? ''}/${path}`;
+  return normalized(absolute);
+}

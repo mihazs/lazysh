@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {expandHome,resolveHostPath} from './hostPath';
+import {expandHome,resolveHostPath,resolveTerminalPath} from './hostPath';
 import {LocalUiError} from './i18n/localError';
 
 const home = '/home/mía';
@@ -51,4 +51,14 @@ it('does not remember a failed home lookup', async () => {
   await expect(resolveHostPath(api, 'session-3', '~/a')).rejects.toThrow('realpath unsupported');
   expect(await resolveHostPath(api, 'session-3', '~/a')).toBe(`${home}/a`);
   expect(api.hostHome).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  ['~/src/../notes.md', undefined, `${home}/notes.md`],
+  ['/var//log/./app.log', undefined, '/var/log/app.log'],
+  ['./build/out.txt', '/work/app', '/work/app/build/out.txt'],
+  ['../shared/x.rs', '/work/app', '/work/shared/x.rs'],
+  ['src/lib.rs', '/work/app/', '/work/app/src/lib.rs'],
+])('resolves printed path %j against cwd %j to %j', async (printed, cwd, expected) => {
+  expect(await resolveTerminalPath(fakeHost(), 'terminal-paths', printed, cwd)).toBe(expected);
 });
