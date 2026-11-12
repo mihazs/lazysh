@@ -7,9 +7,9 @@ import './TerminalComposerSheet.css';
 
 const appleShortcut = () => /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
-/** Send needs visible content; paste-only keeps accepting any nonempty draft. */
-export function composerDraftReady(value: string, sendEnter: boolean) {
-  return sendEnter ? value.trim().length > 0 : value.length > 0;
+/** Send (with Enter) needs visible content; Insert (without Enter) accepts any nonempty draft. */
+export function composerDraftReady(value: string, enter: boolean) {
+  return enter ? value.trim().length > 0 : value.length > 0;
 }
 
 /**
@@ -30,7 +30,10 @@ function usePreviewUrl(blob:Blob|undefined) {
 }
 
 export default function TerminalComposer({value,onChange,onSubmit,onClose,disabled,sendEnter,textareaRef,onAttach,attachments=[]}:{
-  value:string;onChange:(value:string)=>void;onSubmit:()=>void;onClose:()=>void;disabled:boolean;sendEnter:boolean;textareaRef?:Ref<HTMLTextAreaElement>;onAttach?:()=>void;
+  /** `onSubmit(true)` is Send (text, then Enter); `onSubmit(false)` is Insert (text only). */
+  value:string;onChange:(value:string)=>void;onSubmit:(enter:boolean)=>void;onClose:()=>void;disabled:boolean;
+  /** Whether the Ctrl+Enter shortcut and the highlighted button send Enter; the other action stays one button or Shift away. */
+  sendEnter:boolean;textareaRef?:Ref<HTMLTextAreaElement>;onAttach?:()=>void;
   /** Uploaded files the draft references through inline tokens. */
   attachments?:readonly ComposerAttachment[];
 }) {
@@ -94,15 +97,16 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
     viewport.addEventListener('resize',schedule);viewport.addEventListener('scroll',schedule);
     return()=>{cancelAnimationFrame(frame);viewport.removeEventListener('resize',schedule);viewport.removeEventListener('scroll',schedule);};
   },[]);
-  const ready=!disabled&&composerDraftReady(value,sendEnter);
+  const sendReady=!disabled&&composerDraftReady(value,true),insertReady=!disabled&&composerDraftReady(value,false);
   const characters=Array.from(value).length, lines=value?value.split('\n').length:0;
-  const keys=`${appleShortcut()?'⌘':'Ctrl'}+Enter`;
+  const keys=`${appleShortcut()?'⌘':'Ctrl'}+Enter`,otherKeys=`${appleShortcut()?'⌘':'Ctrl'}+Shift+Enter`;
   const keyDown=(event:KeyboardEvent<HTMLDivElement>)=>{
     if(event.nativeEvent.isComposing||event.keyCode===229)return;
     if(event.key==='Escape'){event.preventDefault();event.stopPropagation();onClose();}
-    else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.target===editor.current){
+    else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&event.target===editor.current){
       event.preventDefault();
-      if(ready)onSubmit();
+      const enter=sendEnter!==event.shiftKey;
+      if(enter?sendReady:insertReady)onSubmit(enter);
     }
   };
   const edit=(next:string)=>{
@@ -187,9 +191,12 @@ export default function TerminalComposer({value,onChange,onSubmit,onClose,disabl
         {onAttach&&<button type="button" className="icon-button" title={t('appAttach')} aria-label={t('appAttach')} onClick={onAttach}><Paperclip size={20} aria-hidden="true"/></button>}
       </div>
       <div className="terminal-composer-primary">
-        <span id={hintId} className="terminal-composer-hint">{t(sendEnter?'terminalComposerSendHint':'terminalComposerPasteHint',{keys})}</span>
-        <button type="button" className="terminal-draft-paste terminal-composer-send" aria-label={t(sendEnter?'terminalSendDraft':'terminalPasteDraft')} title={t(sendEnter?'terminalSendDraftDescription':'terminalPasteDraftDescription')} disabled={!ready} onClick={onSubmit}>
-          {sendEnter?<SendHorizontal size={18} aria-hidden="true"/>:<ClipboardPaste size={18} aria-hidden="true"/>}<span>{t(sendEnter?'terminalSendDraft':'terminalPasteDraft')}</span>
+        <span id={hintId} className="terminal-composer-hint">{t(sendEnter?'terminalComposerSendHint':'terminalComposerPasteHint',{keys})} · {t(sendEnter?'terminalComposerPasteHint':'terminalComposerSendHint',{keys:otherKeys})}</span>
+        <button type="button" className="terminal-draft-paste terminal-composer-send" data-primary={!sendEnter||undefined} aria-label={t('terminalPasteDraft')} title={t('terminalPasteDraftDescription')} disabled={!insertReady} onClick={()=>onSubmit(false)}>
+          <ClipboardPaste size={18} aria-hidden="true"/><span>{t('terminalPasteDraft')}</span>
+        </button>
+        <button type="button" className="terminal-composer-send" data-primary={sendEnter||undefined} aria-label={t('terminalSendDraft')} title={t('terminalSendDraftDescription')} disabled={!sendReady} onClick={()=>onSubmit(true)}>
+          <SendHorizontal size={18} aria-hidden="true"/><span>{t('terminalSendDraft')}</span>
         </button>
       </div>
     </div>

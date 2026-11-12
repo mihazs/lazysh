@@ -540,28 +540,40 @@ describe("terminal interactions", () => {
       owner.emit('\x1b[1;1R',false);expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[1;1R');
     } finally {windowFocus.mockRestore();hidden.mockRestore();}
   });
-  it.each([true,false])('submits a guarded composer paste from a focused composer with sendEnter=%s',sendEnter=>{
+  it.each(['Send','Insert'])('%s delivers a composer draft as one bracketed paste, with Enter only for Send',action=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
     try {
-      savePreferences({...defaults,composerSendEnter:sendEnter});
       // xterm brackets the literal paste itself while the remote enables mode 2004.
       const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(`\x1b[200~${text}\x1b[201~`));
       fireEvent.click(screen.getByRole('button',{name:'Compose'}));
       const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'first line\nsecond line'}});composer.focus();
       expect(document.activeElement).toBe(composer);
-      fireEvent.click(screen.getByRole('button',{name:sendEnter?'Send':'Paste draft'}));
+      fireEvent.click(screen.getByRole('button',{name:action}));
       expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('first line\nsecond line');
-      if(sendEnter){
+      if(action==='Send'){
         expect(mocks.writeSequence).toHaveBeenCalledExactlyOnceWith('ssh',['\x1b[200~first line\nsecond line\x1b[201~','\r']);
         expect(mocks.write).not.toHaveBeenCalled();
       } else {
         expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[200~first line\nsecond line\x1b[201~');
         expect(mocks.writeSequence).not.toHaveBeenCalled();
       }
-      expect(screen.queryByLabelText('Compose text')).toBeNull();
-      expect(document.activeElement).toBe(owner.textarea);
+      return waitFor(()=>expect(screen.queryByLabelText('Compose text')).toBeNull()).then(()=>{
+        expect(document.activeElement).toBe(owner.textarea);
+        fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+        expect(screen.getByLabelText('Compose text')).toHaveProperty('value','');
+      });
+    } finally {windowFocus.mockRestore();}
+  });
+  it.each(['Send','Insert'])('keeps the draft and the composer when %s could not write',async action=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(text));
+      (action==='Send'?mocks.writeSequence:mocks.write).mockRejectedValueOnce(new Error('queue full'));
       fireEvent.click(screen.getByRole('button',{name:'Compose'}));
-      expect(screen.getByLabelText('Compose text')).toHaveProperty('value','');
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'keep me'}});
+      fireEvent.click(screen.getByRole('button',{name:action}));
+      await waitFor(()=>expect(owner.reportError).toHaveBeenCalled());
+      expect(screen.getByLabelText('Compose text')).toHaveProperty('value','keep me');
     } finally {windowFocus.mockRestore();}
   });
   it('never sends Enter for a whitespace-only draft or a paste the terminal did not accept',()=>{
@@ -1611,9 +1623,15 @@ it("keeps ordinary terminal input usable and disables virtual modifiers when xte
   fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
 });
 
-it("portals only the active terminal controls into the existing header and retains literal drafts", () => {
+it("portals only the active terminal controls into the existing header and retains literal drafts", async () => {
   const target=document.createElement('div'); document.body.append(target);
   const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  // The terminal accepts the literal paste, as xterm does, so the draft leaves with it.
+  let mark!:()=>void, receive!:(data:string)=>void;
+  terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.paste.mockImplementation(text=>{mark();receive(text);});
+  const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
   const reportError=vi.fn(); const view=render(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
   try {
     expect(within(target).getAllByRole('button')).toHaveLength(2);
@@ -1625,13 +1643,13 @@ it("portals only the active terminal controls into the existing header and retai
     fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
     expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
     fireEvent.click(screen.getByRole('button',{name:'Send'})); expect(terminal.paste).toHaveBeenCalledWith('c');
-    expect(screen.queryByLabelText('Compose text')).toBeNull();
+    await waitFor(()=>expect(screen.queryByLabelText('Compose text')).toBeNull());
     view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
     expect(target.childElementCount).toBe(0);
     view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
     expect(within(target).getAllByRole('button')).toHaveLength(2);
     view.unmount(); expect(target.childElementCount).toBe(0);
-  } finally {target.remove();}
+  } finally {windowFocus.mockRestore();target.remove();}
 });
 
 it('publishes only the active local overlay Back handler and keeps its draft without sending',()=>{

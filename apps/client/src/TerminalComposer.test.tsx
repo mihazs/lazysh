@@ -4,15 +4,15 @@ import {useState} from 'react';
 import {afterEach,expect,it,vi} from 'vitest';
 import TerminalComposer from './TerminalComposer';
 afterEach(cleanup);
-it('keeps editing separate from explicit literal paste and close',()=>{
+it('keeps editing separate from explicit Insert and close',()=>{
   const onChange=vi.fn(),onSubmit=vi.fn(),onClose=vi.fn();
   const view=render(<TerminalComposer value="retained draft" onChange={onChange} onSubmit={onSubmit} onClose={onClose} sendEnter={false} disabled/>);
   const editor=screen.getByRole('textbox',{name:'Compose text'});
   fireEvent.change(editor,{target:{value:'two\nlines'}});fireEvent.keyDown(editor,{key:'Enter'});
   expect(onChange).toHaveBeenCalledWith('two\nlines');expect(onSubmit).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button',{name:'Paste draft'}));expect(onSubmit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Insert'}));expect(onSubmit).not.toHaveBeenCalled();
   view.rerender(<TerminalComposer value="retained draft" onChange={onChange} onSubmit={onSubmit} onClose={onClose} sendEnter={false} disabled={false}/>);
-  fireEvent.click(screen.getByRole('button',{name:'Paste draft'}));expect(onSubmit).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'Insert'}));expect(onSubmit).toHaveBeenCalledExactlyOnceWith(false);
   fireEvent.click(screen.getByRole('button',{name:'Close composer'}));expect(onClose).toHaveBeenCalledTimes(1);expect(editor).toHaveProperty('value','retained draft');
 });
 it('offers attachments only through the explicitly supplied caller action',()=>{
@@ -23,12 +23,29 @@ it('offers attachments only through the explicitly supplied caller action',()=>{
   fireEvent.click(screen.getByRole('button',{name:'Attach'}));
   expect(onAttach).toHaveBeenCalledOnce();expect(onSubmit).not.toHaveBeenCalled();
 });
+it('offers Send and Insert together and runs the one the click or shortcut names',()=>{
+  const onSubmit=vi.fn();
+  const view=render(<TerminalComposer value={' \n'} onChange={()=>{}} onSubmit={onSubmit} onClose={()=>{}} sendEnter disabled={false}/>);
+  // Whitespace cannot be sent but can still be inserted.
+  expect(screen.getByRole('button',{name:'Send'})).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('button',{name:'Insert'}));expect(onSubmit).toHaveBeenLastCalledWith(false);
+  view.rerender(<TerminalComposer value="ls" onChange={()=>{}} onSubmit={onSubmit} onClose={()=>{}} sendEnter disabled={false}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Send'}));expect(onSubmit).toHaveBeenLastCalledWith(true);
+  const editor=screen.getByRole('textbox',{name:'Compose text'});
+  fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true});expect(onSubmit).toHaveBeenLastCalledWith(true);
+  fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true,shiftKey:true});expect(onSubmit).toHaveBeenLastCalledWith(false);
+  // The preference only swaps which action the shortcut runs.
+  view.rerender(<TerminalComposer value="ls" onChange={()=>{}} onSubmit={onSubmit} onClose={()=>{}} sendEnter={false} disabled={false}/>);
+  fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true});expect(onSubmit).toHaveBeenLastCalledWith(false);
+  fireEvent.keyDown(editor,{key:'Enter',metaKey:true,shiftKey:true});expect(onSubmit).toHaveBeenLastCalledWith(true);
+  expect(onSubmit).toHaveBeenCalledTimes(6);
+});
 it('sends only visible drafts, by button or Ctrl+Enter, and leaves plain Enter and IME commits to the editor',()=>{
   const onSubmit=vi.fn(),onClose=vi.fn();
   const view=render(<TerminalComposer value={' \n\t'} onChange={()=>{}} onSubmit={onSubmit} onClose={onClose} sendEnter disabled={false}/>);
   const send=screen.getByRole('button',{name:'Send'});
   expect(send).toHaveProperty('disabled',true);
-  expect(send.getAttribute('title')).toBe('Paste the draft, then press Enter');
+  expect(send.getAttribute('title')).toBe('Put the draft on the input line, then press Enter');
   const editor=screen.getByRole('textbox',{name:'Compose text'});
   expect(screen.getByText('3 characters · 2 lines')).toBeTruthy();
   fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true});expect(onSubmit).not.toHaveBeenCalled();
@@ -36,9 +53,9 @@ it('sends only visible drafts, by button or Ctrl+Enter, and leaves plain Enter a
   expect(send).toHaveProperty('disabled',false);
   fireEvent.keyDown(editor,{key:'Enter'});fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true,keyCode:229});
   expect(onSubmit).not.toHaveBeenCalled();
-  fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true});expect(onSubmit).toHaveBeenCalledOnce();
+  fireEvent.keyDown(editor,{key:'Enter',ctrlKey:true});expect(onSubmit).toHaveBeenCalledExactlyOnceWith(true);
   fireEvent.keyDown(editor,{key:'Escape'});expect(onClose).toHaveBeenCalledOnce();
-  expect(document.getElementById(editor.getAttribute('aria-describedby')!)?.textContent).toBe('Ctrl+Enter to send');
+  expect(document.getElementById(editor.getAttribute('aria-describedby')!)?.textContent).toBe('Ctrl+Enter to send · Ctrl+Shift+Enter to insert');
 });
 it('clears the draft explicitly and keeps focus in the editor',()=>{
   const onChange=vi.fn();

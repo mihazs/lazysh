@@ -165,11 +165,11 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
       expect(field.height).toBeGreaterThanOrEqual(height === 420 ? 96 : 400);
       expect(await editor.evaluate(node=>node.scrollHeight>node.clientHeight && node.scrollWidth<=node.clientWidth)).toBe(true);
       const actionBounds = [];
-      for (const name of ['Close composer', 'Clear draft', 'Send']) {
+      for (const name of ['Close composer', 'Clear draft', 'Insert', 'Send']) {
         const action = composer.getByRole('button', {name, exact: true});
         await expect(action).toBeInViewport();
         await expect(action.locator('svg')).toHaveCount(1);
-        expect(await action.textContent()).toBe(name === 'Send' ? 'Send' : '');
+        expect(await action.textContent()).toBe(name === 'Send' || name === 'Insert' ? name : '');
         const bounds = (await action.boundingBox())!;
         expect(bounds.width).toBeGreaterThanOrEqual(44);
         expect(bounds.height).toBeGreaterThanOrEqual(44);
