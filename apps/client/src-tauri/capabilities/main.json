@@ -143,6 +143,7 @@
     "allow-tmux-jump",
     "allow-tmux-chat",
     "allow-herdr-chat",
+    "allow-herdr-agent-input",
     "allow-agent-snapshot",
     "allow-agent-reported-history",
     "allow-install-companion",
