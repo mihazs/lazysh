@@ -33,6 +33,7 @@ mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
 mod opencode_conversation;
+mod opencode_work;
 pub use opencode_conversation::{
     conversation as opencode_conversation, conversation_window as opencode_conversation_window,
 };

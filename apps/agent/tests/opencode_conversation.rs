@@ -384,3 +384,59 @@ fn shared_synthetic_android_conversation_matches_both_database_formats() {
         recorded_conversations::assert_messages(page["messages"].as_array().unwrap(), &expected);
     }
 }
+
+#[test]
+fn task_calls_become_sub_agents_in_the_work_list_and_a_plain_session_has_none() {
+    let f = Fixture::new(false);
+    f.message("msg_a", 1, "user", json!({"time":{"created":1}}));
+    f.message(
+        "msg_b",
+        2,
+        "assistant",
+        json!({"time":{"created":2,"completed":3},"finish":"stop"}),
+    );
+    f.part("msg_b", 0, json!({"type":"tool","tool":"read","callID":"r1","state":{"status":"completed","input":{"filePath":"a.rs"},"output":"x"}}));
+    assert!(f.page(50)["work"].is_null());
+    f.part("msg_b", 1, json!({"type":"tool","tool":"task","callID":"c1","state":{"status":"completed","input":{"description":"Map config","subagent_type":"explore"},"output":"done","metadata":{"sessionId":"ses_child"},"time":{"start":1_785_941_702_000_i64,"end":1_785_941_762_000_i64}}}));
+    f.part("msg_b", 2, json!({"type":"tool","tool":"task","callID":"c2","state":{"status":"completed","input":{"description":"Research","run_in_background":true},"output":"Background task launched.","metadata":{"backgroundTaskId":"bg_1"},"time":{"start":1_785_941_703_000_i64}}}));
+    f.part("msg_b", 3, json!({"type":"tool","tool":"background_output","callID":"o1","state":{"status":"completed","input":{"task_id":"bg_1"},"output":"Task ID: bg_1\nStatus: completed\n"}}));
+    let page = f.page(50);
+    let work = page["work"].as_array().unwrap();
+    let rows: Vec<_> = work
+        .iter()
+        .map(|t| {
+            (
+                t["title"].as_str().unwrap(),
+                t["subtitle"].as_str(),
+                t["state"].as_str().unwrap(),
+                t["taskId"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Map config", Some("explore"), "done", "ses_child"),
+            ("Research", None, "done", "bg_1")
+        ]
+    );
+    assert_eq!(work[0]["startedAt"], "2026-08-05T14:55:02Z");
+    // The tool calls stay in the conversation next to the work list.
+    assert!(page["messages"].to_string().contains("Map config"));
+}
+
+#[test]
+fn a_v2_database_without_a_part_table_reads_its_inline_parts_and_lists_their_sub_agents() {
+    // OpenCode 2.2 has no `session_part`: the parts of a message stay in its `content`, and reminders are user text.
+    let f = Fixture::new(true);
+    f.db.execute_batch("DROP TABLE session_part").unwrap();
+    f.message("msg_a", 1, "user", json!({"text":"question"}));
+    f.message("msg_b", 2, "assistant", json!({"content":[
+        {"type":"text","text":"working"},
+        {"type":"tool","id":"call_1","name":"task","state":{"status":"completed","input":{"description":"Research","subagent_type":"librarian","run_in_background":true},"output":"Background task launched.","metadata":{"backgroundTaskId":"bg_9"},"time":{"start":1_785_941_702_000_i64}}}]}));
+    let running = f.page(50);
+    assert!(texts(&running).contains(&"working"));
+    assert_eq!(running["work"][0]["state"], "running");
+    f.message("msg_c", 3, "user", json!({"text":"<system-reminder>\n[BACKGROUND TASK COMPLETED]\n\n**Completed:**\n- `bg_9`: Research\n</system-reminder>"}));
+    assert_eq!(f.page(50)["work"][0]["state"], "done");
+}

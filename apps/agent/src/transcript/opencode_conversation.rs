@@ -153,24 +153,27 @@ pub fn conversation_window(
     } else {
         "SELECT message_id,data FROM part WHERE session_id=?1 ORDER BY message_id,id LIMIT 400001"
     };
-    let mut query = db.prepare(sql)?;
-    let mut cursor = query.query([session])?;
     let mut parts: HashMap<String, Vec<Value>> = HashMap::new();
-    let ids: HashSet<_> = rows.iter().map(|r| r.id.as_str()).collect();
-    let mut count = 0;
-    while let Some(row) = cursor.next()? {
-        count += 1;
-        if count > MAX_PARTS {
-            return Err(Error::InvalidEvent);
+    // OpenCode 2.2 keeps a message's parts inline in `session_message.data` and has no `session_part` table.
+    if kind == Schema::V1 || table(&db, "session_part")? {
+        let mut query = db.prepare(sql)?;
+        let mut cursor = query.query([session])?;
+        let ids: HashSet<_> = rows.iter().map(|r| r.id.as_str()).collect();
+        let mut count = 0;
+        while let Some(row) = cursor.next()? {
+            count += 1;
+            if count > MAX_PARTS {
+                return Err(Error::InvalidEvent);
+            }
+            let id: String = row.get(0)?;
+            if !ids.contains(id.as_str()) {
+                return Err(Error::InvalidEvent);
+            }
+            parts
+                .entry(id)
+                .or_default()
+                .push(decoded(&row.get::<_, String>(1)?, &mut bytes)?);
         }
-        let id: String = row.get(0)?;
-        if !ids.contains(id.as_str()) {
-            return Err(Error::InvalidEvent);
-        }
-        parts
-            .entry(id)
-            .or_default()
-            .push(decoded(&row.get::<_, String>(1)?, &mut bytes)?);
     }
     if kind == Schema::V1 {
         if let Some(boundary) = &boundary {
@@ -182,6 +185,7 @@ pub fn conversation_window(
         }
     }
     let mut all = Vec::new();
+    let mut tool_parts: Vec<&Value> = Vec::new();
     for row in &rows {
         // V2 TUI applies lexical IDs before grouping; V1 was cut by ordered index.
         if queued.contains(&row.id)
@@ -190,6 +194,14 @@ pub fn conversation_window(
             continue;
         }
         let overlay = parts.get(&row.id);
+        match overlay {
+            Some(overlay) => tool_parts.extend(overlay),
+            None if kind == Schema::V2 => {
+                tool_parts.extend(row.data["content"].as_array().into_iter().flatten());
+                tool_parts.push(&row.data);
+            }
+            None => {}
+        }
         all.extend(normalize(
             kind,
             &row.id,
@@ -219,7 +231,7 @@ pub fn conversation_window(
         has_newer: selected.has_newer,
         activity,
         queued: Vec::new(),
-        work: None,
+        work: super::opencode_work::tasks(tool_parts),
         session: None,
     })
 }
