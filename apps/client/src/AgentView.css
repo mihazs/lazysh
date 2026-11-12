@@ -65,3 +65,5 @@
 @media (prefers-reduced-motion: reduce) { .agent-view .agent-working[data-activity="working"] .chat-activity-dot { animation: none; } }
 .agent-waiting[data-waiting] { color: var(--accent); font-weight: 600; }
 .agent-view-picker > button[data-waiting] { border-inline-start: 3px solid var(--accent); }
+/* Pending permission requests sit above the conversation and scroll on their own when several wait. */
+.agent-view > .approval-panel { flex: 0 1 auto; max-height: 50%; overflow: auto; margin: 8px 18px; }

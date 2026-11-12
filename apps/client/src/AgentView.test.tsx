@@ -609,3 +609,39 @@ it('shows how long the agent has waited from the recorded start of the wait, not
   await advance(0);
   expect(screen.getByRole('region',{name:'Agent view'}).querySelector('header')!.textContent).toContain('Waiting for your answer · 12 min. ago');
 });
+describe('permission requests of the agent in this pane',()=>{
+  const approval=(id:string,paneId:string,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+  function approvals(requests:unknown[],pane=()=>'%3') {
+    host('claude',[row('Claude Code','%3','needs_attention')],'available',[turn('Prompt','Answer')]);
+    const fallback=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+      if(command==='agent_approvals')return {schemaVersion:1,requests};
+      if(command==='resolve_agent_approval')return {schemaVersion:1,accepted:true};
+      if(command==='tmux_chat')return {...tmuxChatSnapshot,destination:{...tmuxChatSnapshot.destination,paneId:pane()}};
+      return fallback(command,args,options);
+    });
+  }
+  const mount=()=>render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  it('shows only this pane and session, ignores taps for 400 ms, then sends the hook decision once',async()=>{
+    approvals([approval('11111111-1111-4111-8111-111111111111','%3'),approval('22222222-2222-4222-8222-222222222222','%9'),approval('33333333-3333-4333-8333-333333333333','%3','another-session')]);
+    mount();await advance(0);
+    const dock=screen.getByRole('region',{name:'Pending approvals'});
+    expect(within(dock).getAllByRole('article')).toHaveLength(1);expect(dock.textContent).toContain('run 11111111-1111-4111-8111-111111111111');expect(dock.textContent).not.toContain('run 22222222');
+    const deny=within(dock).getByRole('button',{name:'Deny request'});
+    expect(deny.hasAttribute('disabled')).toBe(true);fireEvent.click(deny);expect(calls('resolve_agent_approval')).toEqual([]);
+    await advance(400);expect(deny.hasAttribute('disabled')).toBe(false);
+    await act(async()=>{fireEvent.click(deny);await vi.advanceTimersByTimeAsync(0);});
+    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'%3',decision:'deny'}]);
+    // Nothing was typed into the terminal: the decision is the hook's, not a key.
+    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+    expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
+  });
+  it('sends nothing when the pane no longer runs that agent session',async()=>{
+    let pane='%3';
+    approvals([approval('11111111-1111-4111-8111-111111111111','%3')],()=>pane);
+    mount();await advance(0);await advance(400);
+    pane='%4';
+    await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+    expect(calls('resolve_agent_approval')).toEqual([]);expect(screen.getByRole('alert')).toBeTruthy();
+  });
+});

@@ -5,7 +5,7 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
-declare global {interface Window {agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
+declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
 
 /** The commands every synthetic host answers the same way; each fixture adds its own on top. */
@@ -165,6 +165,36 @@ test('names what the agent waits for in the header and opens the Agent view from
   await expect(list.getByRole('status')).toHaveText('1 waiting for you');
   await expect(list.getByRole('button',{name:/Codex · \/work · Waiting for your answer · /})).toBeVisible();
   const row=await list.getByRole('button').first().boundingBox();expect(row!.x+row!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
+test('answers a Claude permission request from the Agent view through the approval hook and writes no key to the terminal',async({page})=>{
+  await open(page);
+  // The same pane now runs Claude Code, which has one pending permission request.
+  await page.evaluate(()=>{
+    const base=window.nativeFixtureInvoke!;
+    window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[]};
+    window.nativeFixtureInvoke=async(command,args)=>{
+      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
+      if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
+      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
+      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread'}))};
+      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
+      if(command==='agent_transcript')return {...(result as object),agent:'claude'};
+      return result;
+    };
+  });
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const dock=agentView(page).getByRole('region',{name:'Pending approvals',exact:true});
+  await expect(dock).toContainText('git push',{timeout:8000});
+  const deny=dock.getByRole('button',{name:'Deny request',exact:true});
+  await expect(deny).toBeEnabled();
+  const box=await deny.boundingBox();expect(box!.height).toBeGreaterThanOrEqual(36);
+  const before=await fixture(page);
+  await deny.click();
+  await expect(dock).toHaveCount(0);
+  expect(await page.evaluate(()=>window.approvals.decisions)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'claude-thread',paneId:'%3',decision:'deny'})]);
+  const after=await fixture(page);
+  expect(after.stdin).toEqual(before.stdin);expect(after.inputs.every(input=>input.kind==='snapshot')).toBe(true);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{

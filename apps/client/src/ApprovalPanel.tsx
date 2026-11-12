@@ -54,7 +54,17 @@ export function parseApprovals(value: unknown): Approval[] {
     return item as Approval;
   });
 }
-export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false }: { sessionId: string; visible?:boolean; compactEmpty?:boolean }) {
+/** Allow and Deny; a delay keeps a tap that landed as the card appeared from deciding. */
+function ApprovalActions({request, disabled, delay, decide}:{request:Approval;disabled:boolean;delay:number;decide:(request:Approval,decision:'allow'|'deny')=>void}) {
+  const [ready,setReady]=useState(delay===0);
+  useEffect(()=>{if(!delay)return;const timer=window.setTimeout(()=>setReady(true),delay);return ()=>window.clearTimeout(timer);},[delay]);
+  return <div className="approval-actions">
+    <button type="button" className="approval-deny" disabled={disabled || !ready} onClick={()=>decide(request,'deny')}><X size={16} aria-hidden="true" />{t('approvalsDeny')}</button>
+    <button type="button" className="approval-allow" disabled={disabled || !ready} onClick={()=>decide(request,'allow')}><Check size={16} aria-hidden="true" />{t('approvalsAllow')}</button>
+  </div>;
+}
+/** `match` shows only the requests of one agent session in one pane; `validate` must hold again when a decision is sent. */
+export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false, match, validate, delay=0 }: { sessionId: string; visible?:boolean; compactEmpty?:boolean; match?:{agentSessionId:string;paneId:string}; validate?:()=>Promise<boolean>; delay?:number }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
@@ -75,7 +85,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       const rows = parseApprovals(
         await invoke("agent_approvals", { sessionId }),
       );
-      if (owns(current)) setRequests(rows);
+      if (owns(current)) setRequests(match ? rows.filter(row=>row.agent==='claude' && row.sessionId===match.agentSessionId && row.paneId===match.paneId) : rows);
     } catch (e) {
       if (owns(current)) setError(captureUiError(e));
     } finally {
@@ -98,10 +108,11 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       generation.current++;
       window.clearInterval(interval);
     };
-  }, [sessionId,visible]);
+  }, [sessionId,visible,match?.agentSessionId,match?.paneId]);
   async function decide(request: Approval, decision: "allow" | "deny") {
     const current=beginRequest();if(current===null)return;
     try {
+      if (validate && (!await validate() || !owns(current) || Date.parse(request.expiresAt)<=Date.now())) throw new LocalUiError('approvalsNotAccepted');
       const result = await invoke<{ schemaVersion: number; accepted: boolean }>(
         "resolve_agent_approval",
         {
@@ -170,14 +181,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
               {expired?t('approvalsExpired'):t('approvalsExpiresIn',{time:formatCountdown(expires-now)})}
             </time>
           </p>
-          <div className="approval-actions">
-            <button type="button" className="approval-deny" disabled={!visible || busy || expired} onClick={() => void decide(request, "deny")}>
-              <X size={16} aria-hidden="true" />{t('approvalsDeny')}
-            </button>
-            <button type="button" className="approval-allow" disabled={!visible || busy || expired} onClick={() => void decide(request, "allow")}>
-              <Check size={16} aria-hidden="true" />{t('approvalsAllow')}
-            </button>
-          </div>
+          <ApprovalActions key={`${request.id}:${request.expectedHash}`} request={request} disabled={!visible || busy || expired} delay={delay} decide={(item,decision)=>void decide(item,decision)} />
           <dl className="approval-facts">
             <div><dt>{t('approvalsProjectLabel')}</dt><dd>{request.project}</dd></div>
             <div><dt>{t('approvalsSessionLabel')}</dt><dd>{request.sessionId}</dd></div>

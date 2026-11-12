@@ -28,3 +28,7 @@ lazysh-agent approval-resolve --id REQUEST_UUID --expected-hash HASH --session-i
 ```
 
 Omit `--pane-id` only when the listed pane is null. A stale or mismatched resolution exits unsuccessfully with no success JSON. Integration tests use fixture hook subprocesses to verify exact identity, concurrent resolution, cancellation, timeout, replay refusal and payload removal. No real Claude session was used to certify host-version behavior.
+
+## In the Agent view
+
+On a native tmux session, the Agent view shows the pending requests of the Claude Code session whose hook report names its pane (and no other) above the conversation. A decision is the same hash-bound `resolve_agent_approval` call as on the Agents board, sent only after the pane and the single reported session are checked again, and the buttons ignore taps for 400 ms after a card appears. Nothing is typed into the terminal, so switching to the terminal shows the prompt already answered through the hook. A conversation chosen from the session list, and any pane without exactly one matching report, shows no requests there; the Agents board still lists them.
