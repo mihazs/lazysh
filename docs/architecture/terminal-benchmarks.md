@@ -256,14 +256,14 @@ Measured with `cargo run --release --example parse_bench` in `packages/terminal-
 
 Environment: AMD Ryzen 9 5900X (24 threads), Linux 7.3.1, rustc 1.96.1 release profile (the crate's pinned toolchain), libghostty-vt from the vendored Ghostty commit `44f2a44df` built with Zig 0.16.0 `ReleaseFast`, SIMD on, x86_64. The example prints the host load average at start.
 
-The host was shared with other builds. The section was first written from one invocation whose load was not recorded; four more invocations were taken while the 1-minute load average was 22 to 25 on 24 threads. Their medians moved by up to a factor of two between invocations, so the table shows the lowest and highest median over the five invocations instead of one number:
+The host was shared with other builds and agents. The section was first written from one invocation whose load was not recorded; nine more invocations were taken while the 1-minute load average at start was 13 and 18 (two invocations), 22 to 25 (four) and 61, 98 and 175 (three) on 24 threads. Their medians moved by up to a factor of two between invocations, so the table shows the lowest and highest median over the ten invocations instead of one number:
 
 | Workload (80x24) | VT only, MiB/s | VT plus a dirty-row frame per 16 KiB chunk, MiB/s |
 | --- | --- | --- |
-| Plain text | 345 to 729 | 27 to 80 |
-| ANSI and truecolor, many style changes | 45 to 75 | 33 to 46 |
-| Full-screen redraw, 24 positioned rows | 315 to 403 | 45 to 70 |
-| CJK, emoji, combining marks | 38 to 74 | 35 to 44 |
+| Plain text | 200 to 729 | 27 to 80 |
+| ANSI and truecolor, many style changes | 40 to 75 | 25 to 46 |
+| Full-screen redraw, 24 positioned rows | 216 to 403 | 38 to 70 |
+| CJK, emoji, combining marks | 38 to 74 | 23 to 44 |
 
 The high end is the closest figure to an uncontended machine; the low end is what a busy host produced. A quiet-host rerun with the load average recorded is still needed before any number here is used as a baseline.
 
