@@ -387,12 +387,17 @@ mod tests {
             text: "it's $(not run) -x".into(),
         });
         received(b"it's $(not run) -x\n");
+        // Text that looks like an option is still text.
+        deliver(Input::Send {
+            text: "--help".into(),
+        });
+        received(b"it's $(not run) -x\n--help\n");
         deliver(Input::RequestStop);
         deliver(Input::Send {
             text: "two\nlines".into(),
         });
         // Escape stays in the line the agent has not finished reading; a bracketed paste keeps its newline as text.
-        received(b"it's $(not run) -x\n\x1btwo\nlines\n");
+        received(b"it's $(not run) -x\n--help\n\x1btwo\nlines\n");
         // A pane running something else (a shell would take the prompt as a command) and a missing pane are refused.
         let other = String::from_utf8(
             run(&format!(
