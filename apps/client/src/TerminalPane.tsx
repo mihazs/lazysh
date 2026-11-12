@@ -55,9 +55,11 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, typingActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
+export default function TerminalPane({ session, active, swiping = false, typingActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
   session: LiveSession;
   active: boolean;
+  /** Shown beside the Agent view while a swipe moves between them, without becoming the active terminal. */
+  swiping?: boolean;
   herdrNavigationOnly?: boolean;
   /** Activated by the user opening this terminal to type, which may raise the soft keyboard; navigating to a terminal never does. */
   typingActivation?: boolean;
@@ -1181,7 +1183,7 @@ export default function TerminalPane({ session, active, typingActivation = false
     <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarShown(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
     {menuEnabled && menuButton && <button type="button" className="icon-button" title={t('bottomMenuOpen')} aria-label={t('bottomMenuOpen')} aria-expanded={menuOpen} onPointerDown={event => event.preventDefault()} onClick={() => setMenuOpen(!menuOpen)}><ChevronsUp size={18} aria-hidden="true" /></button>}
   </div>;
-  return <div ref={pane} className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
+  return <div ref={pane} className={swiping ? "terminal-pane terminal-pane-swiping" : "terminal-pane"} style={{display: active || swiping ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
