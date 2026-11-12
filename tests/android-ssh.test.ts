@@ -1833,8 +1833,8 @@ test('past-bottom passive actual-owner receipt waits for trusted same-contact DO
       addEventListener:(kind:string,handler:(event:unknown)=>void,options:unknown)=>{expect(options).toEqual({capture:true,passive:true});hooks.set(kind,handler);},
       removeEventListener:(kind:string,handler:unknown,capture:unknown)=>{expect(capture).toBe(true);expect(hooks.get(kind)).toBe(handler);hooks.delete(kind);}};
     const receipt=new Function('owner','document',`${source};return ownedPastBottomTouchReceipt(owner);`)(owner,document);
-    const fire=(kind:string,y:number,extra:Record<string,unknown>={})=>{
-      const touch={identifier:7,clientY:y};
+    const fire=(kind:string,y:number,extra:Record<string,unknown>={},screenY=y+500)=>{
+      const touch={identifier:7,clientY:y,screenY};
       hooks.get(kind)!({isTrusted:true,currentTarget:owner,composedPath:()=>[owner],touches:kind==='touchend'?[]:[touch],changedTouches:[touch],
         privatePrompt:'PRIVATE_CONTEXT',preventDefault(){throw Error('Must remain passive');},stopPropagation(){throw Error('Must remain passive');},...extra});
     };
@@ -1845,12 +1845,15 @@ test('past-bottom passive actual-owner receipt waits for trusted same-contact DO
   good.fire('touchmove',72);expect(good.receipt.read()).toMatchObject({moves:1,ends:0,distance48:false});
   good.fire('touchmove',44);expect(good.receipt.read()).toMatchObject({moves:2,ends:0,distance48:true,monotonicUp:true});
   good.document.activeElement=null;good.fire('touchend',44);
-  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,focused:false});
+  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,screenBack:0,clientBack:0,focused:false});
   good.receipt.dispose();expect(good.hooks.size).toBe(0);
   for(const [extra,field] of [[{isTrusted:false},'trusted'],[{currentTarget:null},'insideOwner'],[{composedPath:()=>[]},'insideOwner']] as const){
     const sample=create();sample.fire('touchstart',100,extra);expect(sample.receipt.read()[field]).toBe(false);sample.receipt.dispose();
   }
-  const wrong=create();wrong.fire('touchstart',100);wrong.fire('touchmove',110);expect(wrong.receipt.read().monotonicUp).toBe(false);
+  // A viewport shift under a still finger moves clientY alone; only the contact's screen position decides.
+  const shifted=create();shifted.fire('touchstart',100);shifted.fire('touchmove',110,{},590);shifted.fire('touchmove',120,{},560);
+  expect(shifted.receipt.read()).toMatchObject({monotonicUp:true,clientBack:10});shifted.receipt.dispose();
+  const wrong=create();wrong.fire('touchstart',100);wrong.fire('touchmove',110);expect(wrong.receipt.read()).toMatchObject({monotonicUp:false,screenBack:10});
   wrong.fire('touchmove',40,{touches:[{identifier:8,clientY:40}]});expect(wrong.receipt.read().sameContact).toBe(false);
   wrong.owner.isConnected=false;expect(wrong.receipt.read().retained).toBe(false);wrong.receipt.dispose();
 });
