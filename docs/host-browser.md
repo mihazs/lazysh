@@ -48,7 +48,7 @@ Security and data (each is tested, not only stated):
 | How is the browser started? | The app starts it, with a dedicated, ephemeral profile and a debug flag. | A debug flag is read only at startup; a browser the user already runs cannot be attached to without restarting it, and the port gives its holder every signed-in session. |
 | How does Chrome reach the client? | A host companion relay on one SSH exec channel, talking to Chrome over `--remote-debugging-pipe`. | No listening socket exists on the host at all. The debug port has no authentication and every local account on the host can use it (measured). |
 | How does Firefox reach the client? | The same relay, talking BiDi to a loopback port the relay alone uses. | Firefox has no pipe mode. The relay hides its one-session limit, its exact `Host` header rule and its lack of push frames. |
-| Does the client open the debug port? | No, in the product. Yes, in the flagged prototype only. | The client is a web view; it cannot set `Host`, and it sends an `Origin` that both browsers refuse unless widened. The prototype widens it for one exact origin to prove the forwarded-loopback path. |
+| Does the client open the debug port? | No, in the product. Yes, in the flagged prototype only. | The client is a web view; it cannot set `Host`, it sends an `Origin` that both browsers refuse unless widened, and the app's Content Security Policy (`connect-src`) allows no loopback WebSocket. The prototype widens the origin for one exact origin and runs only in the Vite dev server, where no such policy applies, to prove the forwarded-loopback path. |
 | Frames | JPEG, length-prefixed binary on the channel, acknowledged after decode. | PNG was 340 KB per frame against 15 KB for JPEG (measured). Base64 inside JSON costs 33 percent. |
 | Input | A fixed set of relay operations that map onto each browser's input commands. | The phone never sends a raw protocol command. |
 | Normal profile | A separate, advanced, warned option, not in the first release. | See "Attaching to the normal profile". |
@@ -259,7 +259,7 @@ Design from those facts:
 
 | Milestone | Delivers | Issue | Ships to users |
 | --- | --- | --- | --- |
-| 1 | This specification, the feasibility measurements, and a developer-flagged Chrome prototype with a CI test | [#1250](https://github.com/mihazs/lazysh/issues/1250) | No. Prototype off by default and hidden. |
+| 1 | This specification, the feasibility measurements, and a developer-flagged Chrome prototype with a CI test (done) | [#1250](https://github.com/mihazs/lazysh/issues/1250) | No. Prototype off by default and hidden. |
 | 2 | Opt-in gate, managed profile, lifecycle, limits | [#1258](https://github.com/mihazs/lazysh/issues/1258) slices A to C | With the viewer below |
 | 2 | Chrome relay and viewer, view-only | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
 | 3 | Chrome input | [#1255](https://github.com/mihazs/lazysh/issues/1255) | Yes |
@@ -274,24 +274,47 @@ is scheduled before Firefox so that the ladder is designed once and the Firefox 
 
 ## Prototype
 
-Milestone 1 includes a prototype that proves the architecture and records latency. It is not part of the product
-and ships no user-facing UI.
+Milestone 1 includes a prototype that proves the architecture and records latency. It is not the product and
+ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser.rs`,
+`apps/client/src/hostBrowser/` and their tests.
 
-- **Developer flag, off by default.** It is not in any menu. A developer enables it explicitly, on the host and on
-  the device; neither side offers it otherwise.
-- **Host side.** A hidden launcher starts a Chrome or Chromium with a throwaway profile and a random loopback
-  debug port, prints the port and the browser path as one JSON line, and removes the browser and the profile
-  when its input closes.
-- **Client side.** A view that reaches that port through the existing forwarded-loopback Preview connection,
-  draws screencast frames of a fixture page, and sends taps and keys. It counts frames per second and tap to
-  frame latency.
-- **Test.** A real headless Chrome drives a fixture page in CI where the runner image has one (the Ubuntu 24.04
-  [hosted image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) lists Chrome 156,
-  Firefox 159 and Xvfb, and the client job installs Playwright's Chromium); the protocol client is also tested against a fake server.
-  The test states what it cannot cover (a real SSH hop, a real device).
+- **Developer flag, off by default.** On the host, the hidden command `lazysh-agent host-browser` (not in
+  `--help`) refuses to run unless `LAZYSH_DEV_HOST_BROWSER=1` is set. On the device, the viewer is a page that
+  only the Vite development server serves at `/?hostBrowserDev=1`; a production build of the client does not
+  contain it (checked by building and searching the output), and the normal app has no menu entry for it.
+- **Host side.** `lazysh-agent host-browser [--url URL] [--allow-origin ORIGIN] [--headed] [--no-sandbox]`
+  starts a Chrome or Chromium found on `PATH` (or `--binary`) with a private profile directory (mode 0700), a
+  random loopback debug port, no sync and no background networking. It prints one JSON line,
+  `{"schemaVersion":1,"port":…,"path":"/devtools/browser/…","pid":…,"profile":"…"}`, and waits. When its
+  standard input closes, on SIGINT, SIGTERM or SIGHUP, or when the browser exits, it stops the browser's whole
+  process group and deletes the profile. It refuses a first page that is not `http`, `https` or `about:blank`,
+  and an `--allow-origin` that is not one exact origin (a wildcard or a list would let any page drive the
+  browser). `--no-sandbox` exists only for containers and CI runners that cannot create a sandbox. If the launcher
+  itself is killed with SIGKILL the browser is left behind: the product relay uses the pipe, which has no such
+  gap.
+- **Client side.** The viewer reaches `ws://127.0.0.1:<port>/devtools/browser/<id>`, the port forwarded over SSH
+  (the Preview tool can forward a host port, or `ssh -L` can), draws screencast frames on a canvas,
+  acknowledges each after decoding, and sends a tap (press and release together), typed text (`insertText`,
+  so accents, CJK and emoji work) and Enter, Backspace, Tab and arrow keys. It sends only methods on a closed
+  allow list and refuses an endpoint that is not a loopback browser path. It reports frames per second and the
+  time from a tap to the first frame that changed.
+- **Try it.** On the host, `LAZYSH_DEV_HOST_BROWSER=1 lazysh-agent host-browser --allow-origin
+  http://127.0.0.1:1420 --url http://127.0.0.1:3000/`. Forward the printed port to the device, run the client
+  with `bun run dev`, open `/?hostBrowserDev=1`, paste the `ws://` URL and choose **Connect**. The allowed
+  origin is the viewer page's origin; the product needs none because its client is native.
+- **Tests.** A launcher test with a fake browser (arguments, private profile, process-group and profile cleanup
+  when input closes, refusals before anything starts), the same launcher against a real Chrome or Chromium
+  where one is on `PATH` (the Ubuntu 24.04 hosted image has Chrome 156), a protocol-client unit test against an
+  in-memory DevTools endpoint, and a Playwright test in which a real headless Chromium plays the host: the
+  viewer must draw the fixture page, a tap must turn it blue, and typed accents and CJK must reach its input.
+  The Playwright test runs in the existing `client` job on the browser the job already installs, and fails
+  rather than skips when no browser is found.
+- **What the tests do not cover.** A real SSH hop in CI, a real device, and a headed browser. The measurements
+  below were made by hand with a real `ssh -L`.
 - **Why a raw forward here, and not in the product.** The prototype uses a forwarded debug port because it
   needs no new relay, and the measurements show why it is not the shipped transport (no authentication on the
-  port, exposure to every local account, and a web view that cannot set `Host`).
+  port, exposure to every local account, a web view that cannot set `Host`, and a Content Security Policy that
+  allows no loopback WebSocket in the app).
 
 ## What it will not do
 

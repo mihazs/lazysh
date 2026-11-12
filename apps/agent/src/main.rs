@@ -76,6 +76,24 @@ enum Command {
         #[arg(long, default_value_t=300, value_parser=clap::value_parser!(u16).range(1..=600))]
         timeout_seconds: u16,
     },
+    /// Developer prototype: start a throwaway Chrome-family browser with a random loopback debug port
+    /// and stop it when stdin closes. Needs LAZYSH_DEV_HOST_BROWSER=1; see docs/host-browser.md.
+    #[command(hide = true)]
+    HostBrowser {
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+        /// Exact origin allowed to open the debug WebSocket; repeatable, never a wildcard.
+        #[arg(long)]
+        allow_origin: Vec<String>,
+        /// First page to open: http, https or about:blank.
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        headed: bool,
+        /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
+        #[arg(long)]
+        no_sandbox: bool,
+    },
     /// Print live, bounded permission requests.
     ApprovalList {
         #[arg(long, default_value_t=20, value_parser=clap::value_parser!(u8).range(1..=20))]
@@ -310,6 +328,22 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             } else {
                 Some(lazysh_agent::devices::run(command)?)
             }
+        }
+        Command::HostBrowser {
+            binary,
+            allow_origin,
+            url,
+            headed,
+            no_sandbox,
+        } => {
+            lazysh_agent::host_browser::run(&lazysh_agent::host_browser::Launch {
+                binary: binary.as_deref(),
+                allow_origins: &allow_origin,
+                url: url.as_deref(),
+                headed,
+                no_sandbox,
+            })?;
+            None
         }
         Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
         Command::ApprovalRequest {
