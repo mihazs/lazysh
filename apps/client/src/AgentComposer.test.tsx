@@ -6,6 +6,7 @@ import AgentComposer from './AgentComposer';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {chatFollowAccess} from './test/chatFollowAccess';
 import {t} from './i18n/core';
+import {activeTextInteractions} from './textInteraction';
 import {tmuxChatBound,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
 import {herdrChatReply,herdrTarget} from './test/herdrChat';
 import {attachmentFile,attachmentPngHeader} from './test/attachmentData';
@@ -401,4 +402,13 @@ it('keeps a Herdr pane at the 4 KiB it can take and says so',async()=>{
   fireEvent.click(sendButton());
   await waitFor(()=>expect(inputs()).toHaveLength(1));
   expect((inputs()[0].input as {kind:string}).kind).toBe('send');
+});
+
+it('holds the edge gestures off while the message box has focus, so a swipe never fires under the keyboard',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(activeTextInteractions()).not.toContain('field');
+  act(()=>box().focus());
+  expect(activeTextInteractions()).toContain('field');
+  act(()=>box().blur());
+  expect(activeTextInteractions()).not.toContain('field');
 });
