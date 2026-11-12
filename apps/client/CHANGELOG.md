@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.44.0
+
+### Minor Changes
+
+- b76c8c7: Open or download the selected file from Files: Open with, Download and (Android) Share, with SFTP streaming, progress and cancel, confirmation for symbolic links and files over 50 MiB, no silent overwrite, and no system open of programs or scripts.
+- cf8a0bf: Answer the open Claude Code question (single or multi-select, several questions, or typed text) from the Agent view on a tmux session, through a new bounded dialog-answer input of the confirmed terminal input.
+
+### Patch Changes
+
+- d770c55: Fix the agent job's moon base revision on pushes to main, which resolved to an empty ref and failed the job. Pull requests are unchanged.
+- @lazysh/account-usage@1.44.0
+  - @lazysh/common@1.44.0
+  - @lazysh/display-idle@1.44.0
+  - @lazysh/et-transport@1.44.0
+  - @lazysh/mosh-transport@1.44.0
+
 ## 1.43.0
 
 ### Minor Changes
