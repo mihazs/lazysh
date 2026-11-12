@@ -3379,10 +3379,7 @@ pub async fn agent_reported_history(
     lease
         .run(async {
             let command = reported_history_command(&agent_session_id)?;
-            let session = state.session(&session_id).await?;
-            Ok(serde_json::from_str(
-                &crate::companion::exec(&session, command, &lease).await?,
-            )?)
+            transcript_result(&lease, &state, &session_id, command, None).await
         })
         .await
 }
@@ -3436,6 +3433,38 @@ pub async fn agent_transcripts(
                 )
                 .await?,
             )?)
+        })
+        .await
+}
+fn history_command(agent: &str, folder: &str) -> Result<String> {
+    if !matches!(agent, "claude" | "codex") {
+        return Err(SshError::new(
+            "invalid_input",
+            "Unsupported history adapter",
+        ));
+    }
+    if !folder.starts_with('/') || folder.len() > 4096 || folder.chars().any(char::is_control) {
+        return Err(SshError::new("invalid_input", "Invalid folder"));
+    }
+    Ok(format!(
+        "lazysh-agent history --agent {agent} --limit 30 --folder {}",
+        quote(folder)
+    ))
+}
+
+/// The earlier sessions of one folder, from the host companion (`lazysh-agent history`).
+#[tauri::command]
+pub async fn agent_history(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    agent: String,
+    folder: String,
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let command = history_command(&agent, &folder)?;
+            transcript_result(&lease, &state, &session_id, command, None).await
         })
         .await
 }
@@ -3884,6 +3913,27 @@ mod tests {
         task.await.unwrap();
         assert!(!saved.load(Ordering::SeqCst));
         assert!(forgotten.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn history_command_lists_one_quoted_folder_for_claude_and_codex_only() {
+        assert_eq!(
+            history_command("claude", "/work/it's here").unwrap(),
+            "lazysh-agent history --agent claude --limit 30 --folder '/work/it'\\''s here'"
+        );
+        assert!(history_command("codex", "/work").is_ok());
+        for (agent, folder) in [
+            ("pi", "/work"),
+            ("claude", "relative"),
+            ("claude", ""),
+            ("claude", "/work\n; rm -rf /"),
+            ("claude", &format!("/{}", "a".repeat(4096))),
+        ] {
+            assert!(
+                history_command(agent, folder).is_err(),
+                "{agent} {folder:?}"
+            );
+        }
     }
 
     #[test]

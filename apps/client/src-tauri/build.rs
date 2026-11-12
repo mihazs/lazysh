@@ -186,6 +186,7 @@ fn main() {
         "agent_usage",
         "account_usage",
         "agent_transcripts",
+        "agent_history",
     ]);
     let mut attributes = tauri_build::Attributes::new().app_manifest(app);
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")

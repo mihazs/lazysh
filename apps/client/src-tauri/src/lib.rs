@@ -313,7 +313,8 @@ pub fn run() {
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,
                 ssh::agent_usage,
-                ssh::agent_transcripts
+                ssh::agent_transcripts,
+                ssh::agent_history
             ];
             handler(invoke)
         })

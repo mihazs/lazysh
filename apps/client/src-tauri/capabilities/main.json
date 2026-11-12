@@ -155,6 +155,7 @@
     "allow-update-companion-settings",
     "allow-agent-transcript",
     "allow-agent-transcripts",
+    "allow-agent-history",
     "allow-agent-usage",
     "allow-account-usage",
     "allow-app-icon-status",

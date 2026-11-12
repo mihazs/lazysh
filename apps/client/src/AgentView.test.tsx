@@ -31,6 +31,8 @@ function host(agent:string,rows:unknown[],history:'available'|'missing'|('availa
 const options=()=>{const button=screen.getByRole('button',{name:'Agent view options'});if(button.getAttribute('aria-expanded')!=='true')fireEvent.click(button);return screen.getByRole('group',{name:'Agent view options'});};
 const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
 const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
+/** The tmux pane the hook reports tie to a conversation, mounted and settled. */
+const mountTmux=async()=>{render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);};
 beforeEach(()=>{localStorage.clear();vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 
@@ -700,6 +702,67 @@ describe('permission requests of the agent in this pane',()=>{
   });
 });
 
+describe('earlier sessions',()=>{
+  const sessions=(agent:string)=>({schemaVersion:1,agent,sessions:agent==='claude'
+    ?[{agent,sessionId:'11111111-1111-4111-8111-111111111111',path:'/home/owner/.claude/projects/-work/11111111.jsonl',title:'Add dark mode',modifiedAt:new Date(Date.now()-3_600_000).toISOString(),bytes:900},
+      {agent:'codex',sessionId:'wrong-agent',path:'/x.jsonl',modifiedAt:new Date().toISOString(),bytes:1},{agent,sessionId:'bad',path:'/y.jsonl',modifiedAt:'not a date',bytes:1}]
+    :[{agent,sessionId:'019aaaaa-0000-7000-8000-000000000000',path:'/home/owner/.codex/sessions/2026/11/rollout-a.jsonl',modifiedAt:new Date(Date.now()-60_000).toISOString(),bytes:500}]});
+  const mount=async(history:(agent:string)=>unknown|Promise<unknown>=sessions)=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('Plan the work','Here is the plan.')]);
+    const answers:Record<string,(args:{agent:string;path:string})=>unknown>={
+      agent_approvals:()=>({schemaVersion:1,requests:[]}),
+      agent_history:args=>history(args.agent),
+    };
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      const given=args as {agent:string;path:string};
+      if(command==='agent_transcript'&&given.path.endsWith('rollout-a.jsonl'))return page('codex',turn('Earlier prompt','Earlier answer'));
+      return answers[command]?answers[command](given):base(command,args);
+    });
+    await mountTmux();
+  };
+
+  it('lists both agents newest first for the folder, opens one read-only without a composer, and goes back to the list',async()=>{
+    await mount();
+    fireEvent.click(within(options()).getByRole('button',{name:'Earlier sessions'}));await advance(0);
+    expect(calls('agent_history')).toEqual([{sessionId:'ssh',agent:'claude',folder:'/work'},{sessionId:'ssh',agent:'codex',folder:'/work'}]);
+    const list=within(screen.getByRole('region',{name:'Earlier sessions in this folder'}));
+    expect(list.getAllByRole('button').map(button=>button.textContent)).toEqual(['Codex · 019aaaaa · 1 min. ago','Claude Code · Add dark mode · 1 hr. ago','Close']);
+    fireEvent.click(list.getByText(/Codex · 019aaaaa/));await advance(0);
+    expect(screen.getByText('Earlier answer')).toBeTruthy();
+    expect(screen.queryByRole('region',{name:'Earlier sessions in this folder'})).toBeNull();
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(calls('agent_transcript').at(-1)).toMatchObject({agent:'codex',path:'/home/owner/.codex/sessions/2026/11/rollout-a.jsonl',view:'conversation'});
+    expect(within(options()).getByText(/read-only/)).toBeTruthy();
+    fireEvent.click(within(options()).getByRole('button',{name:'Back to earlier sessions'}));await advance(0);
+    expect(screen.getByRole('region',{name:'Earlier sessions in this folder'})).toBeTruthy();
+    expect(screen.queryByText('Earlier answer')).toBeNull();
+  });
+
+  it('never offers Resume over a pane that already runs an agent, and says why',async()=>{
+    const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+    await mount();
+    fireEvent.click(within(options()).getByRole('button',{name:'Earlier sessions'}));await advance(0);
+    fireEvent.click(screen.getByText(/Codex · 019aaaaa/));await advance(0);
+    const menu=within(options());
+    expect(menu.queryByRole('button',{name:'Resume in the terminal'})).toBeNull();
+    expect(menu.getByText(/An agent is running in this pane, so Resume is not offered here/)).toBeTruthy();
+    expect(staged).not.toHaveBeenCalled();window.removeEventListener('lazysh-prompt-draft',staged);
+  });
+
+  it('says so when the companion cannot list sessions, and when the folder has none',async()=>{
+    await mount(()=>{throw new Error('unknown subcommand');});
+    fireEvent.click(within(options()).getByRole('button',{name:'Earlier sessions'}));await advance(0);
+    expect(screen.getByRole('alert').textContent).toMatch(/Update the host companion/);
+    cleanup();
+    await mount(agent=>({schemaVersion:1,agent,sessions:[]}));
+    fireEvent.click(within(options()).getByRole('button',{name:'Earlier sessions'}));await advance(0);
+    expect(screen.getByText(/No earlier Claude Code or Codex sessions/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Close'}));
+    expect(screen.queryByRole('region',{name:'Earlier sessions in this folder'})).toBeNull();
+  });
+});
+
 describe('answering the open question of the agent',()=>{
   const question=(questions:object[],id='q1')=>[
     {id:'p',role:'user',blocks:[{type:'text',text:'Ask me'}]},
@@ -939,8 +1002,7 @@ describe('working row',()=>{
     host('claude',[{...row('Claude Code','%3',state),updatedAt,summary}],'available',[messages]);
     const base=vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async(command,args)=>{const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),activity}:reply;});
-    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
-    await advance(0);
+    await mountTmux();
   };
   const working=()=>[...document.querySelectorAll('.agent-working-row')].map(node=>node.textContent);
 

@@ -24,6 +24,7 @@ mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
 mod herdr_session;
+mod history;
 mod inline_image;
 mod work;
 pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_window};
@@ -46,6 +47,7 @@ pub use conversation::{
 };
 pub use database::read_database_page;
 pub use discovery::discover;
+pub use history::history;
 pub(crate) use source_snapshot::SourceSnapshot;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

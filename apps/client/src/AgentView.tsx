@@ -7,6 +7,7 @@ import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {type ScreenSource} from './AgentPickerDock';
+import AgentHistory from './AgentHistory';
 import {publishAnswerGuard} from './agentDialogAnswer';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
@@ -27,7 +28,7 @@ const conversationAgents: Record<string, BoundConversation['agent']> = {'Claude 
 const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
-type Selection = {row?:AgentSession;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
+type Selection = {row?:AgentSession;history?:boolean;resume?:string;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
 function herdrSelection(row:LinkedAgent,server:string,extra:Partial<Selection>):Selection {
   const agent=row.agent_session.agent as BoundConversation['agent'];
   return {cwd:row.cwd ?? undefined,title:[agentNames[agent],row.cwd && pathBasename(row.cwd)].filter(Boolean).join(' · '),status:row.agent_status,
@@ -62,6 +63,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const [unavailable,setUnavailable] = useState(false);
   const [menu,setMenu] = useState(false);
   const [images,setImages] = useState(storedImages);
+  const [history,setHistory] = useState<string>();
   const menuId = useId();
   const [usage,setUsage] = useState<Record<string,number|string>>();
   const [prompts,setPrompts] = useState<string[]>([]);
@@ -206,7 +208,11 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
   // One compact row: what the chat belongs to and its state. Everything else waits behind the options button.
   const enter=selected?.enter && onEnterHerdr;
-  const unlinked=!!herdrSession && !!selected && !selected.linked;
+  const unlinked=!!herdrSession && !!selected && !selected.linked && !selected.history;
+  // The folder whose earlier sessions can be listed: where the conversation on screen works.
+  const paneHasAgent=binding.kind==='bound' || binding.kind==='partial' || !!focus?.agent;
+  const focusedFolder=herdrSession ? navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.cwd ?? undefined : undefined;
+  const viewFolder=selected ? selected.cwd ?? selected.row?.project : row?.project ?? focusedFolder;
   const listing=!!herdrSession && !selected && (!reader || choosing);
   return <section className="agent-view" hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
@@ -222,17 +228,24 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {!selected && reader && !herdrSession && <button type="button" aria-expanded={choosing} onClick={()=>{setChoosing(value=>!value);setMenu(false);}}>{t('agentViewSessions')}</button>}
       {herdrSession && selected?.linked && <button type="button" onClick={()=>{setChoosing(true);setMenu(false);}}>{t('agentViewChooseAgent')}</button>}
       {herdrSession && !selected && linked && <button type="button" onClick={()=>{setChoosing(false);setMenu(false);}}>{t('agentViewThisPane')}</button>}
+      {selected?.history && <button type="button" onClick={()=>{request.current++;setPicked(undefined);setHistory(selected.cwd);setMenu(false);}}>{t('agentHistoryBack')}</button>}
+      {/* Resume stages the agent's own command for review in the terminal composer, like Start; it is never offered over a running agent. */}
+      {selected?.history && selected.resume && !paneHasAgent && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:selected.resume}}));setMenu(false);onShowTerminal();}}>{t('agentHistoryResume')}</button>}
       {selected && !selected.linked && <button type="button" onClick={back}>{t(herdrSession && linked ? 'agentViewThisPane' : 'agentViewBackSessions')}</button>}
+      {reader && viewFolder && !selected?.history && <button type="button" onClick={()=>{setHistory(viewFolder);setMenu(false);}}>{t('agentHistoryOpen')}</button>}
       {enter && <EnterSessionButton server={selected.enter!.server} target={selected.enter!.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}
       {/* The safety rule is unchanged: a shown conversation grants no terminal input beyond the confirmed-input flow. */}
       {selected?.linked && <p>{t('agentViewLinkedNote',{place:selected.place??''})}</p>}
-      {selected && !selected.linked && <p>{t('agentViewSelectedNoStage')}</p>}
+      {selected && !selected.linked && <p>{t(selected.history ? 'agentHistoryReadOnly' : 'agentViewSelectedNoStage')}</p>}
+      {selected?.history && selected.resume && paneHasAgent && <p>{t('agentHistoryResumeBusy')}</p>}
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
       {reader && <AgentSessionDetails session={info}/>}
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
+    {history && <AgentHistory sessionId={sessionId} folder={history} invoke={invoke} onClose={()=>setHistory(undefined)}
+      onOpen={item=>{request.current++;setHistory(undefined);setPicked({history:true,cwd:history,focusKey:lastFocus.current,resume:/^[A-Za-z0-9-]{8,64}$/.test(item.sessionId)?`${item.agent==='claude'?'claude --resume':'codex resume'} ${item.sessionId}`:undefined,title:[agentNames[item.agent],item.title ?? item.sessionId.slice(0,8)].join(' · '),conversation:Object.freeze({agent:item.agent,path:item.path})});}}/>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">
       <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>
@@ -250,6 +263,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       <p>{t('agentViewNoAgentRunning')}</p>
       <div className="button-row">
         <StartButtons sessionId={sessionId}/>
+        {viewFolder && !history && <button type="button" onClick={()=>setHistory(viewFolder)}>{t('agentHistoryOpen')}</button>}
         {herdrLaunch ? <HerdrWorkspaceCreate sessionId={sessionId} server={navigation.data.server} lease={navigation.lease} tree={navigation.data.snapshot} disabled={!shown} label={t('agentViewStartAgent')} agentFirst
           onCreated={workspace=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined)}/> : null}
         <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
@@ -260,6 +274,6 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {reader && !selected && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} answerable={tmux && row?.agent === 'Claude Code' && !!row.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} />}
-    {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
+    {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }
