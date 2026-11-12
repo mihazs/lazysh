@@ -36,8 +36,8 @@ fn command(target: &StockTarget, input: &Input) -> Option<String> {
     let rest = match input {
         Input::Send { text } => format!("prompt {} {}", quote(&target.pane), quote(text)),
         Input::RequestStop => format!("send-keys {} esc", quote(&target.pane)),
-        // Like the guard, stock input has no option-key profile: a dialog answer stays in the terminal.
-        Input::Select { .. } | Input::Submit { .. } => return None,
+        // Like the guard, stock input has no option-key profile and no long-paste path: those stay in the terminal.
+        Input::Select { .. } | Input::Submit { .. } | Input::SendLong { .. } => return None,
     };
     Some(format!(
         "herdr --session {} agent {rest}",
@@ -174,6 +174,10 @@ mod tests {
             None
         );
         assert_eq!(command(&target(), &Input::Submit { of: 3 }), None);
+        assert_eq!(
+            command(&target(), &Input::SendLong { text: "x".into() }),
+            None
+        );
     }
     #[test]
     fn accepts_only_an_exact_pane_and_a_known_agent_session() {
