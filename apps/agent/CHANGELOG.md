@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.48.0
+
+### Minor Changes
+
+- 16c4800: Read the Agent view's background work (sub-agents, background commands, monitors, workflows) from the host companion so the panel covers the whole conversation, shows a shell or monitor's output and flags launches with no recorded end as not confirmed.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.48.0
+  - @lazysh/common@1.48.0
+  - @lazysh/notification-client@1.48.0
+
 ## 1.47.0
 
 ### Patch Changes
