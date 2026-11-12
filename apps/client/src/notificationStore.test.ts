@@ -45,7 +45,7 @@ it('routes only a known event to its exact connected SSH session', async () => {
   const followable = getInbox().rows.find(item => item.agent === 'Claude Code')!;
   expect(openInboxEvent(followable.eventId, [session])).toBe(true);
   expect((navigate.mock.calls[1][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: true });
-  await collectInbox(session, snapshot([{ ...row, agent: 'Claude Code', paneId: null, eventCount: 2, updatedAt: '2026-10-24T22:05:00Z' }]), true);
+  await collectInbox(session, snapshot([{ ...row, agent: 'Claude Code', paneId: '', eventCount: 2, updatedAt: '2026-10-24T22:05:00Z' }]), true);
   expect(openInboxEvent(getInbox().rows.find(item => item.agent === 'Claude Code')!.eventId, [session])).toBe(true);
   expect((navigate.mock.calls[2][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: false });
   window.removeEventListener('lazysh-inbox-open', navigate);
