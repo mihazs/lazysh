@@ -30,7 +30,7 @@ function host(agent:string,rows:unknown[],history:'available'|'missing'|('availa
 const options=()=>{const button=screen.getByRole('button',{name:'Agent view options'});if(button.getAttribute('aria-expanded')!=='true')fireEvent.click(button);return screen.getByRole('group',{name:'Agent view options'});};
 const calls=(name:string)=>vi.mocked(invoke).mock.calls.filter(([command])=>command===name).map(([,args])=>args);
 const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
-beforeEach(()=>{vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
+beforeEach(()=>{localStorage.clear();vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 
 describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(label,agent)=>{
@@ -44,7 +44,8 @@ describe.each([['Claude Code','claude'],['Codex','codex']] as const)('%s pane',(
     const sessions=within(options()).getByRole('button',{name:'Last-reported agent sessions'});
     expect(sessions.getAttribute('aria-expanded')).toBe('false');fireEvent.click(sessions);
     expect(screen.getByRole('region',{name:'Last-reported agent sessions'})).toBeTruthy();fireEvent.click(options().querySelector('button')!);
-    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0}]);
+    // Claude Code previews of attached images are on by default; Codex waits for the switch.
+    expect(calls('agent_transcript')).toEqual([{sessionId:'ssh',agent,path:`/home/owner/${agent} 世界.jsonl`,view:'conversation',offset:0,...(agent==='claude'?{inlineImages:true}:{})}]);
     const turns=screen.getAllByRole('region',{name:'Turn'});
     expect(turns).toHaveLength(1);
     // Prompt and answer are bubbles named by role, without the recorded reader's role headings or follow controls.
@@ -716,6 +717,35 @@ describe('answering the open question of the agent',()=>{
   it('shows no answer controls for a question the agent already got an answer to',async()=>{
     await open([...question([single]),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]}]);await bind();await advance(400);
     expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();
+  });
+});
+
+describe('image previews in the user bubble',()=>{
+  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+  const withImage=(preview?:unknown)=>[
+    {id:'p',role:'user',blocks:[{type:'text',text:'See this'},{type:'image',text:'Attachment: view in the host agent terminal',...(preview?{imagePreview:preview}:{})}]},
+    {id:'a',role:'assistant',blocks:[{type:'text',text:'Seen'}]},
+  ];
+  it('asks for previews of a Claude conversation, shows an admitted image as a control in the bubble and a refused one with the reason',async()=>{
+    const good={mimeType:'image/png',data:png,width:1,height:1};
+    host('claude',[row('Claude Code','%3')],'available',[withImage(good)]);
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(calls('agent_transcript')[0]).toMatchObject({agent:'claude',view:'conversation',inlineImages:true});
+    const bubble=screen.getByRole('article',{name:'user'});
+    expect(within(bubble).getByText('See this')).toBeTruthy();
+    expect(within(bubble).getByRole('button',{name:'Image 1 × 1 · View'})).toBeTruthy();
+  });
+  it('keeps the placeholder with the reason when the image is not admitted, and honours the switch for Codex',async()=>{
+    host('codex',[row('Codex','%3')],'available',[withImage()]);
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(calls('agent_transcript')[0]).not.toHaveProperty('inlineImages');
+    fireEvent.click(within(options()).getByRole('checkbox',{name:'Show image previews'}));
+    await advance(0);
+    expect(calls('agent_transcript').at(-1)).toMatchObject({agent:'codex',view:'conversation',inlineImages:true});
+    expect(screen.getByText(/This image cannot be previewed here/)).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/· View$/})).toBeNull();
   });
 });
 

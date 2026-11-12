@@ -4,7 +4,7 @@ import './ChatPanel.css';
 import {shellPath} from './attachment';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
-import {t, useUi} from './i18n/core';
+import {formatNumber, t, useUi} from './i18n/core';
 import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
@@ -112,8 +112,7 @@ export function parseTranscript(value: unknown): Page {
     for (const block of message.blocks) {
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
-          || ((page.agent==='claude' && ['record_stream','active_branch'].includes(page.view??'')
-            || page.agent==='codex' && page.view==='record_stream') && message.role==='user');
+          || ((page.agent==='claude' || page.agent==='codex') && ['record_stream','active_branch'].includes(page.view??'') && message.role==='user');
         if (!imageContext || block.type!=='image' || block.id!==undefined || block.status!==undefined)
           throw new LocalUiError('chatImageInvalid');
         recordedImage(block.imagePreview);
@@ -202,7 +201,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -223,8 +222,11 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [agent, setAgent] = useState<string>(bound?.agent ?? "claude");
   const [path, setPath] = useState(bound?.path ?? initialReported?.path ?? "");
   const [view, setView] = useState(bound ? "conversation" : "records");
-  const [inlineImages,setInlineImages]=useState(false);
-  const canIncludeImages = (agent==='claude' && ['records','conversation'].includes(view)) || (['grok-acp','codex'].includes(agent) && view==='records');
+  // A bound conversation (the Agent view) takes the caller's choice; the picker's own checkbox decides otherwise.
+  const [pickedImages,setInlineImages]=useState(false);
+  // A Herdr conversation is resolved from the agent's own data root, which has no named file to read previews from.
+  const inlineImages=bound ? images && !bound.herdr : pickedImages;
+  const canIncludeImages = (agent==='claude' && ['records','conversation'].includes(view)) || (agent==='codex' && ['records','conversation'].includes(view)) || (agent==='grok-acp' && view==='records');
   const [preview,setPreview]=useState<{image:RecordedImage;messageId:string;blockIndex:number;source:string;attempt:number}>();
   const previewAttempt=useRef(0);
   const [previewBusy,setPreviewBusy]=useState(false);
@@ -366,7 +368,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   autoRead.current = () => {void read(false,true);};
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
   const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
-    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path} : undefined, [bound,conversation,sourceMatches]);
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path,...(inlineImages?{inlineImages:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
   const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
@@ -599,6 +601,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       </p>}
       {message.blocks.map((block, index) => {
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
+        // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
+        if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
         return block.type === "text" ? (
           <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
         ) : (
@@ -609,7 +613,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
               {block.isError === true && ` · ${block.id ? t("chatToolErrorWithId", {id:block.id}) : t("chatToolError")}`}
             </summary>
             <pre>
-              {block.text || t("chatViewInTerminal")}
+              {timeline && block.type==='image' && opened?.inlineImages ? t('agentImageOverLimit') : block.text || t("chatViewInTerminal")}
             </pre>
             {block.imagePreview && opened?.inlineImages && <button type="button" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('chatImageView')}</button>}
           </details></Fragment>

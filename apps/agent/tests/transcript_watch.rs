@@ -167,3 +167,41 @@ fn an_older_or_conflicting_invocation_is_a_usage_error_with_exit_code_two() {
         Some(2)
     );
 }
+
+#[test]
+fn previews_of_attached_images_ride_the_stream_only_when_asked_for_and_only_for_a_named_file() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let png = include_bytes!("../../client/e2e/fixtures/recorded-images/regions.png");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let with_image = json!({"type":"user","uuid":"m0","parentUuid":null,"message":{"content":[
+        {"type":"text","text":"look"},
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":STANDARD.encode(png)}}
+    ]}});
+    jsonl::write(&path, &[with_image]);
+    let first_blocks = |extra: &[&str]| {
+        let mut args = vec!["--agent", "claude", "--path", path.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        let watch = Watch::start(&args, &[]);
+        watch.next_of("hello");
+        watch.next_of("snapshot")["entries"][0]["message"]["blocks"].clone()
+    };
+    let plain = first_blocks(&[]);
+    assert!(plain[1].get("imagePreview").is_none());
+    let admitted = first_blocks(&["--inline-images"]);
+    assert_eq!(admitted[1]["imagePreview"]["mimeType"], "image/png");
+    assert_eq!(admitted[1]["imagePreview"]["width"], 32);
+    // A provider session id has no named file to read previews from: refused, nothing streamed.
+    let status = Command::new(binary::path())
+        .args([
+            "transcript-watch",
+            "--agent",
+            "claude",
+            "--session-id",
+            ID,
+            "--inline-images",
+        ])
+        .output()
+        .unwrap();
+    assert!(!status.status.success());
+}

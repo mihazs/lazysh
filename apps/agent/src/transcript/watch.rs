@@ -38,6 +38,8 @@ pub struct Options {
     pub session_id: Option<String>,
     pub limit: u8,
     pub interval: Duration,
+    /// Previews of the user's attached images, as `transcript --view conversation --inline-images`.
+    pub inline_images: bool,
 }
 
 struct Entry {
@@ -75,6 +77,7 @@ pub struct Watcher {
     agent: TranscriptAgent,
     source: Source,
     limit: u8,
+    inline_images: bool,
     generation: u64,
     sequence: u64,
     entries: Vec<Entry>,
@@ -118,6 +121,7 @@ impl Watcher {
             agent,
             source,
             limit,
+            inline_images: false,
             generation: 0,
             sequence: 0,
             entries: Vec::new(),
@@ -127,6 +131,15 @@ impl Watcher {
             located: None,
             cost: Duration::ZERO,
         })
+    }
+
+    /// Previews need a transcript file the caller named; a provider session id is resolved without them.
+    pub fn with_images(mut self, inline_images: bool) -> Result<Self> {
+        if inline_images && !matches!(self.source, Source::Path(_)) {
+            return Err(Error::InvalidArgument);
+        }
+        self.inline_images = inline_images;
+        Ok(self)
     }
 
     fn fingerprint(&mut self) -> Result<Fingerprint> {
@@ -148,6 +161,14 @@ impl Watcher {
 
     fn project(&self) -> Result<TranscriptPage> {
         match &self.source {
+            Source::Path(path)
+                if self.inline_images && matches!(self.agent, TranscriptAgent::Codex) =>
+            {
+                super::codex_conversation_images(path, self.limit)
+            }
+            Source::Path(path) if self.inline_images => {
+                super::claude_conversation_images(path, self.limit)
+            }
             Source::Path(path) => super::conversation(path, self.agent, self.limit),
             Source::Session(id) => {
                 herdr_session::read_herdr_conversation(self.agent, id, self.limit)
@@ -312,7 +333,8 @@ pub fn run_stdio(options: Options) -> Result<()> {
         (None, Some(id)) => Source::Session(id),
         _ => return Err(Error::InvalidArgument),
     };
-    let watcher = Watcher::new(options.agent, source, options.limit)?;
+    let watcher =
+        Watcher::new(options.agent, source, options.limit)?.with_images(options.inline_images)?;
     let (closed_tx, closed) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buffer = [0; 64];

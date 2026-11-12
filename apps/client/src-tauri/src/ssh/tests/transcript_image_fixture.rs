@@ -273,7 +273,7 @@ async fn invalid_image_options_reject_before_session_lookup() {
     app.manage(state);
     for (agent, view, checkpointed) in [
         ("pi", None, false),
-        ("codex", Some("conversation"), false),
+        ("grok-acp", Some("conversation"), false),
         ("claude", None, true),
     ] {
         let error = agent_transcript(

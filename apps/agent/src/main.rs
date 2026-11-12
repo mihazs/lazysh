@@ -255,6 +255,9 @@ enum Command {
         /// Frame vocabulary version; only 1 exists.
         #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
         protocol: u8,
+        /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
+        #[arg(long, requires = "path")]
+        inline_images: bool,
     },
 }
 #[derive(Subcommand)]
@@ -484,15 +487,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             if inline_images
                 && (session_id.is_some()
-                    || !(matches!(agent, lazysh_agent::transcript::TranscriptAgent::Claude)
-                        || (matches!(
-                            agent,
-                            lazysh_agent::transcript::TranscriptAgent::GrokAcp
-                                | lazysh_agent::transcript::TranscriptAgent::Codex
-                        ) && matches!(
-                            view,
-                            lazysh_agent::transcript::TranscriptView::Records
-                        ))))
+                    || !(matches!(
+                        agent,
+                        lazysh_agent::transcript::TranscriptAgent::Claude
+                            | lazysh_agent::transcript::TranscriptAgent::Codex
+                    ) || (matches!(
+                        agent,
+                        lazysh_agent::transcript::TranscriptAgent::GrokAcp
+                    ) && matches!(
+                        view,
+                        lazysh_agent::transcript::TranscriptView::Records
+                    ))))
             {
                 return Err(Error::InvalidArgument);
             }
@@ -576,6 +581,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             limit,
             interval_ms,
             protocol: _,
+            inline_images,
         } => {
             lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
                 agent,
@@ -583,6 +589,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 session_id,
                 limit,
                 interval: std::time::Duration::from_millis(interval_ms),
+                inline_images,
             })?;
             None
         }

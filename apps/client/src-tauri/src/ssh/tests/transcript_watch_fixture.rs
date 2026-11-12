@@ -73,6 +73,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let target = || WatchTarget::Path {
         agent: "claude".into(),
         path: transcript.display().to_string(),
+        inline_images: false,
     };
     let start = |events| {
         agent_watch_start(

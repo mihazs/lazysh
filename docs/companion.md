@@ -538,16 +538,20 @@ option defaults off. The Grok companion CLI equivalent is
 `lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --inline-images`;
 it also composes with `--checkpointed` and its existing continuation receipt.
 Claude accepts the same flag with `--agent claude --view records` or
-`--agent claude --view conversation`; Codex accepts `--agent codex --view records`.
+`--agent claude --view conversation`; Codex accepts `--agent codex --view records` and
+`--agent codex --view conversation`.
 Checkpointed mode remains Grok Records only. The native `inlineImages` argument
-defaults false. Other agents, Grok/Codex
+defaults false. Other agents, Grok
 conversation and transcript session selectors reject image opt-in before SSH
 execution; Claude conversation also retains its zero-offset/no-checkpoint rule.
 Existing manual output without the option remains unchanged.
 
 Only top-level recorded Grok user/assistant image chunks and Claude user
 `content[]` images with a `source.type=base64` PNG/JPEG payload, plus top-level
-Codex user `input_image` blocks with exact PNG/JPEG base64 data-URL prefixes,
+Codex user `input_image` blocks with exact PNG/JPEG base64 data-URL prefixes
+(and, in the Codex conversation view, the `image` parts of a user message and the
+`images` data URLs of a legacy `user_message` event; a `local_images` path only yields
+the placeholder and is never read),
 can gain a **View recorded image** action. Tool media, audio, resource/terminal
 references and external URIs stay inert; no referenced file or URL is fetched.
 The original base64 and on-disk transcript bytes are preserved. Invalid,
@@ -1019,7 +1023,13 @@ Visible text, public reasoning summaries, plans, command and function results,
 and dynamic/MCP tool text use existing message and tool cards. Unsupported item
 families (including hook prompts and interactive question/approval controls) are
 omitted; recorded tool metadata never authorizes an action. Codex inline image
-previews remain available in Records, not Conversation.
+previews of the user's own attachments are available in Records and, with
+`--inline-images`, in Conversation. The Agent view asks for them for the conversation it
+follows (on for Claude Code, a switch in its options for Codex) and shows each admitted
+image as a control in the user's bubble that opens the same bounded canvas viewer. The
+`transcript-watch` stream carries them with `--inline-images` (which needs `--path`: a
+provider session id, used for Herdr conversations, has no named file to read previews from,
+so a Herdr conversation shows the placeholder and no switch).
 
 Paginated forks/reverts may reference immutable earlier rollout prefixes. The
 [official lineage contract](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/thread-store/src/local/rollout_lineage.rs)

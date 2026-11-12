@@ -1,8 +1,9 @@
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
+import {preview} from './fixtures/recorded-images/browser';
 
-type Fixture={listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
+type Fixture={watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -30,14 +31,15 @@ async function installBaseHost(page:Page) {
 /** Two restored tmux terminals; hook reports tie a running Codex conversation to pane %3 of `work` only. */
 async function open(page:Page) {
   await installBaseHost(page);
-  await page.addInitScript(({snapshot,bound,transcript})=>{
+  await page.addInitScript(({snapshot,bound,transcript,image})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'tmux',name:'work'}},{hostId:'fixture',attached:{kind:'tmux',name:'other'}}]));
-    const messages=()=>fixture.turns.flatMap((turn,index)=>[
-      {id:`p${index}`,role:'user',blocks:[{type:'text',text:turn.prompt}]},
+    // A recorded image is attached to the first prompt; it only comes back when the view asked for previews.
+    const messages=(images=false)=>fixture.turns.flatMap((turn,index)=>[
+      {id:`p${index}`,role:'user',blocks:[{type:'text',text:turn.prompt},...(index===0&&images?[{type:'image',text:'Attachment: view in the host agent terminal',imagePreview:image}]:[])]},
       {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
       {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
     ]);
-    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],polls:0,watchMode:'off',watchStops:0,
+    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
       emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
@@ -71,15 +73,17 @@ async function open(page:Page) {
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
         fixture.polls++;
         return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages()};
+        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:messages(args.inlineImages===true)};
       }
       // The synthetic host's `transcript-watch`: off (cannot open), an old companion, or a stream the test drives.
       if(command==='agent_watch_start'){
         if(fixture.watchMode==='off')throw new Error('The channel could not open');
         const events=args.events as {onmessage:(event:unknown)=>void};fixture.watch=events;
+        const target=args.target as {inlineImages?:boolean};fixture.watchTargets.push(target);
         setTimeout(()=>{
           if(fixture.watchMode==='old')return events.onmessage({type:'unavailable',reason:'companion_required'});
           fixture.emit({type:'hello',protocol:1,agent:'codex'});
-          fixture.emit({type:'snapshot',gen:1,seq:1,entries:messages().map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+          fixture.emit({type:'snapshot',gen:1,seq:1,entries:messages(target.inlineImages===true).map(message=>({id:(message as {id:string}).id,rev:1,message}))});
         });
         return 'watch-1';
       }
@@ -91,7 +95,7 @@ async function open(page:Page) {
       if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
-  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,transcript});
+  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,transcript,image:preview('regions.png')});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await expect(page.getByRole('tab')).toHaveCount(2);
@@ -699,4 +703,28 @@ test('an @ mention lists the agent folder, completes a file and a folder, and re
   await expect(draft).toHaveValue('');
   const sent=(await page.evaluate(()=>window.agentView.inputs)).filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
   expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(['read @/etc/']);
+});
+
+test('an attached image opens from the user bubble without moving the scroll position, once the preview switch is on, also over the live stream',async({page})=>{
+  const agent=await openLive(page,'stream');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  expect((await fixture(page)).watchTargets.at(-1)?.inlineImages).toBeUndefined();
+  const flow=agent.getByRole('region',{name:'Conversation messages',exact:true});
+  // Codex previews are opt-in: nothing is requested and no control shows until the switch is on.
+  await expect(agent.getByRole('button',{name:/· View$/})).toHaveCount(0);
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await agent.getByRole('checkbox',{name:'Show image previews',exact:true}).check();
+  await page.keyboard.press('Escape');
+  const image=agent.getByRole('button',{name:'Image 32 × 16 · View',exact:true});
+  await expect(image).toBeVisible();
+  // The stream itself carries the previews: the channel was reopened asking for them.
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  expect((await fixture(page)).watchTargets.at(-1)?.inlineImages).toBe(true);
+  await flow.evaluate(node=>{node.scrollTop=0;});
+  await image.click();
+  const viewer=agent.getByRole('region',{name:'Recorded image preview',exact:true});
+  await expect(viewer.getByRole('img',{name:'Recorded image preview'})).toBeVisible();
+  await viewer.getByRole('button',{name:'Close image preview',exact:true}).click();
+  await expect(viewer).toHaveCount(0);
+  expect(await flow.evaluate(node=>node.scrollTop)).toBe(0);
 });

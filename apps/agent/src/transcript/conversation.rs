@@ -16,6 +16,11 @@ pub fn claude_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPa
     conversation_options(path, TranscriptAgent::Claude, limit, true, &Window::Tail)
 }
 
+/// The Codex conversation with bounded previews of the images the user attached.
+pub fn codex_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, TranscriptAgent::Codex, limit, true, &Window::Tail)
+}
+
 /// One page of the active branch at any position of the session, for reading it from the first message.
 pub fn conversation_window(
     path: &Path,
@@ -38,7 +43,7 @@ fn conversation_options(
         return Err(Error::InvalidArgument);
     }
     if matches!(agent, TranscriptAgent::Codex) {
-        return super::codex_conversation::conversation(path, limit, window);
+        return super::codex_conversation::conversation(path, limit, inline_images, window);
     }
     if matches!(agent, TranscriptAgent::GrokAcp) {
         return super::grok_conversation::conversation(path, limit, window);
