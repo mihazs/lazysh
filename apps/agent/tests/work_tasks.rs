@@ -363,3 +363,136 @@ fn a_sub_agent_with_its_own_files_gets_its_conversation_and_a_finished_state() {
     assert_eq!(roles, ["user", "assistant"]);
     assert_eq!(page.messages[0]["blocks"][0]["text"], "Review the diff");
 }
+
+#[test]
+fn a_dynamic_workflow_becomes_a_progress_tree_from_its_journal_and_summary_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("sess.jsonl");
+    let mut log = Log(Vec::new());
+    log.push("user", 0, json!("Run the review workflow"));
+    log.call(
+        1,
+        "w1",
+        "Workflow",
+        json!({"script":"export const meta = {\n  name: 'review-fix',\n  description: 'x'\n}"}),
+    );
+    log.result(1, "w1", "Workflow launched in background. Task ID: wtask1\nSummary: Review then fix\nTranscript dir: /home/u/.claude/projects/p/sess/subagents/workflows/wf_run1-abc", false);
+    log.call(
+        2,
+        "w2",
+        "Workflow",
+        json!({"script":"export const meta = { name: \"second\" }"}),
+    );
+    log.result(2, "w2", "Workflow launched in background. Task ID: wtask2\nTranscript dir: /x/sess/subagents/workflows/wf_run2-def", false);
+    fs::write(
+        &parent,
+        log.0.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let session = directory.path().join("sess");
+    let journal_dir = session.join("subagents/workflows/wf_run1-abc");
+    fs::create_dir_all(&journal_dir).unwrap();
+    let lines = [
+        json!({"type":"launched"}),
+        json!({"type":"started","key":"k1","agentId":"aa1","label":"review:#1","phase":"Review"}),
+        json!({"type":"started","key":"k2","agentId":"aa2","label":"review:#2","phase":"Review"}),
+        json!({"type":"result","key":"k1","agentId":"aa1","result":{"ok":true}}),
+        json!({"type":"started","key":"k3","agentId":"aa3","label":"fix:#1","phase":"Fix"}),
+        json!({"type":"failed","key":"k2","agentId":"aa2"}),
+    ];
+    fs::write(
+        journal_dir.join("journal.jsonl"),
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    fs::write(journal_dir.join("agent-aa1.jsonl"), "{}\n").unwrap();
+    let page = |parent: &std::path::Path| {
+        serde_json::to_value(conversation(parent, TranscriptAgent::Claude, 100).unwrap()).unwrap()
+            ["work"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+
+    // Running: no summary file yet, so the journal alone decides.
+    let work = page(&parent);
+    let first = row(&work, "w1");
+    assert_eq!(
+        (
+            first["kind"].clone(),
+            first["title"].clone(),
+            first["taskId"].clone(),
+            first["runId"].clone(),
+            first["state"].clone()
+        ),
+        (
+            json!("workflow"),
+            json!("review-fix"),
+            json!("wtask1"),
+            json!("wf_run1-abc"),
+            json!("running")
+        )
+    );
+    let tree = &first["workflow"];
+    let states: Vec<_> = tree["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["label"].as_str().unwrap().to_owned(),
+                a["state"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("review:#1".to_owned(), "done".to_owned()),
+            ("review:#2".to_owned(), "failed".to_owned()),
+            ("fix:#1".to_owned(), "running".to_owned())
+        ]
+    );
+    assert_eq!(
+        tree["phases"],
+        json!([{"title":"Review","state":"failed"},{"title":"Fix","state":"running"}])
+    );
+    assert_eq!(
+        tree["agents"][0]["childPath"],
+        journal_dir.join("agent-aa1.jsonl").to_str().unwrap()
+    );
+    assert!(tree["agents"][1].get("childPath").is_none());
+    // A workflow whose files are missing keeps its launch evidence and no tree.
+    assert!(row(&work, "w2").get("workflow").is_none());
+    assert_eq!(row(&work, "w2")["title"], "second");
+
+    // Killed: the summary file ends the workflow and an agent without an end is not confirmed.
+    let summary = json!({"runId":"wf_run1-abc","workflowName":"review-fix","status":"killed","phases":[{"title":"Review"},{"title":"Fix"},{"title":"Report"}],
+        "totalTokens":900,"totalToolCalls":12,
+        "workflowProgress":[{"type":"workflow_phase","index":1,"title":"Review"},
+            {"type":"workflow_agent","agentId":"aa1","label":"review:#1","phaseTitle":"Review","state":"done","tokens":500,"toolCalls":7,"durationMs":3000,"resultPreview":"No findings\nmore"},
+            {"type":"workflow_agent","agentId":"aa3","label":"fix:#1","phaseTitle":"Fix","state":"progress","tokens":400,"toolCalls":5,"lastToolSummary":"cargo test"}]});
+    fs::create_dir_all(session.join("workflows")).unwrap();
+    fs::write(
+        session.join("workflows/wf_run1-abc.json"),
+        summary.to_string(),
+    )
+    .unwrap();
+    let work = page(&parent);
+    let first = row(&work, "w1");
+    assert_eq!(first["state"], "stopped");
+    let tree = &first["workflow"];
+    assert_eq!(tree["name"], "review-fix");
+    assert_eq!(
+        tree["totals"],
+        json!({"agents":3,"tokens":900,"toolCalls":12})
+    );
+    assert_eq!(tree["agents"][0]["last"], "No findings");
+    assert_eq!(tree["agents"][0]["tokens"], 500);
+    assert_eq!(tree["agents"][2]["state"], "unknown");
+    assert_eq!(tree["agents"][2]["last"], "cargo test");
+    assert_eq!(
+        tree["phases"][2],
+        json!({"title":"Report","state":"pending"})
+    );
+}

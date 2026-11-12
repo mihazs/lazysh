@@ -34,6 +34,7 @@ struct Task {
     /// From the notice's `<usage>`: a sub-agent's tokens and run time.
     tokens: Option<u64>,
     duration_ms: Option<u64>,
+    run_id: Option<String>,
 }
 
 fn clip(text: &str, limit: usize) -> String {
@@ -127,7 +128,7 @@ fn start(block: &Value, at: Option<&str>) -> Option<Task> {
         kind,
         title,
         subtitle,
-        command: if kind == "agent" {
+        command: if matches!(kind, "agent" | "workflow") {
             None
         } else {
             text(&input["command"])
@@ -142,6 +143,7 @@ fn start(block: &Value, at: Option<&str>) -> Option<Task> {
         timeout_ms: input["timeout_ms"].as_u64(),
         tokens: None,
         duration_ms: None,
+        run_id: None,
     })
 }
 
@@ -286,7 +288,14 @@ fn result(
     task.task_id = token_after(&body, "agentId:")
         .or_else(|| token_after(&body, "background with ID:"))
         .or_else(|| token_after(&body, "(task "))
+        .or_else(|| token_after(&body, "Task ID:"))
         .or(task.task_id.take());
+    if let Some(run) = body
+        .find("/workflows/wf_")
+        .and_then(|at| token_after(&body[at + 11..], ""))
+    {
+        task.run_id = Some(run);
+    }
     if failed {
         finish(task, "failed", at);
         task.last = first_line(&body);
@@ -325,6 +334,9 @@ fn render(task: Task) -> Value {
             out.insert(key.into(), json!(value));
         }
     }
+    if let Some(run) = task.run_id {
+        out.insert("runId".into(), json!(run));
+    }
     Value::Object(out)
 }
 
@@ -332,7 +344,7 @@ const MAX_CHILDREN: usize = 200;
 const MAX_META: u64 = 16 * 1024;
 const TAIL: u64 = 64 * 1024;
 
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .chars()
@@ -369,7 +381,20 @@ pub(super) fn attach_children(page: &mut TranscriptPage, transcript: &Path) {
     let Some(work) = page.work.as_mut().filter(|work| !work.is_empty()) else {
         return;
     };
-    let directory = transcript.with_extension("").join("subagents");
+    let session = transcript.with_extension("");
+    for item in work.iter_mut().filter(|item| item["kind"] == "workflow") {
+        let tree = item["runId"]
+            .as_str()
+            .and_then(|run| super::workflow::tree(&session, run));
+        if let Some((tree, finished)) = tree {
+            item["workflow"] = tree;
+            if let (Some(state), "running") = (finished, item["state"].as_str().unwrap_or_default())
+            {
+                item["state"] = json!(state);
+            }
+        }
+    }
+    let directory = session.join("subagents");
     let Ok(entries) = fs::read_dir(&directory) else {
         return;
     };

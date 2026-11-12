@@ -1,13 +1,15 @@
 /** What the Claude Code status area shows under the prompt: background shells, monitors, sub-agents and workflows, derived from
  * the conversation page (tool calls, their results and the harness's task notifications). Pure; nothing here reads the terminal. */
-import type {WorkItem} from './agentWork';
+import type {WorkItem, WorkflowTree} from './agentWork';
 export type StatusKind = 'shell' | 'monitor' | 'agent' | 'workflow';
 export type StatusState = 'running' | 'done' | 'failed' | 'stopped' | 'unknown';
 export type StatusItem = {id: string; kind: StatusKind; label: string; type?: string; state: StatusState; startedAt?: number; endedAt?: number; tokens?: number; background: boolean; taskId?: string; detail?: string;
   /** From the companion only: the command, the lines a monitor reported and the last line of output. */
   command?: string; events?: readonly string[]; last?: string;
   /** The sub-agent's own conversation file on the host, when the session directory holds one. */
-  childPath?: string};
+  childPath?: string;
+  /** A workflow's phases and agents, read from the run's files. */
+  workflow?: WorkflowTree};
 type Shape = {role: string; timestamp?: string; blocks: {type: string; text?: string; id?: string; name?: string; isError?: boolean}[]};
 
 const tag = (text: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
@@ -67,7 +69,7 @@ export function fromWork(work: readonly WorkItem[], now = Date.now()): StatusIte
     const stale = item.state === 'running' && startedAt !== undefined && now - startedAt > (item.timeoutMs === undefined ? staleAfter : item.timeoutMs + 60_000);
     return {id: item.id, kind: item.kind, label: item.title, type: item.subtitle, state: stale ? 'unknown' : item.state, startedAt,
       endedAt: item.durationMs !== undefined && startedAt !== undefined ? startedAt + item.durationMs : ended, tokens: item.tokens,
-      background: true, taskId: item.taskId, detail: item.summary, command: item.command, events: item.events, last: item.last, childPath: item.childPath};
+      background: true, taskId: item.taskId, detail: item.summary, command: item.command, events: item.events, last: item.last, childPath: item.childPath, workflow: item.workflow};
   });
 }
 

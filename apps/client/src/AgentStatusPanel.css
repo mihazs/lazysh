@@ -17,3 +17,14 @@
 .agent-child > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .agent-child > header > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-panel[data-child-open] > :not(.agent-child) { display: none; }
+.agent-workflow { display: grid; gap: 6px; min-width: 0; }
+.agent-workflow h5 { margin: 0; font-size: 0.9rem; }
+.agent-workflow ol, .agent-workflow ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-workflow ul { padding-inline-start: 12px; }
+.agent-workflow-totals { margin: 0; color: var(--muted); }
+.agent-status-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.agent-status-head small, .agent-status-last { color: var(--muted); }
+.agent-status-last { flex-basis: 100%; }
+.agent-status-state { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; color: var(--muted); }
+.agent-status-state[data-state="running"] { color: var(--accent); border-color: var(--accent); }
+.agent-status-state[data-state="failed"] { color: var(--danger, currentColor); border-color: var(--danger, currentColor); }

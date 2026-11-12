@@ -2,6 +2,7 @@ import {useId, useMemo, useState} from 'react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {deriveStatus, fromWork, runningOf, type StatusItem, type StatusKind} from './agentBackgroundWork';
 import type {WorkItem} from './agentWork';
+import AgentWorkflow from './AgentWorkflow';
 import {formatNumber, t} from './i18n/core';
 import {formatCountdown, useNow} from './relativeTime';
 import './AgentStatusPanel.css';
@@ -13,6 +14,7 @@ const states = {running: 'agentStatusRunning', done: 'agentStatusDone', failed: 
 
 function Row({item, now, onOpen}: {item: StatusItem; now: number; onOpen?: (item: StatusItem) => void}) {
   const end = item.endedAt ?? now, elapsed = item.startedAt !== undefined && end >= item.startedAt ? formatCountdown(end - item.startedAt) : undefined;
+  if (item.workflow) return <li data-state={item.state}><AgentWorkflow item={item} onOpen={onOpen} /></li>;
   const head = <>
     <span className="agent-status-label">{item.label || t(kinds[item.kind], {count: 1})}</span>
     {item.type && <span className="agent-status-type">{item.type}</span>}
