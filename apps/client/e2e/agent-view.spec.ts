@@ -3,7 +3,7 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
-type Fixture={watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
+type Fixture={uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -39,7 +39,7 @@ async function open(page:Page) {
       {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
       {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
     ]);
-    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
+    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],uploads:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
       emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
@@ -59,7 +59,7 @@ async function open(page:Page) {
         if(action.kind==='snapshot')return {...snapshot,destination:{...snapshot.destination,paneId:args.sessionId==='display-work'?'%3':'%4'}};
         if(action.kind==='bind')return bound;
         if(action.kind==='release')return {kind:'released'};
-        if(action.input?.kind==='send')submit(action.input.text!);
+        if(action.input?.kind==='send' || action.input?.kind==='send_long')submit(action.input.text!);
         return {kind:'delivered',nextOperation:action.operation!+1};
       }
       if(command==='write_stdin'){
@@ -67,6 +67,10 @@ async function open(page:Page) {
         for(const key of data){if(key==='\r'){submit(fixture.typed);fixture.typed='';}else{fixture.typed+=key;echo(String(args.sessionId),key);}}
         return;
       }
+      // The host stores each upload under /tmp by its file name.
+      if(command==='upload_reserve')return {uploadId:'4d1c9ace-94cf-4588-8775-3888061a05bd'};
+      if(command==='upload_cancel')return {outcome:'unknown_or_settled'};
+      if(command==='upload_file'){fixture.uploads.push(String(args.path));return {path:`/tmp/lazysh-fixture/${String(args.path)}`};}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'codex-thread',agent:'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript'){
@@ -727,4 +731,56 @@ test('an attached image opens from the user bubble without moving the scroll pos
   await viewer.getByRole('button',{name:'Close image preview',exact:true}).click();
   await expect(viewer).toHaveCount(0);
   expect(await flow.evaluate(node=>node.scrollTop)).toBe(0);
+});
+
+// One decodable pixel; the host only needs real PNG bytes to accept it as an image.
+const pixel='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+test('a pasted or picked file becomes a token chip that survives edits and reaches the agent as the uploaded path, once',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('compare');
+  // Paste from the clipboard, as a desktop browser delivers a copied screenshot.
+  await draft.evaluate((element,data)=>{
+    const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(data),char=>char.charCodeAt(0))],'before.png',{type:'image/png'}));
+    element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));
+  },pixel);
+  await expect(draft).toHaveValue('compare [Image #1] ');
+  // Pick through the paperclip, the only way on a phone.
+  await agent.getByRole('button',{name:'Add attachment',exact:true}).click();
+  await page.getByLabel('Choose attachment',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('notes')});
+  await page.getByRole('button',{name:'Upload attachment',exact:true}).click();
+  await page.getByRole('button',{name:'Add uploaded path to Chat draft',exact:true}).click();
+  await expect(draft).toHaveValue('compare [Image #1] [File #2] ');
+  const chips=agent.getByRole('list',{name:'Draft attachments',exact:true});
+  await expect(chips.getByRole('listitem')).toHaveText(['[Image #1] before.png','[File #2] notes.txt']);
+  const [box,field]=await Promise.all([chips.boundingBox(),draft.boundingBox()]);
+  expect(box!.y+box!.height).toBeLessThanOrEqual(field!.y+1);expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  // Backspace right after a token takes the whole token and its chip.
+  await draft.evaluate((element:HTMLTextAreaElement)=>{const end=element.value.indexOf('[File #2]')+'[File #2]'.length;element.focus();element.setSelectionRange(end,end);});
+  await draft.press('Backspace');
+  await expect(draft).toHaveValue('compare [Image #1]  ');
+  await expect(chips.getByRole('listitem')).toHaveText(['[Image #1] before.png']);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect(draft).toHaveValue('');
+  await expect(chips).toHaveCount(0);
+  const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
+  expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(["compare '/tmp/lazysh-fixture/before.png'  "]);
+  expect((await fixture(page)).uploads).toEqual(['before.png','notes.txt']);
+});
+
+test('a prompt over 4 KiB is sent whole as one long send, and one past the bound is refused with its limit',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  const long=Array.from({length:600},(_,line)=>`line ${line} of a long brief`).join('\n');
+  await draft.fill(long);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect(draft).toHaveValue('');
+  const sent=(await fixture(page)).inputs.filter(input=>['send','send_long'].includes((input as {input?:{kind:string}}).input?.kind ?? ''));
+  expect(sent.map(input=>(input as {input:{kind:string;text:string}}).input)).toEqual([{kind:'send_long',text:long}]);
+  await draft.fill('é'.repeat(32769));
+  await expect(agent.getByText('Too long for confirmed input (65,536 bytes). Shorten it or use Stage in terminal.',{exact:true})).toBeVisible();
+  await expect(agent.getByRole('button',{name:'Send to the agent',exact:true})).toBeDisabled();
 });

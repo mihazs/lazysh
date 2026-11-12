@@ -2087,7 +2087,7 @@ const translations = {
   agentComposerSend: ["Enviar ao agente", "Enviar al agente"],
   agentComposerReconnect: ["Reconectar ao terminal", "Reconectar con el terminal"],
   agentComposerWrongPane: ["O agente desta conversa não roda neste painel do terminal, então nada pode ser enviado daqui.", "El agente de esta conversación no se ejecuta en este panel del terminal, así que no se puede enviar nada desde aquí."],
-  agentComposerTooLong: ["Longo demais para entrada confirmada (4.096 bytes). Encurte ou use Preparar no terminal.", "Demasiado largo para la entrada confirmada (4096 bytes). Acórtalo o usa Preparar en el terminal."],
+  agentComposerTooLong: ["Longo demais para entrada confirmada ({{limit}} bytes). Encurte ou use Preparar no terminal.", "Demasiado largo para la entrada confirmada ({{limit}} bytes). Acórtalo o usa Preparar en el terminal."],
   agentQueuedTitle: ["Mensagens na fila", "Mensajes en cola"],
   agentQueued: ["Na fila", "En cola"],
   agentComposerCommands: ["Comandos com barra", "Comandos con barra"],

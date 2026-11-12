@@ -2370,6 +2370,53 @@ async fn chat_input_probe() {
         expected.extend_from_slice(format!("{literal}\r\u{1b}").as_bytes());
         chat_fixture_bytes(&outputs[0], &expected).await;
     }
+    // A prompt past `send`'s 4 KiB arrives intact as one paste and one Enter, assembled over several tmux commands;
+    // one past the bound, or too short for this kind, reaches nothing.
+    eprintln!("tmux chat stage: long prompt");
+    let long = (0..700)
+        .map(|line| format!("line {line} 世界 '$x' #{{pane_id}} \\\n"))
+        .collect::<String>();
+    assert!(
+        (20 * 1024..=24 * 1024).contains(&long.len()),
+        "{}",
+        long.len()
+    );
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    for text in ["x".repeat(4096), "x".repeat(64 * 1024 + 1)] {
+        chat_fixture_rejected(
+            &app,
+            &lease,
+            &child,
+            send(
+                &current["receipt"],
+                1,
+                json!({"kind":"send_long","text":text}),
+            ),
+            &outputs[0],
+            &expected,
+        )
+        .await;
+    }
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    let delivered = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(
+            &current["receipt"],
+            1,
+            json!({"kind":"send_long","text":long}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+    expected.extend_from_slice(format!("{long}\r").as_bytes());
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    assert!(
+        servers.direct("chat-a", &["list-buffers"]).is_empty(),
+        "the private buffer is gone"
+    );
     chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
     disconnect(app.state(), child).await.unwrap();
     // No automatic bind after retirement. Reattach here exercises a fresh

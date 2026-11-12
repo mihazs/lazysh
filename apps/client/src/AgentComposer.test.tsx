@@ -6,15 +6,17 @@ import AgentComposer from './AgentComposer';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {chatFollowAccess} from './test/chatFollowAccess';
 import {t} from './i18n/core';
+import {activeTextInteractions} from './textInteraction';
 import {tmuxChatBound,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
 import {herdrChatReply,herdrTarget} from './test/herdrChat';
+import {attachmentFile,attachmentPngHeader} from './test/attachmentData';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 // The guarded input settles over several awaited native calls; a loaded CI machine needs more than the default second.
 configure({asyncUtilTimeout:5000});
 const conversation={agent:'claude' as const,path:'/home/owner/.claude/projects/work/a.jsonl',report:{sessionId:'s1',agent:'Claude Code',paneId:'%3'}};
 const tmuxLabels={backend:'tmux' as const,hostLabel:'host',terminalLabel:'work'};
-const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command!=='list_directory').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
+const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_chat'||command==='herdr_chat').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
 const inputs=()=>actions().filter(action=>action.kind==='input');
 function mount(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
   const access=captureAccess();
@@ -188,7 +190,8 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   type('Maybe');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
   expect(await screen.findByText(t('agentReceiptUncertain'))).toBeTruthy();
   expect(screen.queryByRole('button',{name:t('agentReceiptRetry')})).toBeNull();
-});
+// Two full send cycles in one case: a loaded CI machine needs more than the default five seconds.
+},20000);
 
 it('recalls earlier prompts with Up and Down only from an empty or untouched recalled draft',async()=>{
   await bound();
@@ -280,4 +283,133 @@ it('offers nothing after a failed listing',async()=>{
   fireEvent.change(box(),{target:{value:'with @',selectionStart:6}});
   await waitFor(()=>expect(listed()).toHaveLength(1));
   expect(screen.queryByRole('listbox')).toBeNull();
+});
+
+const uploaded=(name:string)=>`/tmp/lazysh-9f2c/${name}`;
+/** Pasted and dropped files upload through the host's attachment path; this host stores each one under /tmp by its name. */
+function uploads(hold?:{release?:()=>void}) {
+  const reply=vi.mocked(invoke).getMockImplementation()!,sent:string[]=[];
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    const call=args as {path?:string};
+    if(command==='upload_reserve')return Promise.resolve({uploadId:'4d1c9ace-94cf-4588-8775-3888061a05bd'});
+    if(command==='upload_cancel')return Promise.resolve({outcome:'unknown_or_settled'});
+    if(command==='upload_file'){sent.push(call.path!);return hold?new Promise(resolve=>{hold.release=()=>resolve({path:uploaded(call.path!)});}):Promise.resolve({path:uploaded(call.path!)});}
+    return reply(command,args,options);
+  });
+  return sent;
+}
+const png=(name='shot.png')=>attachmentFile(attachmentPngHeader(),name,'image/png');
+/** Drafts outlive a remount by design, so each case follows its own conversation. */
+let followed=0;
+const own=()=>({conversation:{...conversation,path:`/home/owner/.claude/projects/work/own-${++followed}.jsonl`,report:{...conversation.report,sessionId:`own-${followed}`}}});
+const chips=()=>screen.queryAllByRole('listitem').map(item=>item.textContent);
+
+it('pastes an image into the draft as a numbered token and delivers the uploaded path once on send',async()=>{
+  await bound(own());const sent=uploads();
+  type('compare');
+  fireEvent.paste(box(),{clipboardData:{files:[png('before.png')]}});
+  await waitFor(()=>expect(box().value).toBe('compare [Image #1] '));
+  fireEvent.paste(box(),{clipboardData:{files:[attachmentFile(undefined,'notes.txt','text/plain')]}});
+  await waitFor(()=>expect(box().value).toBe('compare [Image #1] [File #2] '));
+  expect(sent).toEqual(['before.png','notes.txt']);
+  expect(chips().map(text=>text?.replace(/\s+/g,' '))).toEqual(['[Image #1] before.png','[File #2] notes.txt']);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {text:string}).text).toBe(`compare '${uploaded('before.png')}' '${uploaded('notes.txt')}' `);
+  await waitFor(()=>expect(box().value).toBe(''));expect(chips()).toEqual([]);
+  // The next draft numbers its files from one again.
+  fireEvent.paste(box(),{clipboardData:{files:[png('again.png')]}});
+  await waitFor(()=>expect(box().value).toBe('[Image #1] '));
+});
+
+it('does not send while a file uploads, and a text paste stays an ordinary paste',async()=>{
+  await bound(own());const hold:{release?:()=>void}={};uploads(hold);
+  type('look');
+  expect(fireEvent.paste(box(),{clipboardData:{files:[]}})).toBe(true);
+  fireEvent.drop(screen.getByRole('region',{name:t('agentComposerTitle')}),{dataTransfer:{types:['Files'],files:[png('wait.png')]}});
+  expect(await screen.findByText(t('attachmentUploading'))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  act(()=>hold.release!());
+  await waitFor(()=>expect(box().value).toBe('look [Image #1] '));
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('attachmentUploading'))).toBeNull();
+});
+
+it('keeps a token whole under any edit and releases its file with the token',async()=>{
+  await bound(own());uploads();
+  fireEvent.paste(box(),{clipboardData:{files:[png('a.png')]}});await waitFor(()=>expect(box().value).toBe('[Image #1] '));
+  type('[Image #1 ');await waitFor(()=>expect(box().value).toBe(' '));
+  expect(chips()).toEqual([]);
+  fireEvent.paste(box(),{clipboardData:{files:[png('b.png')]}});await waitFor(()=>expect(chips()).toHaveLength(1));
+  fireEvent.click(screen.getByRole('button',{name:t('terminalComposerRemoveAttachment',{label:t('terminalComposerImage',{number:2})})}));
+  expect(box().value.trim()).toBe('');expect(chips()).toEqual([]);
+});
+
+it('refuses a file over the limit with its reason and uploads nothing',async()=>{
+  await bound(own());const sent=uploads();
+  const big=attachmentFile(new Uint8Array(4),'huge.bin');Object.defineProperty(big,'size',{value:11*1024*1024});
+  fireEvent.paste(box(),{clipboardData:{files:[big]}});
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(sent).toEqual([]);expect(box().value).toBe('');
+});
+
+it('sends a prompt whose paths push it past 4 KiB as one long send with the paths in place',async()=>{
+  await bound(own());uploads();
+  const name=`${'n'.repeat(200)}.png`;
+  fireEvent.paste(box(),{clipboardData:{files:[png(name)]}});
+  await waitFor(()=>expect(chips()).toHaveLength(1));
+  type(`${'x'.repeat(3950)} [Image #1] `);
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send_long',text:`${'x'.repeat(3950)} '${uploaded(name)}' `});
+});
+
+it('sends a prompt over 4 KiB to tmux as one long send, intact, and still sends a 4 KiB one as an ordinary send',async()=>{
+  await bound();
+  const exactly=`${'a'.repeat(4095)}\n`,long=`${'世界 line\n'.repeat(2000)}end`;
+  type(exactly);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0].input).toEqual({kind:'send',text:exactly});
+  await waitFor(()=>expect(box().value).toBe(''));
+  type(long);await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeNull();
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(2));
+  expect(inputs()[1]).toMatchObject({operation:2,input:{kind:'send_long',text:long}});
+  await waitFor(()=>expect(box().value).toBe(''));
+});
+
+it('refuses a prompt past the bound with the limit, and sends nothing',async()=>{
+  await bound();
+  type('x'.repeat(65536)+'');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  type('é'.repeat(32769));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'65,536'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(inputs()).toHaveLength(0);
+});
+
+it('keeps a Herdr pane at the 4 KiB it can take and says so',async()=>{
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toEqual(['status','prepare','confirm']));
+  type('y'.repeat(5000));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'4,096'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);
+  type('y'.repeat(4096));await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect((inputs()[0].input as {kind:string}).kind).toBe('send');
+});
+
+it('holds the edge gestures off while the message box has focus, so a swipe never fires under the keyboard',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(activeTextInteractions()).not.toContain('field');
+  act(()=>box().focus());
+  expect(activeTextInteractions()).toContain('field');
+  act(()=>box().blur());
+  expect(activeTextInteractions()).not.toContain('field');
 });

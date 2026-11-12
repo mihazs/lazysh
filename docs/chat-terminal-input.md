@@ -54,6 +54,18 @@ CR, other C0 controls, DEL/C1, Unicode line/paragraph separators and malformed
 Unicode are rejected. Accepted bytes are preserved without newline normalization.
 Ordinary single-line text retains literal hexadecimal byte arguments followed
 by one carriage-return Enter byte. Request stop still sends fixed Escape.
+
+Long prompt (`send_long`, tmux only, used by the Agent view composer): nonempty text of
+4,097 to 65,536 UTF-8 bytes under the same character rules, never split into several
+messages. The bytes go to a private tmux paste buffer as ASCII octal escapes over
+several bounded commands (4 KiB of payload each, one marked reply per command, every
+one guarded by the same original-context condition as `send`). Only when every chunk
+was stored does one last guarded command paste the buffer (`paste-buffer -p -r -d`,
+bracketed only when the program enabled it, line feeds kept) and press Enter once. A
+step that finds the destination changed deletes the buffer and sends nothing; a
+partial or lost reply retires the receipt like `send`, so a failed long prompt is never
+resent. A prompt of at most 4,096 bytes is still `send`, a longer one is refused by
+`send` itself, and a guarded Herdr pane has no paste buffer and refuses the kind.
 Unsupported and oversized drafts retain Stage.
 
 Text containing LF or TAB instead uses native tmux `paste-buffer -p -r -d`,
