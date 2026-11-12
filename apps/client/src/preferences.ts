@@ -2,6 +2,8 @@ import {LocalUiError} from './i18n/localError';
 import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
+import { xtermOptions } from "./xtermOptions";
+import type { TerminalPreferences } from "./terminalAdapter";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
 import type { UsageBarMode } from "./usageAgentProvider";
@@ -273,13 +275,18 @@ function subscribe(listener: () => void) {
   return () => { window.removeEventListener(event, listener); window.removeEventListener("storage", stored); };
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
-export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
+/** Backend-neutral terminal preferences for the stored preferences. */
+export function terminalPreferences(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): TerminalPreferences {
   const colors: ThemeColors | undefined = p.theme === 'custom' ? p.customTheme : themes[p.theme];
   const {bold, ...theme} = colors ?? {};
   const light = p.theme === 'paper' || (p.theme === 'custom' && p.customThemeInfo?.mode === 'light');
   // Bundled and pre-metadata palettes retain their existing bright-bold default.
   const legacy = p.theme !== 'custom' || !p.customThemeInfo;
-  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, drawBoldTextInBrightColors: bold !== undefined || legacy, theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
+  const boldColor = terminalBoldColor(p);
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollbackLines: p.scrollback, optionAsMeta: p.optionAsMeta, screenReader: p.screenReader, brightBold: bold !== undefined || legacy, ...(boldColor ? {boldColor} : {}), theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
+}
+export function terminalOptions(p: Preferences, fontFamily?: string): ITerminalOptions {
+  return xtermOptions(terminalPreferences(p, fontFamily));
 }
 export function terminalBoldColor(p: Preferences): string | undefined {
   const bold = p.theme === 'custom' ? p.customTheme?.bold : undefined;

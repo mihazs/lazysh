@@ -1,9 +1,15 @@
 import type { Terminal } from '@xterm/xterm';
-import {terminalOptions,terminalBoldColor,type Preferences} from './preferences';
+import {terminalPreferences,type Preferences} from './preferences';
+import {xtermOptions} from './xtermOptions';
+import type {TerminalPreferences} from './terminalAdapter';
+
+export function applyXtermPreferences(terminal: Terminal, preferences: TerminalPreferences) {
+  configureTerminalBold(terminal, preferences.boldColor);
+  terminal.options = xtermOptions(preferences);
+}
 
 export function applyTerminalTheme(terminal: Terminal, preferences: Preferences, fontFamily?: string) {
-  configureTerminalBold(terminal, terminalBoldColor(preferences));
-  terminal.options = terminalOptions(preferences, fontFamily);
+  applyXtermPreferences(terminal, terminalPreferences(preferences, fontFamily));
 }
 
 
