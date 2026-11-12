@@ -28,3 +28,8 @@
 .agent-status-state { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; color: var(--muted); }
 .agent-status-state[data-state="running"] { color: var(--accent); border-color: var(--accent); }
 .agent-status-state[data-state="failed"] { color: var(--danger, currentColor); border-color: var(--danger, currentColor); }
+.agent-task-stop, .agent-task-stop-receipt { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.agent-task-stop .subtle-button { min-height: 44px; }
+.agent-task-stop p { margin: 0; flex-basis: 100%; }
+.agent-task-stop-receipt { color: var(--muted); }
+.agent-task-stop-receipt[data-state="unconfirmed"] { color: inherit; }

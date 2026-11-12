@@ -8,7 +8,7 @@ import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
-import {publishAnswerGuard} from './agentDialogAnswer';
+import {publishAnswerGuard, publishTaskGuard} from './agentDialogAnswer';
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {conversationAgents, conversationSource} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
@@ -174,13 +174,20 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     const paneId = row?.paneId;
     return !!paneId && shown && access.current() && parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId === paneId;
   }, [row?.paneId, shown, access, invoke, sessionId]);
-  const answerGuard = useCallback(async () => {
-    if (!await paneGuard()) return false;
+  // The state the hook reports for the pane's session, only while the same pane still shows that same session.
+  const reportedState = useCallback(async () => {
+    if (!await paneGuard()) return undefined;
     const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === row?.paneId);
-    return rows.length === 1 && rows[0].sessionId === row?.sessionId && rows[0].state === 'needs_attention' && access.current();
+    return rows.length === 1 && rows[0].sessionId === row?.sessionId && access.current() ? rows[0].state : undefined;
   }, [paneGuard, row?.paneId, row?.sessionId, access, invoke, sessionId]);
+  const answerGuard = useCallback(async () => await reportedState() === 'needs_attention', [reportedState]);
+  // A request to stop a task is typed text and Enter: it needs the same pane still showing the same reported session, and no
+  // dialog open, because Enter would answer one.
+  const taskGuard = useCallback(async () => {const state = await reportedState(); return state !== undefined && state !== 'needs_attention';}, [reportedState]);
   const answerable = tmux && !selected && row?.state === 'needs_attention';
   useEffect(() => {publishAnswerGuard(sessionId, answerable ? answerGuard : undefined); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, answerable, answerGuard]);
+  const taskable = tmux && !selected && !!row && row.state !== 'needs_attention';
+  useEffect(() => {publishTaskGuard(sessionId, taskable ? taskGuard : undefined); return () => publishTaskGuard(sessionId, undefined);}, [sessionId, taskable, taskGuard]);
   if (!selected && binding.kind==='bound') retained.current={id:binding.row.sessionId,conversation:binding.conversation};
   // The list may sit over a followed conversation without losing its reading position or draft.
   // A reader that goes unknown for a moment (view hidden, Herdr unreachable) keeps its position and draft but stays hidden.

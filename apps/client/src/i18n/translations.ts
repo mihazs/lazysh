@@ -2365,6 +2365,13 @@ const translations = {
   agentStatusTokens: ["{{tokens}} tokens", "{{tokens}} tokens"],
   agentStatusMore: ["mais {{count}}", "{{count}} más"],
   agentStatusFewer: ["Mostrar menos", "Mostrar menos"],
+  agentStop: ["Parar", "Detener"],
+  agentStopTask: ["Parar {{task}}", "Detener {{task}}"],
+  agentStopConfirm: ["Pedir ao agente que pare", "Pedir al agente que se detenga"],
+  agentStopCancel: ["Manter em execução", "Mantener en ejecución"],
+  agentStopAsked: ["Pedido enviado ao agente. Aguardando o registro.", "Petición enviada al agente. Esperando el registro."],
+  agentStopUnconfirmed: ["Não confirmado. O agente não registrou a parada; confira o terminal.", "No confirmado. El agente no registró la detención; revisa el terminal."],
+  agentStopFailed: ["O pedido não foi enviado. Pare no terminal.", "La petición no se envió. Deténlo en el terminal."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;

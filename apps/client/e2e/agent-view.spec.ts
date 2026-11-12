@@ -455,6 +455,42 @@ test('says the agent waits in the terminal for a dialog it cannot read exactly, 
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
 });
 
+/** A tmux session whose Claude conversation lists one running background shell. */
+async function openWithShell(page:Page) {
+  await open(page);await asClaude(page);
+  // The conversation the companion read also lists one running background shell.
+  await page.evaluate(()=>{
+    const base=window.nativeFixtureInvoke!;
+    window.nativeFixtureInvoke=async(command,args)=>{
+      const result=await base(command,args);
+      return command==='agent_transcript'?{...(result as object),work:[{id:'sh',kind:'shell',title:'Watch CI',state:'running',taskId:'b89pe81sq',startedAt:new Date(Date.now()-60_000).toISOString(),events:[]}]}:result;
+    };
+  });
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const panel=agentView(page).getByRole('region',{name:'Background work',exact:true});
+  await expect(panel).toBeVisible({timeout:8000});
+  await panel.getByRole('button',{name:'1 shell'}).click();
+  return panel;
+}
+const typedInputs=(page:Page)=>page.evaluate(()=>window.agentView.inputs.filter(action=>action.kind==='input'));
+
+test('stops a background task with one confirmed message through the bound input, and nothing before the confirmation',async({page})=>{
+  const panel=await openWithShell(page);
+  await panel.getByRole('button',{name:'Stop Watch CI'}).click();
+  expect(await typedInputs(page)).toEqual([]);
+  await panel.getByRole('button',{name:'Ask the agent to stop it'}).click();
+  await expect(panel.getByRole('status').filter({hasText:'Asked the agent to stop it'})).toBeVisible();
+  expect(await typedInputs(page)).toEqual([expect.objectContaining({input:{kind:'send',text:'Stop background task b89pe81sq with the TaskStop tool, then reply only "stopped".'}})]);
+});
+
+test('offers no Stop while the agent waits for an answer, because Enter would answer the dialog',async({page})=>{
+  const panel=await openWithShell(page);
+  await expect(panel.getByRole('button',{name:'Stop Watch CI'})).toBeVisible();
+  await page.evaluate(()=>{window.agentView.state='needs_attention';});
+  await expect(panel.getByRole('button',{name:'Stop Watch CI'})).toHaveCount(0,{timeout:10000});
+  expect(await typedInputs(page)).toEqual([]);
+});
+
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='phone','Hardware shortcut is covered on desktop.');
   await open(page);

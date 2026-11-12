@@ -12,7 +12,7 @@ import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcript
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import {useDialogAnswerer} from './agentDialogAnswer';
+import {useDialogAnswerer, useTaskStopper} from './agentDialogAnswer';
 import {ChatActivity,ChatCard,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
@@ -300,6 +300,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const resultAnchors = useMemo(() => new Map(messages.filter(message => timeline && message.blocks.length > 0 && message.blocks.every(block => block.type === 'tool_result' && block.id && toolCalls.has(block.id))).flatMap(message => message.blocks.map(block => [block.id!, message.id] as const))), [timeline, messages, toolCalls]);
   const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
   const answerer = useDialogAnswerer(sessionId);
+  const stopper = useTaskStopper(sessionId);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
   useEffect(()=>{if(preview && !previewRetained)setPreview(undefined);},[preview,previewRetained]);
   const [offset, setOffset] = useState(0);
@@ -887,7 +888,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      {timeline && bound && <AgentStatusPanel messages={messages} work={work} onOpen={openChild} />}
+      {timeline && bound && <AgentStatusPanel messages={messages} work={work} onOpen={openChild} stop={agent === 'claude' ? stopper : undefined} />}
       {timeline && bound && <AgentPlanChip messages={flow} />}
       {timeline && <AgentWorkingRow state={workState} label={liveState?.label} since={workSince} {...(turnRunning ? progress : {})} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
