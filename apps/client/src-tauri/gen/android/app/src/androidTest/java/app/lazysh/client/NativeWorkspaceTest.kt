@@ -3406,12 +3406,21 @@ class NativeWorkspaceTest {
             println("lazysh Mosh background: >35s busy Home interval with the ongoing session notification, notification tap back to the same app/terminal, fresh remote challenge and last-worker foreground service/notification/wake-lock cleanup before foreground")
         } catch (failure: Throwable) { primary = failure; throw failure }
         finally {
-            try {
-                foreground()
-                assertEquals("Owned terminal observation must be removed", "true", evaluate(scenario,
-                    "(()=>{const x=window[$key];if(!x)return true;if(x.token!==$token)return false;delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))
-            } catch (failure: Throwable) {
-                val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName}")
+            // The Activity has only just been brought back, so its WebView may not answer for a moment; retry briefly.
+            val cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+            var cleanupFailure: Throwable? = null
+            while (true) {
+                cleanupFailure = try {
+                    foreground()
+                    assertEquals("Owned terminal observation must be removed", "true", evaluate(scenario,
+                        "(()=>{const x=window[$key];if(!x)return true;if(x.token!==$token)return false;delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))
+                    null
+                } catch (failure: Throwable) { failure }
+                if (cleanupFailure == null || System.nanoTime() >= cleanupDeadline) break
+                Thread.sleep(250)
+            }
+            cleanupFailure?.let { failure ->
+                val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName} at ${failure.stackTrace.firstOrNull { it.className.startsWith("app.lazysh") }}")
                 if (primary != null) primary!!.addSuppressed(closed) else throw closed
             }
         }
