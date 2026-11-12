@@ -39,7 +39,15 @@ it('routes only a known event to its exact connected SSH session', async () => {
   expect(openInboxEvent('unknown', [session])).toBe(false);
   expect(openInboxEvent(eventId, [session], 'stale-session')).toBe(false);
   expect(openInboxEvent(eventId, [session])).toBe(true);
-  expect((navigate.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: true });
+  expect((navigate.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: false });
+  // Only a needs-you event of Claude Code or Codex in a known pane leads to the Agent view's pending card.
+  await collectInbox(session, snapshot([{ ...row, agent: 'Claude Code' }]), true);
+  const followable = getInbox().rows.find(item => item.agent === 'Claude Code')!;
+  expect(openInboxEvent(followable.eventId, [session])).toBe(true);
+  expect((navigate.mock.calls[1][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: true });
+  await collectInbox(session, snapshot([{ ...row, agent: 'Claude Code', paneId: null, eventCount: 2, updatedAt: '2026-10-24T22:05:00Z' }]), true);
+  expect(openInboxEvent(getInbox().rows.find(item => item.agent === 'Claude Code')!.eventId, [session])).toBe(true);
+  expect((navigate.mock.calls[2][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', waiting: false });
   window.removeEventListener('lazysh-inbox-open', navigate);
 });
 

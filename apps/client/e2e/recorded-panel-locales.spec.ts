@@ -34,7 +34,7 @@ for(const labels of [
     await expectPanelInsets(panel);
   }
   await root.getByRole('button',{name:labels.connected,exact:true}).click();
-  expect(await page.evaluate(()=>window.recordedPanels.opened)).toEqual([{sessionId:panelSession.id,waiting:true}]);
+  expect(await page.evaluate(()=>window.recordedPanels.opened)).toEqual([{sessionId:panelSession.id,waiting:false}]);
   const before=await page.evaluate(()=>window.recordedPanels.calls);
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'en'});});
   await expect(root.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveValue(panelRawText);

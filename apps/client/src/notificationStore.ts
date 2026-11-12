@@ -76,9 +76,10 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
   return alerts;
 }
 
+/** `waiting` asks the app for the Agent view: only a needs-you event of an agent whose pane the Agent view can follow has a pending card to show. */
 export function openInboxEvent(eventId: string, sessions: InboxSession[], expectedSessionId?: string): boolean {
   const row = getInbox().rows.find(row => row.eventId === eventId);
   if (!row || (expectedSessionId !== undefined && row.sessionId !== expectedSessionId) || !sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)) return false;
-  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, waiting: row.state === 'needs_attention' } }));
+  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent) } }));
   return true;
 }
