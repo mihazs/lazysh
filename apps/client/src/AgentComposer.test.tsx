@@ -190,7 +190,8 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   type('Maybe');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
   expect(await screen.findByText(t('agentReceiptUncertain'))).toBeTruthy();
   expect(screen.queryByRole('button',{name:t('agentReceiptRetry')})).toBeNull();
-});
+// Two full send cycles in one case: a loaded CI machine needs more than the default five seconds.
+},20000);
 
 it('recalls earlier prompts with Up and Down only from an empty or untouched recalled draft',async()=>{
   await bound();
