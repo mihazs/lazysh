@@ -1,6 +1,8 @@
 package app.lazysh.client
 
 import android.os.Build
+import android.os.SystemClock
+import android.view.View
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -18,9 +20,15 @@ import org.junit.runner.RunWith
 class NativeEdgeGestureExclusionTest {
     @Test fun webViewKeepsTheClaimedBandsWithinItsBoundsAndReleasesThem() {
         assumeTrue(Build.VERSION.SDK_INT >= 29)
-        NativeActivityFixture.scenario.onActivity { activity ->
-            val found = EdgeGestureExclusion.webView(activity.window.decorView)
-            assertNotNull("the Tauri WebView is part of the window", found)
+        // Tauri attaches its WebView after the activity is resumed, so wait for it instead of racing it.
+        var found: View? = null
+        val deadline = SystemClock.uptimeMillis() + 30_000
+        while (found == null && SystemClock.uptimeMillis() < deadline) {
+            NativeActivityFixture.scenario.onActivity { found = EdgeGestureExclusion.webView(it.window.decorView) }
+            if (found == null) Thread.sleep(250)
+        }
+        assertNotNull("the Tauri WebView is part of the window", found)
+        NativeActivityFixture.scenario.onActivity {
             val webView = found!!
             EdgeGestureExclusion.apply(webView, 24, left = true, right = true)
             val claimed = webView.systemGestureExclusionRects

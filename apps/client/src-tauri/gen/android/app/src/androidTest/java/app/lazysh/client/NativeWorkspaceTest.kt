@@ -3406,12 +3406,21 @@ class NativeWorkspaceTest {
             println("lazysh Mosh background: >35s busy Home interval with the ongoing session notification, notification tap back to the same app/terminal, fresh remote challenge and last-worker foreground service/notification/wake-lock cleanup before foreground")
         } catch (failure: Throwable) { primary = failure; throw failure }
         finally {
-            try {
-                foreground()
-                assertEquals("Owned terminal observation must be removed", "true", evaluate(scenario,
-                    "(()=>{const x=window[$key];if(!x)return true;if(x.token!==$token)return false;delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))
-            } catch (failure: Throwable) {
-                val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName}")
+            // The Activity has only just been brought back, so its WebView may not answer for a moment; retry briefly.
+            val cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+            var cleanupFailure: Throwable? = null
+            while (true) {
+                cleanupFailure = try {
+                    foreground()
+                    assertEquals("Owned terminal observation must be removed", "true", evaluate(scenario,
+                        "(()=>{const x=window[$key];if(!x)return true;if(x.token!==$token)return false;delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))
+                    null
+                } catch (failure: Throwable) { failure }
+                if (cleanupFailure == null || System.nanoTime() >= cleanupDeadline) break
+                Thread.sleep(250)
+            }
+            cleanupFailure?.let { failure ->
+                val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName} at ${failure.stackTrace.firstOrNull { it.className.startsWith("app.lazysh") }}")
                 if (primary != null) primary!!.addSuppressed(closed) else throw closed
             }
         }
@@ -4284,6 +4293,7 @@ class NativeWorkspaceTest {
                 val literalClipboard = " # CLIP_${nonce}_\$literal"
                 val literal = JSONObject.quote(literalClipboard)
                 instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
+                val clipSetAt = System.nanoTime()
                 clickButton("paste")
                 awaitDocument(scenario, "native clipboard client settled and focused", """
                     (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
@@ -4300,6 +4310,7 @@ class NativeWorkspaceTest {
                 onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
                 awaitDocument(scenario, "native Enter submits the literal clipboard line",
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf($prompt)>x.textContent.lastIndexOf($literal))")
+                awaitClipboardPreviewGone(clipSetAt)
                 verifyToolbarPages(scenario, fixture.getString("prompt"), nonce)
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
                 if (!requireHerdr) verifyNavigationToolbarKeys(scenario)
@@ -5711,6 +5722,16 @@ class NativeWorkspaceTest {
                 {if(evaluate(scenario,"Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))")=="true")raw.clickIcon("Close Preferences")}
             ))
         }
+    }
+
+    /**
+     * SystemUI shows a preview of a copied clip over the bottom-left of the screen for about six seconds, which is
+     * where the first toolbar chord sits; a native tap meanwhile lands on the preview (opening its editor) instead
+     * of the toolbar. The preview's window has no stable name to wait on, so wait out its timeout with margin.
+     */
+    private fun awaitClipboardPreviewGone(clipSetAt: Long) {
+        val remaining = TimeUnit.SECONDS.toMillis(8) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - clipSetAt)
+        if (remaining > 0) Thread.sleep(remaining)
     }
 
     /** Native taps send one key from the keys page and one saved chord from the snippets page, which the page indicator selects without a swipe. */
