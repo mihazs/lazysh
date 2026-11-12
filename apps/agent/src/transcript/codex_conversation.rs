@@ -367,11 +367,15 @@ fn project(
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
+    let mut agents = super::work::CodexAgents::default();
     for record in &history.records {
         let value = &record.value;
         if value["type"] == "response_item" {
             // Turn state only: model-context items never become messages here.
             pending_question(&value["payload"], &mut asked);
+            if value["payload"]["type"] == "agent_message" {
+                agents.message(&value["payload"], value["timestamp"].as_str());
+            }
         }
         if value["type"] == "compacted" {
             projection.turn(None).compacted = true;
@@ -381,6 +385,9 @@ fn project(
             continue;
         }
         let event = &value["payload"];
+        if event["type"] == "item_completed" && event["item"]["type"] == "SubAgentActivity" {
+            agents.observe(&event["item"], value["timestamp"].as_str());
+        }
         match required(event, "type")? {
             "task_started" | "turn_started" => {
                 activity = Some("working");
@@ -484,6 +491,6 @@ fn project(
             other => other,
         },
         queued: Vec::new(),
-        work: None,
+        work: agents.into_work(),
     })
 }

@@ -323,7 +323,7 @@ Claude conversation responses can also include `work`: the sub-agents, backgroun
 - a notice's `<usage>` gives a finished sub-agent's `tokens` (`subagent_tokens`) and `durationMs`; a `Workflow` call never ends at its launch result, only at its notice;
 - a successful `TaskStop` result ends the task whose id it names as `stopped`.
 
-The companion never decides that an old launch is dead: a task with no recorded end stays `running` and carries `startedAt` and `timeoutMs`, and the client shows it as not confirmed once it is older than it could run. A turn that ended while `turn_duration.pendingBackgroundAgentCount` is above zero reads `working` in `activity`. Other agents report no `work`. Items are capped at 100 and `events` at 50 lines. Test fixtures are synthetic: `apps/agent/tests/work_tasks.rs`.
+The companion never decides that an old launch is dead: a task with no recorded end stays `running` and carries `startedAt` and `timeoutMs`, and the client shows it as not confirmed once it is older than it could run. A turn that ended while `turn_duration.pendingBackgroundAgentCount` is above zero reads `working` in `activity`. Codex conversations report the sub-agents of `SubAgentActivity` items as `agent` items (`id` is the sub-agent's thread id): `started` launches one, `completed` or the `FINAL_ANSWER` `agent_message` the sub-agent sends its parent ends it (`last` is the first line of that answer), and `interacted` changes nothing. Other agents report no `work`. Items are capped at 100 and `events` at 50 lines. Test fixtures are synthetic: `apps/agent/tests/work_tasks.rs`.
 
 ### Reading the whole session
 

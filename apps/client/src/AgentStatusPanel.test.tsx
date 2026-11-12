@@ -4,6 +4,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import AgentStatusPanel from './AgentStatusPanel';
 import {deriveStatus} from './agentBackgroundWork';
 import {parseWork, type WorkItem} from './agentWork';
+import {parseTranscript} from './ChatPanel';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 10, 11, 12, 0, seconds)).toISOString();
 const use = (id: string, name: string, input: object, seconds: number) => ({role: 'assistant', timestamp: at(seconds), blocks: [{type: 'tool_use', id, name, text: JSON.stringify(input)}]});
@@ -119,4 +120,10 @@ describe('AgentStatusPanel from the companion work list', () => {
     expect(() => parseWork([{...work[0], events: [1]}])).toThrow();
     expect(() => parseWork([{...work[0], tokens: -1}])).toThrow();
   });
+  it('takes the sub-agents of a Codex conversation from the page like those of a Claude one', () => {
+    const agent = {id: 'thread-1', kind: 'agent', title: 'audit_diff_review', state: 'running', startedAt: agoIso(60_000), events: []};
+    const page = parseTranscript({schemaVersion: 1, agent: 'codex', view: 'active_branch', messages: [], nextOffset: 0, hasMore: false, work: [agent]});
+    expect(page.work).toEqual([agent]);
+  });
 });
+

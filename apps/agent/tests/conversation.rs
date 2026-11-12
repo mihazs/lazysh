@@ -352,6 +352,82 @@ fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
     assert_eq!(ids(&page), ["3:oneuser-1", "3:oneassistant-1"]);
 }
 
+#[test]
+fn codex_sub_agents_run_from_their_start_until_their_recorded_completion() {
+    // `SubAgentActivity` items as Codex records them: the agent is named by its thread id and its path.
+    let activity = |kind: &str, thread: &str, path: &str, minute: u32| {
+        let mut record = codex_event(
+            "item_completed",
+            json!({"turn_id":"one","item":{"type":"SubAgentActivity","id":format!("{kind}-{thread}"),"kind":kind,"agent_thread_id":thread,"agent_path":path}}),
+        );
+        record["timestamp"] = json!(format!("2026-01-02T03:{minute:02}:00Z"));
+        record
+    };
+    let mut records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+        codex_turn("one"),
+        activity("started", "t-audit", "/root/audit_diff_review", 1),
+        activity("started", "t-fix", "/root/fix_plan", 2),
+        activity("started", "t-qa", "/root/qa_pass", 2),
+        activity("interacted", "t-fix", "/root/fix_plan", 3),
+        // Most sub-agents end with their final answer to the parent, not with a `completed` item.
+        {
+            let mut answer = codex_record(
+                "response_item",
+                json!({"type":"agent_message","author":"/root/qa_pass","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/qa_pass\nPayload:\nAll checks pass.\nSecond line"}]}),
+            );
+            answer["timestamp"] = json!("2026-01-02T03:04:00Z");
+            answer
+        },
+        activity("completed", "t-audit", "/root/audit_diff_review", 5),
+        // An end for an agent that was never seen starting changes nothing.
+        activity("completed", "t-ghost", "/root/ghost", 6),
+    ];
+    for (ordinal, record) in records.iter_mut().enumerate() {
+        record["ordinal"] = json!(ordinal);
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    write(&path, &records);
+    let page =
+        serde_json::to_value(conversation(&path, TranscriptAgent::Codex, 100).unwrap()).unwrap();
+    let work = page["work"].as_array().unwrap();
+    let rows: Vec<_> = work
+        .iter()
+        .map(|task| {
+            (
+                task["title"].clone(),
+                task["kind"].clone(),
+                task["state"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (json!("audit_diff_review"), json!("agent"), json!("done")),
+            (json!("fix_plan"), json!("agent"), json!("running")),
+            (json!("qa_pass"), json!("agent"), json!("done")),
+        ]
+    );
+    assert_eq!(work[0]["startedAt"], "2026-01-02T03:01:00Z");
+    assert_eq!(work[0]["endedAt"], "2026-01-02T03:05:00Z");
+    assert_eq!(
+        (work[2]["last"].clone(), work[2]["endedAt"].clone()),
+        (json!("All checks pass."), json!("2026-01-02T03:04:00Z"))
+    );
+    // A session without sub-agents reports no work.
+    let (_directory, plain) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+    ]);
+    assert!(
+        serde_json::to_value(conversation(&plain, TranscriptAgent::Codex, 100).unwrap()).unwrap()
+            ["work"]
+            .is_null()
+    );
+}
+
 fn paginated(mut records: Vec<Value>, start: u64) -> Vec<Value> {
     for (offset, record) in records.iter_mut().enumerate() {
         record["ordinal"] = json!(start + offset as u64);
