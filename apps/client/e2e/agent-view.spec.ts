@@ -165,6 +165,8 @@ test('names what the agent waits for in the header and opens the Agent view from
   await expect(list.getByRole('status')).toHaveText('1 waiting for you');
   await expect(list.getByRole('button',{name:/Codex · \/work · Waiting for your answer · /})).toBeVisible();
   const row=await list.getByRole('button').first().boundingBox();expect(row!.x+row!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
 test('answers a Claude permission request from the Agent view through the approval hook and writes no key to the terminal',async({page})=>{
   await open(page);
   // The same pane now runs Claude Code, which has one pending permission request.
