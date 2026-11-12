@@ -25,7 +25,8 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   expect(await rows('Agents and notifications')).toEqual(['AI account usage','Notifications','Notification inbox','Agents','Dictate']);
   expect(await rows('Security and sync')).toEqual(['Security and app lock','Encrypted sync']);
   expect(await rows('General')).toEqual(['Language and region','Shareable uploads']);
-  expect(await rows('Help')).toEqual(['About lazysh']);
+  // The gesture help page exists where the gestures do: on phones.
+  expect(await rows('Help')).toEqual(testInfo.project.name==='phone'?['Gestures','About lazysh']:['About lazysh']);
   const appearance=index.getByRole('button',{name:'Appearance and fonts',exact:true});
   expect(await value(appearance)).toBe('lazysh · 14 px');
   expect(await value(index.getByRole('button',{name:'Terminal and accessibility',exact:true}))).toBe('bar · 5,000 lines');

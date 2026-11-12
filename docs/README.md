@@ -30,6 +30,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Create an explicitly public, expiring share link | [Sharing](sharing.md) |
 | Configure terminal appearance and imports | [Themes](themes.md) · [Theme QR](theme-qr.md) · [Fonts](font-downloads.md) |
 | Use terminal shortcuts and chords | [Shortcuts](shortcuts.md) |
+| Use the phone edge swipes and replay the gesture tour | [Session gestures](how-to/use-session-gestures.md) |
 | Dictate editable text or import a local speech model | [Voice](voice.md) · [Parakeet](voice-parakeet.md) |
 | Configure an optional cloud transcription service | [Cloud transcription](cloud-transcription.md) |
 | Keep a supported active mobile screen awake | [Keep awake](keep-awake.md) |

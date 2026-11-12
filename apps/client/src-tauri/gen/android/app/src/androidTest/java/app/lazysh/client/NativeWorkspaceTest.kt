@@ -274,9 +274,10 @@ class NativeWorkspaceTest {
     /**
      * Phones hide the top bar in a connected session by default (the side menu replaces it). These suites drive the top bar's
      * controls, so the device keeps "Show top bar" on; the side menu itself is covered by the Playwright phone project.
+     * The first-run gesture tour opens over the first connected phone session, so this device has already seen it.
      */
     private fun keepTopBar(scenario: ActivityScenario<MainActivity>) {
-        evaluate(scenario, "(()=>{localStorage.setItem('lazysh.show-top-bar.v1','true');window.dispatchEvent(new Event('storage'));return true})()")
+        evaluate(scenario, "(()=>{localStorage.setItem('lazysh.show-top-bar.v1','true');localStorage.setItem('lazysh.gestureTour.v1','999');window.dispatchEvent(new Event('storage'));return true})()")
         awaitDocument(scenario, "top bar kept", "Boolean(document.querySelector('.workspace-header'))")
     }
 
