@@ -1,6 +1,6 @@
 # Terminal performance: product requirements
 
-Status: **proposed**. Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). This document states what must be true, what is known about the current terminal, and what is deliberately undecided. It contains **no benchmark results**: none have been taken. Every figure marked *provisional* is a target, not a measurement.
+Status: **proposed**. Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). This document states what must be true, what is known about the current terminal, and what is deliberately undecided. Its only measurements are the desktop xterm.js baseline recorded in [benchmarks](terminal-benchmarks.md#measured-baseline) (headless Chromium, not an Android WebView); no device or native-candidate result exists. Every figure marked *provisional* is a target, not a measurement.
 
 Companion documents: [runtime](terminal-runtime.md) · [adapter](terminal-adapter.md) · [native rendering](native-rendering.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [migration plan](terminal-migration-plan.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 

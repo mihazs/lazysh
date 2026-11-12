@@ -53,7 +53,7 @@ Surface destroy and recreate; pause and resume; Activity recreation; keyboard sh
 
 ## Validation gaps (authoring environment)
 
-The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no benchmark, no build of libghostty-vt on any target and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
+The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no device or native-candidate benchmark (the only measurements are the desktop xterm.js baseline in [benchmarks](terminal-benchmarks.md#measured-baseline)), no build of libghostty-vt on any target and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
 
 ## Risks
 
