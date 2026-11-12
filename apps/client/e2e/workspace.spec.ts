@@ -186,6 +186,12 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:'Connect',exact:true}).click();
 }
 
+/** A live remote session opens the menu on Agents, so the host list is the Connections tab. */
+async function openHosts(page:Page){
+  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Connections',exact:true}).click();
+}
+
 async function openConnectedAgents(page:Page,phone:boolean){
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
@@ -534,7 +540,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.goto('/');
   const phone=testInfo.project.name==='phone';
   async function connectHost(){
-    if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+    if(phone)await openHosts(page);
     await connectPasswordHost(page,'Focus workstation with a long host name');
   }
   const startup=page.locator('.workspace > .workspace-restore');
@@ -570,7 +576,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   if(phone){
     await page.getByRole('button',{name:'Open hosts',exact:true}).click();
     await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts,true))).toBe(true);
-    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
   }
   const canvas=await page.locator('.terminal-canvas:visible').elementHandle();
@@ -658,7 +664,7 @@ test('mobile terminal keeps one compact header and reaches every session control
     await more.getByRole('button',{name:'Attach',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Attach to this host',exact:true})).toBeVisible();
     await expect(strip).toBeHidden();await expect(tabs).toBeHidden();
-    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
+    await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
@@ -910,11 +916,11 @@ test('reopened phone hosts expose touchable host actions immediately and a close
   test.skip(testInfo.project.name!=='phone','Phone drawer geometry');
   await page.setViewportSize({width:412,height:915});
   await installWorkspaceNavigation(page);await page.goto('/');
-  for(const name of ['Navigation host','Other navigation host']){await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  for(const name of ['Navigation host','Other navigation host']){await openHosts(page);await connectPasswordHost(page,name);}
   await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(2);
   await (await workspaceControl(page,'End Other navigation host connection')).click();
   await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(1);
-  await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await openHosts(page);
   // Sampled without waiting for motion.
   const labels=['Edit Navigation host','Edit Other navigation host','Delete Other navigation host'];
   expect(await hostActionTargets(page,labels)).toEqual(touchable(labels));
@@ -1090,7 +1096,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
   const original=await page.locator('.terminal-canvas:visible').elementHandle();
-  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  if(phone)await openHosts(page);
   await connectPasswordHost(page,'Other navigation host');
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
@@ -1324,7 +1330,7 @@ test('Workspaces keeps three long app sessions compact while mobile pane choices
   const phone=testInfo.project.name==='phone';await page.setViewportSize({width:phone?393:1200,height:852});
   const names=['Desktop development with a long connection name','Desktop development with a long connection name / review','Desktop development with a long connection name / review / agents'];
   await installWorkspaceNavigation(page,true,names);await page.goto('/');
-  for(const name of names){if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();await connectPasswordHost(page,name);}
+  for(const name of names){if(phone)await openHosts(page);await connectPasswordHost(page,name);}
   const terminal=await page.locator('.terminal-canvas:visible').elementHandle();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});await modes.getByRole('button',{name:'Workspaces',exact:true}).click();

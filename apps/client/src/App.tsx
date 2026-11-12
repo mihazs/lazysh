@@ -1,7 +1,7 @@
 import './WorkspaceHierarchy.css';
 import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel, type WorkspaceToolPage} from './WorkspaceToolsCarousel';
 import {cycleFocus, focusableWithin} from './focus';
-import {SideMenu, SideMenuChoices, SideMenuSection} from './SideMenu';
+import {SideMenuChoices} from './SideMenuChoices';
 import {useSideMenuGestures} from './useSideMenuGestures';
 import {useSideMenuMode} from './sideMenuMode';
 import WorkspaceSessions from './WorkspaceSessions';
@@ -19,6 +19,7 @@ import {
   useEffect,
   useLayoutEffect,
   useCallback,
+  Fragment,
   useMemo,
   useRef,
   useId,
@@ -1177,7 +1178,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useClientAppearance();
   const {sessionLayout,usageItem='follow',usageProvider=''} = usePreferences();
   usePrivateKeyboard();
-  const shell=useRef<HTMLDivElement>(null),sideMenuRoot=useRef<HTMLDivElement>(null);
+  const shell=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);
@@ -1447,7 +1448,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     }).catch(()=>{});
     return()=>{current=false;};
   },[active?.id,active?.connected,active?.local,invoke,lease]);
-  // Phones in a session trade the top bar for the side menu; `mobileTools` is its open state, as it is the sheet's.
+  // Phones in a session trade the top bar for the side menu: the navigation page, which `sidebar` opens full screen.
   // Switching the gesture off in Preferences, or screen-reader mode, keeps the top bar: no gesture-only access.
   const leftMenuGesture=useEdgeGestureMode('leftMenu')==='gesture';
   const sideMenuMode=useSideMenuMode(!!active,!wideSidebar) && leftMenuGesture;
@@ -1460,7 +1461,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const paneAgent=useCurrentPaneAgent(active?.id??null,native&&!active?.local?active?.attached:undefined,usageBarShown&&usageItem==='follow');
   const accountUsage=useAccountUsage(active?.connected ? active.id : null,usageItem!=='hidden'||view==='usage',usageTarget(usageItem,usageProvider,paneAgent));
   const navigationState=useRef(navigation);navigationState.current=navigation;
-  const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
+  const remoteActive=!!active?.connected && !active.local;
+  // A connected remote session on a phone lists Agents, Workspaces, Connections and opens on Agents; with no such connection Connections leads.
+  const agentsFirst=remoteActive && !wideSidebar;
+  const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
   const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id)) : [];
@@ -1468,9 +1472,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
   const secondaryTools=sessionViews.filter(tool=>!primaryToolIds.includes(tool.id));
-  function mobileToolButton({id,label,Icon}:ReturnType<typeof views>[number]){
-    return <button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
-  }
+  /** A choice in a tools surface ends the visit: the sheet and the side menu page both close. */
+  const closeTools=()=>{setMobileTools(false);setSidebar(false);};
+  const toolButton=(className?:string)=>({id,label,Icon}:ReturnType<typeof views>[number])=>{
+    return <button type="button" key={id} className={className} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{closeTools();if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
+  };
+  const mobileToolButton=toolButton();
 
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
@@ -1480,15 +1487,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   // The Agent view is fetched before the first swipe, so it arrives with the finger.
   useEffect(()=>{if(swipeEnabled)void import("./AgentView");},[swipeEnabled]);
   useEffect(()=>{if(active && swipeFrom)setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,swipeFrom]);
-  const remoteActive=!!active?.connected && !active.local;
-  // The drawer is the Workspace tools state on phones. Another dialog or the host sidebar takes its place instead of stacking on it.
-  const sideMenuOpen=sideMenuMode && mobileTools;
-  const sideMenuBlocked=(navigationCovered && !mobileTools) || (!wideSidebar && sidebar);
-  useSideMenuGestures({shell,menu:sideMenuRoot,enabled:sideMenuMode && !sideMenuBlocked,open:sideMenuOpen,onOpen:()=>setMobileTools(true),onClose:()=>setMobileTools(false)});
-  useEffect(()=>{if(mobileTools && sideMenuMode && sideMenuBlocked)setMobileTools(false);},[mobileTools,sideMenuMode,sideMenuBlocked]);
-  const wasSideMenu=useRef(sideMenuMode);
-  // Leaving phone mode (rotation, "Show top bar") must not open the tools sheet in the drawer's place.
-  useEffect(()=>{if(wasSideMenu.current && !sideMenuMode)setMobileTools(false);wasSideMenu.current=sideMenuMode;},[sideMenuMode]);
+  // A dialog over the page takes the swipes, so a drag never moves the page under it.
+  useSideMenuGestures({shell,menu:navigationRef,enabled:sideMenuMode && !navigationCovered,open:sidebar,onOpen:openNavigation,onClose:()=>setSidebar(false)});
   const agentSection=agentSections[activeId??'']??'live';
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
@@ -1535,6 +1535,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setSidebar(true);
     return true;
   }
+  /** The menu button's first visit to a live remote session starts on Agents; later visits keep the tab the last one left. */
+  function openNavigation() {if(!(agentsFirst && !navigation[activeId??''] && showNavigation('agents')))setSidebar(true);}
   /** Leaves Agents or Workspaces for the terminal, as the destination heading's back control does. */
   function returnToTerminal(focusConnections:boolean) {
     if(wideSidebar){showNavigation('connections');if(focusConnections)navigationRef.current?.querySelector<HTMLButtonElement>('[data-workspace-mode=connections]')?.focus();}
@@ -2128,7 +2130,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     <div className="workspace-restore-row">
     <button type="button"
       disabled={restoring || !loaded}
-      onClick={() => {setMobileTools(false);void restoreWorkspace();}}
+      onClick={() => {closeTools();void restoreWorkspace();}}
     >
       {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
     </button>
@@ -2146,50 +2148,53 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */
   const workspaceToolsPages: WorkspaceToolPage[] = [
       ...(active?[{id:'session',title:t('appSessionViews'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('appSessionViews')}>
-        <button type="button" disabled={pendingMuxRequest} onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
+        <button type="button" disabled={pendingMuxRequest} onClick={()=>{closeTools();showNavigation('workspaces');}}><Layers size={18} aria-hidden="true"/><span>{t('navigationWorkspaces')}</span></button>
         {primaryTools.map(mobileToolButton)}
       </nav>},
       ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
-        <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
-        {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-        {active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
+        {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
+        {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
-        <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
-        <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+        <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
+        <button onClick={()=>{closeTools();setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
         <button
+         
           disabled={!native}
           onClick={() => {
-            setMobileTools(false);
+            closeTools();
             setInbox(true);
           }}
         >{t("appOpenNotificationInbox")}</button>
         <button
+         
           disabled={!native}
           onClick={() => {
-            setMobileTools(false);
+            closeTools();
             setSync(true);
           }}
         >{t("appOpenEncryptedSync")}</button>
         <button
+         
           disabled={!native}
           onClick={() => {
-            setMobileTools(false);
+            closeTools();
             setSharing(true);
           }}
         >{t("appOpenShareableUploads")}</button>
-        <button
+        {!sideMenuMode && <button
           onClick={() => {
-            setMobileTools(false);
+            closeTools();
             setPalette(true);
           }}
-        >{t("appSearchSavedHosts")}</button>
+        >{t("appSearchSavedHosts")}</button>}
       </div>},
     ];
   const endConnection = active && <div className="workspace-tools-danger">
-              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+              <button type="button" className="danger-button workspace-tools-end" disabled={closingIds.includes(active.id)} onClick={()=>{closeTools();void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
             </div>;
   return (
     <div className="app-shell" ref={shell}>
@@ -2197,7 +2202,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         ref={navigationRef}
         data-navigation={navigationEntry.mode}
         className={`sidebar ${sidebar ? "sidebar-open" : ""}`}
+        data-side-menu={sideMenuMode || undefined}
         aria-label={t("appHostsAndConnections")}
+        inert={sideMenuMode && !sidebar}
       >
         {navigationEntry.mode!=='connections' && <header className="workspace-destination-heading">
           <button type="button" className="icon-button" aria-label={t('navigationReturnTerminal')} title={t('navigationReturnTerminal')} onClick={()=>returnToTerminal(true)}><ArrowLeft size={20} aria-hidden="true"/></button>
@@ -2217,8 +2224,22 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <X size={18} />
           </button>
         </div>
+        {sideMenuMode && active && <section className="sidebar-session" aria-label={t('sideMenuSession')}>
+          <div className="host-item host-active">
+            <button type="button" className="host-connect" title={active.name} aria-label={t('appSwitchTerminalSession')} onClick={()=>{setSidebar(false);setSwitcher(true);}}>
+              <span className="host-symbol" data-tone={hostTone(active.name)} aria-hidden="true">{Array.from(active.name.trim())[0]?.toLocaleUpperCase() ?? <Server size={17}/>}</span>
+              <span><strong>{active.name}</strong><small>{connectionLabel}</small></span>
+              <span className="status-dot" aria-hidden="true"/>
+            </button>
+          </div>
+          {/* Choosing a view or a terminal control is the end of the visit: the page closes over the terminal it serves. */}
+          <SideMenuChoices onChoose={()=>setSidebar(false)}>
+            {sessionViewSwitch}
+            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
+          </SideMenuChoices>
+        </section>}
         <nav className="workspace-navigation-modes" aria-label={t('navigationTitle')}>
-          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
+          {(agentsFirst?['agents','workspaces','connections'] as const:['connections','workspaces','agents'] as const).map(mode=><button key={mode} data-workspace-mode={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{mode==='connections'?<Server size={18} aria-hidden="true"/>:mode==='workspaces'?<Layers size={18} aria-hidden="true"/>:<Bot size={18} aria-hidden="true"/>}<span>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</span></button>)}
         </nav>
         <div className="navigation-connections" hidden={navigationEntry.mode!=='connections'}>
         <button className="search-button" onClick={() => setPalette(true)}>
@@ -2302,6 +2323,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setEditor("new")}
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
+        {sideMenuMode && active && <>
+          <div className="sidebar-heading"><span>{t('workspaceApplicationOptions')}</span></div>
+          {workspaceToolsPages.filter(page=>page.id==='connections' || page.id==='application').map(page=><Fragment key={page.id}>{page.content}</Fragment>)}
+          {endConnection}
+        </>}
         </div>
         <nav className="agent-section-jumps" hidden={!agentsVisible} aria-label={t('agentsSections')}>
           <button type="button" className="subtle-button" aria-label={t('herdrAgentsTitle')} aria-controls={`${agentContentId}-live`} aria-pressed={agentSection==='live'} onClick={()=>jumpAgentContent('live')}>{t('agentsJumpLive')}</button>
@@ -2316,6 +2342,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           {remoteActive && <>
             <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
             {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
+          </>}
+          {sideMenuMode && <>
+            <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
+            {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
@@ -2343,14 +2373,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}${sideMenuMode ? " workspace-side-menu" : ""}`} data-single-session={sessions.length===1} inert={(!wideSidebar && sidebar) || sideMenuOpen}>
+      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}${sideMenuMode ? " workspace-side-menu" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         {!sideMenuMode && <header className="workspace-header">
           <button
             ref={navigationTrigger}
             className="icon-button mobile-menu"
             aria-label={t("appOpenHosts")}
-            onClick={() => setSidebar(true)}
+            onClick={openNavigation}
           >
             <Menu size={19} />
           </button>
@@ -2616,20 +2646,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         )}
       </main>
-      {sideMenuMode && active && <SideMenu open={sideMenuOpen} rootRef={sideMenuRoot} onClose={()=>setMobileTools(false)}>
-        <SideMenuSection id="current" title={t('sideMenuSession')}>
-          <button type="button" className="session-switcher-trigger" title={active.name} aria-label={t("appSwitchTerminalSession")} onClick={()=>{setMobileTools(false);setSwitcher(true);}}>{active.name}</button>
-          <span className="connection-label"><span className="status-dot"/>{connectionLabel}</span>
-          {/* Choosing a view or a terminal control is the end of the visit: the drawer closes over the terminal it serves. */}
-          <SideMenuChoices onChoose={()=>setMobileTools(false)}>
-            {sessionViewSwitch}
-            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
-          </SideMenuChoices>
-          <button type="button" className="side-menu-hosts" onClick={()=>{setMobileTools(false);showNavigation('connections');}}><Server size={18} aria-hidden="true"/><span>{t('appOpenHosts')}</span></button>
-        </SideMenuSection>
-        {workspaceToolsPages.map(page=><SideMenuSection key={page.id} id={page.id} title={page.title}>{page.content}</SideMenuSection>)}
-        {endConnection}
-      </SideMenu>}
       {editor && (
         <HostEditor
           hosts={hosts}
@@ -2728,7 +2744,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </Suspense>
         </Dialog>
       )}
-      {mobileTools && !sideMenuMode && (
+      {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="workspace-tools-content">
             <WorkspaceToolsCarousel initialPage={rememberedToolsPage()} onPageChange={rememberToolsPage} pages={workspaceToolsPages}/>
