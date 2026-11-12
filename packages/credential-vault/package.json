@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/credential-vault",
-  "version": "1.42.0",
+  "version": "1.43.0",
   "private": true,
   "license": "GPL-3.0-or-later"
 }

@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.43.0
+
+### Minor Changes
+
+- e8d624f: Add the phone bottom menu opened by swiping up from the bottom edge, with composer and toolbar show/hide.
+- f94c597: Add `@` file and folder completion to the Agent view composer, listing only paths below the folder the agent works in.
+- 2eecf76: Switch between the terminal and the Agent view with a swipe on a phone in a connected session: swipe from the right edge toward the left to show the Agent view, and while it is shown swipe from the centre toward the right to return to the terminal. The two views slide as one page that follows the finger and settles on release; a short or interrupted swipe leaves the view unchanged. The swipe never starts while typing or editing text, nor inside horizontally scrollable content such as code blocks, diffs and tables. The Terminal | Agent buttons stay, and the choice is still remembered per saved host and multiplexer target.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.43.0
+  - @lazysh/common@1.43.0
+  - @lazysh/display-idle@1.43.0
+  - @lazysh/et-transport@1.43.0
+  - @lazysh/mosh-transport@1.43.0
+
 ## 1.42.0
 
 ### Minor Changes
