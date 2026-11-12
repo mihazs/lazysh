@@ -192,10 +192,16 @@ const api = {
     const frames = meter.stop();
     return { linesWritten: lines, scrollback, bufferLines: retained, fillMs, pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: retained === Math.min(lines + 1, scrollback + terminal.rows) || retained === scrollback + terminal.rows };
   },
-  /** W9: parse-only background sessions (never opened, like unmounted sessions) filled to the scrollback limit. */
+  /** W9: background sessions filled to the scrollback limit. App.tsx mounts a TerminalPane per session and hides the inactive ones with display:none; so do these. */
   async sessions(count: number, lines: number) {
     await reset();
-    const extra = Array.from({ length: Math.max(0, count - 1) }, () => createTerminal());
+    const extra = Array.from({ length: Math.max(0, count - 1) }, () => {
+      const terminal = createTerminal(), pane = document.createElement('div'), canvas = document.createElement('div');
+      pane.className = 'terminal-pane'; pane.style.display = 'none'; canvas.className = 'terminal-canvas';
+      pane.append(canvas); document.body.append(pane); terminal.open(canvas);
+      panes.push(pane);
+      return terminal;
+    });
     sessions.push(...extra);
     const data = new TextEncoder().encode(Array.from({ length: lines }, (_, i) => `background session line ${String(i).padStart(6, '0')} ${'y'.repeat(30)}`).join('\r\n') + '\r\n');
     const all = [harness!.terminal, ...extra];
@@ -216,9 +222,9 @@ const api = {
     }
   },
   async stopBackground() { background!.stop = true; await Promise.all(background!.done); background = undefined; },
-  disposeSessions() { sessions.forEach(terminal => terminal.dispose()); sessions.length = 0; },
+  disposeSessions() { sessions.forEach(terminal => terminal.dispose()); sessions.length = 0; panes.forEach(pane => pane.remove()); panes.length = 0; },
 };
-const sessions: ReturnType<typeof createTerminal>[] = [];
+const sessions: ReturnType<typeof createTerminal>[] = [], panes: HTMLElement[] = [];
 let flooding: { stop: boolean; done: ReturnType<typeof drain> } | undefined;
 let background: { stop: boolean; done: Promise<void>[] } | undefined;
 

@@ -155,7 +155,7 @@ test('terminal baseline', async ({ page, browser, browserName }, info) => {
       const typing = await press(scale.keys, 'echo');
       await page.evaluate(() => window.terminalBench.stopBackground());
       return { ...typing, sessions: filled.sessions, linesPerSession: filled.linesPerSession, perSessionHeapMiB, perSessionRssMiB, correct: typing.correct && filled.correct };
-    }, `${count} sessions, ${scale.fillLines} lines each, others streaming`, 'Background sessions are parse-only terminals that were never opened; per-session figures are the JS-heap and resident-set growth after forced GC divided by sessions; xterm keeps its cell buffers in typed arrays, so RSS is the figure that includes them.');
+    }, `${count} sessions, ${scale.fillLines} lines each, others streaming`, 'Background sessions are opened xterm terminals in display:none panes, as App.tsx keeps inactive sessions; per-session figures are the JS-heap and resident-set growth after forced GC divided by sessions; xterm keeps its cell buffers in typed arrays, so RSS is the figure that includes them.');
   }
   await page.evaluate(() => window.terminalBench.disposeSessions());
 
