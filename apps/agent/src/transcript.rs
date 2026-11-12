@@ -39,7 +39,9 @@ mod snapshot;
 mod source_snapshot;
 pub mod watch;
 pub mod window;
-pub use conversation::{claude_conversation_images, conversation, conversation_window};
+pub use conversation::{
+    claude_conversation_images, codex_conversation_images, conversation, conversation_window,
+};
 pub use database::read_database_page;
 pub use discovery::discover;
 pub(crate) use source_snapshot::SourceSnapshot;

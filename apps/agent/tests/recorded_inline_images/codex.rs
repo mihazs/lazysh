@@ -1,4 +1,5 @@
 use super::*;
+use lazysh_agent::transcript::codex_conversation_images;
 
 fn image(bytes: &[u8], mime: &str) -> Value {
     json!({"type":"input_image","image_url":format!("data:{mime};base64,{}",STANDARD.encode(bytes)),"detail":"auto"})
@@ -162,11 +163,65 @@ fn codex_cli_image_opt_in_rejects_non_record_and_checkpoint_combinations() {
         .unwrap()
     );
     for extra in [
-        vec!["--view", "conversation"],
         vec!["--checkpointed"],
         vec!["--checkpoint", "invalid"],
         vec!["--session-id", "other"],
     ] {
         recorded_image::assert_rejected("codex", &path, &extra);
     }
+}
+
+fn record(kind: &str, mut payload: Value) -> Value {
+    if kind == "event_msg" {
+        payload["thread_id"] = json!("11111111-1111-4111-8111-111111111111");
+    }
+    json!({"timestamp":"2026-10-26T00:00:00Z","type":kind,"payload":payload})
+}
+
+#[test]
+fn conversation_view_carries_bounded_previews_of_user_attached_images_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conversation.jsonl");
+    let url = |bytes: &[u8], mime: &str| format!("data:{mime};base64,{}", STANDARD.encode(bytes));
+    let oversized = format!("data:image/png;base64,{}", "AAAA".repeat(16385));
+    jsonl::write(
+        &path,
+        &[
+            record(
+                "session_meta",
+                json!({"id":"11111111-1111-4111-8111-111111111111","history_mode":"legacy"}),
+            ),
+            record("event_msg", json!({"type":"task_started","turn_id":"one"})),
+            record(
+                "event_msg",
+                json!({"type":"user_message","message":"Look at these","images":[
+                    url(PNG, "image/png"), url(JPEG, "image/jpeg"), oversized, "https://never-fetch.invalid/a.png"
+                ],"local_images":["/never-read.png"]}),
+            ),
+            record(
+                "event_msg",
+                json!({"type":"agent_message","message":"Seen","images":[url(PNG, "image/png")]}),
+            ),
+            record("event_msg", json!({"type":"task_complete","turn_id":"one"})),
+        ],
+    );
+    let original = fs::read(&path).unwrap();
+    let plain =
+        serde_json::to_value(conversation(&path, TranscriptAgent::Codex, 50).unwrap()).unwrap();
+    // Without the opt-in nothing changes: no image block and no preview bytes.
+    assert_eq!(plain["messages"][0]["blocks"].as_array().unwrap().len(), 1);
+    let page = serde_json::to_value(codex_conversation_images(&path, 50).unwrap()).unwrap();
+    let blocks = page["messages"][0]["blocks"].as_array().unwrap();
+    assert_eq!(blocks[0]["text"], "Look at these");
+    assert_eq!(blocks.len(), 6);
+    recorded_image::assert_regions_preview(&blocks[1]["imagePreview"], PNG, "image/png");
+    recorded_image::assert_regions_preview(&blocks[2]["imagePreview"], JPEG, "image/jpeg");
+    // Over the bounds, a link and a local file keep the placeholder and never gain bytes.
+    for block in &blocks[3..] {
+        assert_eq!(block["type"], "image");
+        assert!(block.get("imagePreview").is_none());
+    }
+    // Only what the user attached gets previews, not the agent's own messages.
+    assert_eq!(page["messages"][1]["blocks"].as_array().unwrap().len(), 1);
+    assert_eq!(fs::read(&path).unwrap(), original);
 }

@@ -32,6 +32,11 @@ function herdrSelection(row:LinkedAgent,server:string,extra:Partial<Selection>):
 function StartButtons({sessionId}:{sessionId:string}) {
   return <>{(['claude','codex'] as const).map(agent=><button type="button" key={agent} onClick={()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:agent}}))}>{t('agentViewStartNamed',{agent:agentNames[agent]})}</button>)}</>;
 }
+/** Image previews cost bytes on a mobile link: on by default for Claude Code, opt-in for Codex whose companion support is newer. Kept per viewer. */
+const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false};
+function storedImages() {
+  try {return {...imageDefaults, ...JSON.parse(localStorage.getItem('lazysh.agentImages') ?? '{}')} as Record<BoundConversation['agent'], boolean>;} catch {return imageDefaults;}
+}
 type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: AgentSession} | {kind: 'bound'; row: AgentSession; conversation: BoundConversation};
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
@@ -51,6 +56,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const [choosing,setChoosing] = useState(false);
   const [unavailable,setUnavailable] = useState(false);
   const [menu,setMenu] = useState(false);
+  const [images,setImages] = useState(storedImages);
   const menuId = useId();
   const [usage,setUsage] = useState<Record<string,number|string>>();
   const [prompts,setPrompts] = useState<string[]>([]);
@@ -203,6 +209,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
       {selected && !selected.linked && <p>{t('agentViewSelectedNoStage')}</p>}
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
+      {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
@@ -229,7 +236,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
-    {kept && <ChatPanel key={held ? JSON.stringify(held.conversation) : retained.current?.id} sessionId={sessionId} shown={shown && reader && fresh}
+    {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} />}
     {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} />}
   </section>;

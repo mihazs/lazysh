@@ -551,6 +551,7 @@ fn codex_cli_uses_the_same_recorded_projection_and_rejects_other_reader_options(
     ]);
     for option in [
         None,
+        // The opt-in is admitted for Codex conversations: same text, plus previews only where an image was attached.
         Some("--inline-images"),
         Some("--checkpoint=invalid"),
         Some("--offset=1"),
@@ -571,8 +572,12 @@ fn codex_cli_uses_the_same_recorded_projection_and_rejects_other_reader_options(
             command.arg(option);
         }
         let output = command.output().unwrap();
-        assert_eq!(output.status.success(), option.is_none(), "{option:?}");
-        if option.is_none() {
+        assert_eq!(
+            output.status.success(),
+            matches!(option, None | Some("--inline-images")),
+            "{option:?}"
+        );
+        if output.status.success() {
             let page: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(page["view"], "active_branch");
             assert_eq!(page["agent"], "codex");

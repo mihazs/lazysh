@@ -84,6 +84,25 @@ impl Projection {
 fn text(kind: &str, value: &str) -> Value {
     json!({"type":kind,"text":value})
 }
+/// The embedded `data:` URL of a user-attached image part; a path or a link is never followed.
+fn embedded_image(part: &Value) -> Option<Option<&Value>> {
+    matches!(
+        part["type"].as_str(),
+        Some("image" | "Image" | "input_image" | "inputImage")
+    )
+    .then(|| part.get("image_url").or_else(|| part.get("url")))
+}
+/// A placeholder for the attachment, with the bounded preview only when the bytes are an admissible PNG or JPEG.
+fn image_block(url: Option<&Value>) -> Value {
+    let mut block = json!({"type":"image","text":"Attachment: view in the host agent terminal"});
+    if let Some(preview) = url
+        .and_then(Value::as_str)
+        .and_then(super::inline_image::admit_data_url)
+    {
+        block["imagePreview"] = preview;
+    }
+    block
+}
 fn message(id: &str, role: &str, blocks: Vec<Value>, timestamp: &Value) -> Option<Value> {
     if blocks.is_empty() {
         return None;
@@ -119,7 +138,7 @@ fn output_text(value: &Value) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
+fn canonical(item: &Value, timestamp: &Value, images: bool) -> Result<Option<Value>> {
     let kind = required(item, "type")?;
     let id = required(item, "id")?;
     let (role, blocks) = match kind {
@@ -128,6 +147,11 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
             let blocks = parts
                 .iter()
                 .filter_map(|part| {
+                    if images && kind == "UserMessage" {
+                        if let Some(url) = embedded_image(part) {
+                            return Some(image_block(url));
+                        }
+                    }
                     matches!(part["type"].as_str(), Some("text" | "Text"))
                         .then(|| part["text"].as_str())
                         .flatten()
@@ -219,7 +243,7 @@ fn canonical(item: &Value, timestamp: &Value) -> Result<Option<Value>> {
     };
     Ok(message(id, role, blocks, timestamp))
 }
-fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> {
+fn legacy(event: &Value, key: &str, timestamp: &Value, images: bool) -> Result<Option<Value>> {
     let kind = required(event, "type")?;
     let (role, blocks, id) = match kind {
         "user_message" | "agent_message" => (
@@ -230,7 +254,16 @@ fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> 
             },
             event["message"]
                 .as_str()
-                .map(|s| vec![text("text", s)])
+                .map(|s| {
+                    let mut blocks = vec![text("text", s)];
+                    if images && kind == "user_message" {
+                        // A local file is never read: it only says an image was attached.
+                        let attached = |key: &str| event[key].as_array().into_iter().flatten();
+                        blocks.extend(attached("images").map(|url| image_block(Some(url))));
+                        blocks.extend(attached("local_images").map(|_| image_block(None)));
+                    }
+                    blocks
+                })
                 .ok_or(Error::InvalidEvent)?,
             key.to_owned(),
         ),
@@ -265,13 +298,13 @@ fn legacy(event: &Value, key: &str, timestamp: &Value) -> Result<Option<Value>> 
             let mut item = event.clone();
             item["type"] = json!("DynamicToolCall");
             item["id"] = json!(required(event, "call_id")?);
-            return canonical(&item, timestamp);
+            return canonical(&item, timestamp, images);
         }
         "mcp_tool_call_end" => {
             let item = json!({"type":"McpToolCall","id":required(event,"call_id")?,"tool":event["invocation"]["tool"],"arguments":event["invocation"]["arguments"],"result":event["result"]["Ok"],"error":event["result"]["Err"]});
-            return canonical(&item, timestamp);
+            return canonical(&item, timestamp, images);
         }
-        "item_completed" => return canonical(&event["item"], timestamp),
+        "item_completed" => return canonical(&event["item"], timestamp, images),
         _ => return Ok(None),
     };
     Ok(message(&id, role, blocks, timestamp))
@@ -297,8 +330,13 @@ fn pending_question(payload: &Value, asked: &mut HashSet<String>) {
     }
 }
 
-pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<TranscriptPage> {
-    project(codex_lineage::read(path)?, limit, window)
+pub(super) fn conversation(
+    path: &Path,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
+    project(codex_lineage::read(path)?, limit, images, window)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -315,11 +353,17 @@ pub(super) fn anchored(
     project(
         codex_lineage::read_anchored(root, path, expected)?,
         limit,
+        false,
         window,
     )
 }
 
-fn project(history: codex_lineage::History, limit: u8, window: &Window) -> Result<TranscriptPage> {
+fn project(
+    history: codex_lineage::History,
+    limit: u8,
+    images: bool,
+    window: &Window,
+) -> Result<TranscriptPage> {
     let mut projection = Projection::default();
     let mut activity = None;
     let mut asked = HashSet::new();
@@ -397,7 +441,7 @@ fn project(history: codex_lineage::History, limit: u8, window: &Window) -> Resul
             if required(event, "thread_id")? != record.thread {
                 return Err(Error::InvalidEvent);
             }
-            canonical(&event["item"], &value["timestamp"])?
+            canonical(&event["item"], &value["timestamp"], images)?
         } else {
             // Legacy compatibility events own display text; response_item is
             // model context and can contain reinjection/private compaction data.
@@ -409,7 +453,7 @@ fn project(history: codex_lineage::History, limit: u8, window: &Window) -> Resul
             {
                 continue;
             }
-            legacy(event, &record.key, &value["timestamp"])?
+            legacy(event, &record.key, &value["timestamp"], images)?
         };
         if let Some(message) = projected {
             let turn = event["turn_id"].as_str().filter(|id| !id.is_empty());

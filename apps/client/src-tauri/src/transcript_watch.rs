@@ -31,7 +31,13 @@ const FRAME_TYPES: [&str; 5] = ["hello", "snapshot", "delta", "heartbeat", "end"
 pub enum WatchTarget {
     /// A transcript file the hook reports bound to the pane.
     #[serde(rename_all = "camelCase")]
-    Path { agent: String, path: String },
+    Path {
+        agent: String,
+        path: String,
+        /// Also carry the bounded previews of the images the user attached.
+        #[serde(default)]
+        inline_images: bool,
+    },
     /// A Herdr pane's agent session, resolved on the host and re-checked while it is watched.
     #[serde(rename_all = "camelCase")]
     Herdr {
@@ -73,9 +79,18 @@ impl TranscriptWatches {
 
 fn target_command(target: &WatchTarget) -> Result<String> {
     let (agent, source) = match target {
-        WatchTarget::Path { agent, path } => {
+        WatchTarget::Path {
+            agent,
+            path,
+            inline_images,
+        } => {
             ssh::check_path(path)?;
-            (agent, format!("--path {}", quote(path)))
+            let images = if *inline_images {
+                " --inline-images"
+            } else {
+                ""
+            };
+            (agent, format!("--path {}{images}", quote(path)))
         }
         WatchTarget::Herdr {
             agent,
@@ -381,8 +396,18 @@ mod tests {
         let path = WatchTarget::Path {
             agent: "claude".into(),
             path: "/home/o wner/it's.jsonl".into(),
+            inline_images: false,
         };
         assert_eq!(target_command(&path).unwrap(), "lazysh-agent transcript-watch --agent claude --path '/home/o wner/it'\\''s.jsonl' --limit 50");
+        let with_images = WatchTarget::Path {
+            agent: "codex".into(),
+            path: "/x".into(),
+            inline_images: true,
+        };
+        assert_eq!(
+            target_command(&with_images).unwrap(),
+            "lazysh-agent transcript-watch --agent codex --path '/x' --inline-images --limit 50"
+        );
         let herdr = |agent: &str, id: &str| WatchTarget::Herdr {
             agent: agent.into(),
             agent_session_id: id.into(),
@@ -404,6 +429,7 @@ mod tests {
         let other = WatchTarget::Path {
             agent: "grok-acp".into(),
             path: "/x".into(),
+            inline_images: false,
         };
         assert!(target_command(&other).is_err());
     }

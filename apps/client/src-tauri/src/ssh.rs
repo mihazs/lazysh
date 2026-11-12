@@ -3223,12 +3223,12 @@ fn transcript_request_command(
         return transcript_view_command(agent, path, offset, checkpoint, view);
     }
     let grok_records = agent == "grok-acp" && matches!(view, None | Some("records"));
-    let codex_records = agent == "codex" && matches!(view, None | Some("records"));
+    let codex_images = agent == "codex" && matches!(view, None | Some("records" | "conversation"));
     let claude_images =
         agent == "claude" && matches!(view, None | Some("records" | "conversation"));
     if transcript_session_id.is_some()
         || (flags.checkpointed && !grok_records)
-        || (flags.inline_images && !grok_records && !claude_images && !codex_records)
+        || (flags.inline_images && !grok_records && !claude_images && !codex_images)
     {
         return Err(SshError::new(
             "invalid_input",
@@ -4224,7 +4224,9 @@ mod tests {
             ("claude", None, Some("recording"), 0, None, false, false),
             ("codex", None, None, 0, None, false, true),
             ("codex", Some("records"), None, 10, None, false, true),
-            ("codex", Some("conversation"), None, 0, None, false, false),
+            ("codex", Some("conversation"), None, 0, None, true, false),
+            ("codex", Some("conversation"), None, 0, None, false, true),
+            ("codex", Some("conversation"), None, 1, None, false, false),
             ("codex", None, None, 0, Some("invalid"), false, false),
             ("codex", None, None, 0, None, true, false),
             ("codex", None, Some("recording"), 0, None, false, false),
