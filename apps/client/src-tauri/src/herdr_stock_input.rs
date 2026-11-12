@@ -40,6 +40,7 @@ fn command(target: &StockTarget, input: &Input) -> Option<String> {
         Input::Select { .. }
         | Input::Submit { .. }
         | Input::SendLong { .. }
+        | Input::Pick { .. }
         | Input::CycleMode {} => return None,
     };
     Some(format!(
