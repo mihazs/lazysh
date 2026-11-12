@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import PreferencesPanel from "./PreferencesPanel";
+import {usageProviders} from "./usageAgentProvider";
 import {uiI18n,t} from "./i18n/core";
 import { defaults, getPreferences, savePreferences, parseChord, toolbarRows } from "./preferences";
 afterEach(() => cleanup());
@@ -33,6 +34,31 @@ describe("terminal settings", () => {
     expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:40});
     fireEvent.click(screen.getByRole('button',{name:t('preferencesResetGestures')}));
     expect(getPreferences().edgeGestures).toBeUndefined();
+  });
+  it.each([['en','AI account usage','Follow the current agent','Always show a chosen account','Hide the usage item'],
+    ['pt-BR','Uso da conta de IA','Seguir o agente atual','Sempre mostrar uma conta escolhida','Ocultar o item de uso'],
+    ['es','Uso de la cuenta de IA','Seguir el agente actual','Mostrar siempre una cuenta elegida','Ocultar el elemento de uso']])('chooses the status bar usage item in %s: follows the agent by default, pins an account or hides',async(language,page,follow,fixed,hidden)=>{
+    await act(async()=>{await uiI18n.changeLanguage(language);});
+    try {
+      savePreferences({...defaults});mountPreferences(page);
+      const radio=(name:string)=>screen.getByRole('radio',{name}) as HTMLInputElement;
+      expect(radio(follow).checked).toBe(true);expect(getPreferences().usageItem).toBeUndefined();
+      fireEvent.click(radio(fixed));expect(getPreferences().usageItem).toBe('fixed');
+      const picker=screen.getByRole('combobox') as HTMLSelectElement;
+      expect(picker.disabled).toBe(false);expect(picker.options.length).toBe(32);
+      fireEvent.change(picker,{target:{value:'openai'}});expect(getPreferences().usageProvider).toBe('openai');
+      fireEvent.click(radio(hidden));expect(getPreferences().usageItem).toBe('hidden');expect(picker.disabled).toBe(true);
+      fireEvent.click(radio(follow));expect(getPreferences().usageItem).toBeUndefined();expect(getPreferences().usageProvider).toBe('openai');
+      fireEvent.change(picker,{target:{value:''}});expect(getPreferences().usageProvider).toBeUndefined();
+    } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
+  });
+  it('lists the accounts the host reported and keeps a stored custom provider selectable',()=>{
+    savePreferences({...defaults,usageItem:'fixed',usageProvider:'custom:acme'});
+    render(<PreferencesPanel usageAccounts={[{id:'anthropic@work',name:'Claude · work'},{id:'openai',name:'Codex'}]}/>);
+    fireEvent.click(screen.getByRole('button',{name:'AI account usage'}));
+    const picker=screen.getByRole('combobox') as HTMLSelectElement;
+    expect(picker.value).toBe('custom:acme');
+    expect([...picker.options].map(option=>option.value)).toEqual(['',...usageProviders.map(([id])=>id),'anthropic@work','custom:acme']);
   });
   it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
     savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});

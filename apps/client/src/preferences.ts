@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
+import type { UsageBarMode } from "./usageAgentProvider";
 
 export const themes = {
   forest: { background: "#101311", foreground: "#d9e0d6", cursor: "#c4eb89", selectionBackground: "#40543a", black: "#1d231f", red: "#f48781", green: "#b9df83", yellow: "#e4ce8b", blue: "#8caee4", magenta: "#c4a1dd", cyan: "#8ccfc1", white: "#d9e0d6", brightBlack: "#788478", brightRed: "#ffb0a6", brightGreen: "#d0f0a6", brightYellow: "#f3e0ac", brightBlue: "#b1caf0", brightMagenta: "#dfc3ef", brightCyan: "#b0e8de", brightWhite: "#f3f5ee" },
@@ -131,6 +132,10 @@ export type Preferences = {
   /** The composer's primary action submits the pasted draft with a separate Enter. */
   composerSendEnter: boolean;
   dismissKeyboardOnOverscroll: boolean;
+  /** What the status bar's usage item shows; absent means it follows the agent in the current pane. Omitted at the default so older sync peers accept the snapshot. */
+  usageItem?: UsageBarMode;
+  /** Report entry id of the account shown when the item is fixed, or when no agent is detected; absent means the host's default account. */
+  usageProvider?: string;
 };
 export const defaults: Preferences = {
   version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
@@ -182,6 +187,8 @@ export function parsePreferences(value: unknown): Preferences {
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   const edgeGestures = parseEdgeGestures(p.edgeGestures);
+  const usageItem = p.usageItem === "fixed" || p.usageItem === "hidden" ? p.usageItem : undefined;
+  const usageProvider = typeof p.usageProvider === "string" && p.usageProvider.length >= 1 && p.usageProvider.length <= 160 && !/[\x00-\x1f\x7f]/.test(p.usageProvider) ? p.usageProvider : undefined;
   const toolbarKeyHeight = number("toolbarKeyHeight", toolbarKeyHeights.min, toolbarKeyHeights.max, toolbarKeyHeights.default);
   return {
     version: 1,
@@ -213,6 +220,8 @@ export function parsePreferences(value: unknown): Preferences {
     ...(edgeGestures ? {edgeGestures} : {}),
     ...(p.privateKeyboard === true ? {privateKeyboard: true} : {}),
     ...(typeof p.toolbarHidden === "boolean" ? {toolbarHidden: p.toolbarHidden} : {}),
+    ...(usageItem ? {usageItem} : {}),
+    ...(usageProvider ? {usageProvider} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {

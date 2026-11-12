@@ -477,6 +477,8 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "composerSendEnter",
             "dismissKeyboardOnOverscroll",
             "toolbarAlternates",
+            "usageItem",
+            "usageProvider",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
         validate_theme_preferences(object)?;
@@ -489,6 +491,14 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             || object
                 .get("dismissKeyboardOnOverscroll")
                 .is_some_and(|value| !value.is_boolean())
+            || object
+                .get("usageItem")
+                .is_some_and(|value| !matches!(value.as_str(), Some("follow" | "fixed" | "hidden")))
+            || object.get("usageProvider").is_some_and(|value| {
+                !value
+                    .as_str()
+                    .is_some_and(|id| (1..=160).contains(&id.len()))
+            })
             || object.get("version").and_then(|v| v.as_u64()) != Some(1)
             || object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || serde_json::to_vec(preferences)
@@ -1543,6 +1553,23 @@ mod tests {
                 "{}",
                 field.0
             );
+        }
+    }
+
+    #[test]
+    fn usage_item_choice_syncs_only_with_known_values() {
+        let mut bundle = settings();
+        bundle.preferences =
+            Some(serde_json::json!({"version":1,"usageItem":"fixed","usageProvider":"openai"}));
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        for invalid in [
+            serde_json::json!({"version":1,"usageItem":"always"}),
+            serde_json::json!({"version":1,"usageItem":true}),
+            serde_json::json!({"version":1,"usageProvider":""}),
+            serde_json::json!({"version":1,"usageProvider":7}),
+        ] {
+            bundle.preferences = Some(invalid);
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
         }
     }
 
