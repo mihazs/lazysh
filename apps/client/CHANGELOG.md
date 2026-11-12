@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.35.0
+
+### Minor Changes
+
+- 91e6abf: Add the edge-swipe gesture engine for phone sessions: swipes that start in a thin edge zone follow the finger and settle, and never run while you type, select text or scroll. The side menu, bottom menu and view-switch gestures build on it.
+
+### Patch Changes
+
+- 2870a04: Fix Backspace and word corrections from the phone keyboard (reported with SwiftKey) being skipped after a toolbar key or a mouse report: Backspace over typed text now always reaches the terminal, and wheel scrolling in a mouse-tracking program no longer ends the keyboard edit record.
+- @lazysh/account-usage@1.35.0
+  - @lazysh/common@1.35.0
+  - @lazysh/display-idle@1.35.0
+  - @lazysh/et-transport@1.35.0
+  - @lazysh/mosh-transport@1.35.0
+
 ## 1.34.0
 
 ### Minor Changes
