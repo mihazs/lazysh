@@ -23,12 +23,21 @@ pub async fn agent_approvals(
         .await
 }
 
+/// How an approval is answered beyond allow or deny: one of the request's own suggested permission updates (an
+/// index into the listed `options`, allow only) or a message the agent reads (deny only).
+#[derive(Default)]
+struct Extras<'a> {
+    option: Option<u8>,
+    message: Option<&'a str>,
+}
+
 fn resolve_command(
     id: &str,
     hash: &str,
     agent_session_id: &str,
     pane_id: Option<&str>,
     decision: &str,
+    extras: &Extras,
 ) -> Result<String> {
     if uuid::Uuid::parse_str(id).is_err()
         || hash.len() != 64
@@ -37,6 +46,15 @@ fn resolve_command(
         || agent_session_id.len() > 1024
         || agent_session_id.chars().any(char::is_control)
         || !matches!(decision, "allow" | "deny")
+        || extras
+            .option
+            .is_some_and(|option| option >= 8 || decision != "allow")
+        || extras.message.is_some_and(|message| {
+            decision != "deny"
+                || message.trim().is_empty()
+                || message.chars().count() > 500
+                || message.chars().any(char::is_control)
+        })
     {
         return Err(SshError::new(
             "invalid_input",
@@ -51,7 +69,9 @@ fn resolve_command(
     }) {
         return Err(SshError::new("invalid_input", "Invalid approval pane"));
     }
-    Ok(format!("lazysh-agent approval-resolve --id {} --expected-hash {} --session-id={} --decision {decision}{}", quote(id), quote(hash), quote(agent_session_id), pane_id.map(|pane| format!(" --pane-id={}", quote(pane))).unwrap_or_default()))
+    Ok(format!("lazysh-agent approval-resolve --id {} --expected-hash {} --session-id={} --decision {decision}{}", quote(id), quote(hash), quote(agent_session_id), pane_id.map(|pane| format!(" --pane-id={}", quote(pane))).unwrap_or_default())
+        + &extras.option.map(|option| format!(" --option {option}")).unwrap_or_default()
+        + &extras.message.map(|message| format!(" --message={}", quote(message))).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -64,6 +84,8 @@ pub async fn resolve_agent_approval(
     agent_session_id: String,
     pane_id: Option<String>,
     decision: String,
+    option: Option<u8>,
+    message: Option<String>,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
     access
@@ -74,6 +96,10 @@ pub async fn resolve_agent_approval(
                 &agent_session_id,
                 pane_id.as_deref(),
                 &decision,
+                &Extras {
+                    option,
+                    message: message.as_deref(),
+                },
             )?;
             let session = state.session(&session_id).await?;
             Ok(serde_json::from_str(
@@ -90,8 +116,9 @@ mod tests {
     fn approval_commands_bind_exact_identity_without_shell_interpolation() {
         let id = "b714333f-82b1-4ee0-a383-6fd6dc1eca01";
         let hash = "a".repeat(64);
+        let none = Extras::default();
         assert!(
-            resolve_command(id, &hash, "session'$(cmd)", Some("%7"), "deny")
+            resolve_command(id, &hash, "session'$(cmd)", Some("%7"), "deny", &none)
                 .unwrap()
                 .contains("--session-id='session'\\''$(cmd)'")
         );
@@ -101,7 +128,32 @@ mod tests {
             (id, hash.as_str(), Some("%7;cmd"), "allow"),
             (id, hash.as_str(), None, "allow;cmd"),
         ] {
-            assert!(resolve_command(request, digest, "session", pane, decision).is_err());
+            assert!(resolve_command(request, digest, "session", pane, decision, &none).is_err());
+        }
+    }
+
+    #[test]
+    fn an_option_belongs_to_an_allow_and_a_message_to_a_deny_and_both_are_quoted() {
+        let id = "b714333f-82b1-4ee0-a383-6fd6dc1eca01";
+        let hash = "a".repeat(64);
+        let command = |decision, option, message| {
+            resolve_command(id, &hash, "s", None, decision, &Extras { option, message })
+        };
+        assert!(command("allow", Some(2), None)
+            .unwrap()
+            .ends_with("--decision allow --option 2"));
+        assert!(command("deny", None, Some("it's $(bad)"))
+            .unwrap()
+            .ends_with("--decision deny --message='it'\\''s $(bad)'"));
+        for refused in [
+            command("deny", Some(0), None),
+            command("allow", Some(8), None),
+            command("allow", None, Some("no")),
+            command("deny", None, Some("   ")),
+            command("deny", None, Some("two\nlines")),
+            command("deny", None, Some(&"x".repeat(501))),
+        ] {
+            assert!(refused.is_err());
         }
     }
 }

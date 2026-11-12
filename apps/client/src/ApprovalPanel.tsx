@@ -1,10 +1,11 @@
 import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
-import { Check, Clock, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { Clock, RefreshCw, ShieldAlert } from 'lucide-react';
 import { formatCountdown, formatRelativeTime, pathBasename, useNow } from './relativeTime';
 import './ApprovalPanel.css';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
+import {ApprovalActions, parseOptions, type Answer, type Suggestion} from './ApprovalChoices';
 
 
 type Approval = {
@@ -16,6 +17,7 @@ type Approval = {
   paneId: string | null;
   toolName: string;
   toolInput: unknown;
+  options: readonly Suggestion[];
   createdAt: string;
   expiresAt: string;
 };
@@ -51,17 +53,8 @@ export function parseApprovals(value: unknown): Approval[] {
       JSON.stringify(item.toolInput ?? null).length > 32768
     )
       throw new LocalUiError('approvalsInvalidIdentity');
-    return item as Approval;
+    return {...item, options: parseOptions(item.options)} as Approval;
   });
-}
-/** Allow and Deny; a delay keeps a tap that landed as the card appeared from deciding. */
-function ApprovalActions({request, disabled, delay, decide}:{request:Approval;disabled:boolean;delay:number;decide:(request:Approval,decision:'allow'|'deny')=>void}) {
-  const [ready,setReady]=useState(delay===0);
-  useEffect(()=>{if(!delay)return;const timer=window.setTimeout(()=>setReady(true),delay);return ()=>window.clearTimeout(timer);},[delay]);
-  return <div className="approval-actions">
-    <button type="button" className="approval-deny" disabled={disabled || !ready} onClick={()=>decide(request,'deny')}><X size={16} aria-hidden="true" />{t('approvalsDeny')}</button>
-    <button type="button" className="approval-allow" disabled={disabled || !ready} onClick={()=>decide(request,'allow')}><Check size={16} aria-hidden="true" />{t('approvalsAllow')}</button>
-  </div>;
 }
 /** `match` shows only the requests of one agent session in one pane; `validate` must hold again when a decision is sent. */
 export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false, match, validate, delay=0 }: { sessionId: string; visible?:boolean; compactEmpty?:boolean; match?:{agentSessionId:string;paneId:string}; validate?:()=>Promise<boolean>; delay?:number }) {
@@ -109,7 +102,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       window.clearInterval(interval);
     };
   }, [sessionId,visible,match?.agentSessionId,match?.paneId]);
-  async function decide(request: Approval, decision: "allow" | "deny") {
+  async function decide(request: Approval, {decision, option, message}: Answer) {
     const current=beginRequest();if(current===null)return;
     try {
       if (validate && (!await validate() || !owns(current) || Date.parse(request.expiresAt)<=Date.now())) throw new LocalUiError('approvalsNotAccepted');
@@ -122,6 +115,8 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
           agentSessionId: request.sessionId,
           paneId: request.paneId,
           decision,
+          ...(option === undefined ? {} : { option }),
+          ...(message === undefined ? {} : { message }),
         },
       );
       if (result?.schemaVersion !== 1 || result.accepted !== true)
@@ -181,7 +176,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
               {expired?t('approvalsExpired'):t('approvalsExpiresIn',{time:formatCountdown(expires-now)})}
             </time>
           </p>
-          <ApprovalActions key={`${request.id}:${request.expectedHash}`} request={request} disabled={!visible || busy || expired} delay={delay} decide={(item,decision)=>void decide(item,decision)} />
+          <ApprovalActions key={`${request.id}:${request.expectedHash}`} options={request.options} disabled={!visible || busy || expired} delay={delay} decide={answer=>void decide(request,answer)} />
           <dl className="approval-facts">
             <div><dt>{t('approvalsProjectLabel')}</dt><dd>{request.project}</dd></div>
             <div><dt>{t('approvalsSessionLabel')}</dt><dd>{request.sessionId}</dd></div>
