@@ -2109,6 +2109,7 @@ const translations = {
   agentImageOverLimit: ["Esta imagem não pode ser visualizada aqui: só aparecem imagens PNG e JPEG de até 48 KiB e cerca de um megapixel. Veja-a no terminal.", "Esta imagen no se puede previsualizar aquí: solo se muestran imágenes PNG y JPEG de hasta 48 KiB y cerca de un megapíxel. Mírala en el terminal."],
   agentViewStageOnly: ["Esta sessão não aceita entrada confirmada. Use Preparar no terminal para enviar um rascunho.", "Esta sesión no acepta entrada confirmada. Usa Preparar en el terminal para enviar un borrador."],
   agentViewTurn: ["Turno", "Turno"],
+  agentPlanProgress: ["{{done}} de {{total}}", "{{done}} de {{total}}"],
   agentViewActivity: ["Atividade ({{count}})", "Actividad ({{count}})"],
   chatWatchDelayed: ["As atualizações ao vivo não estão disponíveis; esta visão atualiza a cada 2 segundos e pode atrasar.", "Las actualizaciones en vivo no están disponibles; esta vista se actualiza cada 2 segundos y puede retrasarse."],
   chatWatchStale: ["Conexão perdida. Mostrando a última atualização de {{time}}; reconectando.", "Conexión perdida. Se muestra la última actualización de {{time}}; reconectando."],

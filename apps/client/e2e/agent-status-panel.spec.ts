@@ -1,4 +1,5 @@
 import {expect,test} from '@playwright/test';
+import {openAgentWork} from './fixtures/agentWorkPage';
 
 const stamp=(seconds:number)=>new Date(Date.now()-seconds*1000).toISOString();
 const use=(id:string,name:string,input:object,seconds:number)=>({id:`use-${id}`,role:'assistant',timestamp:stamp(seconds),blocks:[{type:'tool_use',id,name,text:JSON.stringify(input)}]});
@@ -10,11 +11,7 @@ const messages=[
 ];
 
 test('the status panel lists background work compactly and stays inside the viewport',async({page})=>{
-  await page.goto('/');
-  await page.evaluate(messages=>{
-    Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async()=>({schemaVersion:1,agent:'claude',view:'active_branch',messages,nextOffset:1,hasMore:false})}});
-  },messages);
-  await page.evaluate(async()=>{(await import('/e2e/fixtures/AgentStatusHarness.tsx')).mountAgentStatusHarness();});
+  await openAgentWork(page,messages);
   const panel=page.getByRole('region',{name:'Background work'});
   await expect(panel.getByRole('button',{name:'6 running'})).toBeVisible();
   await expect(panel.getByRole('button',{name:'1 shell'})).toBeVisible();
