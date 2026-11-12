@@ -581,7 +581,11 @@ fn guarded_input(input: &Input) -> WireOutcome<()> {
     // Herdr's guard has no paste buffer and no key profile: a long prompt, a dialog answer and a mode cycle stay in the terminal.
     if matches!(
         input,
-        Input::SendLong { .. } | Input::Select { .. } | Input::Submit { .. } | Input::CycleMode {}
+        Input::SendLong { .. }
+            | Input::Select { .. }
+            | Input::Submit { .. }
+            | Input::Pick { .. }
+            | Input::CycleMode {}
     ) {
         return Err(Fault::Invalid);
     }

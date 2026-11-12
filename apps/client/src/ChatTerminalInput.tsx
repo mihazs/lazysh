@@ -8,8 +8,8 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   {agent:Exclude<TranscriptAgentId,'hermes'|'opencode'>;transcriptSessionId?:never}
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
-/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, and a free-text answer. */
-export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'cycle_mode'}>;
+/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, a free-text answer, a move of a list dialog's highlight (with Enter to take the row) and Escape to leave it. */
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'cycle_mode'}|{kind:'pick';rows:number;enter:boolean}|{kind:'request_stop'}>;
 /** Where Shift+Tab landed, as the agent's status line showed it; `unconfirmed` when the screen was not recognised. */
 export const permissionModes=['default','acceptEdits','plan','auto','bypassPermissions','unconfirmed'] as const;
 export type PermissionMode=typeof permissionModes[number];

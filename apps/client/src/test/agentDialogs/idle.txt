@@ -1,0 +1,7 @@
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "create a util logging.py that..."
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+  ⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and…

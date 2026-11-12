@@ -1,0 +1,14 @@
+/* The open TUI dialog, above the composer: large options, the highlighted one marked, notes below. */
+.agent-picker { display: grid; gap: 8px; flex-shrink: 0; max-height: 55%; overflow: auto; overscroll-behavior: contain; margin: 6px 8px; padding: 10px 12px; border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; }
+.agent-picker > h4 { margin: 0; overflow-wrap: anywhere; }
+.agent-picker > p { margin: 0; }
+.agent-picker-body { max-height: 7.5em; overflow: auto; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.agent-picker-body > p { margin: 0 0 4px; }
+.agent-picker-options { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-picker-options :is(button, p) { display: grid; gap: 2px; width: 100%; min-height: 44px; margin: 0; padding: 8px 12px; text-align: start; white-space: normal; overflow-wrap: anywhere; box-sizing: border-box; }
+.agent-picker-options p { border: 1px solid var(--theme-border, var(--border)); border-radius: 8px; }
+.agent-picker-options [aria-current] { border-inline-start: 4px solid var(--accent); }
+.agent-picker-options small { color: var(--muted); font-size: 12px; }
+.agent-picker .button-row { flex-wrap: wrap; }
+.agent-picker .button-row button { min-height: 44px; }
+.agent-picker-hint { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
