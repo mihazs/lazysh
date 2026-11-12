@@ -6,9 +6,11 @@ import ChatTerminalInput,{validTerminalDraft,validTerminalSource,type TerminalCo
 import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
 import {t,useUi} from './i18n/core';
-import AgentComposerPalette from './AgentComposerPalette';
+import AgentComposerPalette,{type Suggestion} from './AgentComposerPalette';
 import {promptsOf,recall,rememberPrompt,type Recall} from './agentComposerHistory';
 import {matchSlash,pickerCommand,promptMode,slashText,type SlashCommand} from './agentSlashCommands';
+import {mentionAt,mentionText} from './agentFileMention';
+import {useAgentFileSuggestions} from './useAgentFileSuggestions';
 import {canRetry,promptsLike,receiptState,type SendPhase} from './agentSendReceipt';
 import {useNow} from './relativeTime';
 import './AgentComposer.css';
@@ -25,11 +27,13 @@ const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kin
 /** The message box of the Agent view: always present under a followed conversation.
  * With a proof the input binds itself to the proven pane and Send goes straight to the agent's terminal; without one
  * the explicit destination confirmation stays. Stage in terminal is the path of a session that takes no confirmed input. */
-export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[]}:{
+export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],cwd}:{
   sessionId:string;conversation:BoundConversation;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;shown:boolean;
   labels?:TerminalInputLabels;proof?:ComposerProof;stage:boolean;
   /** What the conversation already holds as the person's prompts, so a receipt settles from the transcript. */
   prompts?:readonly string[];
+  /** The host folder the agent works in: the root of `@` file mentions. Without it there is no file picker. */
+  cwd?:string;
 }) {
   useUi();
   // The agent's own session names the conversation, so a transcript that moves to a new file keeps its draft.
@@ -43,7 +47,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const field=useRef<HTMLTextAreaElement>(null);
   const paletteId=useId();
   const walk=useRef<Recall>({index:null,text:''});
-  const [slashIndex,setSlashIndex]=useState(0),[slashClosed,setSlashClosed]=useState(false);
+  const [slashIndex,setSlashIndex]=useState(0),[slashClosed,setSlashClosed]=useState(false),[caret,setCaret]=useState(0);
+  const wantCaret=useRef<number|undefined>(undefined);
   const [receipt,setReceipt]=useState<{text:string;phase:SendPhase;at:number;before:number}>();
   const [stopArmed,setStopArmed]=useState(false);
   const edit=useCallback((next:string)=>{
@@ -73,6 +78,20 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const agent=conversation.agent;
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
+  const mention=!slash && !slashClosed && !compositionActive && cwd ? mentionAt(draft,caret) : undefined;
+  const files=useAgentFileSuggestions({sessionId,invoke,cwd,mention});
+  // One list for both kinds of suggestion, so the keys and the listbox behave the same.
+  const popup:{label:string;items:Suggestion[];pick:(index:number)=>void}|undefined=slash?{label:t('agentComposerCommands'),
+      items:slash.map(command=>({key:command.name,label:`/${command.name}`,hint:command.picker?t('agentComposerOpensPicker'):undefined})),pick:index=>pick(slash[index])}
+    : mention && files.length ? {label:t('agentComposerFiles'),items:files.map(entry=>({key:entry.name,label:entry.isDir?`${entry.name}/`:entry.name})),
+      pick:index=>{
+        const text=mentionText(mention,files[index]);
+        wantCaret.current=mention.start+text.length;edit(draft.slice(0,mention.start)+text+draft.slice(caret));field.current?.focus({preventScroll:true});
+      }} : undefined;
+  useEffect(()=>{
+    if(wantCaret.current===undefined)return;
+    field.current?.setSelectionRange(wantCaret.current,wantCaret.current);setCaret(wantCaret.current);wantCaret.current=undefined;
+  },[draft]);
   const pick=(command:SlashCommand)=>{edit(slashText(command));field.current?.focus({preventScroll:true});};
   const now=useNow(1000,receipt?.phase==='accepted');
   const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued:[],elapsedMs:now-receipt.at});
@@ -104,21 +123,21 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
         edit(next);setAttachmentOpen(false);field.current?.focus({preventScroll:true});
       }}/>
     </div>}
-    {slash && <AgentComposerPalette id={paletteId} items={slash} active={Math.min(slashIndex,slash.length-1)} onPick={pick} onHover={setSlashIndex}/>}
+    {popup && <AgentComposerPalette id={paletteId} label={popup.label} items={popup.items} active={Math.min(slashIndex,popup.items.length-1)} onPick={popup.pick} onHover={setSlashIndex}/>}
     {mode && <span className="agent-composer-mode" data-mode={mode}>{t(mode==='bash'?'agentModeBash':'agentModeMemory')}</span>}
     <form className="agent-composer-row" aria-label={t('chatDraft')} onSubmit={event=>{event.preventDefault();submit();}}>
       <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
       <textarea ref={field} rows={Math.max(1,Math.min(6,draft.split('\n').length))} maxLength={LIMIT} value={draft} aria-label={t('chatDraftLabel')} placeholder={t('agentComposerLabel')}
-        onChange={event=>edit(event.target.value)}
+        onChange={event=>{setCaret(event.target.selectionStart);edit(event.target.value);}} onSelect={event=>setCaret(event.currentTarget.selectionStart)}
         onCompositionStart={()=>{composing.current=true;setCompositionActive(true);}} onCompositionEnd={()=>{composing.current=false;setCompositionActive(false);}}
         // Enter sends with a hardware keyboard; a touch keyboard keeps Enter as a new line and sends with the button.
-        aria-controls={slash?paletteId:undefined} aria-activedescendant={slash?`${paletteId}-${slash[Math.min(slashIndex,slash.length-1)].name}`:undefined}
+        aria-controls={popup?paletteId:undefined} aria-activedescendant={popup?`${paletteId}-${Math.min(slashIndex,popup.items.length-1)}`:undefined}
         onKeyDown={event=>{
           if(event.nativeEvent.isComposing || composing.current)return;
-          if(slash){
-            const active=Math.min(slashIndex,slash.length-1);
-            if(event.key==='ArrowDown' || event.key==='ArrowUp'){event.preventDefault();setSlashIndex((active+(event.key==='ArrowDown'?1:slash.length-1))%slash.length);return;}
-            if(event.key==='Tab' || (event.key==='Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey)){event.preventDefault();pick(slash[active]);return;}
+          if(popup){
+            const active=Math.min(slashIndex,popup.items.length-1);
+            if(event.key==='ArrowDown' || event.key==='ArrowUp'){event.preventDefault();setSlashIndex((active+(event.key==='ArrowDown'?1:popup.items.length-1))%popup.items.length);return;}
+            if(event.key==='Tab' || (event.key==='Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey)){event.preventDefault();popup.pick(active);return;}
             if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setSlashClosed(true);return;}
           }
           if((event.key==='ArrowUp' || event.key==='ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey){

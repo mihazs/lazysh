@@ -2033,6 +2033,7 @@ export const english = {
   agentQueuedTitle: "Queued messages",
   agentQueued: "Queued",
   agentComposerCommands: "Slash commands",
+  agentComposerFiles: "Files and folders",
   agentComposerOpensPicker: "Opens a picker in the terminal",
   agentComposerPickerNote: "{{command}} opens a dialog in the terminal. Send it, then answer there.",
   agentModeBash: "Shell command",

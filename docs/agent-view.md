@@ -184,6 +184,15 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   after 8 s, **Not sent** with **Retry** (bind again, send once) when nothing was written,
   and **Delivery is unknown** with no Retry once writing began. **Request stop** needs a
   second press within 4 s, because Escape interrupts a running turn.
+- `@` in the composer opens a picker of the files and folders of the folder the agent works
+  in (the project the hook report names, listed over the same SFTP read the Files explorer
+  uses, at most 150 ms after the last key, one listing per folder per conversation). A
+  mention may only name a path below that folder: an absolute path, `..`, `.`, a backslash or
+  a control character in it is refused before any listing is requested. Dot files appear only
+  when the typed name starts with a dot, and names with whitespace cannot be mentioned. Picking
+  a file inserts `@path ` and picking a folder goes one level deeper; nothing is sent by it.
+  A conversation without a known folder, or a listing that fails, offers no picker and the
+  text is still sent as typed.
 
 ### Desktop
 

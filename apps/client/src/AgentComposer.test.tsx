@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {act,cleanup,configure,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import AgentComposer from './AgentComposer';
 import {bindProtectedInvoke,captureAccess} from './access';
@@ -10,9 +10,11 @@ import {tmuxChatBound,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTar
 import {herdrChatReply,herdrTarget} from './test/herdrChat';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
+// The guarded input settles over several awaited native calls; a loaded CI machine needs more than the default second.
+configure({asyncUtilTimeout:5000});
 const conversation={agent:'claude' as const,path:'/home/owner/.claude/projects/work/a.jsonl',report:{sessionId:'s1',agent:'Claude Code',paneId:'%3'}};
 const tmuxLabels={backend:'tmux' as const,hostLabel:'host',terminalLabel:'work'};
-const actions=()=>vi.mocked(invoke).mock.calls.map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
+const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command!=='list_directory').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
 const inputs=()=>actions().filter(action=>action.kind==='input');
 function mount(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
   const access=captureAccess();
@@ -233,4 +235,49 @@ it('names the prompt mode a leading ! or # selects and sends the text byte-exact
   expect((inputs()[0].input as {text:string}).text).toBe('!ls -la');
   type('#remember me');expect(screen.getByText(t('agentModeMemory'))).toBeTruthy();
   type('plain');expect(screen.queryByText(t('agentModeMemory'))).toBeNull();
+});
+
+const listing=(entries:{name:string;isDir:boolean;size:number}[])=>{
+  const reply=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='list_directory'?Promise.resolve(entries):reply(command,args,options));
+};
+const listed=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='list_directory').map(([,args])=>(args as {path:string}).path);
+const entries=[{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:10},{name:'.env',isDir:false,size:1}];
+
+it('completes @ mentions from the agent folder: lists it, filters as you type, inserts a file and goes one level into a folder',async()=>{
+  await bound({cwd:'/work/app'});listing(entries);
+  fireEvent.change(box(),{target:{value:'see @',selectionStart:5}});
+  const list=await screen.findByRole('listbox',{name:t('agentComposerFiles')});
+  expect(listed()).toEqual(['/work/app']);
+  expect(within(list).getAllByRole('option').map(option=>option.textContent)).toEqual(['src/','README.md']);
+  fireEvent.change(box(),{target:{value:'see @re',selectionStart:7}});
+  expect(within(screen.getByRole('listbox')).getAllByRole('option').map(option=>option.textContent)).toEqual(['README.md']);
+  fireEvent.keyDown(box(),{key:'Enter'});
+  expect(box().value).toBe('see @README.md ');
+  expect(inputs()).toHaveLength(0);
+  fireEvent.change(box(),{target:{value:'@s',selectionStart:2}});
+  fireEvent.click(within(await screen.findByRole('listbox')).getByRole('button',{name:'src/'}));
+  expect(box().value).toBe('@src/');
+  await waitFor(()=>expect(listed()).toEqual(['/work/app','/work/app/src']));
+});
+
+it('never lists outside the agent folder and offers nothing without one or after a failed listing',async()=>{
+  await bound({cwd:'/work/app'});listing(entries);
+  for(const value of ['@../','@src/../','@/etc/'])fireEvent.change(box(),{target:{value,selectionStart:value.length}});
+  await new Promise(resolve=>setTimeout(resolve,250));
+  expect(listed()).toEqual([]);expect(screen.queryByRole('listbox')).toBeNull();
+  cleanup();vi.mocked(invoke).mockClear();
+  await bound();listing(entries);
+  fireEvent.change(box(),{target:{value:'@',selectionStart:1}});
+  await new Promise(resolve=>setTimeout(resolve,250));
+  expect(listed()).toEqual([]);expect(screen.queryByRole('listbox')).toBeNull();
+});
+
+it('offers nothing after a failed listing',async()=>{
+  await bound({cwd:'/work/app'});
+  const reply=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='list_directory'?Promise.reject(new Error('denied')):reply(command,args,options));
+  fireEvent.change(box(),{target:{value:'with @',selectionStart:6}});
+  await waitFor(()=>expect(listed()).toHaveLength(1));
+  expect(screen.queryByRole('listbox')).toBeNull();
 });

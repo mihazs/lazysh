@@ -2,7 +2,7 @@ import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 
-type Fixture={queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
+type Fixture={listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -37,7 +37,7 @@ async function open(page:Page) {
       {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
       {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
     ]);
-    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},polls:0,watchMode:'off',watchStops:0,
+    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],polls:0,watchMode:'off',watchStops:0,
       emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
@@ -84,6 +84,10 @@ async function open(page:Page) {
         return 'watch-1';
       }
       if(command==='agent_watch_stop'){fixture.watchStops++;return;}
+      if(command==='list_directory'){
+        fixture.listed.push(String(args.path));
+        return args.path==='/work'?[{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:12},{name:'.env',isDir:false,size:1}]:[{name:'app.ts',isDir:false,size:3}];
+      }
       if(command==='multiplexer_tree')return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
@@ -641,4 +645,30 @@ test('the slash palette filters and inserts a command, history recalls the last 
   await expect(draft).toHaveValue('!echo hi');
   const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
   expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(['!echo hi']);
+});
+
+test('an @ mention lists the agent folder, completes a file and a folder, and refuses a path outside the folder',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('read @');
+  const list=agent.getByRole('listbox',{name:'Files and folders',exact:true});
+  await expect(list.getByRole('option')).toHaveText(['src/','README.md']);
+  const [box,field]=await Promise.all([list.boundingBox(),draft.boundingBox()]);
+  expect(box!.y+box!.height).toBeLessThanOrEqual(field!.y+1);expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await list.getByRole('button',{name:'src/'}).click();
+  await expect(draft).toHaveValue('read @src/');
+  await expect(list.getByRole('option')).toHaveText(['app.ts']);
+  await list.getByRole('button',{name:'app.ts'}).click();
+  await expect(draft).toHaveValue('read @src/app.ts ');
+  await expect.poll(async()=>(await page.evaluate(()=>window.agentView.listed))).toEqual(['/work','/work/src']);
+  await draft.fill('read @../');
+  await expect(list).toHaveCount(0);
+  await draft.fill('read @/etc/');
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(()=>window.agentView.listed)).toEqual(['/work','/work/src']);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect(draft).toHaveValue('');
+  const sent=(await page.evaluate(()=>window.agentView.inputs)).filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
+  expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(['read @/etc/']);
 });
