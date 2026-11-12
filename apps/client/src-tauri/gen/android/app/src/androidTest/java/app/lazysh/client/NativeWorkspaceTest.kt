@@ -4284,6 +4284,7 @@ class NativeWorkspaceTest {
                 val literalClipboard = " # CLIP_${nonce}_\$literal"
                 val literal = JSONObject.quote(literalClipboard)
                 instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
+                val clipSetAt = System.nanoTime()
                 clickButton("paste")
                 awaitDocument(scenario, "native clipboard client settled and focused", """
                     (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
@@ -4300,6 +4301,7 @@ class NativeWorkspaceTest {
                 onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
                 awaitDocument(scenario, "native Enter submits the literal clipboard line",
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf($prompt)>x.textContent.lastIndexOf($literal))")
+                awaitClipboardPreviewGone(clipSetAt)
                 verifyToolbarPages(scenario, fixture.getString("prompt"), nonce)
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
                 if (!requireHerdr) verifyNavigationToolbarKeys(scenario)
@@ -5711,6 +5713,16 @@ class NativeWorkspaceTest {
                 {if(evaluate(scenario,"Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))")=="true")raw.clickIcon("Close Preferences")}
             ))
         }
+    }
+
+    /**
+     * SystemUI shows a preview of a copied clip over the bottom-left of the screen for about six seconds, which is
+     * where the first toolbar chord sits; a native tap meanwhile lands on the preview (opening its editor) instead
+     * of the toolbar. The preview's window has no stable name to wait on, so wait out its timeout with margin.
+     */
+    private fun awaitClipboardPreviewGone(clipSetAt: Long) {
+        val remaining = TimeUnit.SECONDS.toMillis(8) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - clipSetAt)
+        if (remaining > 0) Thread.sleep(remaining)
     }
 
     /** Native taps send one key from the keys page and one saved chord from the snippets page, which the page indicator selects without a swipe. */
