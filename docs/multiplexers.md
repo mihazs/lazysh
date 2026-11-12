@@ -168,6 +168,17 @@ swipe over an open agent question can still move its selected option. Mouse whee
 keep their ordinary terminal behavior. Updating a host binary does not upgrade
 an already-running server; lazysh does not restart it automatically.
 
+The Agent view composer works on stock Herdr too. Where the guard is not
+available, Send runs `herdr --session NAME agent prompt PANE TEXT` over the
+host connection (Stop runs `agent send-keys PANE esc`). Herdr itself wraps the
+text in bracketed paste, presses Enter and refuses an agent that is waiting for
+an answer. lazysh first re-reads `herdr api snapshot` and sends only when exactly
+one live agent row carries the conversation's session id in the exact pane and
+terminal the conversation was opened from; no focus is involved and no companion
+is needed. The message is confirmed by the conversation showing it, and a failure
+after the command started is never resent. A guarded host keeps using the guarded
+input.
+
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
 

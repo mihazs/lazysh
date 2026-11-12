@@ -128,6 +128,7 @@ fn main() {
         "tmux_jump",
         "tmux_chat",
         "herdr_chat",
+        "herdr_agent_input",
         "herdr_tree",
         "agent_herdr_conversation",
         "agent_watch_start",

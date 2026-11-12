@@ -76,7 +76,7 @@ it('refuses to send when the pane the agent runs in is not the terminal, and off
   mount({proof:{kind:'tmux',paneId:'%9'}});
   expect(await screen.findByText(t('agentComposerWrongPane'))).toBeTruthy();
   expect(actions().map(action=>action.kind)).toEqual(['snapshot']);
-  type('hello');fireEvent.click(await screen.findByRole('button',{name:t('chatStage')}));
+  type('hello');fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('chatStage')}));
   expect(inputs()).toHaveLength(0);expect(staged).toHaveBeenCalledTimes(1);
   expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'hello'});
   window.removeEventListener('lazysh-prompt-draft',staged as EventListener);
@@ -120,9 +120,9 @@ it('retains the draft and offers a reconnect, without resending, when delivery f
   await screen.findByRole('alert');expect(box().value).toBe('important');
   expect(inputs()).toHaveLength(1);
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
-  fireEvent.click(await screen.findByRole('button',{name:t('agentComposerReconnect')}));
-  await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
-  await waitFor(()=>expect(box().value).toBe(''));expect(inputs()).toHaveLength(2);
+  // Retry binds again and sends the draft once, without another click on Send.
+  fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('agentReceiptRetry')}));
+  await waitFor(()=>expect(box().value).toBe(''));expect(inputs()).toHaveLength(2);expect(screen.queryByRole('alert')).toBeNull();
 });
 
 it('binds a guarded Herdr terminal only when it is the pane of the proven agent',async()=>{
@@ -136,6 +136,95 @@ it('binds a guarded Herdr terminal only when it is the pane of the proven agent'
   render(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown labels={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} proof={{...herdr,pane:'other'}} stage/>);
   expect(await screen.findByText(t('agentComposerWrongPane'))).toBeTruthy();
   expect(actions().map(action=>action.kind)).toEqual(['status','prepare']);
+});
+
+// Stock Herdr (0.9.3 to 0.9.5) has no `lazysh.guard` RPC: the guard status says unavailable and only Herdr's own agent commands exist.
+const stockLabels={backend:'herdr' as const,hostLabel:'host',terminalLabel:'work'};
+const stockHost={herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'};
+const stockConversation={agent:'claude' as const,path:'12345678-1234-4234-8234-123456789abc',herdr:stockHost};
+const stockProof={kind:'herdr' as const,pane:stockHost.paneId,terminal:stockHost.terminalId};
+const stockTarget={herdrSession:'owned',pane:'w2E:pF',terminal:'term-one',agent:'claude',agentSessionId:stockConversation.path};
+function stockHerdr(input:(args:unknown)=>unknown=()=>null) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='herdr_chat'){if((args as {action:{kind:string}}).action.kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
+    if(command==='herdr_agent_input')return input(args);
+    throw new Error(`unexpected ${command}`);
+  });
+}
+const agentInputs=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_agent_input').map(([,args])=>args);
+const mountStock=(props:Partial<Parameters<typeof AgentComposer>[0]>={})=>mount({conversation:stockConversation,labels:stockLabels,proof:stockProof,...props});
+async function sendTyped(text:string) {
+  type(text);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+}
+
+it('sends on a stock Herdr host through its own agent input, with no guard and no error shown',async()=>{
+  stockHerdr();mountStock();
+  await sendTyped('Run the tests\nthen commit');
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(agentInputs()).toEqual([{sessionId:'ssh',target:stockTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_chat').map(([,args])=>(args as {action:{kind:string}}).action.kind)).toEqual(['status']);
+  expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalStop')}));fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(agentInputs()).toHaveLength(2));
+  expect(agentInputs()[1]).toMatchObject({input:{kind:'request_stop'}});
+});
+
+it('never targets the stock pane when the conversation does not belong to the proven pane',async()=>{
+  stockHerdr();mountStock({proof:{...stockProof,terminal:'another-terminal'}});
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeGuard'))).toBeTruthy();
+  type('hello');expect(agentInputs()).toEqual([]);
+});
+
+it.each([
+  ['the agent waits for an answer',{kind:'herdr_chat_blocked',message:'blocked'},'agentNoticeNotSentTitle','agentNoticeBlocked',['chatOpenTerminal'],['agentReceiptRetry']],
+  ['the pane changed',{kind:'herdr_chat_stale',message:'changed'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
+  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
+  ['Herdr refuses the message',{kind:'herdr_chat_rejected',message:'agent_prompt_failed: pty closed'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
+  ['delivery cannot be confirmed',{kind:'herdr_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
+] as const)('says one thing in one notice when %s, keeps the draft and never offers a blind resend',async(_name,rejection,title,reason,offered,absent)=>{
+  stockHerdr(()=>{throw rejection;});const open=vi.fn();mountStock({onOpenTerminal:open});
+  await sendTyped('keep this');
+  const alert=await screen.findByRole('alert');
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(within(alert).getByText(t(title))).toBeTruthy();expect(within(alert).getByText(t(reason))).toBeTruthy();
+  expect(within(alert).getAllByRole('button').map(button=>button.textContent || button.getAttribute('aria-label'))).toEqual([...offered.map(key=>t(key)),t('appDismiss')]);
+  for(const key of absent)expect(within(alert).queryByRole('button',{name:t(key)})).toBeNull();
+  expect(box().value).toBe('keep this');expect(agentInputs()).toHaveLength(1);
+  // The two long paragraphs of the old error area are gone.
+  expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  if(rejection.kind==='herdr_chat_uncertain'){expect(alert.querySelector('details')?.textContent).toContain(t('chatTerminalUncertain'));fireEvent.click(within(alert).getByRole('button',{name:t('chatOpenTerminal')}));expect(open).toHaveBeenCalledTimes(1);}
+  if(rejection.kind==='herdr_chat_rejected'){
+    expect(within(alert).getByText(t('agentNoticeDetails'))).toBeTruthy();expect(within(alert).getByText(rejection.message)).toBeTruthy();
+  }
+});
+
+it('retries a refused stock send once on request, then clears the notice and the draft',async()=>{
+  let fail=true;stockHerdr(()=>{if(fail)throw {kind:'disconnected',message:'Session closed'};return null;});
+  mountStock();await sendTyped('second chance');
+  const alert=await screen.findByRole('alert');fail=false;
+  fireEvent.click(within(alert).getByRole('button',{name:t('agentReceiptRetry')}));
+  await waitFor(()=>expect(agentInputs()).toHaveLength(2));
+  await waitFor(()=>expect(box().value).toBe(''));expect(screen.queryByRole('alert')).toBeNull();
+  expect((agentInputs()[1] as {input:{text:string}}).input.text).toBe('second chance');
+});
+
+it('dismisses the notice without losing the draft, and the receipt line takes over',async()=>{
+  stockHerdr(()=>{throw {kind:'herdr_chat_blocked',message:'blocked'};});mountStock();
+  await sendTyped('still here');
+  fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('appDismiss')}));
+  expect(screen.queryByRole('alert')).toBeNull();expect(box().value).toBe('still here');
+  expect(screen.getByText(t('agentReceiptNotSent'))).toBeTruthy();
+});
+
+it('explains a terminal that takes no guarded input in one notice with Stage first',async()=>{
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{if((args as {action:{kind:string}}).action.kind==='status')return {kind:'status',available:false};throw new Error(command);});
+  const open=vi.fn();mountStock({conversation:{agent:'claude',path:stockConversation.path},onOpenTerminal:open});
+  const alert=await screen.findByRole('alert');
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(within(alert).getByText(t('agentNoticeGuard'))).toBeTruthy();
+  expect(within(alert).getAllByRole('button').map(button=>button.textContent)).toContain(t('chatOpenTerminal'));
+  expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
+  expect(screen.queryByRole('button',{name:'Reconnect to the terminal'})).toBeNull();
 });
 
 it('does not hold a binding while the view is hidden',async()=>{
@@ -178,7 +267,9 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   await bound();
   vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind==='input'?Promise.reject({kind:'tmux_chat_stale',message:'stale'}):tmuxChatReply(command,args));
   type('Important');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
-  expect(await screen.findByText(t('agentReceiptNotSent'))).toBeTruthy();
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeNotSentTitle'))).toBeTruthy();
+  // One notice speaks for the failed send; the receipt line stays out of its way until the notice is dismissed.
+  expect(screen.queryByText(t('agentReceiptNotSent'))).toBeNull();
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
   fireEvent.click(screen.getByRole('button',{name:t('agentReceiptRetry')}));
   await waitFor(()=>expect(inputs()).toHaveLength(2));
@@ -188,8 +279,10 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   await bound();
   vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind==='input'?Promise.reject({message:'connection lost'}):tmuxChatReply(command,args));
   type('Maybe');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
-  expect(await screen.findByText(t('agentReceiptUncertain'))).toBeTruthy();
+  expect(within(await screen.findByRole('alert')).getByText(t('agentNoticeUnconfirmedTitle'))).toBeTruthy();
   expect(screen.queryByRole('button',{name:t('agentReceiptRetry')})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:t('appDismiss')}));
+  expect(screen.getByText(t('agentReceiptUncertain'))).toBeTruthy();expect(box().value).toBe('Maybe');
 // Two full send cycles in one case: a loaded CI machine needs more than the default five seconds.
 },20000);
 

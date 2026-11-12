@@ -360,14 +360,18 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
           agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
     };
     const reports=Array.from({length:50},(_,index)=>({sessionId:`ended-${index}`,agent:'Claude Code',project:`/home/owner/old-${index}`,state:'done',updatedAt:new Date().toISOString(),summary:'Session ended',paneId:null,eventCount:3}));
-    (window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];focus:string}}).herdrFixture={conversations:[],entered:[],focus:start.focus??''};
-    const record=(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];focus:string}}).herdrFixture;
+    type Fixture={conversations:unknown[];entered:unknown[];focus:string;inputs:unknown[];inputError?:unknown};
+    (window as unknown as {herdrFixture:Fixture}).herdrFixture={conversations:[],entered:[],focus:start.focus??'',inputs:[]};
+    const record=(window as unknown as {herdrFixture:Fixture}).herdrFixture;
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
       if(command==='attach_multiplexer')return {sessionId:'display-owned'};
       if(command==='multiplexer_sessions')return [{name:'owned'}];
       if(command==='herdr_tree')return tree();
       if(command==='herdr_action'){record.entered.push(args.action);return;}
+      // Stock Herdr has no guard: the status says so and every guarded call is refused. Only its own agent commands deliver input.
+      if(command==='herdr_chat'){if((args.action as {kind:string}).kind==='status')return {kind:'status',available:false};throw {kind:'herdr_chat_unavailable',message:'no guard'};}
+      if(command==='herdr_agent_input'){if(record.inputError)throw record.inputError;record.inputs.push({target:args.target,input:args.input});return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
       if(command==='agent_herdr_conversation'){
@@ -384,7 +388,7 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
 }
-const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture);
+const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];inputs:unknown[]}}).herdrFixture);
 const focusPane=(page:Page,pane:string)=>page.evaluate(pane=>{(window as unknown as {herdrFixture:{focus:string}}).herdrFixture.focus=pane;},pane);
 
 test('stock Herdr: the Agent view lists the live agents, and selecting one opens its native chat',async({page})=>{
@@ -404,6 +408,35 @@ test('stock Herdr: the Agent view lists the live agents, and selecting one opens
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Enter session',exact:true}).click();
   await expect.poll(async()=>(await herdrFixture(page)).entered).toEqual([{type:'focusPane',target:'w5:p1'}]);
+});
+
+test('stock Herdr: the composer sends through Herdr\'s own agent input, and a refused send shows one notice that keeps the draft',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1'});
+  const agent=agentView(page);
+  const field=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(agent.getByRole('alert')).toHaveCount(0);
+  await field.fill('Run the tests');
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect.poll(async()=>(await herdrFixture(page)).inputs).toEqual([{target:{herdrSession:'owned',pane:'w2:p1',terminal:'term-2',agent:'claude',agentSessionId:'00000002-0000-4000-8000-000000000000'},input:{kind:'send',text:'Run the tests'}}]);
+  await expect(field).toHaveValue('');
+  await expect(agent.getByRole('alert')).toHaveCount(0);
+  // The agent waits for an approval: one notice, the draft is kept, and nothing else is shown under the composer.
+  await page.evaluate(()=>{(window as unknown as {herdrFixture:{inputError:unknown}}).herdrFixture.inputError={kind:'herdr_chat_blocked',message:'blocked'};});
+  await field.fill('Next step');
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  const notice=agent.getByRole('alert');
+  await expect(notice).toHaveCount(1);
+  await expect(notice).toContainText('Message not sent');await expect(notice).toContainText('waiting for an answer or approval');
+  await expect(notice.getByRole('button',{name:'Open terminal',exact:true})).toBeVisible();
+  await expect(agent.getByText('Reconnect to the terminal')).toHaveCount(0);
+  await expect(field).toHaveValue('Next step');
+  const [box,viewport]=await Promise.all([notice.boundingBox(),page.viewportSize()]);
+  expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(viewport!.width);expect(box!.height).toBeLessThan(220);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  await notice.getByRole('button',{name:'Dismiss',exact:true}).click();
+  await expect(agent.getByRole('alert')).toHaveCount(0);await expect(field).toHaveValue('Next step');
+  expect((await herdrFixture(page)).inputs).toHaveLength(1);
 });
 
 test('stock Herdr with an old companion: the Agent view says to update it and still enters the pane',async({page})=>{
