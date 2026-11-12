@@ -138,6 +138,8 @@ export type Preferences = {
   toolbarHidden?: boolean;
   /** How the terminal composer shows: the default full-height sheet, or a movable panel that leaves the terminal as it is. Device-local, like the toolbar key height. */
   composerLayout?: "floating";
+  /** The multiplexer tab strip on this device: omitted for Auto (phones, when the session has more than one tab), else forced on or off. */
+  tabStrip?: "on" | "off";
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -234,6 +236,7 @@ export function parsePreferences(value: unknown): Preferences {
     ...(usageItem ? {usageItem} : {}),
     ...(usageProvider ? {usageProvider} : {}),
     ...(p.composerLayout === "floating" ? {composerLayout: "floating" as const} : {}),
+    ...(p.tabStrip === "on" || p.tabStrip === "off" ? {tabStrip: p.tabStrip} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
@@ -245,12 +248,12 @@ export function parsePreferences(value: unknown): Preferences {
   };
 }
 /** Settings that describe this device's screen stay on it: sync neither uploads them nor lets a download replace them. */
-export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden" | "composerLayout"> {
-  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, composerLayout: _layout, ...shared} = value;
+export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden" | "composerLayout" | "tabStrip"> {
+  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, composerLayout: _layout, tabStrip: _strip, ...shared} = value;
   return shared;
 }
 export function keepDevicePreferences(imported: unknown, local: Preferences): unknown {
-  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden, composerLayout: local.composerLayout} : imported;
+  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden, composerLayout: local.composerLayout, tabStrip: local.tabStrip} : imported;
 }
 let cached: Preferences | undefined;
 let nativeUiLanguage: UiLanguage | undefined;

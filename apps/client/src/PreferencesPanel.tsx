@@ -132,6 +132,8 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
     <fieldset className="cursor-picker"><legend>{t("preferencesComposerView")}</legend><div>{(["docked", "floating"] as const).map(value => <label key={value}><input type="radio" name="composer-layout" value={value} checked={(preferences.composerLayout ?? "docked") === value} onChange={() => update({composerLayout: value === "floating" ? "floating" : undefined})} /><span>{t(value === "floating" ? "preferencesComposerFloating" : "preferencesComposerDocked")}</span></label>)}</div></fieldset>
     <p>{t("preferencesComposerViewHelp")}</p>
     <h3 className="settings-group-title">{t("settingsGroupToolbarAndShortcuts")}</h3>
+    <label>{t("preferencesTabStrip")}<select value={preferences.tabStrip ?? "auto"} aria-describedby="tab-strip-help" onChange={e => update({tabStrip: e.target.value === "auto" ? undefined : e.target.value as "on" | "off"})}><option value="auto">{t("preferencesTabStripAuto")}</option><option value="on">{t("preferencesTabStripOn")}</option><option value="off">{t("preferencesTabStripOff")}</option></select></label>
+    <p id="tab-strip-help">{t("preferencesTabStripHelp")}</p>
 
 </>},
 {id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>

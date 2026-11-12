@@ -90,6 +90,7 @@ import {usageTarget} from "./usageAgentProvider";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import HerdrNavigation,{type HerdrContentReceipt} from "./HerdrNavigation";
 import type {HerdrTree} from "./useHerdrNavigation";
+import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
@@ -2100,11 +2101,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         const ownedInvoke=bindProtectedInvoke(owner);
         const snapshot=await ownedInvoke<HerdrTree>('herdr_tree',{sessionId:destination.id,name});
         assertCurrent();
-        const workspace=snapshot.workspaces.find(row=>row.workspace_id===target.workspace);
-        const tab=target.kind==='workspace'?undefined:snapshot.tabs.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab);
-        const pane=target.kind!=='pane'?undefined:snapshot.panes.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab && row.pane_id===target.pane && row.terminal_id===target.terminal);
-        if(!workspace || (target.kind!=='workspace' && !tab) || (target.kind==='pane' && !pane))throw new LocalUiError('herdrNavigationChanged');
-        const action=target.kind==='workspace'?{type:'focusWorkspace',target:target.workspace}:target.kind==='tab'?{type:'focusTab',target:target.tab}:{type:'focusPane',target:target.pane};
+        const action=herdrFocusAction(snapshot,target);
         await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
         assertCurrent();
       }

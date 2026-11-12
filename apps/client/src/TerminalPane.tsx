@@ -14,6 +14,8 @@ import { useSoftKeyboard } from "./useSoftKeyboard";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import BottomMenu, {useBottomMenuButton, usePhone} from './BottomMenu';
+import MultiplexerTabStrip from './MultiplexerTabStrip';
+import {useMultiplexerStrip} from './useMultiplexerStrip';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
 import {endTextComposition, isTextEditingActive, markTyping, registerTextInteraction} from './textInteraction';
@@ -285,6 +287,11 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (!phone) {setToolbarOverride(shown); return;}
     try {savePreferences({...preferences, toolbarHidden: !shown}); setToolbarOverride(null);} catch {setToolbarOverride(shown);}
   }
+  // Auto: phones with a multiplexer, while the key toolbar is shown and there is something to switch between. Always: whenever attached.
+  const tabStripMode = preferences.tabStrip ?? "auto";
+  const tabStrip = useMultiplexerStrip({sessionId: session.id, attached: session.local ? undefined : session.attached, onError: reportError,
+    enabled: active && session.connected && !session.local && !!session.attached && (tabStripMode === "on" || (tabStripMode === "auto" && phone && toolbarVisible))});
+  const tabStripShown = !!tabStrip.strip && (tabStripMode === "on" || tabStrip.strip.tabs.length > 1 || tabStrip.strip.group.choices.length > 1);
   const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
   dpadView.current={session,enabled:dpadEnabled};
   function ownsDpad(gesture:DpadGesture) {
@@ -1233,6 +1240,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {menuEnabled && menuButton && <button type="button" className="icon-button" title={t('bottomMenuOpen')} aria-label={t('bottomMenuOpen')} aria-expanded={menuOpen} onPointerDown={event => event.preventDefault()} onClick={() => setMenuOpen(!menuOpen)}><ChevronsUp size={18} aria-hidden="true" /></button>}
   </div>;
   return <div ref={pane} className={swiping ? "terminal-pane terminal-pane-swiping" : "terminal-pane"} style={{display: active || swiping ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
+    {tabStripShown && tabStrip.strip && <MultiplexerTabStrip strip={tabStrip.strip} onSelect={tabStrip.select} />}
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>

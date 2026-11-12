@@ -1,0 +1,42 @@
+/* One slim row of the terminal chrome (a 40 px row and its hairline). It is ordinary layout above the terminal, so the terminal loses exactly this row's height; the workspace list overlays the terminal and takes none. */
+.terminal-pane > .mux-strip {
+  --mux-height: 41px;
+  position: relative; z-index: 3; box-sizing: border-box; display: flex; align-items: stretch; flex: 0 0 auto; height: var(--mux-height); min-width: 0;
+  padding: 0 max(4px, env(safe-area-inset-right)) 0 max(4px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--ui-hairline, var(--theme-border, var(--border)));
+  background: var(--theme-panel, var(--panel)); color: var(--theme-text, var(--text)); font-size: 13px;
+}
+.mux-strip button { margin: 0; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 0; touch-action: manipulation; }
+.mux-group, .mux-chip { min-height: 0; }
+.mux-group {
+  display: flex; align-items: center; flex: 0 1 auto; gap: 6px; min-width: 0; max-width: 48%; padding: 0 8px; font-weight: 650;
+  border-inline-end: 1px solid var(--ui-hairline, var(--theme-border, var(--border)));
+}
+.mux-group-name, .mux-chip > span:last-child, .mux-choice > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mux-group > svg { flex: 0 0 auto; color: var(--theme-muted, var(--muted)); }
+.mux-tabs { display: flex; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; touch-action: pan-x; }
+.mux-tabs::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: no-preference) { .mux-tabs { scroll-behavior: smooth; } }
+/* The chip is the full row tall (a 40 px target, past the 24 px WCAG minimum) and 44 px wide at least; the active one carries an accent bar under its label. */
+.mux-chip {
+  position: relative; display: flex; align-items: center; flex: 0 0 auto; gap: 6px; min-width: 44px; max-width: min(46vw, 220px); padding: 0 12px;
+  color: var(--theme-muted, var(--muted));
+}
+.mux-chip[data-active] { color: var(--theme-text, var(--text)); font-weight: 650; }
+.mux-chip[data-active]::after { content: ''; position: absolute; inset: auto 8px 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); }
+.mux-chip[data-attention] { background: color-mix(in srgb, var(--status-attention) 14%, transparent); }
+.mux-group[data-attention] .mux-group-name { color: var(--status-attention); }
+.mux-strip button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mux-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; }
+.mux-dot[data-state="working"] { background: var(--status-working); }
+.mux-dot[data-state="done"] { background: var(--status-done); }
+.mux-dot[data-state="blocked"] { background: var(--status-attention); box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-attention) 30%, transparent); }
+@media (prefers-reduced-motion: no-preference) { .mux-dot[data-state="working"] { animation: mux-dot-pulse 1.6s ease-in-out infinite; } }
+@keyframes mux-dot-pulse { 50% { opacity: .45; } }
+.mux-choices {
+  position: absolute; z-index: 1; inset: 100% auto auto max(4px, env(safe-area-inset-left)); display: flex; flex-direction: column; min-width: 200px; max-width: calc(100% - 8px); max-height: min(50vh, 320px); overflow-y: auto;
+  border: 1px solid var(--ui-hairline-strong, var(--theme-border, var(--border))); border-radius: 0 0 12px 12px; background: var(--theme-panel, var(--panel)); box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+.mux-choice { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; text-align: start; }
+.mux-choice[data-active] { font-weight: 650; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.mux-choice[data-attention] > span:last-child { color: var(--status-attention); }

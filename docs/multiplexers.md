@@ -256,6 +256,18 @@ device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
 
+## Tab strip
+
+An attached tmux, Herdr or Zellij terminal shows its tabs in one native row above the terminal (`MultiplexerTabStrip`). One backend-agnostic model feeds it (`multiplexerTabs.ts`: title, active, needs attention, agent state, and the guarded command a chip runs), read by `useMultiplexerStrip`:
+
+| Multiplexer | Reads | Leading chip | Chip tap runs |
+| --- | --- | --- | --- |
+| Herdr | `useHerdrNavigation` (`herdr_tree`, every 5 s while the terminal is shown) | The focused workspace; opens the list of workspaces, each with its agent state, and flags another workspace that needs attention | A fresh `herdr_tree`, then `herdr_action` `focusTab` / `focusWorkspace` only if the target still exists |
+| Zellij | `zellij_tabs` (`zellij action list-tabs --json`, Zellij 0.45 or newer; every 5 s) | The session name | `zellij_action` `goToTab` with the 1-based position |
+| tmux | The Jump To snapshot of the attached control stream (every 5 s) | The session name | `tmux_jump` with the snapshot's generation, so a stale list is refused |
+
+A selection is never typed into the terminal, never focuses an input (the soft keyboard stays as it was) and never resizes the terminal beyond the strip's own row. Chips are buttons in a labelled group, not `role="tab"`: session tabs are the workspace's only tabs. **Preferences > Keyboard and gestures > Show tab strip** (device-local): **Auto** shows the strip on phones when the session has more than one tab (Herdr: more than one tab or workspace) and the key toolbar is shown; **Always** shows it whenever the terminal is attached, on any screen; **Never** removes it and stops the reads. A multiplexer that cannot list its tabs (an older Zellij, a tmux terminal without the control stream) shows no strip. Not in this version: rename and close from a long press (the multiplexer layer has no close command, and rename needs its own prompt), a **+** for new tabs, and the Herdr panes level.
+
 ## Native checks
 
 With tmux, Herdr and Zellij installed on PATH:
