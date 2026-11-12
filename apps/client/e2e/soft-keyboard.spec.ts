@@ -1,5 +1,5 @@
 import {expect,test,type Page} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {connectLocalTerminal,installLocalTerminal} from './fixtures/localTerminal';
 import {setKeyboard} from './fixtures/softKeyboard';
 
 declare global {interface Window {nativeKeyboard:{visible:boolean;calls:string[]}}}
@@ -18,9 +18,7 @@ async function openTerminal(page:Page,android=false,preferences?:Record<string,u
     };
   });
   await page.goto('/');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+  await connectLocalTerminal(page);
 }
 /** The header button stands in for the toolbar's keyboard key, so it appears once the toolbar is out of the way. */
 const hideToolbar=(page:Page)=>page.getByRole('button',{name:'Hide terminal keys',exact:true}).tap();

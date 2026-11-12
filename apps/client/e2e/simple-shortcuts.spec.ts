@@ -1,8 +1,9 @@
 import {openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {connectLocalTerminal,installLocalTerminal} from './fixtures/localTerminal';
 import {pressMore} from './fixtures/toolbarMore';
+import {emulateVisualViewportKeyboard} from './fixtures/softKeyboard';
 
 async function fixture(page:Page) {
   await installLocalTerminal(page);
@@ -1254,9 +1255,7 @@ test.describe('terminal composer sheet',()=>{
     await option.uncheck();
     expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).composerSendEnter)).toBe(false);
     await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
-    if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-    await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-    await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+    await connectLocalTerminal(page);
     await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?2004h'));
     await page.getByRole('button',{name:'Compose',exact:true}).click();
     await expect(page.getByRole('button',{name:'Send',exact:true})).toBeVisible();
@@ -1274,22 +1273,17 @@ test.describe('terminal composer sheet',()=>{
     test.skip(testInfo.project.name!=='phone','Soft keyboard');
     await openShortcutTerminal(page);
     // WebKit-style keyboards keep the layout viewport and shrink only the visual viewport.
-    await page.evaluate(()=>{
-      const target=new EventTarget(), keyboard={height:window.innerHeight};
-      Object.defineProperties(target,{offsetTop:{value:0},offsetLeft:{value:0},scale:{value:1},width:{value:window.innerWidth},height:{get:()=>keyboard.height}});
-      Object.defineProperty(window,'visualViewport',{configurable:true,value:target});
-      Reflect.set(window,'showKeyboard',(height:number)=>{keyboard.height=window.innerHeight-height;target.dispatchEvent(new Event('resize'));});
-    });
+    const keyboard=await emulateVisualViewportKeyboard(page);
     await page.getByRole('button',{name:'Compose',exact:true}).click();
     const editor=page.getByRole('textbox',{name:'Compose text',exact:true});
     await editor.fill('above the keyboard');
-    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(336));
+    await keyboard(336);
     const visible=await page.evaluate(()=>window.innerHeight-336);
     for(const control of [editor,page.getByRole('button',{name:'Send',exact:true}),page.getByRole('button',{name:'Close composer',exact:true})])
       await expect.poll(async()=>{const box=(await control.boundingBox())!;return box.y+box.height<=visible;}).toBe(true);
     expect((await editor.boundingBox())!.height).toBeGreaterThanOrEqual(96);
     await page.screenshot({path:testInfo.outputPath('composer-keyboard.png'),animations:'disabled'});
-    await page.evaluate(()=>(Reflect.get(window,'showKeyboard') as (height:number)=>void)(0));
+    await keyboard(0);
     await expect.poll(async()=>(await page.getByRole('button',{name:'Send',exact:true}).boundingBox())!.y).toBeGreaterThan(visible);
   });
 });

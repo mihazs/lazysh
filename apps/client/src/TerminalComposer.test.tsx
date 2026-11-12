@@ -114,3 +114,29 @@ it('removes a whole token when a committed IME composition deleted part of it',(
   expect(editor.selectionStart).toBe(5);
   expect(screen.queryByRole('list',{name:'Draft attachments'})).toBeNull();
 });
+it('offers a floating panel its own move, collapse and close controls, keeps the draft while collapsed, and says where it can go',()=>{
+  const onClose=vi.fn(),onCollapse=vi.fn(),toggle=vi.fn();
+  function Harness() {
+    const [value,setValue]=useState('floating draft');
+    return <TerminalComposer value={value} onChange={setValue} onSubmit={()=>{}} onClose={onClose} sendEnter disabled={false} floating onCollapse={onCollapse} keyboard={{open:true,toggle}}/>;
+  }
+  const view=render(<Harness/>);
+  const panel=view.container.querySelector('.terminal-composer-floating')!;
+  expect(panel).toBeTruthy();
+  const grip=screen.getByRole('button',{name:'Move composer'});
+  expect(document.getElementById(grip.getAttribute('aria-describedby')!)?.textContent).toContain('arrow keys');
+  fireEvent.click(screen.getByRole('button',{name:'Hide keyboard'}));expect(toggle).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button',{name:'Collapse composer'}));
+  expect(onCollapse).toHaveBeenCalledOnce();
+  expect(panel.hasAttribute('data-collapsed')).toBe(true);
+  expect(screen.getByRole('button',{name:'Expand composer'}).getAttribute('aria-expanded')).toBe('false');
+  // The draft is still there for the next expand.
+  expect(screen.getByRole('textbox',{name:'Compose text',hidden:true})).toHaveProperty('value','floating draft');
+  fireEvent.click(screen.getByRole('button',{name:'Expand composer'}));
+  expect(panel.hasAttribute('data-collapsed')).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:'Close composer'}));expect(onClose).toHaveBeenCalledOnce();
+  // The docked sheet has neither a grip nor a collapse control.
+  view.rerender(<TerminalComposer value="" onChange={()=>{}} onSubmit={()=>{}} onClose={()=>{}} sendEnter disabled={false}/>);
+  expect(screen.queryByRole('button',{name:'Move composer'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Collapse composer'})).toBeNull();
+});

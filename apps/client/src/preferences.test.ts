@@ -209,6 +209,17 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: false, fontSize: 20}, mine))).toMatchObject({toolbarHidden: true, fontSize: 20});
   expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, toolbarHidden: true}, parsePreferences({...defaults}))), "toolbarHidden")).toBe(false);
  });
+ it("stores the floating composer view only when chosen, and keeps it on this device when settings sync", () => {
+  expect(defaults.composerLayout).toBeUndefined();
+  expect(Object.hasOwn(parsePreferences({...defaults}), "composerLayout")).toBe(false);
+  for (const value of ["docked", "Floating", true, 1, null, {}]) expect(Object.hasOwn(parsePreferences({...defaults, composerLayout: value}), "composerLayout")).toBe(false);
+  const floating = parsePreferences(JSON.parse(JSON.stringify({...defaults, composerLayout: "floating"})));
+  expect(floating.composerLayout).toBe("floating");
+  // Neither uploaded, so an older peer accepts the snapshot, nor replaced by a download.
+  expect(Object.hasOwn(syncablePreferences(floating), "composerLayout")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, floating))).toMatchObject({composerLayout: "floating", fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, composerLayout: "floating"}, parsePreferences({...defaults}))), "composerLayout")).toBe(false);
+ });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);
   // The previous release's validator: keep known keys only, in order.
