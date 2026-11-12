@@ -4,7 +4,7 @@ import {cycleFocus, focusableWithin} from './focus';
 import {announceAuthHint, type AuthHint} from './authHints';
 import {SideMenuChoices} from './SideMenuChoices';
 import {useSideMenuGestures} from './useSideMenuGestures';
-import {useSideMenuMode} from './sideMenuMode';
+import {useShowTopBar, useSideMenuMode, useTouchScreen} from './sideMenuMode';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -97,6 +97,7 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
+import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTour";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
@@ -127,6 +128,8 @@ const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
 const VoicePanel = lazy(() => import("./VoicePanel"));
 const SyncPanel = lazy(() => import("./SyncPanel"));
 const SharePanel = lazy(() => import("./SharePanel"));
+const GestureTour = lazy(() => import("./GestureTour"));
+const GestureTourHelp = lazy(() => import("./GestureTour").then(({GestureTourHelp}) => ({default: GestureTourHelp})));
 const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
@@ -1198,7 +1201,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
-  const {sessionLayout,usageItem='follow',usageProvider=''} = usePreferences();
+  const preferencesState = usePreferences();
+  const {sessionLayout,usageItem='follow',usageProvider=''} = preferencesState;
   usePrivateKeyboard();
   const shell=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -1510,7 +1514,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const mobileToolButton=toolButton();
 
   const sidebarShown=wideSidebar || sidebar;
-  const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  const otherDialogOpen=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  // The first-run tour opens over the first connected phone session only (remote, like the Agent view swipe): never on desktop, the connection list, over another dialog or with every gesture off.
+  const touchScreen=useTouchScreen(),gesturePhone=!wideSidebar && touchScreen;
+  const tourNotes=gestureTourNotes(preferencesState,useShowTopBar());
+  const gestureTour=useGestureTour(!!active?.connected && !active.local && gesturePhone && !otherDialogOpen && gestureTourUseful(tourNotes));
+  // The tour is a dialog like the others: no edge swipe acts behind it.
+  const navigationCovered=otherDialogOpen || gestureTour.open;
   // Phones in a connected session swipe between the terminal and the Agent view; the Terminal|Agent buttons stay.
   const swipeEnabled=useEdgeGestureMode('viewSwitch')==='gesture' && !!active && active.connected && !active.local && view==='terminal' && !wideSidebar && !sidebar && !navigationCovered;
   const swipeFrom=useViewSwipe({enabled:swipeEnabled,scope:active?.id??'',page:activeSessionView==='terminal'?'terminal':'agent',body:sessionBody,onSwitch:page=>{if(active)chooseSessionView(active,page);}});
@@ -2201,6 +2211,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
         <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
+        {gesturePhone && <button type="button" onClick={()=>{closeTools();gestureTour.show();}}>{t('gestureTourTitle')}</button>}
         <button onClick={()=>{closeTools();setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
         <button
          
@@ -2763,6 +2774,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
             {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
             {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSharing(true);}},
+            ...(gesturePhone?[{id:'gestures',section:'help',title:t('gestureHelpTitle'),content:<Suspense fallback={null}><GestureTourHelp notes={tourNotes} play={()=>{setPreferences(false);gestureTour.show();}}/></Suspense>}]:[]),
             {id:'about',section:'help',title:t('appAboutLazysh'),onSelect:()=>{setPreferences(false);setAbout(true);}},
           ]}/>
           </div>
@@ -2785,6 +2797,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <NotificationPanel sessions={inboxSessions} />
         </Dialog>
       )}
+      {gestureTour.open && <Dialog title={t("gestureTourTitle")} close={gestureTour.dismiss} initialFocus={()=>document.querySelector<HTMLElement>('.gt .primary-button')}>
+        <Suspense fallback={null}><GestureTour notes={tourNotes} finish={gestureTour.dismiss}/></Suspense>
+      </Dialog>}
       {about && (
         <Dialog mobilePresentation="page" title={t("appAboutLazysh")} close={() => setAbout(false)}>
           <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>
