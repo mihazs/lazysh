@@ -36,6 +36,10 @@ One-hop bastions use independent credentials and pins for each handshake. A reje
 
 Browser previews bind only device loopback and connect through existing SSH. Their sandboxed remote origin has no Tauri command permissions. Limits apply per session, application and active socket; disconnect cancels listeners and connections. Other local applications can reach loopback forwards. Voice inference is local Whisper with bounded model imports, audio and execution, no automatic model download, and suppressed native speech logs. Platform microphone/preview behavior still needs real-device checks.
 
+## Planned terminal architecture
+
+The terminal is xterm.js in the WebView today. A proposal to introduce a `TerminalAdapter`, a shared Rust terminal runtime on the vendored libghostty-vt and, where measurements justify it, a native renderer is recorded in [terminal-performance-prd](architecture/terminal-performance-prd.md) and [ADR 0001](architecture/adr-0001-terminal-runtime.md). It is not implemented and no measurement has been taken.
+
 ## Acceptance and delivery
 
 The [Project](https://github.com/users/mihazs/projects/2) and [parity epic](https://github.com/mihazs/lazysh/issues/1) are the delivery record. The [evidence catalog](reference-evidence.md) lists the full reference client boundary and unresolved runtime claims. Current implementation work is reviewed through PRs; future features are separate sub-issues with executable acceptance criteria.

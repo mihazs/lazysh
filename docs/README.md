@@ -54,6 +54,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
 | Planned host browser: requirements, opt-in and launch model, threat model, input mapping and milestones | [Host browser](host-browser.md) |
+| Planned terminal adapter contract, platform matrix and benchmark design (no measurements yet) | [TerminalAdapter](architecture/terminal-adapter.md) · [Platform integration](architecture/platform-integration.md) · [Terminal benchmarks](architecture/terminal-benchmarks.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
 | Theme QR evidence and pending native acceptance | [Theme QR acceptance](theme-qr-acceptance.md) |
@@ -79,6 +80,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Why does public sharing use a separate service? | [Sharing design](explanation/sharing.md) |
 | Why does local inbox monitoring not provide background push? | [Notification delivery](explanation/notification-delivery.md) |
 | How are client, native transport and optional services separated? | [Architecture and implementation boundary](architecture.md) |
+| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery
 
