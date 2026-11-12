@@ -72,8 +72,8 @@ it("requires explicit preview and apply, and never automatically uploads", async
   expect(changed).toHaveBeenCalledOnce();
 });
 
-it("keeps this device's toolbar key height out of uploads and out of reach of downloads", async () => {
-  savePreferences({ ...defaults, toolbarKeyHeight: 44, fontSize: 18 });
+it("keeps this device's toolbar key height and private keyboard choice out of uploads and out of reach of downloads", async () => {
+  savePreferences({ ...defaults, toolbarKeyHeight: 44, privateKeyboard: true, fontSize: 18 });
   vi.mocked(invoke).mockImplementation(async (command) =>
     command === "sync_status"
       ? { configured: true, endpoint: "https://dav.example/", username: "dev", settingsEnabled: true, credentialsEnabled: false }
@@ -81,7 +81,7 @@ it("keeps this device's toolbar key height out of uploads and out of reach of do
         ? preview
         : command === "sync_apply"
           // Another device's settings, with its own key height.
-          ? { hostsAdded: 0, credentialsAdded: 0, preferences: { ...defaults, fontSize: 22, toolbarKeyHeight: 56 } }
+          ? { hostsAdded: 0, credentialsAdded: 0, preferences: { ...defaults, fontSize: 22, toolbarKeyHeight: 56, privateKeyboard: false } }
           : undefined,
   );
   render(<SyncPanel onHostsChanged={vi.fn()} />);
@@ -90,8 +90,10 @@ it("keeps this device's toolbar key height out of uploads and out of reach of do
   const pushed = vi.mocked(invoke).mock.calls.find(([name]) => name === "sync_push")![1] as { preferences: Record<string, unknown> };
   expect(pushed.preferences.fontSize).toBe(18);
   expect(Object.hasOwn(pushed.preferences, "toolbarKeyHeight")).toBe(false);
+  expect(Object.hasOwn(pushed.preferences, "privateKeyboard")).toBe(false);
   fireEvent.click(await screen.findByRole("button", { name: "Preview remote settings" }));
   fireEvent.click(await screen.findByRole("button", { name: "Apply reviewed changes" }));
   await vi.waitFor(() => expect(getPreferences().fontSize).toBe(22));
   expect(getPreferences().toolbarKeyHeight).toBe(44);
+  expect(getPreferences().privateKeyboard).toBe(true);
 });

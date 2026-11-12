@@ -893,6 +893,8 @@ export const english = {
   "preferencesReducingHistoryRemovesOlderLocalLines": "Reducing history removes older local lines.",
   "preferencesUseOptionAsMetaOnMacOS": "Use Option as Meta on macOS",
   preferencesComposerSendEnter: "Ctrl+Enter sends the draft (off: it only inserts it)",
+  preferencesPrivateKeyboard: "Private keyboard in the terminal",
+  preferencesPrivateKeyboardHelp: "Asks the Android keyboard to type in private mode while the terminal has focus: it does not learn from what you type and sends plain characters. Predictive text, autocorrect and swipe typing stop working in the terminal while this is on. Other text fields are not affected. Use it if your keyboard drops or changes characters.",
   "preferencesScreenReaderAnnouncements": "Screen reader announcements",
   "preferencesDismissKeyboardOnOverscroll": "Hide keyboard when scrolling past local history bottom",
   "preferencesPinchWithTwoFingersToResizeTerminalText": "Pinch with two fingers to resize terminal text",

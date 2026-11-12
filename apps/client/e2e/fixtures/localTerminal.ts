@@ -1,11 +1,11 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[]}}
 
 /** One synthetic local terminal: output is injected, input and opened links are recorded. No shell runs. */
 export async function installLocalTerminal(page:Page) {
   await page.addInitScript(()=>{
-    window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];
+    window.simpleShortcutWrites=[];window.simpleShortcutPrivateKeyboard=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
@@ -29,12 +29,20 @@ export async function installLocalTerminal(page:Page) {
         if(window.simpleShortcutWriteFailure)throw {kind:window.simpleShortcutWriteFailure,message:'Owned queue failure'};
         return;
       }
+      if (command==='terminal_private_keyboard'){window.simpleShortcutPrivateKeyboard.push(args.active as boolean);return;}
       if (command==='local_resize'){window.simpleShortcutResizes.push({cols:args.cols as number,rows:args.rows as number});return;}
       if (['local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected shortcut fixture command: ${command}`);
     }}});
   });
+}
+
+/** Opens that terminal from the workspace, through the hosts drawer on a phone, once its output sink is ready. */
+export async function openLocalTerminal(page:Page,testInfo:TestInfo) {
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
 }
 
 /** Opens that terminal with the browser's real clipboard, seeded with `BEFORE`. */

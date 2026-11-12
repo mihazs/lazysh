@@ -1498,7 +1498,7 @@ test.skipIf(process.platform!=='linux')('raw receiver checker rejects an observe
 
 test.skipIf(typeof process.getuid!=='function')('IME failure wire snapshot exports only bounded fixed-stream comparisons',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-wire-')),path=join(directory,'received-bytes');
-  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  const nonce='0123456789abcdef'.repeat(2),expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2uowned-private-${nonce}`);
   const samples=[Buffer.alloc(0),expected.subarray(0,7),expected,Buffer.concat([expected,Buffer.from('extra-private')]),Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}`),Buffer.from('private-payload')];
   try {
     for(const bytes of samples) {
@@ -1570,7 +1570,7 @@ test.skipIf(typeof process.getuid!=='function')('actual Android failure handler 
   const names=['herdr','tmux','sharedHerdr','moshWitness','navigationScreenshots','root','dpad','ime','companion','attachments','moshBackground','deniedNotification','crashes','observeImeReceiverWire','imeDirectory','fixture','hostAdbServerIdentity','adb','serial','hostServerBefore','packageExitInfo','emulatorContinuity','reverse','retainedPackages','ownedAndroidPackagePresence','before','keyboard','timing','gradleFailureClasses','reportInstrumentationFailures','gradle','recorded','compareEmulatorContinuity','compareHostAdbServer','mkdir','writeFile','join'];
   const compiled=new Bun.Transpiler({loader:'ts'}).transformSync(`async function run(context){const {${names.join(',')}}=context;let primary=false;try{throw context.failure;}catch(error){${body}}}`);
   const run=Function(compiled+';return run;')() as (context:Record<string,unknown>)=>Promise<void>;
-  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-ime-handler-')),nonce='0'.repeat(32),imeDirectory=join(directory,'ime'),wire=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2uowned-private-${nonce}`);
   const logger=spyOn(console,'error').mockImplementation(()=>{}),reported:string[]=[];
   try {
     await mkdir(imeDirectory);await writeFile(join(imeDirectory,'received-bytes'),wire,{mode:0o600});
@@ -1612,16 +1612,20 @@ test('native soft Enter observer filters foreign targets, settles after the Ente
   expect(JSON.stringify(result)).not.toContain('private');expect(handlers.size).toBe(0);expect(window.owned).toBeUndefined();
 });
 
-test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
-  const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
-  const expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`);
+test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits, a duplicated current marker and a Private keyboard text that is missing, repeated, early or stale',()=>{
+  const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`,typed=`owned-private-${nonce}`;
+  const expected=Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`);
   expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
   for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
     Buffer.from(`${IME_TRANSACTION_WIRE}owned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
     Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`),
-    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u`),
-    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u`),
-    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-preedit-${nonce}${current}\r\x1b[13;2u${typed}`),
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u${typed}`),
+    // Before the setting existed the wire stopped after the two line breaks; without the typed text the setting did nothing.
+    Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}\r\x1b[13;2u`),
+    Buffer.concat([expected,Buffer.from(typed)]),Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2u${current}${typed}\r\x1b[13;2u`),
+    Buffer.from(expected.toString('latin1').replace(typed,`owned-private-${'f'.repeat(32)}`),'latin1'),Buffer.from(expected.toString('latin1').replace(typed,typed.slice(0,-1)),'latin1'),
     expected.subarray(0,expected.length-1),Buffer.concat([expected,Buffer.from('\r')]),
     // SwiftKey-shaped edits: a skipped Backspace after the toolbar key, a lost autocorrect erase, a lost or repeated word.
     Buffer.from(expected.toString('latin1').replace('\x1b\x7f','\x1b'),'latin1'),Buffer.from(expected.toString('latin1').replace('\x7f\x7f\x7f\x7ftan','\x7f\x7ftan'),'latin1'),
@@ -1656,6 +1660,8 @@ test('packaged SSH IME case uses ordinary native routing, a separate report, and
   for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
   expect(/\.value\s*=(?!=)/.test(body)).toBe(false);
   expect(body).toContain('ime.restore()');expect(body).toContain('ime.call("old")');expect(body).toContain('ime.call("current")');
+  // Private keyboard goes through the real Preferences switch, never a bridge call, and is switched back off.
+  expect(body).toContain('ime.call("private")');expect(body).toContain('privateKeyboard(true)');expect(body).toContain('privateKeyboard(false)');expect(body).not.toContain('terminal_private_keyboard');
   const setup=kotlin.split('private inner class OwnedRawSshInput(')[1].split('private fun verifySshImeTransactions(')[0];
   expect(setup).toContain('assertSame("Packaged WebView must remain original"');
   for(const forbidden of ['loadUrl(', 'loadData', 'dispatchEvent(', 'terminal.input('])expect(setup).not.toContain(forbidden);

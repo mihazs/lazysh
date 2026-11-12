@@ -81,6 +81,10 @@ public final class OwnedImeService extends InputMethodService {
             result.putBoolean("noSuggestions", (active.inputType & InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) != 0);
             result.putBoolean("autoCorrect", (active.inputType & InputType.TYPE_TEXT_FLAG_AUTO_CORRECT) != 0);
             result.putBoolean("privateLearning", (active.options & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0);
+            result.putBoolean("visiblePassword", variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            // The exact EditorInfo the framework gave this editor, so acceptance can log it with the setting off and on.
+            result.putInt("inputType", active.inputType);
+            result.putInt("imeOptions", active.options);
             result.putBoolean("remoteProxy", active.connection.getClass().getName().endsWith(".RemoteInputConnection"));
             result.putLong("generation", active.generation);
             result.putBoolean("distinct", saved != null && saved.connection != active.connection);
@@ -173,7 +177,7 @@ public final class OwnedImeService extends InputMethodService {
             // A remote read orders the fixed commit; it does not acknowledge delivery.
             result.putBoolean("readReturned", target.connection.getTextBeforeCursor(256, 0) != null);
         }
-        if ("old".equals(method) || "current".equals(method)) {
+        if ("old".equals(method) || "current".equals(method) || "private".equals(method)) {
             Snapshot selected = Objects.requireNonNull("old".equals(method) ? saved : active, "Owned IME connection unavailable");
             String text = "owned-" + method + "-" + nonce;
             result.putBoolean("accepted", selected.connection.commitText(text, 1));
@@ -196,7 +200,7 @@ public final class OwnedImeService extends InputMethodService {
                     || "eraseTail".equals(method) || "repeatWord".equals(method) || "restoreTail".equals(method)
                     || "predictWord".equals(method) || "swipeWord".equals(method) || "composingBackspace".equals(method)
                     || "replacePrevious".equals(method) || "eraseOne".equals(method) || "webWord".equals(method)
-                    || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "release".equals(method)))
+                    || "preedit".equals(method) || "lineBreak".equals(method) || "old".equals(method) || "current".equals(method) || "private".equals(method) || "release".equals(method)))
                 throw new IllegalStateException("Owned IME operation rejected");
             CountDownLatch completed = new CountDownLatch(1);
             AtomicReference<Bundle> result = new AtomicReference<>();

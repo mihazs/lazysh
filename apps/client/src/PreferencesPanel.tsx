@@ -117,6 +117,10 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
     <h3 className="settings-group-title">{t("settingsGroupKeyboard")}</h3>
     <label><input type="checkbox" checked={preferences.optionAsMeta} onChange={e => update({optionAsMeta: e.target.checked})} />{t("preferencesUseOptionAsMetaOnMacOS")}</label>
     <label><input type="checkbox" checked={preferences.composerSendEnter} onChange={e => update({composerSendEnter: e.target.checked})} />{t("preferencesComposerSendEnter")}</label>
+    {isAndroidApp() && <>
+      <label><input type="checkbox" checked={preferences.privateKeyboard === true} aria-describedby="private-keyboard-help" onChange={e => update({privateKeyboard: e.target.checked || undefined})} />{t("preferencesPrivateKeyboard")}</label>
+      <p id="private-keyboard-help">{t("preferencesPrivateKeyboardHelp")}</p>
+    </>}
     <h3 className="settings-group-title">{t("settingsGroupToolbarAndShortcuts")}</h3>
 
 </>},

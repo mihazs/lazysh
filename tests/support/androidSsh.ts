@@ -446,9 +446,10 @@ export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
   if(!Buffer.from(bytes).equals(expected))throw new Error('Owned IME receiver bytes differ');
 }
 
+/** The transactions, the two soft line breaks, then the one text typed with Private keyboard on. */
 function imeExpectedWire(nonce:string) {
   if(!/^[a-f0-9]{32}$/.test(nonce))throw new Error('Owned IME nonce invalid');
-  return Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2u`);
+  return Buffer.from(`${IME_TRANSACTION_WIRE}\x1b[13;2u\r\x1b[13;2uowned-current-${nonce}\r\x1b[13;2uowned-private-${nonce}`);
 }
 export async function readRawReceiverBytes(path:string) {
   const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
@@ -643,7 +644,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
         verifyDpadReceiverBytes(bytes,fixture.nonce,counts);
       }
       if(createHash('sha256').update(await readFile(receiverImage)).digest('hex')!==imeImageHash)throw new Error('Owned IME receiver image changed');
-      console.log(ime?'Owned packaged SSH IME: exact ASCII correction/repeat/current bytes and no stale marker verified':'Owned packaged SSH D-pad: ordered runs equal native stopped-count snapshot and one fixed drain marker');
+      console.log(ime?'Owned packaged SSH IME: exact ASCII correction/repeat/current bytes, the Private keyboard text and no stale marker verified':'Owned packaged SSH D-pad: ordered runs equal native stopped-count snapshot and one fixed drain marker');
     }
     if(sharedHerdr){
       const receipt=await verifySharedHerdrResult(sharedReportDirectory,previousSharedReport);

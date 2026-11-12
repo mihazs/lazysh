@@ -6241,11 +6241,24 @@ class NativeWorkspaceTest {
                 paint:[style.backgroundColor,style.color,style.borderTopColor,style.boxShadow]};}
         """
         fun toolbarSnapshot(name:String)=JSONObject(evaluate(scenario,"($toolbarState)(${JSONObject.quote(name)})"))
-        fun toolbarPreferences() {
+        fun inputPreferences() {
             if (evaluate(scenario,workspaceElementVisible("button[aria-label='Preferences']")) == "true") raw.clickIcon("Preferences")
             else workspaceMenuAction(scenario,"Preferences")
             preferencesCategory(scenario,"input")
+        }
+        fun toolbarPreferences() {
+            inputPreferences()
             preferencesCategory(scenario,"preferencesToolbarKeysAndOrder")
+        }
+        val privateKeyboardSwitch = """Array.from(document.querySelectorAll('[data-settings-page="input"] > label')).find(item=>item.textContent.trim()==='Private keyboard in the terminal')?.querySelector('input')"""
+        var privateKeyboardOn = false
+        /** The real Preferences switch. The focused terminal editor then reports itself, and the shell restarts the keyboard's input with the private setup. */
+        fun privateKeyboard(on: Boolean) {
+            inputPreferences()
+            onWebView().withElement(findElement(Locator.XPATH,"//section[@data-settings-page='input']/label[normalize-space(.)='Private keyboard in the terminal']")).perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario,"private keyboard switch ${if (on) "on" else "off"}","($privateKeyboardSwitch)?.checked===$on")
+            privateKeyboardOn = on
+            raw.clickIcon("Close Preferences")
         }
         val addedToolbarKeys=mutableListOf<String>()
         var originalToolbarOrder:String?=null
@@ -6415,11 +6428,33 @@ class NativeWorkspaceTest {
             commitOwnedLineBreak(second.getLong("generation"))
             assertToolbarReleased("Shift",shiftBaseline)
             android.util.Log.i("lazysh-ime-ssh-owned", "packaged=true remoteEpoch=true privateLearning=false oldRead=false currentRead=true")
+            // Private keyboard mode: the same packaged terminal, with the real setting on, is given the private editor
+            // setup, and the host receiver must get the typed text byte for byte after the transactions above.
+            privateKeyboard(true)
+            tapTerminal()
+            val privateSetup = ime.awaitIme("Private keyboard editor setup required") {
+                it.getBoolean("connected") && it.getBoolean("privateLearning") && it.getBoolean("visiblePassword")
+            }
+            ime.privateEditor(privateSetup,first); terminalEditor()
+            val typed = ime.call("private")
+            assertTrue("Fixed private keyboard commit accepted", typed.getBoolean("accepted"))
+            assertTrue("Fixed private keyboard commit read barrier returned", typed.getBoolean("readReturned"))
+            // The receiver reports the typed text once it has arrived; the host then compares every byte.
+            awaitDocument(scenario, "actual receiver received the private keyboard text", raw.proof("IME_${nonce}_PRIVATE"))
+            // Back off: the next editor setup is the ordinary one again, without reconnecting.
+            privateKeyboard(false)
+            tapTerminal()
+            val restored = ime.awaitIme("Ordinary keyboard editor setup restored") {
+                it.getBoolean("connected") && it.getBoolean("normalText") && !it.getBoolean("privateLearning")
+            }
+            ime.editor(restored); terminalEditor()
+            android.util.Log.i("lazysh-ime-ssh-owned", "privateKeyboard=true setupOn=true setupOff=true receiverAck=true")
         } catch (failure: Throwable) { primary=failure; finishImeOrder(failure); throw failure }
         finally {
             finishImeOrder(primary)
             var cleanupFailure:Throwable?=null
             try { ime.restore() } catch (cleanup: Throwable) {cleanupFailure=cleanup}
+            try { if (privateKeyboardOn) privateKeyboard(false) } catch (cleanup: Throwable) {if(cleanupFailure!=null)cleanupFailure!!.addSuppressed(cleanup) else cleanupFailure=cleanup}
             try {
                 if (originalToolbarOrder!=null) {
                     toolbarPreferences()
@@ -6465,12 +6500,30 @@ class NativeWorkspaceTest {
             }while(System.nanoTime()<deadline)
             throw AssertionError(label)
         }
+        /** Bounded numeric flags only; the editor text never leaves the IME process. */
+        private fun logEditor(setting:String,state:android.os.Bundle) =
+            android.util.Log.i("lazysh-ime-editor","privateKeyboard=$setting inputType=0x${Integer.toHexString(state.getInt("inputType"))} imeOptions=0x${Integer.toHexString(state.getInt("imeOptions"))}")
         fun editor(state:android.os.Bundle) {
+            logEditor("off",state)
             assertTrue("Actual IME remote proxy required",state.getBoolean("remoteProxy"))
             assertTrue("Normal text editor required",state.getBoolean("normalText"))
             assertTrue("Autocomplete hint must reach native NO_SUGGESTIONS",state.getBoolean("noSuggestions"))
             assertFalse("Native AUTO_CORRECT must stay off",state.getBoolean("autoCorrect"))
             assertFalse("Private learning flag must remain absent",state.getBoolean("privateLearning"))
+            assertFalse("Visible-password setup must remain absent",state.getBoolean("visiblePassword"))
+        }
+        /** The terminal editor with Private keyboard on: plain text asked to behave as a visible password, with no suggestions and no learning. */
+        fun privateEditor(state:android.os.Bundle,baseline:android.os.Bundle) {
+            logEditor("on",state)
+            assertTrue("Actual IME remote proxy required",state.getBoolean("remoteProxy"))
+            assertEquals("Private keyboard stays a text editor",android.text.InputType.TYPE_CLASS_TEXT,state.getInt("inputType") and android.text.InputType.TYPE_MASK_CLASS)
+            assertTrue("Private keyboard asks for visible-password input",state.getBoolean("visiblePassword"))
+            assertTrue("Private keyboard asks for no suggestions",state.getBoolean("noSuggestions"))
+            assertFalse("Private keyboard turns autocorrect off",state.getBoolean("autoCorrect"))
+            assertTrue("Private keyboard asks for no personalised learning",state.getBoolean("privateLearning"))
+            // The learning flag is added to what Chromium set (no fullscreen, no extract UI, the Enter action), never replacing it.
+            val ordinary=baseline.getInt("imeOptions")
+            assertEquals("Private keyboard keeps every IME option of the ordinary editor",ordinary,state.getInt("imeOptions") and ordinary)
         }
         fun arm() { call("arm"); armed = true }
         fun select() {

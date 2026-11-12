@@ -88,6 +88,7 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
 import { usePreferences } from "./preferences";
+import { usePrivateKeyboard } from "./privateKeyboard";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from "./workspace";
 import { ConnectionRecovery, useNetworkOnline, type RecoveryOutcome } from "./connectionRecovery";
@@ -1193,6 +1194,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
   const {sessionLayout} = usePreferences();
+  usePrivateKeyboard();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState<LocalCapability>({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);

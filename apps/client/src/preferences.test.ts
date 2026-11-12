@@ -168,6 +168,23 @@ describe("OSC52 clipboard requests", () => {
   // It syncs with the other preferences.
   expect(syncablePreferences(saved).edgeGestures).toEqual(saved.edgeGestures);
  });
+ it("stores the private keyboard choice only when it is on, and ignores anything but a real true", () => {
+  const stored = (privateKeyboard: unknown) => parsePreferences({...defaults, privateKeyboard});
+  expect(stored(true).privateKeyboard).toBe(true);
+  expect(Object.hasOwn(JSON.parse(JSON.stringify(stored(true))), "privateKeyboard")).toBe(true);
+  for (const value of [false, undefined, null, 1, "true", [], {}]) expect(Object.hasOwn(stored(value), "privateKeyboard")).toBe(false);
+  expect(Object.hasOwn(parsePreferences({...defaults}), "privateKeyboard")).toBe(false);
+ });
+ it("keeps the private keyboard choice on this device when settings sync", () => {
+  const mine = parsePreferences({...defaults, privateKeyboard: true, toolbarKeyHeight: 44, fontSize: 18});
+  // Uploading leaves the choice out: the other device may use another keyboard, and older peers reject unknown fields.
+  const uploaded = syncablePreferences(mine);
+  expect(Object.hasOwn(uploaded, "privateKeyboard")).toBe(false);
+  expect(uploaded.fontSize).toBe(18);
+  // A download from a device that has it on, or off, never changes this device's choice.
+  expect(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: false, fontSize: 20}, mine))).toMatchObject({privateKeyboard: true, fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: true}, parsePreferences({...defaults}))), "privateKeyboard")).toBe(false);
+ });
  it("lets a client without row support read the same keys from a multi-row toolbar", () => {
   const multiRow = toolbarFromRows([["esc", "ctrl"], ["tab"]]);
   // The previous release's validator: keep known keys only, in order.
