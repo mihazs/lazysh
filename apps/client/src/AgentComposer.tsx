@@ -11,6 +11,7 @@ import type {BoundConversation} from './ChatPanel';
 import type {AccessLease,bindProtectedInvoke} from './access';
 import {formatNumber,t,useUi} from './i18n/core';
 import AgentComposerPalette,{type Suggestion} from './AgentComposerPalette';
+import {useModeSwitch} from './AgentComposerMode';
 import {promptsOf,recall,rememberPrompt,type Recall} from './agentComposerHistory';
 import {matchSlash,pickerCommand,promptMode,slashText,type SlashCommand} from './agentSlashCommands';
 import {mentionAt,mentionText} from './agentFileMention';
@@ -96,6 +97,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const sendable=ready && validTerminalDraft(text,bytes) && !control!.busy && !compositionActive && !attach.busy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
+  // Shift+Tab has a verified key profile for Claude Code on tmux only; every other terminal hides the button.
+  const modeSwitch=useModeSwitch(control,labels?.backend==='tmux' && agent==='claude',key);
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
   const mention=!slash && !slashClosed && !compositionActive && cwd ? mentionAt(draft,caret) : undefined;
@@ -158,6 +161,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     {attach.list.length>0 && <AgentComposerChips attachments={attach.list} onRemove={attach.remove}/>}
     <form className="agent-composer-row" aria-label={t('chatDraft')} onSubmit={event=>{event.preventDefault();submit();}}>
       <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
+      {modeSwitch.button}
       <textarea ref={field} rows={Math.max(1,Math.min(6,draft.split('\n').length))} maxLength={LIMIT} value={draft} aria-label={t('chatDraftLabel')} placeholder={t('agentComposerLabel')}
         onChange={event=>{setCaret(event.target.selectionStart);attach.change(event.target.value,composing.current);}}
         onSelect={event=>{if(!composing.current)attach.snap(event.currentTarget);setCaret(event.currentTarget.selectionStart);}}
@@ -197,6 +201,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       onStage={()=>{stageDraft();setDismissed(problem);}} onDismiss={()=>setDismissed(problem)}/>}
     {state && !(notice && (state==='notSent' || state==='uncertain')) && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
       {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={retry}>{t('agentReceiptRetry')}</button></>}</p>}
+    {modeSwitch.note}
     {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
     {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
     {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong',{limit:formatNumber(bytes)})}</p>}

@@ -7,7 +7,7 @@ import {bindProtectedInvoke,captureAccess} from './access';
 import {chatFollowAccess} from './test/chatFollowAccess';
 import {t} from './i18n/core';
 import {activeTextInteractions} from './textInteraction';
-import {tmuxChatBound,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
+import {tmuxChatBound,tmuxChatMode,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
 import {herdrChatReply,herdrTarget} from './test/herdrChat';
 import {attachmentFile,attachmentPngHeader} from './test/attachmentData';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
@@ -26,7 +26,7 @@ function mount(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
 const box=()=>screen.getByRole('textbox',{name:t('chatDraftLabel')}) as HTMLTextAreaElement;
 const type=(value:string)=>fireEvent.change(box(),{target:{value}});
 const sendButton=()=>screen.getByRole('button',{name:t('agentComposerSend')}) as HTMLButtonElement;
-beforeEach(()=>{chatFollowAccess();vi.mocked(invoke).mockReset().mockImplementation(tmuxChatReply);window.matchMedia=vi.fn(()=>({matches:false})) as never;});
+beforeEach(()=>{tmuxChatMode.landed='plan';chatFollowAccess();vi.mocked(invoke).mockReset().mockImplementation(tmuxChatReply);window.matchMedia=vi.fn(()=>({matches:false})) as never;});
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
 it('binds to the proven pane without a confirmation step and delivers a message once, then clears the draft',async()=>{
@@ -505,4 +505,35 @@ it('holds the edge gestures off while the message box has focus, so a swipe neve
   expect(activeTextInteractions()).toContain('field');
   act(()=>box().blur());
   expect(activeTextInteractions()).not.toContain('field');
+});
+
+const modeButton=()=>screen.findByRole('button',{name:t('agentModeSwitch')});
+
+it('cycles the permission mode with one guarded Shift+Tab per tap and shows the mode the terminal read back',async()=>{
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModePlan')}))).toBeTruthy();
+  tmuxChatMode.landed='auto';
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModeAuto')}))).toBeTruthy();
+  expect(inputs().map(({operation,input})=>({operation,input}))).toEqual([{operation:1,input:{kind:'cycle_mode'}},{operation:2,input:{kind:'cycle_mode'}}]);
+});
+
+it('claims no mode when the status line was not recognised',async()=>{
+  tmuxChatMode.landed='unconfirmed';
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeUnconfirmed'))).toBeTruthy();
+  expect(screen.queryByText(/Permission mode:/)).toBeNull();
+});
+
+it('offers the mode button only for Claude Code on tmux',async()=>{
+  const {view}=mount({conversation:{...conversation,agent:'codex' as const,path:'/home/owner/.codex/sessions/a.jsonl'}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
+  view.unmount();
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await screen.findByRole('textbox',{name:t('chatDraftLabel')});
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
 });

@@ -60,7 +60,7 @@ async function open(page:Page) {
         if(action.kind==='bind')return bound;
         if(action.kind==='release')return {kind:'released'};
         if(action.input?.kind==='send' || action.input?.kind==='send_long')submit(action.input.text!);
-        return {kind:'delivered',nextOperation:action.operation!+1};
+        return {kind:'delivered',nextOperation:action.operation!+1,...(action.input?.kind==='cycle_mode'?{mode:'acceptEdits'}:{})};
       }
       if(command==='write_stdin'){
         const data=String(args.data);fixture.stdin.push(data);
@@ -209,20 +209,25 @@ test('answers a Claude permission request from the Agent view through the approv
   expect(after.stdin).toEqual(before.stdin);expect(after.inputs.some(input=>input.kind==='input')).toBe(false);
 });
 
-test('answers the open Claude question with the digit of the chosen option and the pane keeps showing the terminal',async({page})=>{
-  await open(page);
-  await page.evaluate(()=>{
+/** The same pane now runs Claude Code: the base fixture with the agent renamed, optionally already waiting, and its conversation replaced. */
+async function claudeHere(page:Page,patch:{state?:string;transcript?:object}={}) {
+  await page.evaluate(({state,transcript})=>{
     const base=window.nativeFixtureInvoke!;
     window.nativeFixtureInvoke=async(command,args)=>{
       const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
-      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread',state:'needs_attention'}))};
+      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread',...(state?{state}:{})}))};
       if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
-      if(command==='agent_transcript')return {...(result as {messages:object[]}),agent:'claude',activity:'waiting',messages:[
-        {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
-        {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]}]}}]}]};
+      if(command==='agent_transcript')return {...(result as object),agent:'claude',...transcript};
       return result;
     };
-  });
+  },patch);
+}
+
+test('answers the open Claude question with the digit of the chosen option and the pane keeps showing the terminal',async({page})=>{
+  await open(page);
+  await claudeHere(page,{state:'needs_attention',transcript:{activity:'waiting',messages:[
+    {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
+    {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]}]}}]}]}});
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   const agent=agentView(page);
   const card=agent.getByRole('region',{name:'Question',exact:true});
@@ -235,6 +240,21 @@ test('answers the open Claude question with the digit of the chosen option and t
   const fixture=await page.evaluate(()=>window.agentView.inputs);
   expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
   const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
+test('the mode button sends one Shift+Tab per tap to a Claude pane and names the mode the terminal read back',async({page})=>{
+  await open(page);
+  await claudeHere(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  const button=agent.getByRole('button',{name:'Switch permission mode (Shift+Tab)',exact:true});
+  await expect(button).toBeEnabled({timeout:8000});
+  const box=(await button.boundingBox())!;
+  expect(box.height).toBeGreaterThanOrEqual(36);expect(box.x+box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await button.click();
+  await expect(agent.getByText('Permission mode: Accept edits',{exact:true})).toBeVisible();
+  const inputs=(await fixture(page)).inputs.filter(action=>action.kind==='input');
+  expect(inputs).toEqual([expect.objectContaining({operation:1,input:{kind:'cycle_mode'}})]);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{

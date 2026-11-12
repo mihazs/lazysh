@@ -53,7 +53,7 @@ Send accepts nonempty text of at most 4,096 UTF-8 bytes, including LF and TAB.
 CR, other C0 controls, DEL/C1, Unicode line/paragraph separators and malformed
 Unicode are rejected. Accepted bytes are preserved without newline normalization.
 Ordinary single-line text retains literal hexadecimal byte arguments followed
-by one carriage-return Enter byte. Request stop still sends fixed Escape.
+by one carriage-return Enter byte. Request stop still sends fixed Escape. `cycle_mode` (tmux, Claude Code sources only) sends one fixed Shift+Tab (`ESC [ Z`) and the reply carries `mode`, read from the last six lines of the pane after the terminal repainted (`default`, `acceptEdits`, `plan`, `auto`, `bypassPermissions`, or `unconfirmed` when the status line is not the one the `claude-2.1` profile knows or two modes show at once). A guarded Herdr pane refuses the kind.
 
 Long prompt (`send_long`, tmux only, used by the Agent view composer): nonempty text of
 4,097 to 65,536 UTF-8 bytes under the same character rules, never split into several

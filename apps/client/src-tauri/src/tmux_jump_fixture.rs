@@ -2417,6 +2417,45 @@ async fn chat_input_probe() {
         servers.direct("chat-a", &["list-buffers"]).is_empty(),
         "the private buffer is gone"
     );
+    // The mode cycle is one Shift+Tab, and its reply carries the mode the status line shows afterwards. The workload
+    // draws nothing itself, so the screen is written to the pane's terminal; words above the status line count for nothing.
+    eprintln!("tmux chat stage: mode cycle and read-back");
+    let tty = servers.direct(
+        "chat-a",
+        &["display-message", "-p", "-t", "%0", "#{pane_tty}"],
+    );
+    let draw = |text: &str| std::fs::write(&tty, text).unwrap();
+    let current = chat_fixture_bind(&app, &lease, &child, &source).await;
+    draw("\x1b[2J\x1b[Hauto mode on\r\n\r\n  \u{23f5}\u{23f5} accept edits on (shift+tab to cycle)\r\n");
+    let cycled = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&current["receipt"], 1, json!({"kind":"cycle_mode"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        cycled,
+        json!({"kind":"delivered","nextOperation":2,"mode":"acceptEdits"})
+    );
+    expected.extend_from_slice(b"\x1b[Z");
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    draw("\x1b[2J\x1b[H  ? for shortcuts\r\n");
+    let unknown = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&current["receipt"], 2, json!({"kind":"cycle_mode"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        unknown,
+        json!({"kind":"delivered","nextOperation":3,"mode":"unconfirmed"})
+    );
+    expected.extend_from_slice(b"\x1b[Z");
+    chat_fixture_bytes(&outputs[0], &expected).await;
     chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
     disconnect(app.state(), child).await.unwrap();
     // No automatic bind after retirement. Reattach here exercises a fresh

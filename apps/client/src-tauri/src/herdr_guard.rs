@@ -578,10 +578,10 @@ pub enum Action {
 }
 /// The guard takes `send` and `request_stop` only.
 fn guarded_input(input: &Input) -> WireOutcome<()> {
-    // Herdr's guard has no paste buffer and no option-key profile: a long prompt and a dialog answer stay in the terminal.
+    // Herdr's guard has no paste buffer and no key profile: a long prompt, a dialog answer and a mode cycle stay in the terminal.
     if matches!(
         input,
-        Input::SendLong { .. } | Input::Select { .. } | Input::Submit { .. }
+        Input::SendLong { .. } | Input::Select { .. } | Input::Submit { .. } | Input::CycleMode {}
     ) {
         return Err(Fault::Invalid);
     }

@@ -262,6 +262,7 @@ the PTY directly.
 | Question or menu option | Live protocol answer. Else a new guarded `select` input that sends the profile's keys for that option. |
 | Slash command | Guarded `send` of the command text, picked from a palette built from the agent's documented commands. Commands that open TUI pickers leave the result in the terminal. |
 | Attachment | Existing upload, then `[Image #n]`/`[File #n]` tokens in the sent text. |
+| Permission mode | Guarded `cycle_mode` (tmux, Claude Code only): one Shift+Tab, `1b 5b 5a`, then a read of the pane's last six lines for the status line (`⏸ manual mode on`, `⏵⏵ accept edits on`, `⏸ plan mode on`, `⏵⏵ auto mode on`, `⏵⏵ bypass permissions on`; profile `claude-2.1`, verified on 2.1.318). The reply names the mode or `unconfirmed`. The transcript records the mode only at the next prompt, so it cannot be the read-back. Herdr and every other agent refuse the kind. |
 
 Per-agent keys (option selection, submit, queue, steer, interrupt, cancel) live in a
 versioned data profile per agent, not in code. Each send gets a receipt shown on the
