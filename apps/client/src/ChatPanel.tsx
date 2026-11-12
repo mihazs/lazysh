@@ -388,7 +388,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if(historyRef.current.newer)return;
       holdPosition();setError('');
       if(historyRef.current.paging && op.kind==='replace')place({kind:'tail'},op.messages);
-      else setMessages(previous=>applyWatchOp(previous,op,WINDOW_CAP));
+      else{
+        // The window keeps its newest messages; when live ones push the head out, the session no longer starts there.
+        const merged=applyWatchOp(messagesRef.current,op,Infinity),dropped=merged.length>WINDOW_CAP;
+        messagesRef.current=dropped?merged.slice(-WINDOW_CAP):merged;setMessages(messagesRef.current);
+        if(dropped && !historyRef.current.older)setHistory(previous=>({...previous,older:true}));
+      }
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
       if(op.kind==='replace')setWork(op.work);else if(op.work)setWork(op.work.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
