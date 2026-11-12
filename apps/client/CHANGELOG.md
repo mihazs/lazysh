@@ -1,5 +1,23 @@
 # @lazysh/client
 
+## 1.49.0
+
+### Minor Changes
+
+- b2a9d62: Switch Claude Code's permission mode from the Agent view on tmux: a new button sends one guarded Shift+Tab per tap and names the mode the terminal's own status line showed afterwards.
+- deef2a8: Add a Floating composer view as a per-device option next to Docked: a small movable, collapsible panel over the terminal that keeps the terminal grid and toolbar in place and sits above the soft keyboard, with Send, Insert, attachments and the draft.
+- 4f882e7: Show the agent's model, permission mode, context left, git branch and worktree in the Agent view header, from a new additive `session` object of the Claude Code and Codex conversation pages and watch frames.
+- ecaf908: Open, view, download or copy a host file path printed in the terminal: absolute, `~/` and `./` paths (and relative ones once the shell reports its directory with OSC 7), with `:line:col`, become links only when the host confirms the file exists.
+
+### Patch Changes
+
+- b2a9d62: Allow the stock Herdr send command of the Agent view composer in the app capability, so a send on a stock Herdr host is no longer refused by the app before it reaches the host.
+- @lazysh/account-usage@1.49.0
+  - @lazysh/common@1.49.0
+  - @lazysh/display-idle@1.49.0
+  - @lazysh/et-transport@1.49.0
+  - @lazysh/mosh-transport@1.49.0
+
 ## 1.48.0
 
 ### Minor Changes
