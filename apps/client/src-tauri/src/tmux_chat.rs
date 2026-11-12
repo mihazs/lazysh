@@ -156,8 +156,19 @@ impl Action {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
-    Send { text: String },
+    Send {
+        text: String,
+    },
     RequestStop,
+    /// One option of a numbered dialog: Claude Code's key for it is the digit alone, no Enter (verified on 2.1.318).
+    Select {
+        option: u8,
+        of: u8,
+    },
+    /// Confirms a multi-select list of `of` options: Claude Code puts its Submit row after "Type something".
+    Submit {
+        of: u8,
+    },
 }
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
@@ -171,6 +182,14 @@ impl Input {
             {
                 return Err(invalid());
             }
+        }
+        // Digits 1-9 are the only option keys; a dialog with more options stays in the terminal.
+        match self {
+            Self::Select { option, of } if !(1..=9).contains(of) || !(1..=*of).contains(option) => {
+                return Err(invalid())
+            }
+            Self::Submit { of } if !(1..=8).contains(of) => return Err(invalid()),
+            _ => {}
         }
         Ok(())
     }
@@ -196,6 +215,11 @@ impl Input {
                 format!("send-keys -t {pane} -H {bytes} 0d")
             }
             Self::RequestStop => format!("send-keys -t {pane} Escape"),
+            Self::Select { option, .. } => format!("send-keys -t {pane} -H {:02x}", b'0' + option),
+            Self::Submit { of } => format!(
+                "send-keys -t {pane} {}Enter",
+                "Down ".repeat(usize::from(*of) + 1)
+            ),
         };
         Ok(command)
     }
@@ -713,9 +737,95 @@ mod tests {
         .keys("%12")
         .is_ok());
         assert!(serde_json::from_str::<Input>(r#"{"kind":"send","text":"\ud800"}"#).is_err());
+        assert_eq!(
+            Input::Select { option: 3, of: 4 }.keys("%12").unwrap(),
+            "send-keys -t %12 -H 33"
+        );
+        for (option, of) in [(0, 3), (4, 3), (1, 0), (10, 10), (1, 10)] {
+            assert!(
+                Input::Select { option, of }.keys("%12").is_err(),
+                "{option} of {of}"
+            );
+        }
+        assert_eq!(
+            Input::Submit { of: 3 }.keys("%12").unwrap(),
+            "send-keys -t %12 Down Down Down Down Enter"
+        );
+        for of in [0, 9] {
+            assert!(Input::Submit { of }.keys("%12").is_err(), "{of}");
+        }
+        assert!(
+            serde_json::from_str::<Input>(r#"{"kind":"select","option":1,"of":2,"keys":"x"}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"select","option":-1,"of":2}"#).is_err());
         assert!(
             serde_json::from_str::<Action>(r#"{"kind":"gate","before_dispatch":false}"#).is_err()
         );
+    }
+
+    /// The generated command, run by a real tmux, gives a program reading the pane exactly one digit and no Enter.
+    #[test]
+    fn select_reaches_a_real_pane_as_one_digit_without_enter() {
+        use std::{
+            process::Command,
+            time::{Duration, Instant},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("tmux.sock");
+        let tmux = |args: &[&str]| {
+            Command::new("tmux")
+                .arg("-S")
+                .arg(&socket)
+                .args(args)
+                .output()
+        };
+        let (ready, output) = (dir.path().join("ready"), dir.path().join("keys.txt"));
+        let program = format!(
+            "stty raw -echo; touch {}; head -c 1 | od -An -tx1 > {}; sleep 2",
+            ready.display(),
+            output.display()
+        );
+        match tmux(&[
+            "new-session",
+            "-d",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            "sh",
+            "-c",
+            &program,
+        ]) {
+            Ok(started) if started.status.success() => {}
+            _ => return eprintln!("tmux is not available; skipped"),
+        }
+        let wait = |path: &std::path::Path| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !path.exists()
+                || std::fs::read_to_string(path)
+                    .is_ok_and(|text| path == output && text.trim().is_empty())
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "{} never appeared",
+                    path.display()
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        wait(&ready);
+        let keys = Input::Select { option: 2, of: 3 }.keys("%0").unwrap();
+        let sent = tmux(&keys.split(' ').collect::<Vec<_>>()).unwrap();
+        assert!(
+            sent.status.success(),
+            "{}",
+            String::from_utf8_lossy(&sent.stderr)
+        );
+        wait(&output);
+        let received = std::fs::read_to_string(&output).unwrap();
+        let _ = tmux(&["kill-server"]);
+        assert_eq!(received.trim(), "32", "the option digit and nothing else");
     }
 
     #[test]

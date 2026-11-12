@@ -8,6 +8,9 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   {agent:Exclude<TranscriptAgentId,'hermes'|'opencode'>;transcriptSessionId?:never}
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
+/** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, and a free-text answer. */
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}>;
+export type DialogAnswerer=(answer:DialogAnswer)=>Promise<boolean>;
 export type TerminalInputLabels=Readonly<{backend:'tmux'|'herdr';hostLabel:string;terminalLabel:string}>;
 type Destination=Readonly<{generation:string;sessionId:string;windowId:string;paneId:string}>;
 type Snapshot=Readonly<{kind:'destination';destination:Destination;sessionName:string;windowName:string;paneIndex:number}>;
@@ -97,7 +100,7 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend']):unk
 
 export type TerminalDestination=Destination|HerdrDestination;
 /** What an automatically bound input offers its caller; `send` and `stop` do nothing while `ready` is false. */
-export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void}>;
+export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void;/** One dialog key sequence through the same receipt, one guarded input at a time; false when nothing was sent. */answer:DialogAnswerer}>;
 
 /** `notes` false keeps the heading and disclaimer behind the composer's info button.
  * `proves` turns on automatic binding: the destination is chosen on mount and confirmed without a click only when it
@@ -188,34 +191,37 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   // Automatic binding runs once per context; after a failure only the explicit Reconnect button tries again.
   useEffect(()=>{if(auto && sourceValid && !snapshot && !binding && !error && !busy && !flight.current)void choose();});
   useEffect(()=>{if(proven && !binding && !busy && !error)void confirm();});
-  const latestInput=useRef<(kind:'send'|'request_stop')=>void>(()=>{});
+  const latestInput=useRef<(kind:'send'|'request_stop'|DialogAnswer)=>Promise<boolean>>(async()=>false);
   // Retry is one explicit request: bind again, and send the draft once as soon as that binding exists.
   const retrying=useRef(false);
   useEffect(()=>{if(retrying.current && binding && !busy){retrying.current=false;void input('send');}});
   useEffect(()=>{if(retrying.current && error)retrying.current=false;},[error]);
   const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
-  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>latestInput.current('send'),stop:()=>latestInput.current('request_stop'),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused]);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
-  async function input(kind:'send'|'request_stop') {
-    const permission=owned.current;
-    if(flight.current || !permission || !access.current() || composing.current)return;
-    if(kind==='send' && !validTerminalDraft(draft)){setError({key:'chatTerminalInvalidDraft'});return;}
-    const original=context,text=draft,revision=draftRevision;
+  async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
+    const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
+    if(flight.current || !permission || !access.current() || composing.current)return false;
+    if(body.kind==='send' && !validTerminalDraft(body.text)){setError({key:'chatTerminalInvalidDraft'});return false;}
+    const original=context,text=body.kind==='send'?body.text:'',revision=draftRevision;
     flight.current=true;setBusy(true);setError(undefined);setStatus('');
     try {
-      const nextOperation=parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:kind==='send'?{kind,text}:{kind}}),permission.nextOperation);
-      if(!current(original))return;
+      const nextOperation=parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body}),permission.nextOperation);
+      if(!current(original))return false;
       if(nextOperation===0xffffffff){retire();setBinding(undefined);}
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
-      setStatus(labels.backend==='herdr'?(kind==='send'?'chatHerdrSent':'chatHerdrStopRequested'):(kind==='send'?'chatTerminalSent':'chatTerminalStopRequested'));
+      const stop=body.kind==='request_stop';
+      setStatus(labels.backend==='herdr'?(stop?'chatHerdrStopRequested':'chatHerdrSent'):(stop?'chatTerminalStopRequested':'chatTerminalSent'));
       if(kind==='send')onSent(text,revision);
+      return true;
     } catch(error) {
-      failed(error,original,true,labels.backend==='tmux' && kind==='send' && /[\n\t]/.test(text));
+      failed(error,original,true,labels.backend==='tmux' && body.kind==='send' && /[\n\t]/.test(text));
       if(kind==='send' && current(original))onFailed?.(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)?'refused':'unknown');
+      return false;
     }
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
-  latestInput.current=kind=>void input(kind);
+  latestInput.current=input;
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
     <h4 hidden={!notes}>{t('chatTerminalTitle')}</h4><p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
     <p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>

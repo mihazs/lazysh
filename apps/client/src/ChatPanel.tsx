@@ -10,6 +10,7 @@ import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcript
 import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import {useDialogAnswerer} from './agentDialogAnswer';
 import {ChatActivity,ChatCard,ChatMarkdown,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
@@ -260,6 +261,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
+  // The newest unanswered question is the dialog that may still be open: it stays out of the folded activity, and only it can be answered here.
+  const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
+  const answerer = useDialogAnswerer(sessionId);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
   useEffect(()=>{if(preview && !previewRetained)setPreview(undefined);},[preview,previewRetained]);
   const [offset, setOffset] = useState(0);
@@ -594,7 +598,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
       </p>}
       {message.blocks.map((block, index) => {
-        const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} />;
+        const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
         return block.type === "text" ? (
           <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
         ) : (
@@ -783,7 +787,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {timeline ? turns.map(turn => <section key={turn.key} data-anchor={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
-          {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
+          {(()=>{
+            // Only the last turn can still wait for its question.
+            const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
+            const folded = turn.activity.filter(message => !pending.includes(message));
+            return <>{folded.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary({...turn, activity: folded})}</summary>{folded.map(renderMessage)}</details>}{pending.map(renderMessage)}</>;
+          })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
         {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}

@@ -453,3 +453,20 @@ fn queued_binding() -> (Binding, mpsc::Receiver<Work>, AccessLease) {
         .unwrap();
     (binding, queue, lease)
 }
+
+#[test]
+fn dialog_answers_never_reach_the_herdr_guard() {
+    let input = |input| {
+        json!({"kind":"input","receipt":"22345678-1234-4234-8234-123456789abc",
+            "source":{"agent":"claude","path":"/owned","view":"records","inlineImages":false},"operation":1,"input":input})
+    };
+    for answer in [
+        json!({"kind":"select","option":1,"of":2}),
+        json!({"kind":"submit","of":2}),
+    ] {
+        let action: Action = serde_json::from_value(input(answer)).unwrap();
+        assert!(matches!(action.validate(), Err(Fault::Invalid)));
+    }
+    let stop: Action = serde_json::from_value(input(json!({"kind":"request_stop"}))).unwrap();
+    assert!(stop.validate().is_ok());
+}

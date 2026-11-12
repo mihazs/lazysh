@@ -613,6 +613,10 @@ impl Action {
                 input,
             } if token(receipt) && *operation > 0 && *operation < u32::MAX => {
                 source.validate().map_err(|_| Fault::Invalid)?;
+                // Herdr's guard has no option-key profile: a dialog answer stays in the terminal.
+                if matches!(input, Input::Select { .. } | Input::Submit { .. }) {
+                    return Err(Fault::Invalid);
+                }
                 input.validate().map_err(|_| Fault::Invalid)
             }
             _ => Err(Fault::Invalid),

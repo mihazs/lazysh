@@ -201,6 +201,34 @@ test('answers a Claude permission request from the Agent view through the approv
   expect(after.stdin).toEqual(before.stdin);expect(after.inputs.some(input=>input.kind==='input')).toBe(false);
 });
 
+test('answers the open Claude question with the digit of the chosen option and the pane keeps showing the terminal',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    const base=window.nativeFixtureInvoke!;
+    window.nativeFixtureInvoke=async(command,args)=>{
+      const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
+      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread',state:'needs_attention'}))};
+      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
+      if(command==='agent_transcript')return {...(result as {messages:object[]}),agent:'claude',activity:'waiting',messages:[
+        {id:'p',role:'user',blocks:[{type:'text',text:'Ask me a question'}]},
+        {id:'a',role:'assistant',blocks:[{type:'tool_use',id:'q1',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{question:'Pick a color',header:'Color',multiple:false,options:[{label:'Red'},{label:'Blue'}]}]}}]}]};
+      return result;
+    };
+  });
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  const card=agent.getByRole('region',{name:'Question',exact:true});
+  await expect(card).toContainText('Pick a color',{timeout:8000});
+  const blue=card.getByRole('button',{name:'Blue',exact:true});
+  await expect(blue).toBeEnabled();
+  expect((await blue.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await blue.click();
+  await expect(card.getByRole('status')).toContainText('Sent to the terminal');
+  const fixture=await page.evaluate(()=>window.agentView.inputs);
+  expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
+  const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='phone','Hardware shortcut is covered on desktop.');
   await open(page);

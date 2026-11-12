@@ -6,6 +6,7 @@ import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
+import {publishAnswerGuard} from './agentDialogAnswer';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
@@ -141,6 +142,17 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const row = selected ? selected.row : (binding.kind === 'bound' || binding.kind === 'partial' ? binding.row : undefined);
   const conversation=selected?.conversation ?? (binding.kind==='bound'?binding.conversation:undefined);
   const reader=!!conversation;
+  // The composer's bound input also answers the open dialog. Before every key the pane is read again, and nothing is sent
+  // unless the same reported session still needs the user, so a dialog answered in the terminal first gets no stray key.
+  const answerGuard = useCallback(async () => {
+    const paneId = row?.paneId;
+    if (!paneId || !shown || !access.current()) return false;
+    if (parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId !== paneId) return false;
+    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === paneId);
+    return rows.length === 1 && rows[0].sessionId === row.sessionId && rows[0].state === 'needs_attention' && access.current();
+  }, [row?.paneId, row?.sessionId, shown, access, invoke, sessionId]);
+  const answerable = tmux && !selected && row?.state === 'needs_attention';
+  useEffect(() => {publishAnswerGuard(sessionId, answerable ? answerGuard : undefined); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, answerable, answerGuard]);
   if (!selected && binding.kind==='bound') retained.current={id:binding.row.sessionId,conversation:binding.conversation};
   // The list may sit over a followed conversation without losing its reading position or draft.
   // A reader that goes unknown for a moment (view hidden, Herdr unreachable) keeps its position and draft but stays hidden.
