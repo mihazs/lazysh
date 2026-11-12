@@ -20,6 +20,7 @@
     "**/.turbo/**",
     "**/playwright-report/**",
     "**/test-results/**",
+    "docs/architecture/benchmarks/**",
     "packages/mosh-transport/vendor/**",
     "packages/mosh-transport/vendor-android/**",
     "packages/portable-pty-vendor/**",
