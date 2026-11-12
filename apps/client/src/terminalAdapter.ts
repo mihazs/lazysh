@@ -132,8 +132,11 @@ export interface TerminalAdapter {
   /** Idempotent. Pending writes reject; subscribers are released. */
   dispose(): Promise<void>;
 
-  /** Present when `dataPath` is 'renderer'. Resolves once the bytes are applied: the point to return transport credits. */
-  write?(bytes: Uint8Array): Promise<void>;
+  /**
+   * Present when `dataPath` is 'renderer'. Resolves once the bytes are applied: the point to return transport credits.
+   * `onApplied` runs synchronously at that point, in write order, before any promise continuation.
+   */
+  write?(bytes: Uint8Array, onApplied?: () => void): Promise<void>;
   /** Inject input as if it were typed; it reaches the observer like keyboard input. */
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin): void;
   /** Present with the `ime` capability. */

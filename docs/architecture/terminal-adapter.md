@@ -101,9 +101,10 @@ The contract lives in `apps/client/src/terminalAdapter.ts`, the xterm backend in
 - `ime` became `observeInput(listener, acceptsInput, onUnappliedEdit)`, returning the observer `TerminalPane` already drives. It is present exactly when the `ime` capability is claimed.
 - Canonical Mosh resize is `enableCanonicalResize()`, present exactly when `canonicalMoshResize` is claimed. It returns the controller `TerminalPane` already uses (`{cols, rows}` sizes) so the pane needed no change; the adapter also emits `resizeIntent`, `geometry` (`authority: 'transport'`) and `failure` events.
 - `TerminalPreferences` carries `scrollbackLines`, `brightBold`, `boldColor` and a theme object instead of xterm option names; `preferences.ts` produces it (`terminalPreferences`) and `xtermOptions.ts` maps it back.
+- `write(bytes, onApplied?)` also takes a callback that runs synchronously at the apply point, so transport credit is returned in the same turn the terminal consumed the chunk (a promise continuation would add a microtask turn).
 - `search(query, direction, from)` returns row, column and length; `readRows` takes an optional column span (Herdr navigation reads the right edge).
 - `setActive(false)` cannot stop the xterm DOM renderer from drawing dirty rows; it only guarantees a repaint on reactivation. A native backend is expected to suspend drawing.
-- `XtermTerminalAdapter.terminal` is a transitional escape hatch for `TerminalPane`, which still draws xterm directly ([#1308](https://github.com/mihazs/lazysh/issues/1308)). The registry offers no other backend yet, and the native backend is not auto-eligible.
+- `App.tsx` already creates, feeds, acknowledges, resizes (Mosh), queries paste mode of and disposes each session's terminal through its adapter (`LiveSession.adapter`). `XtermTerminalAdapter.terminal` (`LiveSession.terminal`) is a transitional escape hatch for `TerminalPane`, which still draws xterm directly ([#1308](https://github.com/mihazs/lazysh/issues/1308)). The registry offers no other backend yet, and the native backend is not auto-eligible.
 - A developer override is the `lazysh.terminal.backend` key in `localStorage` (`xterm` or `native`); it never enables a backend whose probe failed.
 
 ## Unresolved questions

@@ -56,6 +56,17 @@ export function runTerminalAdapterContract(name: string, harness: ContractHarnes
       expect(screen()[3]).toBe('x');
     });
 
+    it('runs the applied callback synchronously, in write order, before the promise settles', async () => {
+      const {adapter} = await open();
+      const seen: string[] = [];
+      const first = adapter.write!(text('a'), () => seen.push('a-applied')).then(() => seen.push('a-resolved'));
+      const second = adapter.write!(text('b'), () => seen.push('b-applied')).then(() => seen.push('b-resolved'));
+      await Promise.all([first, second]);
+      expect(seen.indexOf('a-applied')).toBeLessThan(seen.indexOf('b-applied'));
+      expect(seen.indexOf('a-applied')).toBeLessThan(seen.indexOf('a-resolved'));
+      expect(seen.indexOf('b-applied')).toBeLessThan(seen.indexOf('b-resolved'));
+    });
+
     it('never reorders a write behind a later one', async () => {
       const {adapter, write} = await open();
       const order: number[] = [];

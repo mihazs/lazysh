@@ -66,12 +66,13 @@ export class XtermTerminalAdapter implements TerminalAdapter {
     return this.disposed = Promise.resolve();
   }
 
-  write(bytes: Uint8Array) {
+  write(bytes: Uint8Array, onApplied?: () => void) {
     if (this.disposed) return Promise.reject(new Error('This terminal is disposed.'));
     return new Promise<void>((resolve, reject) => {
       this.pending.add(reject);
       this.xterm.write(bytes, () => {
         if (!this.pending.delete(reject)) return;
+        onApplied?.();
         resolve();
         // The canonical-geometry controller records a malformed Mosh frame as it parses it.
         const failure = this.canonical?.failure;

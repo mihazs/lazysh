@@ -17,6 +17,9 @@ export type LiveSession = {
   hostId: string;
   name: string;
   destination: string;
+  /** The session's terminal state. Prefer this over `terminal`. */
+  adapter: import('./terminalAdapter').TerminalAdapter;
+  /** The xterm view of `adapter`, until TerminalPane consumes the adapter (#1308). */
   terminal: Terminal;
   connected: boolean;
   disposed?: true;
