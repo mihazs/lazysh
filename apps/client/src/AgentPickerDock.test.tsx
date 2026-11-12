@@ -24,7 +24,7 @@ function bind(react = true) {
     else screenOf.set(closed);
     return true;
   });
-  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer};
+  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer, cycleMode: vi.fn(async () => undefined)};
   act(() => publishComposerControl('s', control));
   return answer;
 }
@@ -98,7 +98,7 @@ it('finds the chosen option by what it says when the list scrolls as the highlig
     else screenOf.set(closed);
     return true;
   });
-  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control}));
+  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control, cycleMode: vi.fn(async () => undefined)}));
   mount(list(0, 0));
   await waitFor(() => expect(option('Three').disabled).toBe(false));
   fireEvent.click(option('Three'));
