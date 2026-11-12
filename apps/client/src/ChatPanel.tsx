@@ -23,6 +23,7 @@ import {projectMessages,type InjectedEvent} from './chatInjected';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
 import ChatHistoryControls from './ChatHistoryControls';
+import AgentStatusPanel from './AgentStatusPanel';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -804,6 +805,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
+      {timeline && bound && <AgentStatusPanel messages={messages} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">
