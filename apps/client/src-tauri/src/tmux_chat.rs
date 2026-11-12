@@ -148,7 +148,7 @@ impl Action {
             Self::Release { .. } => Ok(()),
             Self::Input { source, input, .. } => {
                 source.validate()?;
-                input.validate()
+                input.validate_for(source)
             }
         }
     }
@@ -173,6 +173,8 @@ pub enum Input {
     SendLong {
         text: String,
     },
+    /// One Shift+Tab, Claude Code's permission-mode cycle (profile `claude-2.1`). The reply reads the mode back off the status line.
+    CycleMode {},
 }
 /// What `Send` takes in one tmux command.
 const SEND_MAX: usize = 4096;
@@ -204,6 +206,14 @@ impl Input {
             }
             Self::Submit { of } if !(1..=8).contains(of) => return Err(invalid()),
             _ => {}
+        }
+        Ok(())
+    }
+    /// A key profile belongs to one agent: its bytes are never sent to another program.
+    pub(crate) fn validate_for(&self, source: &Source) -> Result<()> {
+        self.validate()?;
+        if matches!(self, Self::CycleMode {}) && source.agent != Agent::Claude {
+            return Err(invalid());
         }
         Ok(())
     }
@@ -242,6 +252,7 @@ impl Input {
                 "Down ".repeat(usize::from(*of) + 1)
             ),
             Self::SendLong { .. } => return Err(invalid()),
+            Self::CycleMode {} => format!("send-keys -t {pane} -H 1b 5b 5a"),
         };
         Ok(command)
     }
@@ -335,7 +346,51 @@ pub enum Reply {
     Released,
     Delivered {
         next_operation: u32,
+        /// Only for `cycle_mode`: the permission mode the status line showed afterwards.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<Mode>,
     },
+}
+/// Claude Code's permission modes as its status line names them; `Unconfirmed` is any screen the profile does not recognise.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    Default,
+    AcceptEdits,
+    Plan,
+    Auto,
+    BypassPermissions,
+    Unconfirmed,
+}
+/// Profile `claude-2.1` (verified on 2.1.318): the status line under the prompt box starts with a glyph, then the mode.
+const MODE_LABELS: [(&str, Mode); 5] = [
+    ("manual mode on", Mode::Default),
+    ("accept edits on", Mode::AcceptEdits),
+    ("plan mode on", Mode::Plan),
+    ("auto mode on", Mode::Auto),
+    ("bypass permissions on", Mode::BypassPermissions),
+];
+/// The mode shown on the last few lines of a pane. Text the agent printed higher up is never read, and two different
+/// modes on those lines are no answer at all.
+fn mode_on_screen(rows: &[String]) -> Mode {
+    let mut found = None;
+    for row in rows
+        .iter()
+        .rev()
+        .filter(|row| !row.trim().is_empty())
+        .take(6)
+    {
+        let label = row.trim_start_matches(|c: char| c == ' ' || !c.is_ascii());
+        for (text, mode) in MODE_LABELS {
+            if label.starts_with(text) && row.trim_start() != label {
+                if found.is_some_and(|seen| seen != mode) {
+                    return Mode::Unconfirmed;
+                }
+                found = Some(mode);
+            }
+        }
+    }
+    found.unwrap_or(Mode::Unconfirmed)
 }
 pub(super) struct Receipt {
     token: String,
@@ -530,6 +585,21 @@ impl Control {
         let command = bounded(paste_stage(guard, pane, &buffer, &marker))?;
         self.marked_dispatch(&command, &marker, budget).await
     }
+    /// Read the permission mode back off the pane once the TUI had time to repaint.
+    async fn read_mode(&mut self, pane: &str, budget: &mut usize) -> Result<Mode> {
+        let mut mode = Mode::Unconfirmed;
+        for wait in [300, 500] {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            let rows = self
+                .command(&format!("capture-pane -p -t {pane}"), budget)
+                .await?;
+            mode = mode_on_screen(&rows);
+            if mode != Mode::Unconfirmed {
+                break;
+            }
+        }
+        Ok(mode)
+    }
     pub(super) async fn chat_action(
         &mut self,
         lease: &AccessLease,
@@ -595,7 +665,7 @@ impl Control {
                     return Err(stale());
                 }
                 bound.owner.check().map_err(|_| stale())?;
-                input.validate()?;
+                input.validate_for(&bound.source)?;
                 self.chat_ready(&bound.destination, budget).await?;
                 bound.owner.check().map_err(|_| stale())?;
                 lease.check()?;
@@ -611,10 +681,20 @@ impl Control {
                 // recall bytes. A failed/partial response retires the actor.
                 self.chat_dispatch(&bound.destination, &input, budget)
                     .await?;
+                // The key has no echo of its own: the status line is the only proof of where the cycle landed.
+                let mode = match input {
+                    Input::CycleMode {} => {
+                        Some(self.read_mode(&bound.destination.pane_id, budget).await?)
+                    }
+                    _ => None,
+                };
                 bound.owner.check()?;
                 let next_operation = bound.next;
                 self.chat = Some(bound);
-                Ok(Reply::Delivered { next_operation })
+                Ok(Reply::Delivered {
+                    next_operation,
+                    mode,
+                })
             }
         }
     }
@@ -773,6 +853,65 @@ mod tests {
             inline_images: false,
             transcript_session_id: None,
         }
+    }
+    #[test]
+    fn the_mode_cycle_is_one_shift_tab_for_claude_only() {
+        assert_eq!(
+            Input::CycleMode {}.keys("%12").unwrap(),
+            "send-keys -t %12 -H 1b 5b 5a"
+        );
+        assert!(serde_json::from_str::<Input>(r#"{"kind":"cycle_mode","times":3}"#).is_err());
+        let claude = ordinary_source();
+        let mut codex = ordinary_source();
+        codex.agent = Agent::Codex;
+        assert!(Input::CycleMode {}.validate_for(&claude).is_ok());
+        assert!(Input::CycleMode {}.validate_for(&codex).is_err());
+        assert!(Input::RequestStop.validate_for(&codex).is_ok());
+    }
+    #[test]
+    fn the_mode_is_read_from_the_status_line_and_nowhere_else() {
+        let screen = |rows: &[&str]| rows.iter().map(|row| row.to_string()).collect::<Vec<_>>();
+        let shows = |status: &str| {
+            mode_on_screen(&screen(&[
+                "answer text",
+                "─────────",
+                "❯ ",
+                "─────────",
+                status,
+                "",
+                "",
+            ]))
+        };
+        assert_eq!(shows("  ⏸ manual mode on · ? for shortcuts"), Mode::Default);
+        assert_eq!(
+            shows("  ⏵⏵ accept edits on (shift+tab to cycle)"),
+            Mode::AcceptEdits
+        );
+        assert_eq!(
+            shows("  ⏸ plan mode on (shift+tab to cycle)  ◐ medium"),
+            Mode::Plan
+        );
+        assert_eq!(
+            shows("  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"),
+            Mode::Auto
+        );
+        assert_eq!(
+            shows("  ⏵⏵ bypass permissions on (shift+tab to cycle)"),
+            Mode::BypassPermissions
+        );
+        // Unknown wording, or no status line at all, confirms nothing.
+        assert_eq!(shows("  ? for shortcuts"), Mode::Unconfirmed);
+        assert_eq!(mode_on_screen(&[]), Mode::Unconfirmed);
+        // Words the agent or the user wrote are not a status line: no glyph before them, or too far up the screen.
+        assert_eq!(shows("plan mode on"), Mode::Unconfirmed);
+        let mut old = screen(&["  ⏸ plan mode on"]);
+        old.extend((0..10).map(|n| format!("later line {n}")));
+        assert_eq!(mode_on_screen(&old), Mode::Unconfirmed);
+        // Two different modes on the last lines are ambiguous.
+        assert_eq!(
+            mode_on_screen(&screen(&["  ⏸ plan mode on", "  ⏵⏵ auto mode on"])),
+            Mode::Unconfirmed
+        );
     }
     #[test]
     fn single_line_input_is_literal_and_terminal_keys_are_fixed() {

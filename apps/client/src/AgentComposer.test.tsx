@@ -7,13 +7,15 @@ import {bindProtectedInvoke,captureAccess} from './access';
 import {chatFollowAccess} from './test/chatFollowAccess';
 import {t} from './i18n/core';
 import {activeTextInteractions} from './textInteraction';
-import {tmuxChatBound,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
+import {tmuxChatBound,tmuxChatMode,tmuxChatReceipt,tmuxChatReply,tmuxChatSnapshot,tmuxChatTarget} from './test/tmuxChat';
 import {herdrChatReply,herdrTarget} from './test/herdrChat';
 import {attachmentFile,attachmentPngHeader} from './test/attachmentData';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 // The guarded input settles over several awaited native calls; a loaded CI machine needs more than the default second.
 configure({asyncUtilTimeout:5000});
+// Several cases chain whole send cycles through awaited native calls; a loaded CI machine needs more than five seconds for them.
+vi.setConfig({testTimeout:20000});
 const conversation={agent:'claude' as const,path:'/home/owner/.claude/projects/work/a.jsonl',report:{sessionId:'s1',agent:'Claude Code',paneId:'%3'}};
 const tmuxLabels={backend:'tmux' as const,hostLabel:'host',terminalLabel:'work'};
 const actions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_chat'||command==='herdr_chat').map(([,args])=>(args as {action:{kind:string;input?:unknown;operation?:number}}).action);
@@ -26,7 +28,7 @@ function mount(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
 const box=()=>screen.getByRole('textbox',{name:t('chatDraftLabel')}) as HTMLTextAreaElement;
 const type=(value:string)=>fireEvent.change(box(),{target:{value}});
 const sendButton=()=>screen.getByRole('button',{name:t('agentComposerSend')}) as HTMLButtonElement;
-beforeEach(()=>{chatFollowAccess();vi.mocked(invoke).mockReset().mockImplementation(tmuxChatReply);window.matchMedia=vi.fn(()=>({matches:false})) as never;});
+beforeEach(()=>{tmuxChatMode.landed='plan';chatFollowAccess();vi.mocked(invoke).mockReset().mockImplementation(tmuxChatReply);window.matchMedia=vi.fn(()=>({matches:false})) as never;});
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
 it('binds to the proven pane without a confirmation step and delivers a message once, then clears the draft',async()=>{
@@ -271,7 +273,10 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   // One notice speaks for the failed send; the receipt line stays out of its way until the notice is dismissed.
   expect(screen.queryByText(t('agentReceiptNotSent'))).toBeNull();
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
-  fireEvent.click(screen.getByRole('button',{name:t('agentReceiptRetry')}));
+  // The button shows a render before the control behind it reports idle; a click on it while disabled is lost.
+  const retry=()=>screen.getByRole('button',{name:t('agentReceiptRetry')}) as HTMLButtonElement;
+  await waitFor(()=>expect(retry().disabled).toBe(false));
+  fireEvent.click(retry());
   await waitFor(()=>expect(inputs()).toHaveLength(2));
   expect((inputs()[1].input as {text:string}).text).toBe('Important');
   await waitFor(()=>expect(box().value).toBe(''));
@@ -505,4 +510,35 @@ it('holds the edge gestures off while the message box has focus, so a swipe neve
   expect(activeTextInteractions()).toContain('field');
   act(()=>box().blur());
   expect(activeTextInteractions()).not.toContain('field');
+});
+
+const modeButton=()=>screen.findByRole('button',{name:t('agentModeSwitch')});
+
+it('cycles the permission mode with one guarded Shift+Tab per tap and shows the mode the terminal read back',async()=>{
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModePlan')}))).toBeTruthy();
+  tmuxChatMode.landed='auto';
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeNow',{mode:t('agentModeAuto')}))).toBeTruthy();
+  expect(inputs().map(({operation,input})=>({operation,input}))).toEqual([{operation:1,input:{kind:'cycle_mode'}},{operation:2,input:{kind:'cycle_mode'}}]);
+});
+
+it('claims no mode when the status line was not recognised',async()=>{
+  tmuxChatMode.landed='unconfirmed';
+  mount();
+  fireEvent.click(await modeButton());
+  expect(await screen.findByText(t('agentModeUnconfirmed'))).toBeTruthy();
+  expect(screen.queryByText(/Permission mode:/)).toBeNull();
+});
+
+it('offers the mode button only for Claude Code on tmux',async()=>{
+  const {view}=mount({conversation:{...conversation,agent:'codex' as const,path:'/home/owner/.codex/sessions/a.jsonl'}});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
+  view.unmount();
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
+  await screen.findByRole('textbox',{name:t('chatDraftLabel')});
+  expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
 });

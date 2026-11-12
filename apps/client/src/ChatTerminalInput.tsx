@@ -9,7 +9,10 @@ export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';i
   | {agent:'hermes'|'opencode';transcriptSessionId:string}
 )>;
 /** What the Agent view may send besides the composer's draft: an option digit of a dialog, its multi-select confirmation, and a free-text answer. */
-export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}>;
+export type DialogAnswer=Readonly<{kind:'select';option:number;of:number}|{kind:'submit';of:number}|{kind:'send';text:string}|{kind:'cycle_mode'}>;
+/** Where Shift+Tab landed, as the agent's status line showed it; `unconfirmed` when the screen was not recognised. */
+export const permissionModes=['default','acceptEdits','plan','auto','bypassPermissions','unconfirmed'] as const;
+export type PermissionMode=typeof permissionModes[number];
 export type DialogAnswerer=(answer:DialogAnswer)=>Promise<boolean>;
 export type TerminalInputLabels=Readonly<{backend:'tmux'|'herdr';hostLabel:string;terminalLabel:string}>;
 type Destination=Readonly<{generation:string;sessionId:string;windowId:string;paneId:string}>;
@@ -100,6 +103,12 @@ export function parseTerminalDelivered(value:unknown,operation:number):number {
   if(row.kind!=='delivered' || !uint32(operation) || operation<1 || operation>=0xffffffff || row.nextOperation!==operation+1)throw invalid();
   return row.nextOperation as number;
 }
+/** The reply to `cycle_mode`: a delivery that also names the mode read back. */
+export function parseTerminalCycle(value:unknown,operation:number):{nextOperation:number;mode:PermissionMode} {
+  const row=record(value,['kind','nextOperation','mode']);
+  if(typeof row.mode!=='string' || !(permissionModes as readonly string[]).includes(row.mode))throw invalid();
+  return {nextOperation:parseTerminalDelivered({kind:row.kind,nextOperation:row.nextOperation},operation),mode:row.mode as PermissionMode};
+}
 function nativeFailure(error:unknown,backend:TerminalInputLabels['backend'],stock=false):unknown {
   const kind=error && typeof error==='object' && 'kind' in error?error.kind:undefined;
   if(backend==='herdr' && kind==='herdr_chat_unavailable')return new InputFailure('chatHerdrUnavailable');
@@ -115,7 +124,7 @@ function nativeFailure(error:unknown,backend:TerminalInputLabels['backend'],stoc
 
 export type TerminalDestination=Destination|HerdrDestination;
 /** What an automatically bound input offers its caller; `send` and `stop` do nothing while `ready` is false. */
-export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void;/** One dialog key sequence through the same receipt, one guarded input at a time; false when nothing was sent. */answer:DialogAnswerer;
+export type TerminalControl=Readonly<{ready:boolean;busy:boolean;/** Binding was refused or lost: only an explicit reconnect or Stage remains. */failed:boolean;send:()=>void;stop:()=>void;/** Bind again, then send the draft once. */retry:()=>void;/** One dialog key sequence through the same receipt, one guarded input at a time; false when nothing was sent. */answer:DialogAnswerer;/** One Shift+Tab; the mode the agent's status line showed afterwards, undefined when nothing was sent. */cycleMode:()=>Promise<PermissionMode|undefined>;
   /** Why the last bind or send failed, for the caller to present; `uncertain` once writing may have begun. */problem?:TerminalProblem}>;
 export type TerminalProblem=Readonly<{key:FailureKey|'agentComposerWrongPane';raw?:string;uncertain:''|'keys'|'paste'}>;
 
@@ -226,6 +235,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   useEffect(()=>{if(auto && sourceValid && !snapshot && !binding && !error && !busy && !flight.current)void choose();});
   useEffect(()=>{if(proven && !binding && !busy && !error)void confirm();});
   const latestInput=useRef<(kind:'send'|'request_stop'|DialogAnswer)=>Promise<boolean>>(async()=>false);
+  const landed=useRef<PermissionMode|undefined>(undefined);
   // Retry is one explicit request: bind again, and send the draft once as soon as that binding exists.
   const retrying=useRef(false);
   useEffect(()=>{if(retrying.current && binding && !busy){retrying.current=false;if(validTerminalDraft(draft,draftLimit(labels.backend,long)))void input('send');}});
@@ -233,7 +243,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
   const problem:TerminalProblem|undefined=error?{key:'key' in error?error.key:'chatHerdrRejected',raw:error.raw,uncertain}:mismatch?{key:'agentComposerWrongPane',uncertain:''}:undefined;
   const problemKey=problem&&JSON.stringify(problem);
-  useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),cycleMode:async()=>{landed.current=undefined;return await latestInput.current({kind:'cycle_mode'})?landed.current:undefined;},retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
@@ -242,8 +252,11 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     const original=context,text=body.kind==='send'?body.text:'',revision=draftRevision;
     flight.current=true;setBusy(true);setError(undefined);setStatus('');
     try {
-      const nextOperation=permission.stock?(await stockInput(body),permission.nextOperation):parseTerminalDelivered(await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body}),permission.nextOperation);
+      const reply=permission.stock?(await stockInput(body),undefined):await call({kind:'input',receipt:permission.receipt,source,operation:permission.nextOperation,input:body.kind==='send' && utf8(text)>SEND_BYTES?{kind:'send_long',text}:body});
+      const cycled=body.kind==='cycle_mode' && !permission.stock?parseTerminalCycle(reply,permission.nextOperation):undefined;
+      const nextOperation=permission.stock?permission.nextOperation:cycled?cycled.nextOperation:parseTerminalDelivered(reply,permission.nextOperation);
       if(!current(original))return false;
+      landed.current=cycled?.mode;
       if(nextOperation===0xffffffff){retire();setBinding(undefined);}
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
       const stop=body.kind==='request_stop';
