@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.39.0
+
+### Minor Changes
+
+- 68631cf: Add an Android-only Private keyboard in the terminal setting (off by default, saved on this device only) for keyboards that drop or change typed characters: while the terminal has focus, the keyboard is asked for private typing with no learning and no suggestions, so predictive text, autocorrect and swipe typing stop working there.
+
+### Patch Changes
+
+- e98336b: Fix the Herdr switch button disappearing while scrolling or with the keyboard open: Herdr sessions now show a switch button in the session header, outside the scrolling terminal, that opens Herdr Spaces.
+- @lazysh/account-usage@1.39.0
+  - @lazysh/common@1.39.0
+  - @lazysh/display-idle@1.39.0
+  - @lazysh/et-transport@1.39.0
+  - @lazysh/mosh-transport@1.39.0
+
 ## 1.38.0
 
 ### Minor Changes
