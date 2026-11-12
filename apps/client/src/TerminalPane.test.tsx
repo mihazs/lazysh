@@ -17,7 +17,7 @@ vi.mock("./terminalLinks", () => ({installTerminalLinks: (_terminal: unknown, op
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), onRender: (_listener:()=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), scrollToBottom: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((code: number, handler: typeof osc) => {if (code === 52) osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), onRender: (_listener:()=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), scrollToBottom: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -1504,7 +1504,7 @@ it('keeps one explicit OSC copy through a held write and retranslates only its l
   expect(screen.getByRole('alert').textContent).toContain('El acceso al portapapeles no estaba disponible.');
   await act(async()=>{await uiI18n.changeLanguage('en');});
   expect(screen.getByRole('alert').textContent).toBe('Clipboard access was unavailable. Use your system copy menu.');
-  expect(terminal.parser.registerOscHandler).toHaveBeenCalledTimes(1);
+  expect(terminal.parser.registerOscHandler.mock.calls.filter(([code])=>code===52)).toHaveLength(1);
   expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
 });
 it('retains a held paste and the same link operation without translating raw diagnostics',async()=>{

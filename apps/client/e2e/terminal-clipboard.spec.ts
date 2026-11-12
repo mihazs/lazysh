@@ -1,4 +1,4 @@
-import {expect,test,type Page} from '@playwright/test';
+import {expect,test,type Page,type TestInfo} from '@playwright/test';
 import {openClipboardTerminal} from './fixtures/localTerminal';
 import {pressMore} from './fixtures/toolbarMore';
 
@@ -173,5 +173,51 @@ test.describe('touch selection',()=>{
     await input.detach();
     await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(before);
     expect(await selection(page)).toBe(0);
+  });
+});
+
+test.describe('host file paths in the output',()=>{
+  const log='/var/log/build.log',home='/home/fixture/notes/todo.md';
+  async function tap(page:Page,testInfo:TestInfo,row:number,column:number) {
+    const target=await cellPoint(page,row,column);
+    if(testInfo.project.name==='phone')await page.touchscreen.tap(target.x,target.y);
+    else {await page.mouse.move(target.x,target.y);await page.mouse.move(target.x+1,target.y);await page.mouse.click(target.x+1,target.y);}
+  }
+  test('an existing path offers View, Download and Copy path; prose and missing files stay plain',async({page},testInfo)=>{
+    await page.addInitScript(([log,home])=>{window.simpleShortcutFiles={[log]:'first line\nsecond line',[home]:'# todo'};},[log,home]);
+    await openClipboardTerminal(page);
+    await output(page,`\x1b[2J\x1b[Hwrote ${log}:2 now\r\nsee ~/notes/todo.md\r\nmissing /no/such/file.txt\r\n`);
+    await expect(screen(page)).toContainText('missing /no/such/file.txt');
+    const region=page.getByRole('region',{name:'Host file',exact:true});
+    // The host is asked about each candidate before it becomes a link: the missing file never opens a sheet.
+    await tap(page,testInfo,2,12);
+    await expect.poll(()=>page.evaluate(()=>window.simpleShortcutHostCalls)).toContain('host_file_stat /no/such/file.txt');
+    await tap(page,testInfo,2,12);
+    await page.waitForTimeout(300);
+    await expect(region).toHaveCount(0);
+    await expect(async()=>{await tap(page,testInfo,0,10);await expect(region).toBeVisible({timeout:1000});}).toPass();
+    await expect(region).toContainText(log);
+    await expect(region).toContainText('Line 2');
+    await region.getByRole('button',{name:'View',exact:true}).click();
+    await expect(region).toContainText('second line');
+    await region.getByRole('button',{name:'Download',exact:true}).click();
+    await expect(region).toContainText('Saved to /downloads/saved.');
+    await region.getByRole('button',{name:'Copy path',exact:true}).click();
+    await expect.poll(()=>readClipboard(page)).toBe(log);
+    expect(await page.evaluate(()=>window.simpleShortcutHostCalls)).toContain('host_file_deliver save');
+    await region.getByRole('button',{name:'Dismiss file',exact:true}).click();
+    await expect(region).toHaveCount(0);
+  });
+  test('~/ resolves against the host home and a relative path against the OSC 7 directory',async({page},testInfo)=>{
+    await page.addInitScript(([home])=>{window.simpleShortcutFiles={[home]:'# todo','/work/app/src/main.rs':'fn main() {}'};},[home]);
+    await openClipboardTerminal(page);
+    const region=page.getByRole('region',{name:'Host file',exact:true});
+    await output(page,`\x1b[2J\x1b[Hsee ~/notes/todo.md\r\n`);
+    await expect(async()=>{await tap(page,testInfo,0,8);await expect(region).toBeVisible({timeout:1000});}).toPass();
+    await expect(region).toContainText(home);
+    await region.getByRole('button',{name:'Dismiss file',exact:true}).click();
+    await output(page,`\x1b]7;file://host/work/app\x07\x1b[2J\x1b[Herror in ./src/main.rs:3:9\r\n`);
+    await expect(async()=>{await tap(page,testInfo,0,14);await expect(region).toBeVisible({timeout:1000});}).toPass();
+    await expect(region).toContainText('/work/app/src/main.rs');
   });
 });

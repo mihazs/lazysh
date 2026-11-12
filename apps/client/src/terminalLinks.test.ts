@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {describe,expect,it} from 'vitest';
-import {findUrls,type Rows} from './terminalLinks';
+import {findPaths,findUrls,type Rows} from './terminalLinks';
 
 const wide=(char:string)=>/[⺀-鿿＀-￯]/.test(char);
 /** A synthetic screen: `lines` hold what each row displays, `wrapped` the rows xterm marked as soft-wrapped. */
@@ -144,5 +144,30 @@ describe('with a real xterm buffer',()=>{
     terminal.options.linkHandler?.activate(new MouseEvent('click'),'https://hyperlink.example/osc8',{start:{x:1,y:1},end:{x:2,y:1}});
     expect(opened.at(-1)).toBe('https://hyperlink.example/osc8');
     terminal.dispose();
+  });
+});
+
+describe('host file paths',()=>{
+  const paths=(lines:string[],line=1,cols=90)=>findPaths(screen(lines,cols),cols,line).map(({text,path,line,column})=>({text,path,line,column}));
+  it('finds absolute, home and dot-relative paths with their line and column',()=>{
+    expect(paths(['wrote /var/log/app.log, see ~/notes/todo.md:12 and ./src/main.rs:3:9.'])).toEqual([
+      {text:'/var/log/app.log',path:'/var/log/app.log'},
+      {text:'~/notes/todo.md:12',path:'~/notes/todo.md',line:12},
+      {text:'./src/main.rs:3:9',path:'./src/main.rs',line:3,column:9},
+    ].map(link=>({line:undefined,column:undefined,...link})));
+  });
+  it('finds dir/file.ext paths in quotes and compiler output but not prose or URLs',()=>{
+    expect(paths(['error[E0308]: src/lib/mod.rs:40:5']).map(link=>link.path)).toEqual(['src/lib/mod.rs']);
+    expect(paths(['open "/tmp/a b.txt" or (/etc/hosts)']).map(link=>link.path)).toEqual(['/tmp/a','/etc/hosts']);
+    expect(paths(['read and/or write, 1/2 done, https://example.com/a/b.html and http://h/x/y.js'])).toEqual([]);
+    expect(paths(['dir /var/ and / and ... and ~/'])).toEqual([]);
+  });
+  it('maps the range to the cells, wide characters included, and joins soft-wrapped paths',()=>{
+    const [link]=findPaths(screen(['世界 /tmp/日本.log:7'],40),40,1);
+    expect(link.path).toBe('/tmp/日本.log');
+    expect(link.range).toEqual({start:{x:6,y:1},end:{x:6+'/tmp/'.length+4+'.log:7'.length-1,y:1}});
+    const {rows,wrapped}=softWrap('build failed in /home/dev/projects/app/src/components/Panel.tsx:88',24);
+    const wrappedScreen=screen(rows,24,wrapped);
+    for(let line=1;line<=rows.length;line++)expect(findPaths(wrappedScreen,24,line).map(link=>link.path)).toEqual(['/home/dev/projects/app/src/components/Panel.tsx']);
   });
 });

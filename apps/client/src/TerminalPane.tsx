@@ -5,7 +5,9 @@ import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
-import {installTerminalLinks} from "./terminalLinks";
+import {installTerminalLinks, type PathLink} from "./terminalLinks";
+import {resolveTerminalPath} from "./hostPath";
+import HostPathSheet from "./HostPathSheet";
 import { ChevronsUp, Keyboard, KeyboardOff, Layers, Lock, PanelBottomClose, PanelBottomOpen, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
 import { useSoftKeyboard } from "./useSoftKeyboard";
@@ -207,6 +209,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }
   useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
   const [link, setLink] = useState<string | null>(null);
+  const [hostPath, setHostPath] = useState<{path: string; line?: number} | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -245,22 +248,23 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }, [active, session.terminal]);
   // Selection handles appear after a touch long-press; actions also after a mouse selection.
   const [selectionTools, setSelectionTools] = useState<{handles: boolean} | null>(null);
-  useEffect(() => setSelectionTools(null), [session.id, session.terminal]);
+  useEffect(() => {setSelectionTools(null); setHostPath(null);}, [session.id, session.terminal]);
   useEffect(()=>{
-    const available=active && (menuOpen || composing || searching || clipboard!==null || link!==null || dpadOpen || selectionTools!==null);
+    const available=active && (menuOpen || composing || searching || clipboard!==null || link!==null || hostPath!==null || dpadOpen || selectionTools!==null);
     onBackChange?.(session.id,available?()=>{
       if(!activeRef.current || !mounted.current || !access.current())return false;
       if(menuOpen)setMenuOpen(false);
       else if(selectionTools!==null)session.terminal.clearSelection();
       else if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
       else if(link!==null)setLink(null);
+      else if(hostPath!==null)setHostPath(null);
       else if(searching)setSearching(false);
       else if(composing)setComposing(false);
       else setDpadOpen(false);
       return true;
     }:null);
     return()=>onBackChange?.(session.id,null);
-  },[active,menuOpen,composing,searching,clipboard,link,dpadOpen,selectionTools,session.id,onBackChange]);
+  },[active,menuOpen,composing,searching,clipboard,link,hostPath,dpadOpen,selectionTools,session.id,onBackChange]);
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -705,9 +709,27 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const terminal = session.terminal;
     const addon = new TerminalFitAddon();
     terminal.loadAddon(addon);
+    // The shell reports its directory with OSC 7 (`file://host/path`); relative paths resolve only against that.
+    let cwd: string | undefined;
+    const cwdReport = terminal.parser.registerOscHandler(7, data => {
+      try { const url = new URL(data); if (url.protocol === "file:") cwd = decodeURIComponent(url.pathname); } catch { /* A malformed report keeps the last directory. */ }
+      return true;
+    });
+    const resolve = (link: PathLink) => resolveTerminalPath(api, session.id, link.path, cwd);
+    const verified = new Map<string, {at: number; file: Promise<boolean>}>();
     const links = installTerminalLinks(terminal, uri => {
       const url = terminalWebUrl(uri);
       if (url) setLink(url);
+    }, {
+      exists(link) {
+        if (!/^[~/]/.test(link.path) && !cwd) return Promise.resolve(false);
+        const key = `${cwd}\0${link.path}`, known = verified.get(key);
+        if (known && Date.now() - known.at < 10_000) return known.file;
+        const file = resolve(link).then(path => api.hostFileStat(session.id, path)).then(stat => stat.kind === "file", () => false);
+        verified.set(key, {at: Date.now(), file});
+        return file;
+      },
+      open: link => void resolve(link).then(path => { if (mounted.current && access.current()) setHostPath({path, line: link.line}); }, () => {}),
     });
     const osc = terminal.parser.registerOscHandler(52, data => {
       const text = decodeClipboardRequest(data);
@@ -840,7 +862,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       element.removeEventListener("paste", literalLane, true);
       element.removeEventListener("scroll", clamped, true); scrolls();
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
-      resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
+      resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); cwdReport.dispose(); links.dispose(); addon.dispose();
       terminal.attachCustomKeyEventHandler(() => true);
       fit.current = null;
     };
@@ -1226,6 +1248,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {link && <div className="terminal-consent" role="region" aria-label={t('terminalLinkRegion')}>
       <p>{link}</p><button disabled={openingLink} onClick={() => void openLink()}>{openingLink ? t('terminalOpening') : t('terminalOpenBrowser')}</button><button onClick={() => void copy(link)}>{t('terminalCopyUrl')}</button><button onClick={() => setLink(null)}>{t('terminalDismissLink')}</button>
     </div>}
+    {hostPath && <HostPathSheet sessionId={session.id} path={hostPath.path} line={hostPath.line} onCopy={path => void copy(path)} onClose={() => setHostPath(null)}/>}
     {searching && <form className="terminal-search" onSubmit={event => {event.preventDefault(); search(1);}}>
       <input ref={searchInput} aria-label={t('terminalSearch')} maxLength={256} value={query} onChange={event => {setQuery(event.target.value); searchLine.current = -1; setSearchStatus(null);}} />
       <button>{t('terminalNext')}</button><button type="button" onClick={() => search(-1)}>{t('terminalPrevious')}</button><button type="button" onClick={() => {setSearching(false); focusTerminal();}}>{t('terminalCloseSearch')}</button>

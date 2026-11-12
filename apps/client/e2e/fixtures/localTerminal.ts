@@ -1,11 +1,11 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null;simpleShortcutFiles?:Record<string,string>;simpleShortcutHostCalls:string[]}}
 
 /** One synthetic local terminal: output is injected, input and opened links are recorded. No shell runs. */
 export async function installLocalTerminal(page:Page) {
   await page.addInitScript(()=>{
-    window.simpleShortcutWrites=[];window.simpleShortcutPrivateKeyboard=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];
+    window.simpleShortcutWrites=[];window.simpleShortcutPrivateKeyboard=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];window.simpleShortcutHostCalls=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
@@ -16,6 +16,20 @@ export async function installLocalTerminal(page:Page) {
       if (command==='clipboard_is_android') return false;
       // Android's IME controller: a spec that installs `simpleShortcutKeyboard` plays the native side, otherwise there is none (null).
       if (command==='soft_keyboard') return window.simpleShortcutKeyboard?.(args.action as string) ?? null;
+      // Host files: `simpleShortcutFiles` maps an absolute path to its text; any other path does not exist.
+      if (command==='host_home') return '/home/fixture';
+      if (command.startsWith('host_file_')||command==='read_file') {
+        window.simpleShortcutHostCalls.push(`${command} ${String(args.path??args.action??'')}`.trim());
+        const text=window.simpleShortcutFiles?.[args.path as string];
+        if (command==='host_file_stat') {
+          if (text===undefined) throw {kind:'not_found',message:'No such file'};
+          return {path:args.path,name:String(args.path).split('/').pop(),kind:'file',size:text.length,link:null,actions:['save','open']};
+        }
+        if (command==='read_file') return text;
+        if (command==='host_file_download') {(args.progress as {onmessage:(v:unknown)=>void}).onmessage({bytes:1,total:1});return {name:String(args.path).split('/').pop(),size:1};}
+        if (command==='host_file_deliver') return {location:'/downloads/saved'};
+        return;
+      }
       if (command==='open_web_url') {window.simpleShortcutOpened.push(args.url as string);return;}
       if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
