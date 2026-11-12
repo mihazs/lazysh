@@ -158,7 +158,7 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-          MOON_BASE: origin/${{ github.base_ref }}
+          MOON_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD' }}
         run: |
           # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g --downstream none'; else verb=run; fi
