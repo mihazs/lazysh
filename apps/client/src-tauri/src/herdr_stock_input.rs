@@ -37,7 +37,10 @@ fn command(target: &StockTarget, input: &Input) -> Option<String> {
         Input::Send { text } => format!("prompt {} {}", quote(&target.pane), quote(text)),
         Input::RequestStop => format!("send-keys {} esc", quote(&target.pane)),
         // Like the guard, stock input has no option-key profile and no long-paste path: those stay in the terminal.
-        Input::Select { .. } | Input::Submit { .. } | Input::SendLong { .. } => return None,
+        Input::Select { .. }
+        | Input::Submit { .. }
+        | Input::SendLong { .. }
+        | Input::CycleMode {} => return None,
     };
     Some(format!(
         "herdr --session {} agent {rest}",
@@ -178,6 +181,7 @@ mod tests {
             command(&target(), &Input::SendLong { text: "x".into() }),
             None
         );
+        assert_eq!(command(&target(), &Input::CycleMode {}), None);
     }
     #[test]
     fn accepts_only_an_exact_pane_and_a_known_agent_session() {
