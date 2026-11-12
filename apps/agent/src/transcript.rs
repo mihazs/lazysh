@@ -25,18 +25,21 @@ mod grok_checkpoint;
 mod grok_conversation;
 mod herdr_session;
 mod inline_image;
-pub use herdr_session::read_herdr_conversation;
+pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_window};
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
 mod opencode_conversation;
-pub use opencode_conversation::conversation as opencode_conversation;
+pub use opencode_conversation::{
+    conversation as opencode_conversation, conversation_window as opencode_conversation_window,
+};
 #[cfg(test)]
 mod mutation_observer;
 mod snapshot;
 mod source_snapshot;
 pub mod watch;
-pub use conversation::{claude_conversation_images, conversation};
+pub mod window;
+pub use conversation::{claude_conversation_images, conversation, conversation_window};
 pub use database::read_database_page;
 pub use discovery::discover;
 pub(crate) use source_snapshot::SourceSnapshot;
@@ -47,8 +50,9 @@ pub(crate) fn anchored_codex(
     path: &Path,
     limit: u8,
     expected: &SourceSnapshot,
+    window: &window::Window,
 ) -> Result<TranscriptPage> {
-    codex_conversation::anchored(root, path, limit, expected)
+    codex_conversation::anchored(root, path, limit, expected, window)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -155,7 +159,11 @@ pub struct TranscriptPage {
     pub has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<String>,
+    /// Older messages exist before the first one of this page.
     pub truncated: bool,
+    /// Newer messages exist after the last one of this page; absent for the newest page.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_newer: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
     /// Recorded turn state: working, waiting, idle or stopped. Absent is unknown.
@@ -332,6 +340,7 @@ fn read_records(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
         queued: Vec::new(),
     })

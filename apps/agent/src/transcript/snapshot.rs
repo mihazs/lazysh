@@ -87,6 +87,7 @@ pub(super) fn page(
         branch_id: None,
         truncated: false,
         checkpoint: None,
+        has_newer: false,
         activity: None,
         queued: Vec::new(),
     })

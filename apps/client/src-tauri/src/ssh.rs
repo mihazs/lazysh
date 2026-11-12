@@ -3152,6 +3152,47 @@ fn transcript_view_command(
     Ok(command)
 }
 
+/// Which part of a conversation to read: the newest messages unless one of these is set.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptWindow {
+    before: Option<String>,
+    after: Option<String>,
+    #[serde(default)]
+    from_start: bool,
+}
+
+impl TranscriptWindow {
+    /// Command-line flags for the companion; a message id is opaque text, so it is quoted and bounded.
+    pub(crate) fn flags(&self) -> Result<String> {
+        let anchors = [("--before", &self.before), ("--after", &self.after)];
+        let set =
+            anchors.iter().filter(|(_, id)| id.is_some()).count() + usize::from(self.from_start);
+        if set > 1 {
+            return Err(SshError::new(
+                "invalid_input",
+                "Choose one transcript window",
+            ));
+        }
+        let mut flags = String::new();
+        for (flag, id) in anchors {
+            if let Some(id) = id {
+                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Invalid transcript message identifier",
+                    ));
+                }
+                flags.push_str(&format!(" {flag}={}", quote(id)));
+            }
+        }
+        if self.from_start {
+            flags.push_str(" --from-start");
+        }
+        Ok(flags)
+    }
+}
+
 #[derive(Default)]
 struct TranscriptFlags {
     checkpointed: bool,
@@ -3282,10 +3323,11 @@ pub async fn agent_transcript(
     checkpointed: Option<bool>,
     inline_images: Option<bool>,
     transcript_session_id: Option<String>,
+    window: Option<TranscriptWindow>,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let command = transcript_request_command(
+            let mut command = transcript_request_command(
                 &agent,
                 &path,
                 offset,
@@ -3297,6 +3339,14 @@ pub async fn agent_transcript(
                     inline_images: inline_images.unwrap_or(false),
                 },
             )?;
+            let flags = window.unwrap_or_default().flags()?;
+            if !flags.is_empty() && view.as_deref() != Some("conversation") {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Windows read the conversation view",
+                ));
+            }
+            command.push_str(&flags);
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
@@ -4232,6 +4282,35 @@ mod tests {
         )
         .unwrap();
         assert!(!legacy.contains("inline-images"));
+    }
+
+    #[test]
+    fn transcript_windows_quote_the_message_id_and_admit_one_anchor() {
+        let window =
+            |json: serde_json::Value| serde_json::from_value::<TranscriptWindow>(json).unwrap();
+        assert_eq!(window(serde_json::json!({})).flags().unwrap(), "");
+        assert_eq!(
+            window(serde_json::json!({"fromStart": true}))
+                .flags()
+                .unwrap(),
+            " --from-start"
+        );
+        assert_eq!(
+            window(serde_json::json!({"before": "a'b;$(x)"}))
+                .flags()
+                .unwrap(),
+            " --before='a'\\''b;$(x)'"
+        );
+        for bad in [
+            serde_json::json!({"before": ""}),
+            serde_json::json!({"after": "a\nb"}),
+            serde_json::json!({"before": "a", "fromStart": true}),
+        ] {
+            assert!(window(bad).flags().is_err());
+        }
+        assert!(
+            serde_json::from_value::<TranscriptWindow>(serde_json::json!({"offset": 1})).is_err()
+        );
     }
 
     #[test]

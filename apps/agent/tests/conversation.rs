@@ -89,7 +89,7 @@ fn latest_main_leaf_selects_one_branch_ignoring_progress_sidechains_and_old_fork
 }
 
 #[test]
-fn compaction_replaces_earlier_chain_and_recent_limit_is_explicit() {
+fn compaction_keeps_the_earlier_conversation_above_the_summary_and_recent_limit_is_explicit() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("session.jsonl");
     let mut summary = message(
@@ -109,7 +109,8 @@ fn compaction_replaces_earlier_chain_and_recent_limit_is_explicit() {
         ],
     );
     let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
-    assert_eq!(ids(&page), vec!["summary", "reply"]);
+    // The boundary restarts the parent chain; the conversation before it is still the session's history.
+    assert_eq!(ids(&page), vec!["old", "summary", "reply"]);
     let latest = conversation(&path, TranscriptAgent::Claude, 1).unwrap();
     assert_eq!(ids(&latest), vec!["reply"]);
     assert!(latest.truncated);

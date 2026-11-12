@@ -20,6 +20,8 @@ import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
 import {applyWatchOp} from './transcriptWatch';
 import {projectMessages,type InjectedEvent} from './chatInjected';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
+import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
+import ChatHistoryControls from './ChatHistoryControls';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -49,6 +51,8 @@ type Page = {
   hasMore: boolean;
   view?: string;
   truncated?: boolean;
+  /** Newer messages exist after this page. Only a companion that pages the whole session sends it. */
+  hasNewer?: boolean;
   checkpoint?: string;
   branchId?: string;
   activity?: Activity;
@@ -78,6 +82,7 @@ export function parseTranscript(value: unknown): Page {
     || typeof page.branchId !== 'string' || !page.branchId || /[\x00-\x1f\x7f-\x9f]/.test(page.branchId)
     || new TextEncoder().encode(page.branchId).length > 256
   )) throw new LocalUiError('chatUnsupportedResponse');
+  if (page.hasNewer !== undefined && (typeof page.hasNewer !== 'boolean' || page.view !== 'active_branch')) throw new LocalUiError('chatUnsupportedResponse');
   page.activity = parseActivity(page.activity, page.agent, page.view);
   page.queued = parseQueued(page.queued);
   if (page.agent === "antigravity-jsonl") {
@@ -189,6 +194,8 @@ export function activitySummary(turn: Turn): string {
   return parts.join(' · ');
 }
 
+const NO_HISTORY = {paging: false, older: false, newer: false};
+
 /** A conversation the Agent view found for its pane from hook reports. */
 export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
 
@@ -244,6 +251,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   },[opened,bound]);
   const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
+  // `paging` is false against a companion that predates whole-session reading: the view keeps the latest window only.
+  const [history, setHistory] = useState(NO_HISTORY);
+  const messagesRef = useRef(messages); messagesRef.current = messages;
+  const historyRef = useRef(history); historyRef.current = history;
   const [activity, setActivity] = useState<Activity>();
   const [queued, setQueued] = useState<Queued[]>([]);
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
@@ -309,7 +320,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     if (!shown) request.current++;
     if (bound && (path !== bound.path || agent !== bound.agent)) {
       request.current++; setFollowing(false); followRef.current = false;
-      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setActivity(undefined); setQueued([]);
+      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]);
       setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
     }
   }, [shown, bound, path, agent]);
@@ -317,7 +328,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setAttachmentOpen(false);setDraftHelpOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
-    setOpened(undefined); setMessages([]); setActivity(undefined); setQueued([]); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
@@ -340,24 +351,37 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   function currentRequest(current: number) {
     return mounted.current && access.current() && (!initialReported || initialReported.sessionId===sessionId) && request.current === current;
   }
-  function jumpToLatest() {
+  function scrollToLatest() {
     atLatestRef.current = true; setAtLatest(true);
     if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight;
   }
-  useEffect(() => {if (following && atLatestRef.current) jumpToLatest();}, [following,messages]);
+  // Away from the newest page (after Jump to start), the newest messages have to be read back first.
+  function jumpToLatest() {if (historyRef.current.newer) {scrollTo.current = 'bottom'; void read(true);} else scrollToLatest();}
+  useEffect(() => {if (following && atLatestRef.current && !historyRef.current.newer) scrollToLatest();}, [following,messages]);
   const autoRead = useRef(() => {});
   autoRead.current = () => {void read(false,true);};
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
   const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
     ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path} : undefined, [bound,conversation,sourceMatches]);
-  const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current(),sessionId,
+  const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
+      // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
+      if(historyRef.current.newer)return;
       holdPosition();setError('');
-      setMessages(previous=>applyWatchOp(previous,op));
+      if(historyRef.current.paging && op.kind==='replace')place({kind:'tail'},op.messages);
+      else setMessages(previous=>applyWatchOp(previous,op,WINDOW_CAP));
       if(op.kind==='replace')setActivity(op.activity);else if(op.activity)setActivity(op.activity.value);
       if(op.kind==='replace')setQueued(op.queued ?? []);else if(op.queued)setQueued(op.queued);
       setUpdated(Date.now());
     }});
+  /** Puts a page into the window of the session that is held, and keeps the turn at the top of the view where it is. */
+  function place(request: WindowRequest, page: Message[], more = {older: false, newer: false}, fresh = false) {
+    const next = placePage({messages: messagesRef.current, older: historyRef.current.older, newer: historyRef.current.newer}, request, {messages: page, ...more}, fresh);
+    if (!fresh) holdPosition();
+    if (request.kind === 'start') scrollTo.current = 'top';
+    setMessages(next.messages); setHistory({paging: true, older: next.older, newer: next.newer});
+  }
+  const scrollTo = useRef<'top' | 'bottom' | undefined>(undefined);
   const watchLive=useRef(false);watchLive.current=watch.live;
   // Reading older turns: the turn at the top of the view stays where it is while updates land around it.
   const anchor=useRef<{key:string;top:number}|null>(null);
@@ -365,23 +389,26 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     const list=messageList.current;anchor.current=null;
     if(!list || atLatestRef.current)return;
     const top=list.getBoundingClientRect().top;
-    for(const child of Array.from(list.children)) {
+    // A message is the finest anchor: turns regroup when an older page completes the turn at the top.
+    for(const child of [...Array.from(list.querySelectorAll('article[data-anchor]')),...Array.from(list.children)]) {
       const box=child.getBoundingClientRect(),key=(child as HTMLElement).dataset.anchor;
-      if(key && box.bottom>top){anchor.current={key,top:box.top-top};return;}
+      if(key && box.height>0 && box.bottom>top){anchor.current={key,top:box.top-top};return;}
     }
   }
   useLayoutEffect(()=>{
     const held=anchor.current;anchor.current=null;
     const list=messageList.current;
-    const element=held && list ? Array.from(list.children).find(child=>(child as HTMLElement).dataset.anchor===held.key) : undefined;
+    const element=held && list ? Array.from(list.querySelectorAll('[data-anchor]')).find(child=>(child as HTMLElement).dataset.anchor===held.key) : undefined;
     if(held && list && element)list.scrollTop+=element.getBoundingClientRect().top-list.getBoundingClientRect().top-held.top;
+    if(scrollTo.current==='top' && list){scrollTo.current=undefined;atLatestRef.current=false;setAtLatest(false);list.scrollTop=0;}
+    else if(scrollTo.current==='bottom' && list && !historyRef.current.newer){scrollTo.current=undefined;scrollToLatest();}
   },[messages]);
   const [updated,setUpdated] = useState(Date.now);
   useEffect(() => {
-    if (!following || !canFollow || busy || !visible || !shown || watch.live || !access.current()) return;
+    if (!following || !canFollow || busy || !visible || !shown || watch.live || history.newer || !access.current()) return;
     const timer = setTimeout(() => autoRead.current(),2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,shown,watch.live,completed,accessState.epoch,access]);
+  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access]);
   const lagging = !!watchTarget && following && (watch.state === 'delayed' || watch.state === 'stale');
   const now = useNow(1000, lagging);
   async function discover() {
@@ -430,11 +457,11 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if(history.status!=='available' || history.path!==bound.path || (bound.report.paneId && history.paneId!==bound.report.paneId)) throw new LocalUiError('chatChanged');
     } catch(error) {if(still())onBoundInvalid?.();throw error;}
   }
-  async function read(reset: boolean, automatic = false, prepare = false) {
-    if (watchLive.current && !reset) return;
+  async function read(reset: boolean, automatic = false, prepare = false, slice?: WindowRequest) {
+    if (watchLive.current && !reset && !slice) return;
     if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
-    if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden')) return;
-    const source = reset
+    if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden' || historyRef.current.newer)) return;
+    const source = reset && !slice
       ? {
           agent,
           path: selectedPath,
@@ -463,15 +490,16 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (!currentRequest(current)) return;
       }
       const page = parseTranscript(
-        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr}}) : invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
           sessionId,
           ...source,
           offset: cursor,
+          ...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {}),
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
         })),
       );
       // A stream that went live while this poll was out is newer than the page.
-      if (!currentRequest(current) || (watchLive.current && !reset)) return;
+      if (!currentRequest(current) || (watchLive.current && !reset && !slice) || (automatic && historyRef.current.newer)) return;
       if (bound?.report) {
         await validateReport();
         if (!currentRequest(current)) return;
@@ -497,8 +525,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
-      if (replace) {setActivity(page.activity);setQueued(page.queued ?? []);}
-      setMessages((previous) => {
+      if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);}
+      if (source.view === 'conversation') place(slice ?? {kind: 'tail'}, page.messages, {older: page.truncated === true, newer: page.hasNewer === true}, reset && !slice);
+      else setMessages((previous) => {
         const combined = replace
           ? page.messages
           : [...previous, ...page.messages];
@@ -508,8 +537,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       });
     } catch (e) {
       if (currentRequest(current)) {
+        // A companion that predates whole-session reading rejects the window flags; what is loaded stays readable.
         setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-          ? new LocalUiError('chatChanged') : captureUiError(e));
+          ? new LocalUiError('chatChanged') : slice && /unexpected argument|unrecognized/i.test(errorMessage(e)) ? new LocalUiError('chatUpdateCompanion') : captureUiError(e));
+        if (slice) return;
         // A bound conversation keeps trying through a dropped connection, since the stream or the next poll recovers it
         // and clears the error. A conversation that is no longer this pane's, or a host that cannot read it, stops.
         const permanent = e instanceof LocalUiError ? ['chatChanged','herdrConversationCompanion','chatUpdateCompanion'].includes(e.key) : (e as {kind?: string} | null)?.kind === 'herdr_target_missing';
@@ -521,6 +552,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       if (mounted.current && access.current()) {if(reset)setInputOpen(value=>({...value,pending:false}));setBusy(false); setCompleted(value => value + 1);}
     }
   }
+  const readSlice = (slice: WindowRequest) => void read(false, false, false, slice);
+  const loadOlder = () => {const first = messagesRef.current[0]; if (first) readSlice({kind: 'before', id: first.id});};
+  const loadNewer = () => {const last = messagesRef.current.at(-1); if (last) readSlice({kind: 'after', id: last.id});};
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
@@ -544,13 +578,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const renderMessage = (message: Message) => message.event ? (
-    <article key={message.id} className="chat-message agent-event">
+    <article key={message.id} data-anchor={message.id} className="chat-message agent-event">
       {message.event.detail
         ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
         : <p>{eventLabel(message.event)}</p>}
     </article>
   ) : (
-    <article key={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
+    <article key={message.id} data-anchor={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
@@ -723,7 +757,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {bound && !atLatest && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
+      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
       {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
@@ -733,20 +767,27 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
         {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}
-        {!atLatest && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
+        {(!atLatest || history.newer) && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
       </div>}
       {conversation && sourceMatches && !bound && <ChatActivity activity={activity} />}
       <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
+        // Scrolling to either end of the loaded window reads the next page there.
+        if (element && opened?.view === 'conversation' && !busy) {
+          if (history.older && element.scrollTop <= 80) loadOlder();
+          else if (history.newer && element.scrollHeight - element.clientHeight - element.scrollTop <= 80) loadNewer();
+        }
       }}>
+        {opened?.view === 'conversation' && <ChatHistoryControls edge="top" more={history.older} first={messages.length > 0} busy={busy} onMore={loadOlder} onJumpStart={() => readSlice({kind: 'start'})} />}
         {timeline ? turns.map(turn => <section key={turn.key} data-anchor={turn.key} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
           {turn.activity.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary(turn)}</summary>{turn.activity.map(renderMessage)}</details>}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
-        {timeline && (activity === 'working' || activity === 'waiting') && <p className="agent-working" role="status" data-activity={activity}>
+        {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
+        {timeline && (activity === 'working' || activity === 'waiting') && !history.newer && <p className="agent-working" role="status" data-activity={activity}>
           <span className="chat-activity-dot" aria-hidden="true" />{t(activity === 'working' ? 'chatActivityWorking' : 'chatActivityWaiting')}
         </p>}
         {timeline && <AgentQueued queued={queued} />}

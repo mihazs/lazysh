@@ -441,6 +441,7 @@ pub struct HerdrConversationTarget {
     terminal_id: String,
     agent: String,
     agent_session_id: String,
+    window: Option<crate::ssh::TranscriptWindow>,
 }
 
 #[tauri::command]
@@ -456,6 +457,7 @@ pub async fn agent_herdr_conversation(
         terminal_id,
         agent,
         agent_session_id,
+        window,
     } = target;
     access
         .run(async {
@@ -483,7 +485,7 @@ pub async fn agent_herdr_conversation(
                 "lazysh-agent herdr-conversation --agent {} --session-id {}",
                 quote(&agent),
                 quote(&agent_session_id)
-            );
+            ) + &window.unwrap_or_default().flags()?;
             let command = crate::companion::required_command(
                 &session,
                 command,

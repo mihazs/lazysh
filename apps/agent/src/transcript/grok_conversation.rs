@@ -1,7 +1,7 @@
 //! Clean-room recorded display reduction, not reconstruction of model context.
+use super::window::{select, Window};
 use super::{
     grok_acp, open_transcript, read_record_line, Error, Result, TranscriptAgent, TranscriptPage,
-    MAX_PAGE,
 };
 use serde_json::{json, Value};
 use std::{
@@ -19,10 +19,7 @@ enum Action {
     Barrier,
 }
 
-pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
+pub(super) fn conversation(path: &Path, limit: u8, window: &Window) -> Result<TranscriptPage> {
     let mut file = open_transcript(path)?;
     let before = super::SourceSnapshot::capture(&file)?;
     let size = before.len();
@@ -187,32 +184,18 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
     // Parsed actions own their data; reject a changed source before publishing a view.
     super::unchanged_snapshot(path, &before)?;
     let messages = reduce(actions)?;
-    let total_messages = messages.len();
-    let mut output_bytes = 0;
-    let mut latest = Vec::new();
-    for message in messages.into_iter().rev() {
-        let bytes = normalized_size(&message)?;
-        if bytes > MAX_PAGE {
-            return Err(Error::InvalidEvent);
-        }
-        if latest.len() == usize::from(limit) || output_bytes + bytes > MAX_PAGE {
-            break;
-        }
-        output_bytes += bytes;
-        latest.push(message);
-    }
-    let truncated = latest.len() < total_messages;
-    latest.reverse();
+    let selected = select(messages, window, limit)?;
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
         agent: TranscriptAgent::GrokAcp,
-        messages: latest,
+        messages: selected.messages,
         next_offset: offset,
         has_more: false,
         branch_id,
-        truncated,
+        truncated: selected.has_older,
         checkpoint: None,
+        has_newer: selected.has_newer,
         activity: None,
         queued: Vec::new(),
     })
@@ -419,7 +402,7 @@ mod mutation_tests {
                 })
                 .unwrap();
         });
-        let result = conversation(&path, 50);
+        let result = conversation(&path, 50, &Window::Tail);
         super::super::mutation_observer::clear();
         let (rows, mixed) = result
             .as_ref()
@@ -474,7 +457,7 @@ mod mutation_tests {
         let mut bytes = first.clone();
         bytes.extend_from_slice(&second[..split]);
         fs::write(&path, &bytes).unwrap();
-        let partial = conversation(&path, 50).unwrap();
+        let partial = conversation(&path, 50, &Window::Tail).unwrap();
         assert_eq!(partial.next_offset, first.len() as u64);
         assert_eq!(partial.messages.len(), 1);
         assert!(!partial.has_more);
@@ -485,7 +468,7 @@ mod mutation_tests {
             .unwrap()
             .write_all(&second[split..])
             .unwrap();
-        let completed = conversation(&path, 50).unwrap();
+        let completed = conversation(&path, 50, &Window::Tail).unwrap();
         assert_eq!(completed.next_offset, (first.len() + second.len()) as u64);
         assert!(completed.messages[0]["blocks"][0]["text"]
             .as_str()
@@ -500,7 +483,7 @@ mod mutation_tests {
         let mut bytes = record('Q');
         bytes.pop();
         fs::write(&path, bytes).unwrap();
-        let pending = conversation(&path, 50).unwrap();
+        let pending = conversation(&path, 50, &Window::Tail).unwrap();
         assert!(pending.messages.is_empty());
         assert_eq!(pending.next_offset, 0);
         assert!(!pending.has_more);

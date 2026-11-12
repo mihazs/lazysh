@@ -60,6 +60,7 @@ async fn read(
             None,
             images,
             None,
+            None,
         ),
     )
     .await
@@ -287,6 +288,7 @@ async fn invalid_image_options_reject_before_session_lookup() {
             Some(checkpointed),
             Some(true),
             None,
+            None,
         )
         .await
         .err()
@@ -341,6 +343,7 @@ async fn cancelled_agent_read(reported: bool) {
             None,
             None,
             Some(true),
+            None,
             None,
         )
         .await
