@@ -1,5 +1,9 @@
 # @lazysh/account-usage
 
+## 1.40.0
+
+No changes in this release.
+
 ## 1.39.0
 
 No changes in this release.
