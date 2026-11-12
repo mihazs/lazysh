@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.38.0
+
+### Minor Changes
+
+- 2a5bcf8: Bring the message box back to the Agent view as an always-present composer that binds itself to the terminal pane of the followed agent, so sending needs no Choose and Confirm steps.
+- 6f7cd9e: Answer Claude Code permission requests from the Agent view: the pane agent's pending request appears above the conversation and Allow or Deny sends the hash-bound approval decision after the pane is re-verified.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.38.0
+  - @lazysh/common@1.38.0
+  - @lazysh/display-idle@1.38.0
+  - @lazysh/et-transport@1.38.0
+  - @lazysh/mosh-transport@1.38.0
+
 ## 1.37.0
 
 ### Minor Changes
