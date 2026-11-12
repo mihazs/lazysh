@@ -1,6 +1,6 @@
 # Terminal runtime: current and proposed
 
-Status: **proposed**. Facts about the current system were read from the checked-out source. The proposed runtime is a design to be validated by the [benchmarks](terminal-benchmarks.md) and the [composition gate](native-rendering.md#composition-gate); it is not implemented. Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed**. Facts about the current system were read from the checked-out source. The proposed runtime is a design to be validated by the [benchmarks](terminal-benchmarks.md) and the [composition gate](native-rendering.md#composition-gate); only the first slice, the core crate, exists (see [Implementation status](#implementation-status)); nothing in the app uses it. Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## Current architecture
 
@@ -137,6 +137,26 @@ Today each session's scrollback lives in WebView memory (default 5000 lines, max
 | Queue full | Producer waits on credits; no byte is dropped or reordered. |
 | Native backend unavailable at creation | Fall back to xterm.js with a recorded reason ([migration plan](terminal-migration-plan.md)). |
 | Switching backend mid-session | Not lossless: xterm and Ghostty state are not interchangeable. Start the new backend from a visible-screen snapshot (`read_ansi_screen`); scrollback loss is documented. |
+
+## Implementation status
+
+[`packages/terminal-runtime`](../../packages/terminal-runtime/README.md) ([#1313](https://github.com/mihazs/lazysh/issues/1313)) is the first slice of the shared core. It depends on Herdr's vendored `ghostty-vt` binding by path and adds no second VT engine, Ghostty copy or patch. It is a nested workspace like `herdr-upstream` because building it compiles libghostty-vt with Zig 0.16.0; default lazysh builds are unaffected, and its tests run inside the `herdr-native` job against the same admitted archives (nothing about [#384](https://github.com/mihazs/lazysh/issues/384) is relaxed).
+
+| Proposed element | In the crate | Not yet |
+| --- | --- | --- |
+| Binary-safe, ordered, bounded byte-in with credits after VT processing ([#1315](https://github.com/mihazs/lazysh/issues/1315)) | `Ingress`, `offer`, `pump` (rejected chunks returned intact; credit = bytes processed) | Wiring to SSH, local PTY, Mosh, ET; no thread or async runtime owned by the crate |
+| Screen and cursor state, incremental dirty rows, snapshot for a recreated surface | `take_frame` (only changed rows, `None` when idle), `snapshot` (all rows) | Renderer API and golden images ([#1322](https://github.com/mihazs/lazysh/issues/1322)); frames carry per-cell `String`s |
+| UI resize intent versus transport-authoritative size | `request_size`, `apply_transport_size`, `release_transport_authority`, `size_intent` | Mosh frame parsing and a non-reflowing resize ([#1317](https://github.com/mihazs/lazysh/issues/1317)); libghostty-vt reflows today and a test pins that |
+| Terminal-generated replies | `take_replies`, capped at 64 KiB with a dropped-byte count | Routing replies to the right transport |
+| Input encoding | keys, mouse, bracketed paste (end marker stripped), IME commit versus composition ([#1316](https://github.com/mihazs/lazysh/issues/1316)) | Android soft keyboard/IME integration ([#1328](https://github.com/mihazs/lazysh/issues/1328)) |
+| Screen inspection as text | `viewport_text`, `screen_text` | Herdr navigation use ([#1318](https://github.com/mihazs/lazysh/issues/1318)) |
+| Selection, search, links, OSC 52 policy | OSC 52 payloads, bells and directory changes surfaced via `take_events`; at most 8 of each kind pending, overflow counted | Everything else ([#1320](https://github.com/mihazs/lazysh/issues/1320)) |
+
+Conformance coverage lives in `tests/conformance.rs` (29 cases: wrapping, ANSI and truecolor, CJK, combining marks and ZWJ emoji, alternate screen, cursor modes, bracketed paste, mouse reports, key encoding, split-sequence equivalence, binary noise, backpressure, resize authority, scrollback bounds, session isolation, bounded pending events, moving a live session to another thread). The corpus does not yet include Claude/Codex/OpenCode transcripts, tmux/Zellij/Herdr captures or the Mosh frame fixture ([#1314](https://github.com/mihazs/lazysh/issues/1314)).
+
+A `TerminalRuntime` is `Send` (not `Sync`), which the VT worker pool of [#1319](https://github.com/mihazs/lazysh/issues/1319) needs. The binding marks `Terminal` and `KeyEncoder` `Send` but not `MouseEncoder`, which first made every runtime `!Send`; the crate wraps that one handle in a documented `unsafe impl Send` (no thread-local state in the built libghostty-vt archive, same shape as `KeyEncoder`) instead of editing the vendored binding.
+
+Scrollback is budgeted in bytes by libghostty-vt, while lazysh's setting is lines; the crate exposes the byte budget as is. The budget is coarse (256 KiB and 1 MiB kept the same rows) and the rows kept depend on column count and content, so a line setting needs a mapping that is part of [#1338](https://github.com/mihazs/lazysh/issues/1338); the measured table is in the [benchmarks](terminal-benchmarks.md#core-parse-throughput-host-microbenchmark-not-a-device-baseline).
 
 ## Unresolved questions
 

@@ -20,7 +20,7 @@ test('the workspace loads with its layer and tag constraints satisfied', async (
     'account-usage', 'agent', 'ai-usagebar-vendor', 'apple-speech', 'apple-status', 'client', 'client-native', 'common',
     'credential-vault', 'deep-link-vendor', 'display-idle', 'et-transport', 'herdr-guard', 'herdr-upstream', 'mosh-transport',
     'notification-client', 'notification-service', 'parakeet-runtime', 'portable-pty-vendor', 'push-registration',
-    'share-service', 'transcription-service',
+    'share-service', 'terminal-runtime', 'transcription-service',
   ]);
 });
 
