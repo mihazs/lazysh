@@ -1,13 +1,9 @@
 import {expect,test,type Page} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {startLocalTerminal} from './fixtures/localTerminal';
 
 /** A local terminal whose program asks for bracketed paste, or not. */
 async function openComposer(page:Page,bracketed:boolean) {
-  await installLocalTerminal(page);
-  await page.goto('/');
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+  await startLocalTerminal(page);
   await page.evaluate(mode=>window.simpleShortcutOutput(`$ \x1b[?2004${mode?'h':'l'}`),bracketed);
   await page.getByRole('button',{name:'Compose',exact:true}).click();
   const editor=page.getByRole('textbox',{name:'Compose text',exact:true});

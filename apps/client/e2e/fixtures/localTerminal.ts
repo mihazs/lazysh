@@ -54,6 +54,13 @@ export async function openClipboardTerminal(page:Page) {
   await connectLocalTerminal(page);
 }
 
+/** Installs that terminal, opens the app and starts the local terminal (through the hosts drawer on a phone). */
+export async function startLocalTerminal(page:Page) {
+  await installLocalTerminal(page);
+  await page.goto('/');
+  await connectLocalTerminal(page);
+}
+
 /** From the start page, opens the synthetic local terminal and waits until it can take output. */
 export async function connectLocalTerminal(page:Page) {
   const hosts=page.getByRole('button',{name:'Open hosts',exact:true});

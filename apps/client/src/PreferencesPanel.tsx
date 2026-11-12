@@ -11,6 +11,7 @@ import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
+import {setShowTopBar, useShowTopBar} from "./sideMenuMode";
 import { bodyGestureSlots, defaults, discreteGestureActions, edgeGestureIds, edgeGestureSettings, edgeGestureZone, gestureActions, gestureDirections, levelAwareGestureActions, levelGestureSlots, savePreferences, themes, usePreferences, type GestureAction, type GestureSlot, type Preferences } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
@@ -33,6 +34,7 @@ const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):
 export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[];footer?:string}={}) {
   useUi();
   const preferences = usePreferences();
+  const topBar = useShowTopBar();
   const invoke = useProtectedInvoke();
   const locale=useNativeLocale();
   const owner=useMountedAccess();
@@ -71,6 +73,8 @@ export default function PreferencesPanel({pages=[],footer}:{pages?:SettingsPage[
     <h3 className="settings-group-title">{t("settingsGroupApp")}</h3>
     <AppIconPanel />
     <label>{t("preferencesSessionSwitcherLayout")}<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">{t("preferencesList")}</option><option value="cards">{t("preferencesCards")}</option></select></label>
+    <label><input type="checkbox" checked={topBar} onChange={e => setShowTopBar(e.target.checked)} />{t("preferencesShowTopBar")}</label>
+    <p>{t("preferencesShowTopBarHint")}</p>
     <label>{t("preferencesAppTheme")}<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme === "forest" ? "lazysh" : t(themeLabels[theme as keyof typeof themes])}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
     <h3 className="settings-group-title">{t("settingsGroupTerminalColors")}</h3>
     <label>{t("preferencesTerminalTheme")}<select value={preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], ...(!preferences.customThemeInfo && e.target.value !== "custom" ? {customTheme: undefined} : {})})}>

@@ -103,6 +103,7 @@ vi.mock('./AppleStatusPanel',async()=>{
 vi.mock('./UsagePanel',()=>({default:({onShareAppleUsage}:{onShareAppleUsage?:(report:unknown)=>void})=><button onClick={()=>onShareAppleUsage?.({recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000})}>Use latest report for Watch</button>}));
 vi.mock('./VoicePanel',()=>({default:(props:{sessionId:string;onDirectDictation:(request:import('./voiceDelivery').DirectDictation)=>Promise<void>})=>{mocks.voiceProps(props);return <div>Voice for {props.sessionId}</div>;}}));
 import App, { ConnectDialog, validateHost } from "./App";
+import {topBarKey} from './sideMenuMode';
 import {applyAccessStatus, captureAccess} from './access';
 
 const host: Host = {
@@ -173,6 +174,8 @@ it('restores the actual Agents origin when returning from usage',async()=>{
 it.each(['success','failure','same-snapshot-failure','server','mode','viewport','lock','session','same-mode','inbox-entry','jump-live','double-back'] as const)('restores only a fresh same-owner mobile Agents read: %s',async outcome=>{
   const media={matches:false,addEventListener:vi.fn<(event:string,callback:(event:{matches:boolean})=>void)=>void>(),removeEventListener:vi.fn()};
   vi.stubGlobal('matchMedia',vi.fn(()=>media));
+  // This test drives the narrow header's Workspace tools sheet; the side menu has its own coverage.
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key===topBarKey?'true':null);
   let finish!:(value:unknown)=>void,fail!:(reason:Error)=>void,reads=0;
   const reported={...herdrNavigationTree,agents:herdrNavigationTree.agents as typeof herdrNavigationTree.agents|undefined};
   const original=mocks.invoke.getMockImplementation()!;
