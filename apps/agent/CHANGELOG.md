@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.49.0
+
+### Minor Changes
+
+- 4f882e7: Show the agent's model, permission mode, context left, git branch and worktree in the Agent view header, from a new additive `session` object of the Claude Code and Codex conversation pages and watch frames.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.49.0
+  - @lazysh/common@1.49.0
+  - @lazysh/notification-client@1.49.0
+
 ## 1.48.0
 
 ### Minor Changes
