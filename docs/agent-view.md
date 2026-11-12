@@ -171,6 +171,19 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   line, a coarse-pointer keyboard keeps Enter as a line break and sends with the button,
   and Enter is ignored during IME composition. Drafts are kept per conversation
   (agent session) for the lifetime of the page.
+- The composer helps without adding a way to send anything the guarded input would refuse.
+  Typing `/` as the first word opens a palette of the agent's common slash commands
+  (`agentSlashCommands.ts`; the agent's own `/help` stays the authority). Choosing one
+  inserts its text and does not send it; a command that opens a dialog in the terminal UI
+  (for example `/model`) says so, and its dialog is answered in the terminal. A leading `!`
+  or `#` shows a **Shell command** or **Memory note** chip; the text is sent unchanged.
+  Up and Down recall the prompts sent from this conversation, only from an empty field or
+  while the text is still exactly the recalled prompt. Each sent message has a receipt
+  that settles from the conversation itself: **Sending**, **Sent** when the transcript
+  holds one more identical prompt than before the send, **Not in the conversation yet**
+  after 8 s, **Not sent** with **Retry** (bind again, send once) when nothing was written,
+  and **Delivery is unknown** with no Retry once writing began. **Request stop** needs a
+  second press within 4 s, because Escape interrupts a running turn.
 
 ### Desktop
 

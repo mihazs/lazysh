@@ -52,6 +52,8 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   const [menu,setMenu] = useState(false);
   const menuId = useId();
   const [usage,setUsage] = useState<Record<string,number|string>>();
+  const [prompts,setPrompts] = useState<string[]>([]);
+  const trackPrompts = useCallback((next:string[])=>setPrompts(previous=>JSON.stringify(previous)===JSON.stringify(next)?previous:next),[]);
   const trackUsage = useCallback((next?:Record<string,number|string>)=>setUsage(previous=>JSON.stringify(previous)===JSON.stringify(next)?previous:next),[]);
   // Under Herdr the focused pane of the attached server decides which agent this view belongs to; a 3 s read follows it.
   const navigation=useHerdrNavigation({sessionId,herdrSession,visible:shown && !!herdrSession,intervalMs:3000});
@@ -216,7 +218,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
     {kept && <ChatPanel key={held ? JSON.stringify(held.conversation) : retained.current?.id} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} />}
-    {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} />}
+    {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} />}
   </section>;
 }

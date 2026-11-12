@@ -587,6 +587,8 @@ test('Enter sends from a hardware keyboard and stays a line break on a touch key
   const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
   expect(sent).toHaveLength(1);
   await agent.getByRole('button',{name:'Request stop',exact:true}).click();
+  expect((await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='request_stop')).toHaveLength(0);
+  await agent.getByRole('button',{name:'Tap again to stop the agent',exact:true}).click();
   await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='request_stop').length).toBe(1);
 });
 
@@ -614,4 +616,29 @@ test('live: a queued message arrives and leaves on stream frames without a poll'
   await page.evaluate(()=>window.agentView.emit({type:'delta',gen:1,seq:3,upserts:[],drops:[],queued:[]}));
   await expect(cards).toHaveCount(0);
   expect((await fixture(page)).polls).toBe(polls);
+});
+
+test('the slash palette filters and inserts a command, history recalls the last prompt, and a leading ! shows its mode',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('/com');
+  const palette=agent.getByRole('listbox',{name:'Slash commands',exact:true});
+  await expect(palette.getByRole('option')).toHaveCount(1);
+  const [list,field]=await Promise.all([palette.boundingBox(),draft.boundingBox()]);
+  expect(list!.y+list!.height).toBeLessThanOrEqual(field!.y+1);
+  expect(list!.x).toBeGreaterThanOrEqual(0);expect(list!.x+list!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await palette.getByRole('button',{name:/\/compact/}).click();
+  await expect(draft).toHaveValue('/compact ');
+  await expect(palette).toHaveCount(0);
+  await draft.fill('!echo hi');
+  await expect(agent.getByText('Shell command',{exact:true})).toBeVisible();
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect(draft).toHaveValue('');
+  await expect(agent.getByText('Answered: !echo hi',{exact:true})).toBeVisible({timeout:6000});
+  // Up in an empty composer brings back what was just sent, byte for byte.
+  await draft.press('ArrowUp');
+  await expect(draft).toHaveValue('!echo hi');
+  const sent=(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send');
+  expect(sent.map(input=>(input as {input:{text:string}}).input.text)).toEqual(['!echo hi']);
 });

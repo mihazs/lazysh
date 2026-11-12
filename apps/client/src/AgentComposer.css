@@ -8,3 +8,13 @@
 .agent-composer > section > :is(p, div) { margin: 2px 0; }
 .agent-composer-attach { display: grid; gap: 6px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
 .agent-composer-attach > p { margin: 0; font-size: 12px; color: var(--muted); }
+/* The slash palette sits right above the field and scrolls inside itself, so the conversation keeps its height. */
+.agent-composer-palette { list-style: none; margin: 0; padding: 4px; max-height: 40vh; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--theme-border, var(--border)); border-radius: 10px; }
+.agent-composer-palette > li > button { display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 40px; padding: 4px 8px; background: transparent; border: 0; text-align: start; color: inherit; font: inherit; }
+.agent-composer-palette > li[aria-selected="true"] > button { background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-palette small { color: var(--muted); font-size: 12px; }
+.agent-composer-mode { justify-self: start; padding: 0 8px; border-radius: 10px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); }
+.agent-composer-receipt { margin: 0; font-size: 12px; color: var(--muted); }
+.agent-composer-receipt[data-state="notSent"] { color: var(--danger, inherit); }
+.agent-composer-receipt > button { min-height: 32px; }
+.agent-composer-row > .icon-button[data-armed] { outline: 2px solid var(--danger, currentColor); }
