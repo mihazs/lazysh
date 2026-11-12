@@ -632,8 +632,8 @@ describe('permission requests of the agent in this pane',()=>{
     await advance(400);expect(deny.hasAttribute('disabled')).toBe(false);
     await act(async()=>{fireEvent.click(deny);await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'%3',decision:'deny'}]);
-    // Nothing was typed into the terminal: the decision is the hook's, not a key.
-    expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
+    // Nothing was typed into the terminal: the decision is the hook's, not a key. The composer binds the pane but sends no input.
+    expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
     expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });
   it('sends nothing when the pane no longer runs that agent session',async()=>{
@@ -642,6 +642,38 @@ describe('permission requests of the agent in this pane',()=>{
     mount();await advance(0);await advance(400);
     pane='%4';
     await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
-    expect(calls('resolve_agent_approval')).toEqual([]);expect(screen.getByRole('alert')).toBeTruthy();
+    expect(calls('resolve_agent_approval')).toEqual([]);expect(within(screen.getByRole('region',{name:'Pending approvals'})).getByRole('alert')).toBeTruthy();
   });
+});
+
+it('shows a message typed while the agent works as a queued card until the agent takes it, then once as the person\'s message',async()=>{
+  const queued=[{text:'then run the tests',timestamp:new Date(Date.now()-90_000).toISOString()},{text:'and update the docs'}];
+  const first={...page('claude',turn('First prompt','First answer')),queued};
+  const taken={...page('claude',[...turn('First prompt','First answer'),...turn('then run the tests','Tests pass')]),queued:[queued[1]]};
+  host('claude',[row('Claude Code','%3')],'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let reply:unknown=first;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  const cards=screen.getByRole('region',{name:'Queued messages'});
+  expect(within(cards).getAllByRole('article').map(card=>card.textContent)).toEqual(['Queued · 1 min. agothen run the tests','Queuedand update the docs']);
+  // Queued text is not a turn: the conversation still has the one prompt it had.
+  expect(screen.getAllByRole('region',{name:'Turn'})).toHaveLength(1);
+  reply=taken;await advance(2500);
+  expect(within(screen.getByRole('region',{name:'Queued messages'})).getAllByRole('article').map(card=>card.textContent)).toEqual(['Queuedand update the docs']);
+  expect(screen.getAllByText('then run the tests')).toHaveLength(1);
+  expect(screen.getAllByRole('region',{name:'Turn'})).toHaveLength(2);
+  reply={...taken,queued:undefined};await advance(2500);
+  expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
+});
+
+it('ignores a malformed queue from the companion and shows no card',async()=>{
+  const reply={...page('claude',turn('First prompt','First answer')),queued:[null,{text:''},{text:5},{text:'x'.repeat(5000)},'text']};
+  host('claude',[row('Claude Code','%3')],'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText('First answer')).toBeTruthy();expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
 });

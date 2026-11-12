@@ -779,3 +779,81 @@ fn shared_synthetic_android_codex_conversation_matches_original_messages() {
     );
     recorded_conversations::assert_messages(&page.messages, &expected);
 }
+
+fn queue_operation(operation: &str, content: &str, at: &str) -> Value {
+    json!({"type":"queue-operation","operation":operation,"timestamp":at,"sessionId":"s","content":content})
+}
+fn queued_text(page: &lazysh_agent::transcript::TranscriptPage) -> Vec<&str> {
+    page.queued
+        .iter()
+        .map(|entry| entry["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn prompts_typed_while_the_agent_works_are_queued_until_they_are_taken() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut records = vec![
+        message("root", None, "user", "first"),
+        queue_operation("enqueue", "then run the tests", "2026-11-11T10:00:00Z"),
+        queue_operation("enqueue", "and update the docs", "2026-11-11T10:00:05Z"),
+        // Text the harness injects is not something a person typed.
+        queue_operation(
+            "enqueue",
+            "<task-notification>done</task-notification>",
+            "2026-11-11T10:00:06Z",
+        ),
+    ];
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(
+        queued_text(&page),
+        ["then run the tests", "and update the docs"]
+    );
+    assert_eq!(page.queued[0]["timestamp"], "2026-11-11T10:00:00Z");
+    // The oldest is taken and shows up as the user's message in the same step.
+    records.push(queue_operation(
+        "dequeue",
+        "then run the tests",
+        "2026-11-11T10:00:10Z",
+    ));
+    records.push(message("taken", Some("root"), "user", "then run the tests"));
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(queued_text(&page), ["and update the docs"]);
+    assert_eq!(ids(&page), ["root", "taken"]);
+    // Removing an entry by its text, and emptying the queue.
+    records.push(queue_operation("enqueue", "extra", "2026-11-11T10:00:11Z"));
+    records.push(queue_operation("remove", "extra", "2026-11-11T10:00:12Z"));
+    write(&path, &records);
+    assert_eq!(
+        queued_text(&conversation(&path, TranscriptAgent::Claude, 50).unwrap()),
+        ["and update the docs"]
+    );
+    records.push(queue_operation("popAll", "", "2026-11-11T10:00:13Z"));
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert!(page.queued.is_empty());
+    // An empty queue is not serialised, so older clients see the page they always saw.
+    assert!(serde_json::to_value(&page).unwrap().get("queued").is_none());
+}
+
+#[test]
+fn a_long_queue_keeps_its_first_entries_and_bounds_each_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut records = vec![message("root", None, "user", "first")];
+    for index in 0..30 {
+        records.push(queue_operation(
+            "enqueue",
+            &format!("{index}{}", "世".repeat(3000)),
+            "2026-11-11T10:00:00Z",
+        ));
+    }
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(page.queued.len(), 20);
+    assert!(page.queued[0]["text"].as_str().unwrap().len() <= 4096);
+    assert!(page.queued[0]["text"].as_str().unwrap().starts_with("0世"));
+}

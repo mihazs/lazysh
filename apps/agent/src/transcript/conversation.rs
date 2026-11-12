@@ -1,7 +1,7 @@
 use super::{
     normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -58,6 +58,7 @@ pub(super) fn project_claude_bounded(
     let size = bytes.len() as u64;
     let mut reader = Cursor::new(&bytes);
     let mut records = Vec::new();
+    let mut queue = Queue::default();
     let mut session_seen = false;
     let mut offset = 0;
     while offset < size {
@@ -77,6 +78,9 @@ pub(super) fn project_claude_bounded(
                     return Err(Error::InvalidEvent);
                 }
                 session_seen = true;
+            }
+            if record["type"] == "queue-operation" {
+                queue.apply(&record);
             }
             if matches!(
                 record["type"].as_str(),
@@ -156,6 +160,7 @@ pub(super) fn project_claude_bounded(
         }
     }
     messages.reverse();
+    let queued = queue.pending();
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
@@ -167,6 +172,7 @@ pub(super) fn project_claude_bounded(
         truncated,
         checkpoint: None,
         activity,
+        queued,
     })
 }
 
@@ -273,6 +279,53 @@ fn candidate_results<'a>(
         Some(calls)
     }
 }
+/// The prompts typed while Claude Code works, replayed from its `queue-operation` records: `enqueue`
+/// appends, `dequeue` takes the oldest, `remove` drops the entry with that text and `popAll` empties
+/// the queue. Text the harness injects (`<task-notification>`, `<agent-message>`, ...) starts with
+/// `<` and is not something a person typed, so it is not shown.
+#[derive(Default)]
+struct Queue(Vec<(String, Option<String>)>);
+const MAX_QUEUED: usize = 20;
+const MAX_QUEUED_TEXT: usize = 4096;
+impl Queue {
+    fn apply(&mut self, record: &Value) {
+        let content = record["content"].as_str().unwrap_or_default();
+        match record["operation"].as_str() {
+            Some("enqueue") => self
+                .0
+                .push((content.to_owned(), string(record, "timestamp"))),
+            Some("dequeue") if !self.0.is_empty() => {
+                self.0.remove(0);
+            }
+            Some("remove") => {
+                if let Some(index) = self.0.iter().position(|(text, _)| text == content) {
+                    self.0.remove(index);
+                }
+            }
+            Some("popAll") => self.0.clear(),
+            _ => {}
+        }
+    }
+    fn pending(self) -> Vec<Value> {
+        self.0
+            .into_iter()
+            .filter(|(text, _)| !text.trim().is_empty() && !text.trim_start().starts_with('<'))
+            .take(MAX_QUEUED)
+            .map(|(text, timestamp)| {
+                let mut end = text.len().min(MAX_QUEUED_TEXT);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let mut value = json!({"text":&text[..end]});
+                if let Some(timestamp) = timestamp {
+                    value["timestamp"] = json!(timestamp);
+                }
+                value
+            })
+            .collect()
+    }
+}
+
 /// Turn state at the selected leaf. Claude Code records `system/turn_duration`
 /// after a turn ends; an unanswered question or plan approval waits for the
 /// user; an assistant `tool_use` stop or a user record means a turn is running.

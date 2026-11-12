@@ -2027,6 +2027,8 @@ export const english = {
   agentComposerReconnect: "Reconnect to the terminal",
   agentComposerWrongPane: "This conversation's agent does not run in this terminal pane, so nothing can be sent from here.",
   agentComposerTooLong: "Too long for confirmed input (4,096 bytes). Shorten it or use Stage in terminal.",
+  agentQueuedTitle: "Queued messages",
+  agentQueued: "Queued",
   agentViewStageOnly: "This session cannot take confirmed input. Use Stage in terminal to send a draft.",
   agentViewTurn: "Turn",
   agentViewActivity: "Activity ({{count}})",

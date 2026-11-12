@@ -2,7 +2,7 @@ import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 
-type Fixture={turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
+type Fixture={queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -70,7 +70,7 @@ async function open(page:Page) {
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
         fixture.polls++;
-        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:messages()};
+        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages()};
       }
       // The synthetic host's `transcript-watch`: off (cannot open), an old companion, or a stream the test drives.
       if(command==='agent_watch_start'){
@@ -194,7 +194,7 @@ test('answers a Claude permission request from the Agent view through the approv
   await expect(dock).toHaveCount(0);
   expect(await page.evaluate(()=>window.approvals.decisions)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'claude-thread',paneId:'%3',decision:'deny'})]);
   const after=await fixture(page);
-  expect(after.stdin).toEqual(before.stdin);expect(after.inputs.every(input=>input.kind==='snapshot')).toBe(true);
+  expect(after.stdin).toEqual(before.stdin);expect(after.inputs.some(input=>input.kind==='input')).toBe(false);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
@@ -588,4 +588,30 @@ test('Enter sends from a hardware keyboard and stays a line break on a touch key
   expect(sent).toHaveLength(1);
   await agent.getByRole('button',{name:'Request stop',exact:true}).click();
   await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='request_stop').length).toBe(1);
+});
+
+test('a message queued while the agent works shows as a card between the turns and the composer, and goes once taken',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  await page.evaluate(()=>{window.agentView.queued=[{text:'then run the tests'},{text:'and update the docs'}];});
+  const cards=agent.getByRole('region',{name:'Queued messages',exact:true});
+  await expect(cards).toBeVisible({timeout:6000});
+  await expect(cards.getByRole('article')).toHaveText([/Queued.*then run the tests/s,/Queued.*and update the docs/s]);
+  const [box,composer]=await Promise.all([cards.boundingBox(),agent.getByRole('form',{name:'Transcript draft',exact:true}).boundingBox()]);
+  expect(box!.y+box!.height).toBeLessThanOrEqual(composer!.y+1);expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.evaluate(()=>{window.agentView.queued=[];});
+  await expect(cards).toHaveCount(0,{timeout:6000});
+});
+
+test('live: a queued message arrives and leaves on stream frames without a poll',async({page})=>{
+  const agent=await openLive(page,'stream');
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  const polls=(await fixture(page)).polls;
+  await page.evaluate(()=>window.agentView.emit({type:'delta',gen:1,seq:2,upserts:[],drops:[],queued:[{text:'next, please'}]}));
+  const cards=agent.getByRole('region',{name:'Queued messages',exact:true});
+  await expect(cards.getByRole('article')).toHaveText([/Queued.*next, please/s]);
+  await page.evaluate(()=>window.agentView.emit({type:'delta',gen:1,seq:3,upserts:[],drops:[],queued:[]}));
+  await expect(cards).toHaveCount(0);
+  expect((await fixture(page)).polls).toBe(polls);
 });
