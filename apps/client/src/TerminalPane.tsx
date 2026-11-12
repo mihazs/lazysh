@@ -6,10 +6,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
 import {installTerminalLinks} from "./terminalLinks";
-import { Keyboard, KeyboardOff, Layers, Lock, SquarePen } from "lucide-react";
+import { ChevronsUp, Keyboard, KeyboardOff, Layers, Lock, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
+import BottomMenu, {useBottomMenuButton, usePhone} from './BottomMenu';
 import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComposerAttachmentNumber,onComposerAttachment,type ComposerAttachment} from './composerTokens';
 import TerminalSelectionTools from './TerminalSelectionTools';
 import {endTextComposition, markTyping, registerTextInteraction} from './textInteraction';
@@ -208,6 +209,11 @@ export default function TerminalPane({ session, active, typingActivation = false
   const searchLine = useRef(-1);
   const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
+  const phone = usePhone();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuEnabled = phone && active && session.connected;
+  const menuButton = useBottomMenuButton();
+  useEffect(() => {if (!menuEnabled) setMenuOpen(false);}, [menuEnabled]);
   const composingRef = useRef(composing);
   composingRef.current = composing;
   // Leaving this terminal while an input holds focus keeps the soft keyboard up for what takes over; so does closing the composer, which the user opened to type.
@@ -237,10 +243,11 @@ export default function TerminalPane({ session, active, typingActivation = false
   const [selectionTools, setSelectionTools] = useState<{handles: boolean} | null>(null);
   useEffect(() => setSelectionTools(null), [session.id, session.terminal]);
   useEffect(()=>{
-    const available=active && (composing || searching || clipboard!==null || link!==null || dpadOpen || selectionTools!==null);
+    const available=active && (menuOpen || composing || searching || clipboard!==null || link!==null || dpadOpen || selectionTools!==null);
     onBackChange?.(session.id,available?()=>{
       if(!activeRef.current || !mounted.current || !access.current())return false;
-      if(selectionTools!==null)session.terminal.clearSelection();
+      if(menuOpen)setMenuOpen(false);
+      else if(selectionTools!==null)session.terminal.clearSelection();
       else if(clipboard!==null){setClipboard(null);pendingClipboard.current=false;}
       else if(link!==null)setLink(null);
       else if(searching)setSearching(false);
@@ -249,7 +256,7 @@ export default function TerminalPane({ session, active, typingActivation = false
       return true;
     }:null);
     return()=>onBackChange?.(session.id,null);
-  },[active,composing,searching,clipboard,link,dpadOpen,selectionTools,session.id,onBackChange]);
+  },[active,menuOpen,composing,searching,clipboard,link,dpadOpen,selectionTools,session.id,onBackChange]);
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -268,7 +275,12 @@ export default function TerminalPane({ session, active, typingActivation = false
   const press = useRef<{id: number; x: number; y: number; when: number; moved: boolean} | null>(null);
   const taps = useRef<{count: number; when: number; x: number; y: number; timer?: ReturnType<typeof setTimeout>} | null>(null);
   const gesture = useRef<{x: number; y: number; distance: number; fontSize: number; zoomed: boolean; moved: Set<number>} | null>(null);
-  const toolbarVisible = toolbarOverride ?? !(preferences.autoHideToolbar && desktopPointer);
+  // A phone remembers the last choice on this device; a desktop window starts from its auto-hide setting every time.
+  const toolbarVisible = toolbarOverride ?? (phone && preferences.toolbarHidden !== undefined ? !preferences.toolbarHidden : !(preferences.autoHideToolbar && desktopPointer));
+  function setToolbarShown(shown: boolean) {
+    if (!phone) {setToolbarOverride(shown); return;}
+    try {savePreferences({...preferences, toolbarHidden: !shown}); setToolbarOverride(null);} catch {setToolbarOverride(shown);}
+  }
   const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
   dpadView.current={session,enabled:dpadEnabled};
   function ownsDpad(gesture:DpadGesture) {
@@ -1166,7 +1178,8 @@ export default function TerminalPane({ session, active, typingActivation = false
     {/* Herdr draws its own switch button inside the terminal, where scrolled history and a resized grid can take it away; this one sits in the session header, which neither scrolls nor shrinks with the soft keyboard. */}
     {(multiplexer === 'herdr' || herdrScreen) && <button type="button" className="icon-button herdr-switch-handle" title={t('herdrSwitchHandle')} aria-label={t('herdrSwitchHandle')} onClick={() => runGesture('openWorkspaces')}><Layers size={18} aria-hidden="true" /></button>}
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
-    <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
+    <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarShown(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
+    {menuEnabled && menuButton && <button type="button" className="icon-button" title={t('bottomMenuOpen')} aria-label={t('bottomMenuOpen')} aria-expanded={menuOpen} onPointerDown={event => event.preventDefault()} onClick={() => setMenuOpen(!menuOpen)}><ChevronsUp size={18} aria-hidden="true" /></button>}
   </div>;
   return <div ref={pane} className="terminal-pane" style={{display: active ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
@@ -1221,5 +1234,6 @@ export default function TerminalPane({ session, active, typingActivation = false
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="" style={{"--toolbar-columns": toolbarColumns(keyRows), "--toolbar-rows": keyRows.length, "--terminal-key-height": `${preferences.toolbarKeyHeight ?? toolbarKeyHeights.default}px`} as CSSProperties}>
       <ToolbarPages repeats={repeatStarts} pages={[{id: "keys", content: keyRows.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">{row.map((key, column) => key === "gap" ? <span key={`gap-${column}`} aria-hidden="true" /> : toolbarKey(key))}</div>)}, ...toolbarExtraPages()]} />
     </div>}
+    {menuEnabled && <BottomMenu open={menuOpen} onOpenChange={setMenuOpen} composing={composing} onToggleComposer={() => setComposing(!composing)} toolbarVisible={toolbarVisible} onToggleToolbar={() => setToolbarShown(!toolbarVisible)} />}
   </div>;
 }

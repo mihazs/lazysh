@@ -51,7 +51,13 @@ export async function openClipboardTerminal(page:Page) {
   await page.goto('/');
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
-  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectLocalTerminal(page);
+}
+
+/** From the start page, opens the synthetic local terminal and waits until it can take output. */
+export async function connectLocalTerminal(page:Page) {
+  const hosts=page.getByRole('button',{name:'Open hosts',exact:true});
+  if(await hosts.isVisible())await hosts.click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
   await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');

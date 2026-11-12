@@ -124,6 +124,8 @@ export type Preferences = {
   edgeGestures?: EdgeGestureSettings;
   /** Android only: ask the soft keyboard to act as a plain key source in the terminal (private mode); omitted when off, and kept on this device. */
   privateKeyboard?: boolean;
+  /** The key rows were hidden or shown on purpose on this device; omitted until then so the automatic desktop behaviour still applies. */
+  toolbarHidden?: boolean;
   dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
   /** The composer's primary action submits the pasted draft with a separate Enter. */
@@ -210,6 +212,7 @@ export function parsePreferences(value: unknown): Preferences {
     ...(toolbarKeyHeight !== toolbarKeyHeights.default ? {toolbarKeyHeight} : {}),
     ...(edgeGestures ? {edgeGestures} : {}),
     ...(p.privateKeyboard === true ? {privateKeyboard: true} : {}),
+    ...(typeof p.toolbarHidden === "boolean" ? {toolbarHidden: p.toolbarHidden} : {}),
     dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => [direction, action(p.gestures, direction, defaults.gestures[direction], levelAwareGestureActions)])) as Preferences["gestures"],
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
@@ -221,12 +224,12 @@ export function parsePreferences(value: unknown): Preferences {
   };
 }
 /** Settings that describe this device's screen stay on it: sync neither uploads them nor lets a download replace them. */
-export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard"> {
-  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, ...shared} = value;
+export function syncablePreferences(value: Preferences): Omit<Preferences, "toolbarKeyHeight" | "privateKeyboard" | "toolbarHidden"> {
+  const {toolbarKeyHeight: _height, privateKeyboard: _keyboard, toolbarHidden: _hidden, ...shared} = value;
   return shared;
 }
 export function keepDevicePreferences(imported: unknown, local: Preferences): unknown {
-  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard} : imported;
+  return imported && typeof imported === "object" && !Array.isArray(imported) ? {...imported, toolbarKeyHeight: local.toolbarKeyHeight, privateKeyboard: local.privateKeyboard, toolbarHidden: local.toolbarHidden} : imported;
 }
 let cached: Preferences | undefined;
 let nativeUiLanguage: UiLanguage | undefined;
