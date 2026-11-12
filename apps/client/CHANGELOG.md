@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.46.0
+
+### Minor Changes
+
+- f6e5dbb: Add a Show/Hide keyboard button for touch devices: one tap focuses the terminal input and asks Android for its keyboard, the next hides it without sending input, and the icon follows the real keyboard, including a system back dismissal. The toolbar keyboard key shares the same toggle.
+- 52592f7: On phones in a connected session the top bar and the hamburger are gone: a swipe from the left edge opens a side menu that holds everything the top bar offered, and the terminal gains the freed height.
+- 6ebb3d8: Show the PNG and JPEG images a user attached as a bounded preview control in the Agent view bubble, for Claude Code and (new in the companion) Codex conversations.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.46.0
+  - @lazysh/common@1.46.0
+  - @lazysh/display-idle@1.46.0
+  - @lazysh/et-transport@1.46.0
+  - @lazysh/mosh-transport@1.46.0
+
 ## 1.45.0
 
 ### Minor Changes

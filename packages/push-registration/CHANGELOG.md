@@ -1,5 +1,9 @@
 # @lazysh/push-registration
 
+## 1.46.0
+
+No changes in this release.
+
 ## 1.45.0
 
 No changes in this release.

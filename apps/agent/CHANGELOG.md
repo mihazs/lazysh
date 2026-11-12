@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.46.0
+
+### Minor Changes
+
+- 6ebb3d8: Show the PNG and JPEG images a user attached as a bounded preview control in the Agent view bubble, for Claude Code and (new in the companion) Codex conversations.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.46.0
+  - @lazysh/common@1.46.0
+  - @lazysh/notification-client@1.46.0
+
 ## 1.45.0
 
 ### Patch Changes
