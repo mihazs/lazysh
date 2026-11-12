@@ -2270,6 +2270,8 @@ export const english = {
   agentStatusUnknown: "Not confirmed",
   agentStatusUnknownCount: "{{count}} not confirmed",
   agentStatusOutput: "Recorded output",
+  agentStatusOpen: "Open conversation",
+  agentStatusBack: "Back to the conversation",
   agentStatusTokens: "{{tokens}} tokens",
   agentStatusMore: "{{count}} more",
   agentStatusFewer: "Show fewer",

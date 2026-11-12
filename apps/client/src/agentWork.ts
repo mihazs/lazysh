@@ -6,13 +6,13 @@ export type WorkState = 'running' | 'done' | 'failed' | 'stopped' | 'unknown';
 export type WorkKind = 'agent' | 'shell' | 'monitor' | 'workflow';
 export type WorkItem = {
   id: string; kind: WorkKind; title: string; state: WorkState; events: string[];
-  subtitle?: string; command?: string; taskId?: string; startedAt?: string; endedAt?: string; last?: string; summary?: string;
+  subtitle?: string; command?: string; taskId?: string; childPath?: string; startedAt?: string; endedAt?: string; last?: string; summary?: string;
   timeoutMs?: number; tokens?: number; durationMs?: number;
 };
 
 const states: readonly string[] = ['running', 'done', 'failed', 'stopped', 'unknown'];
 const kinds: readonly string[] = ['agent', 'shell', 'monitor', 'workflow'];
-const optional = ['subtitle', 'command', 'taskId', 'startedAt', 'endedAt', 'last', 'summary'] as const;
+const optional = ['subtitle', 'command', 'taskId', 'childPath', 'startedAt', 'endedAt', 'last', 'summary'] as const;
 const counts = ['timeoutMs', 'tokens', 'durationMs'] as const;
 
 export function parseWork(value: unknown): WorkItem[] | undefined {

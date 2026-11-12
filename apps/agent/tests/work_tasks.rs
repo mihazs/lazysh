@@ -279,3 +279,87 @@ fn a_finished_turn_with_a_running_background_agent_is_still_working() {
     idle.turn_end(2, 0);
     assert_eq!(idle.activity(), "idle");
 }
+
+fn side(n: usize, kind: &str, content: Value) -> Value {
+    json!({"uuid":format!("c{n}"),"parentUuid":(n > 0).then(|| format!("c{}", n - 1)),"type":kind,"isSidechain":true,
+        "agentId":"a1b2","timestamp":format!("2026-11-11T10:{:02}:00Z", n + 2),"message":{"role":kind,"content":content,"id":format!("cm{n}")}})
+}
+
+#[test]
+fn a_sub_agent_with_its_own_files_gets_its_conversation_and_a_finished_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("sess.jsonl");
+    let mut log = Log(Vec::new());
+    log.push("user", 0, json!("Audit it"));
+    log.call(1, "a1", "Agent", json!({"description":"Review the diff"}));
+    log.call(1, "a2", "Agent", json!({"description":"Still going"}));
+    log.call(1, "a3", "Agent", json!({"description":"No files"}));
+    fs::write(
+        &parent,
+        log.0.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let folder = directory.path().join("sess/subagents");
+    fs::create_dir_all(&folder).unwrap();
+    let child: Vec<Value> = vec![
+        side(0, "user", json!("Review the diff")),
+        side(
+            1,
+            "assistant",
+            json!([{"type":"text","text":"Reading files.\nNo blockers."}]),
+        ),
+    ];
+    fs::write(
+        folder.join("agent-a1b2.jsonl"),
+        child.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    fs::write(
+        folder.join("agent-a1b2.meta.json"),
+        json!({"toolUseId":"a1","parentAgentId":null,"finished":true}).to_string(),
+    )
+    .unwrap();
+    fs::write(folder.join("agent-c3d4.jsonl"), "{}\n").unwrap();
+    fs::write(
+        folder.join("agent-c3d4.meta.json"),
+        json!({"toolUseId":"a2","finished":false}).to_string(),
+    )
+    .unwrap();
+    // A meta file with an id that is not a plain identifier, and one that is not JSON, are ignored.
+    fs::write(
+        folder.join("agent-..%2Fx.meta.json"),
+        json!({"toolUseId":"a3","finished":true}).to_string(),
+    )
+    .unwrap();
+    fs::write(folder.join("agent-zzzz.meta.json"), "not json").unwrap();
+
+    let work = serde_json::to_value(conversation(&parent, TranscriptAgent::Claude, 100).unwrap())
+        .unwrap()["work"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let first = row(&work, "a1");
+    assert_eq!(
+        (
+            first["state"].clone(),
+            first["taskId"].clone(),
+            first["last"].clone()
+        ),
+        (json!("done"), json!("a1b2"), json!("Reading files."))
+    );
+    let path = first["childPath"].as_str().unwrap();
+    assert_eq!(path, folder.join("agent-a1b2.jsonl").to_str().unwrap());
+    assert_eq!(row(&work, "a2")["state"], "running");
+    assert!(row(&work, "a2").get("childPath").is_some());
+    assert!(row(&work, "a3").get("childPath").is_none());
+
+    // The child file read on its own is a conversation, although every record is a sidechain record.
+    let page = conversation(std::path::Path::new(path), TranscriptAgent::Claude, 100).unwrap();
+    let roles: Vec<_> = page
+        .messages
+        .iter()
+        .map(|m| m["role"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(roles, ["user", "assistant"]);
+    assert_eq!(page.messages[0]["blocks"][0]["text"], "Review the diff");
+}

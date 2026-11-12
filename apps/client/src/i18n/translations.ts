@@ -2276,6 +2276,8 @@ const translations = {
   agentStatusUnknown: ["Sem confirmação", "Sin confirmar"],
   agentStatusUnknownCount: ["{{count}} sem confirmação", "{{count}} sin confirmar"],
   agentStatusOutput: ["Saída registrada", "Salida registrada"],
+  agentStatusOpen: ["Abrir conversa", "Abrir conversación"],
+  agentStatusBack: ["Voltar à conversa", "Volver a la conversación"],
   agentStatusTokens: ["{{tokens}} tokens", "{{tokens}} tokens"],
   agentStatusMore: ["mais {{count}}", "{{count}} más"],
   agentStatusFewer: ["Mostrar menos", "Mostrar menos"],

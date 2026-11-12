@@ -105,6 +105,16 @@ describe('AgentStatusPanel from the companion work list', () => {
     rerender(<AgentStatusPanel messages={session} />);
     expect(screen.getByRole('button', {name: '4 running'})).toBeTruthy();
   });
+  it('offers Open conversation only on a sub-agent whose own conversation the host found', () => {
+    vi.useFakeTimers({now: clock});
+    const opened: string[] = [];
+    render(<AgentStatusPanel messages={[]} onOpen={item => opened.push(item.childPath!)}
+      work={[{...work[2], childPath: '/s/subagents/agent-1.jsonl'}, {...work[1], kind: 'agent', id: 'x', title: 'No files yet'}]} />);
+    fireEvent.click(screen.getByRole('button', {name: '1 running'}));
+    expect(screen.getAllByRole('button', {name: 'Open conversation'})).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', {name: 'Open conversation'}));
+    expect(opened).toEqual(['/s/subagents/agent-1.jsonl']);
+  });
   it('shows no panel while nothing is running or unconfirmed, and says not confirmed when only that is left', () => {
     vi.useFakeTimers({now: clock});
     const {container, rerender} = render(<AgentStatusPanel messages={[]} work={[work[2]]} />);

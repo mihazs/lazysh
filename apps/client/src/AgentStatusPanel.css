@@ -12,3 +12,8 @@
 .agent-status-tree small { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .agent-status-tree summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; }
 .agent-status-tree pre { max-height: 30vh; margin: 4px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-status-open { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
+.agent-child { display: grid; grid-template-rows: auto 1fr; min-height: 0; gap: 8px; }
+.agent-child > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-child > header > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-panel[data-child-open] > :not(.agent-child) { display: none; }
