@@ -138,6 +138,37 @@ fn output_text(value: &Value) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+/// A Codex `FileChange` item as one patch the Agent view draws as a diff card: `*** Add File:`, `*** Update File:` and
+/// `*** Delete File:` blocks whose lines carry the `+`, `-` and context marks. Bounded, so a large new file is cut.
+fn file_change_patch(changes: &Value) -> Option<String> {
+    const MAX_PATCH: usize = 32 * 1024;
+    let mut patch = String::from("*** Begin Patch\n");
+    for (path, change) in changes.as_object()? {
+        let (verb, body, mark) = match change["type"].as_str()? {
+            "add" => ("Add", change["content"].as_str()?, "+"),
+            "delete" => ("Delete", change["content"].as_str()?, "-"),
+            "update" => ("Update", change["unified_diff"].as_str()?, ""),
+            _ => return None,
+        };
+        patch.push_str(&format!("*** {verb} File: {path}\n"));
+        for line in body.lines() {
+            patch.push_str(mark);
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        if patch.len() > MAX_PATCH {
+            let mut cut = MAX_PATCH;
+            while !patch.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            patch.truncate(cut);
+            patch.push('\n');
+            break;
+        }
+    }
+    patch.push_str("*** End Patch");
+    Some(patch)
+}
 fn canonical(item: &Value, timestamp: &Value, images: bool) -> Result<Option<Value>> {
     let kind = required(item, "type")?;
     let id = required(item, "id")?;
@@ -198,6 +229,22 @@ fn canonical(item: &Value, timestamp: &Value, images: bool) -> Result<Option<Val
             if let Some(output) = item["aggregated_output"].as_str() {
                 let failed = matches!(item["status"].as_str(), Some("failed" | "declined"))
                     || item["exit_code"].as_i64().is_some_and(|n| n != 0);
+                blocks.push(json!({"type":"tool_result","id":id,"text":output,"isError":failed}));
+            }
+            ("assistant", blocks)
+        }
+        "FileChange" => {
+            let patch = file_change_patch(&item["changes"]).ok_or(Error::InvalidEvent)?;
+            let mut blocks =
+                vec![json!({"type":"tool_use","id":id,"name":"apply_patch","text":patch})];
+            if let Some(status) = item["status"].as_str() {
+                let failed = matches!(status, "failed" | "declined");
+                let output = [item["stdout"].as_str(), item["stderr"].as_str()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 blocks.push(json!({"type":"tool_result","id":id,"text":output,"isError":failed}));
             }
             ("assistant", blocks)

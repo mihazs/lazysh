@@ -352,6 +352,75 @@ fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
     assert_eq!(ids(&page), ["3:oneuser-1", "3:oneassistant-1"]);
 }
 
+#[test]
+fn codex_file_changes_become_one_patch_call_with_its_outcome() {
+    // Independently authored `FileChange` items in the recorded shape: a map of path to add, update or delete.
+    let change = |id: &str, status: &str, changes: Value| {
+        codex_event(
+            "item_completed",
+            json!({"turn_id":"one","item":{"type":"FileChange","id":id,"status":status,"stdout":"Done!","stderr":"","changes":changes}}),
+        )
+    };
+    let mut records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "paginated"),
+        codex_turn("one"),
+        change(
+            "edit-1",
+            "completed",
+            json!({"src/a.rs":{"type":"update","unified_diff":"@@ -1,3 +1,3 @@\n fn a() {\n-    old();\n+    new();\n }\n","move_path":null},
+                   "docs/b.md":{"type":"add","content":"# B\nhello\n"}}),
+        ),
+        change(
+            "edit-2",
+            "failed",
+            json!({"old.txt":{"type":"delete","content":"gone\n"}}),
+        ),
+        change(
+            "edit-3",
+            "completed",
+            json!({"big.txt":{"type":"add","content":"x".repeat(100_000)}}),
+        ),
+    ];
+    for (ordinal, record) in records.iter_mut().enumerate() {
+        record["ordinal"] = json!(ordinal);
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recorded.jsonl");
+    write(&path, &records);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let blocks = |index: usize| page.messages[index]["blocks"].clone();
+    let first = blocks(0);
+    assert_eq!(first[0]["type"], "tool_use");
+    assert_eq!(first[0]["name"], "apply_patch");
+    assert_eq!(
+        first[0]["text"],
+        "*** Begin Patch\n*** Add File: docs/b.md\n+# B\n+hello\n*** Update File: src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {\n-    old();\n+    new();\n }\n*** End Patch"
+    );
+    assert_eq!(
+        (
+            first[1]["type"].clone(),
+            first[1]["id"].clone(),
+            first[1]["isError"].clone(),
+            first[1]["text"].clone()
+        ),
+        (
+            json!("tool_result"),
+            first[0]["id"].clone(),
+            json!(false),
+            json!("Done!")
+        )
+    );
+    let second = blocks(1);
+    assert!(second[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("*** Delete File: old.txt\n-gone\n"));
+    assert_eq!(second[1]["isError"], true);
+    // A large new file is cut, and the patch still ends where a reader expects.
+    let big = blocks(2)[0]["text"].as_str().unwrap().to_owned();
+    assert!(big.len() < 33 * 1024 && big.ends_with("\n*** End Patch"));
+}
+
 fn paginated(mut records: Vec<Value>, start: u64) -> Vec<Value> {
     for (offset, record) in records.iter_mut().enumerate() {
         record["ordinal"] = json!(start + offset as u64);
