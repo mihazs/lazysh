@@ -31,7 +31,8 @@ async function snapshot(cdp: CDPSession, browser: CDPSession): Promise<Snapshot>
   let rssKiB: number | null = null;
   for (const proc of (await browser.send('SystemInfo.getProcessInfo')).processInfo) {
     cpu[proc.type] = (cpu[proc.type] ?? 0) + proc.cpuTime;
-    if (proc.type === 'renderer') rssKiB = Number(/VmRSS:\s+(\d+)/.exec(read(`/proc/${proc.id}/status`) ?? '')?.[1] ?? NaN) || rssKiB;
+    // A spare renderer may exist beside the page's; the page's is the largest.
+    if (proc.type === 'renderer') rssKiB = Math.max(rssKiB ?? 0, Number(/VmRSS:\s+(\d+)/.exec(read(`/proc/${proc.id}/status`) ?? '')?.[1]) || 0) || null;
   }
   return { metrics, cpu, rssKiB };
 }
