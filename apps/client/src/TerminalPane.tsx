@@ -6,8 +6,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { createPortal } from "react-dom";
 import { TerminalFitAddon } from "./terminalFit";
 import {installTerminalLinks} from "./terminalLinks";
-import { ChevronsUp, Keyboard, KeyboardOff, Layers, Lock, SquarePen } from "lucide-react";
+import { ChevronsUp, Keyboard, KeyboardOff, Layers, Lock, PanelBottomClose, PanelBottomOpen, SquarePen } from "lucide-react";
 import { toolbarIcons } from "./toolbarIcons";
+import { useSoftKeyboard } from "./useSoftKeyboard";
 import {observeHerdrHistory, scrollHerdrHistory} from './herdrTouchHistory';
 import TerminalComposer, {composerDraftReady} from './TerminalComposer';
 import BottomMenu, {useBottomMenuButton, usePhone} from './BottomMenu';
@@ -102,6 +103,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const zellijBusy = useRef(false);
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
+  const softKeyboard = useSoftKeyboard();
   const fonts = useDeviceFonts();
   const [ctrl, setCtrl] = useState(false);
   const [ctrlLocked, setCtrlLocked] = useState(false);
@@ -867,6 +869,21 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (target !== undefined) target?.focus();
     else {imeInput.current?.resume(); session.terminal.focus();}
   }
+  /** The input that has focus while typing: the composer's editor while it is open, else the terminal. */
+  const keyboardTarget = () => composingRef.current ? composerInput.current : session.terminal.textarea;
+  /** Focuses the input, then asks Android for the keyboard, which a focused input alone does not bring back after the system back gesture closed it. */
+  function showKeyboard() {
+    focusTerminal(composingRef.current ? composerInput.current : undefined);
+    softKeyboard.request(true);
+  }
+  function hideKeyboard() {
+    if (composingRef.current) composerInput.current?.blur(); else session.terminal.blur();
+    softKeyboard.request(false);
+  }
+  /** Touch devices follow the real keyboard; a desktop window only moves focus. */
+  function toggleKeyboard() {
+    if (softKeyboard.open ?? document.activeElement === keyboardTarget()) hideKeyboard(); else showKeyboard();
+  }
   // Like xterm's keyboard input, sent keys return the reader to the live screen where the TUI answers them.
   function followLive() {if (session.terminal.options.scrollOnUserInput !== false) session.terminal.scrollToBottom();}
   function sendNamed(key: string, physical?: KeyboardEvent, expectedOwner?:InputOwner) {
@@ -997,8 +1014,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     }
     if (action === "find") {setSearching(true); requestAnimationFrame(() => focusTerminal(searchInput.current));}
     else if (action === "compose") setComposing(true);
-    else if (action === "keyboard") focusTerminal();
-    else if (action === "hideKeyboard") session.terminal.blur();
+    else if (action === "keyboard") showKeyboard();
+    else if (action === "hideKeyboard") hideKeyboard();
     else if (action === "paste") void paste();
     else if (action === "copy") {const text = session.terminal.getSelection(); if (text) void copy(text);}
     else if (action === "nextSession" || action === "previousSession" || action === "openAgents" || action === "openWorkspaces") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
@@ -1103,7 +1120,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   function toolbarKey(key: ToolbarKey) {
     const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
     const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
-    const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
+    const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : key === "keyboard" ? softKeyboard.open ?? undefined : undefined;
     const action = () => {
       if (modifier) {
         if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
@@ -1115,7 +1132,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       else if (key === "shift") {modifierState.current.shift = !shift; setShift(!shift);}
       else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
       else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
-      else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else focusTerminal();}
+      else if (key === "keyboard") toggleKeyboard();
       else if (key === "dpad") {setDpadOpen(!dpadOpen); setComposing(false);}
       else if (key === "agents" || key === "workspaces") runGesture(toolbarNavigationActions[key]);
       else sendKey(sequences[key] ?? key);
@@ -1124,7 +1141,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
     const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad" && !Object.hasOwn(toolbarNavigationActions, key);
     const release = () => {stopRepeat(); releaseHold();};
-    const Icon = toolbarIcons[key];
+    const Icon = key === "keyboard" && softKeyboard.open ? KeyboardOff : toolbarIcons[key];
     // Icons and arrows carry no text, and a locked modifier shows its lock as an icon, so each names itself for assistive technology.
     const name = key === "attach" ? t("terminalAttach") : key === "keyboard" ? t("terminalKeyboardToggle")
       : labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : Icon ? toolbarKeyLabel(key) : locked ? `${toolbarKeyLabel(key)} · ${t("terminalLock")}` : undefined;
@@ -1176,11 +1193,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }
   const attachFromComposer = composing && !session.local && session.connected && !!onOpenAttachments;
   const keyRows = visibleToolbarRows(toolbarRows(preferences.toolbar), key => key !== "attach" || !attachFromComposer);
+  // The header carries the keyboard button only where the toolbar's own key is out of reach, so a phone's header keeps its room for the session name.
+  const keyboardKeyReachable = toolbarVisible && !composing && keyRows.some(row => row.includes("keyboard"));
   const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
     {/* Herdr draws its own switch button inside the terminal, where scrolled history and a resized grid can take it away; this one sits in the session header, which neither scrolls nor shrinks with the soft keyboard. */}
     {(multiplexer === 'herdr' || herdrScreen) && <button type="button" className="icon-button herdr-switch-handle" title={t('herdrSwitchHandle')} aria-label={t('herdrSwitchHandle')} onClick={() => runGesture('openWorkspaces')}><Layers size={18} aria-hidden="true" /></button>}
     <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
-    <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarShown(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
+    {softKeyboard.open !== null && !keyboardKeyReachable && <button type="button" className="icon-button" data-keyboard={softKeyboard.open ? "open" : "closed"} title={softKeyboard.open ? t("terminalHideKeyboard") : t("terminalShowKeyboard")} aria-label={softKeyboard.open ? t("terminalHideKeyboard") : t("terminalShowKeyboard")} disabled={!session.connected} onPointerDown={event => event.preventDefault()} onClick={toggleKeyboard}>{softKeyboard.open ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>}
+    <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarShown(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <PanelBottomClose size={18} aria-hidden="true" /> : <PanelBottomOpen size={18} aria-hidden="true" />}</button>
     {menuEnabled && menuButton && <button type="button" className="icon-button" title={t('bottomMenuOpen')} aria-label={t('bottomMenuOpen')} aria-expanded={menuOpen} onPointerDown={event => event.preventDefault()} onClick={() => setMenuOpen(!menuOpen)}><ChevronsUp size={18} aria-hidden="true" /></button>}
   </div>;
   return <div ref={pane} className={swiping ? "terminal-pane terminal-pane-swiping" : "terminal-pane"} style={{display: active || swiping ? "flex" : "none"}} onFocus={() => {typing.current = false;}}>
@@ -1236,6 +1256,6 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')} data-rows="" style={{"--toolbar-columns": toolbarColumns(keyRows), "--toolbar-rows": keyRows.length, "--terminal-key-height": `${preferences.toolbarKeyHeight ?? toolbarKeyHeights.default}px`} as CSSProperties}>
       <ToolbarPages repeats={repeatStarts} pages={[{id: "keys", content: keyRows.map((row, rowIndex) => <div key={rowIndex} className="terminal-keys-row">{row.map((key, column) => key === "gap" ? <span key={`gap-${column}`} aria-hidden="true" /> : toolbarKey(key))}</div>)}, ...toolbarExtraPages()]} />
     </div>}
-    {menuEnabled && <BottomMenu open={menuOpen} onOpenChange={setMenuOpen} composing={composing} onToggleComposer={() => setComposing(!composing)} toolbarVisible={toolbarVisible} onToggleToolbar={() => setToolbarShown(!toolbarVisible)} />}
+    {menuEnabled && <BottomMenu open={menuOpen} onOpenChange={setMenuOpen} composing={composing} onToggleComposer={() => setComposing(!composing)} toolbarVisible={toolbarVisible} onToggleToolbar={() => setToolbarShown(!toolbarVisible)} keyboard={softKeyboard.open === null ? undefined : {open: softKeyboard.open, onToggle: toggleKeyboard}} />}
   </div>;
 }

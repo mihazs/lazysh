@@ -1,3 +1,4 @@
+import {setKeyboard} from './fixtures/softKeyboard';
 import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWith} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
 import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
@@ -255,8 +256,11 @@ async function herdrSwitchKeyboard(page:Page,{touch,drawer,replyDelay=0}:{touch:
   if(!touch)return;
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBe('Terminal input');
+  // The key follows the real keyboard: once it is up, the next tap hides it.
+  await setKeyboard(page,true);
   await page.getByRole('button',{name:'Toggle keyboard',exact:true}).tap();
   await expect.poll(focused).toBeNull();
+  await setKeyboard(page,false);
   await page.locator('.terminal-canvas:visible').tap();
   await expect.poll(focused).toBe('Terminal input');
 }
@@ -575,6 +579,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   const tabs=page.locator('.session-tabs');
   const restore=page.locator('.workspace > .workspace-restore');
   const actions=header.locator('.terminal-actions');
+  // Compose and the toolbar toggle: the toolbar's own keyboard key is in reach, so the header adds no keyboard button.
   await expect(actions.getByRole('button')).toHaveCount(2);
   expect(await page.locator('.terminal-toolbar-toggle').count()).toBe(0);
   await actions.getByRole('button',{name:'Compose',exact:true}).click();

@@ -474,6 +474,8 @@ export const english = {
   bottomMenuHideToolbar: "Hide toolbar",
   bottomMenuShowKeyboard: "Show keyboard",
   bottomMenuHideKeyboard: "Hide keyboard",
+  terminalShowKeyboard: "Show keyboard",
+  terminalHideKeyboard: "Hide keyboard",
   terminalAttach: "Attach",
   terminalModifiersUnavailable: "Virtual modifiers are unavailable for this terminal version.",
   terminalControlLocked: "Control is locked. Tap ctrl to release it.",

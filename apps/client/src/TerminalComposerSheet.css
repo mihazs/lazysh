@@ -13,7 +13,7 @@
 @keyframes terminal-composer-in { from { opacity: 0; transform: translateY(6px); } }
 .terminal-composer-sheet > .terminal-composer-head { display: flex; align-items: baseline; gap: 12px; flex: 0 0 auto; min-height: 24px; padding-inline: 4px; }
 /* The fallback header controls stay reachable above the sheet. */
-.terminal-pane:has(> .terminal-actions-fallback) .terminal-composer-sheet > .terminal-composer-head { padding-inline-end: 100px; }
+.terminal-pane:has(> .terminal-actions-fallback) .terminal-composer-sheet > .terminal-composer-head { padding-inline-end: 148px; }
 .terminal-composer-head > label { font-weight: 600; font-size: 15px; }
 .terminal-composer-head > .terminal-composer-count { color: var(--theme-muted, var(--muted)); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .terminal-stage > .terminal-composer-sheet > .terminal-draft-editor {

@@ -1,6 +1,6 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[]}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null}}
 
 /** One synthetic local terminal: output is injected, input and opened links are recorded. No shell runs. */
 export async function installLocalTerminal(page:Page) {
@@ -14,6 +14,8 @@ export async function installLocalTerminal(page:Page) {
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
       if (command==='clipboard_is_android') return false;
+      // Android's IME controller: a spec that installs `simpleShortcutKeyboard` plays the native side, otherwise there is none (null).
+      if (command==='soft_keyboard') return window.simpleShortcutKeyboard?.(args.action as string) ?? null;
       if (command==='open_web_url') {window.simpleShortcutOpened.push(args.url as string);return;}
       if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
