@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.47.0
+
+### Minor Changes
+
+- 4a816a8: Paste, drop or pick files in the Agent view composer as numbered `[Image #n]` / `[File #n]` tokens that expand to the uploaded host paths on send.
+- fb9d5b7: Pin the latest plan or todo list of the agent above the composer in the Agent view as one chip with progress and the current step, expanding to the full list.
+- 4a816a8: Send prompts of up to 64 KiB from the Agent view composer on tmux as one bounded, guarded paste.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.47.0
+  - @lazysh/common@1.47.0
+  - @lazysh/display-idle@1.47.0
+  - @lazysh/et-transport@1.47.0
+  - @lazysh/mosh-transport@1.47.0
+
 ## 1.46.0
 
 ### Minor Changes
