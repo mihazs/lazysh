@@ -485,6 +485,7 @@ const translations = {
   terminalArrowLeft: ["Seta para a esquerda", "Flecha izquierda"],
   terminalArrowRight: ["Seta para a direita", "Flecha derecha"],
   terminalArrowUp: ["Seta para cima", "Flecha arriba"],
+  terminalArrowsKey: ["Setas", "Flechas"],
   terminalArrowDown: ["Seta para baixo", "Flecha abajo"],
   terminalControlRelease: ["Control travado; toque para liberar", "Control bloqueado; toca para liberar"],
   terminalControlLock: ["Toque duas vezes para travar Control", "Toca dos veces para bloquear Control"],

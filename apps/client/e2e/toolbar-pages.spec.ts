@@ -1,27 +1,12 @@
 import {expect,test,type Locator,type Page,type TestInfo} from '@playwright/test';
-import {installLocalTerminal} from './fixtures/localTerminal';
+import {openToolbarTerminal} from './fixtures/localTerminal';
 
 type Point={x:number;y:number};
 const wideRow=['esc','tab','ctrl','meta','shift','enter','backspace','Home','End','PageUp','PageDown','Insert','Delete','F1','F2','F3','F4','F5','F6','F7','F8'];
 
-/** A local terminal whose toolbar has one saved snippet and one literal chord (the default layout unless `extra` sets one); input bytes are recorded. */
-async function openToolbar(page:Page,testInfo:TestInfo,extra:Record<string,unknown>={}) {
-  await installLocalTerminal(page);
-  await page.addInitScript(extra=>{
-    if(sessionStorage.getItem('toolbar-pages-seeded'))return;
-    sessionStorage.setItem('toolbar-pages-seeded','1');
-    localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,composerSendEnter:false,
-      snippets:[{label:'Greet',text:'echo snippet'}],chords:[{label:'Mark',keys:'text:PAGE_MARK'}],...extra}));
-  },extra);
-  await page.goto('/');
-  await openTerminal(page,testInfo);
-  return page.getByLabel('Terminal keys',{exact:true});
-}
-async function openTerminal(page:Page,testInfo:TestInfo) {
-  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
-}
+/** A local terminal whose toolbar has one saved snippet and one literal chord (the default layout unless `extra` sets one). */
+const openToolbar=(page:Page,testInfo:TestInfo,extra:Record<string,unknown>={})=>openToolbarTerminal(page,testInfo,
+  {snippets:[{label:'Greet',text:'echo snippet'}],chords:[{label:'Mark',keys:'text:PAGE_MARK'}],...extra});
 const writes=(page:Page)=>page.evaluate(()=>window.simpleShortcutWrites.filter(data=>data!=='\x1b[I'&&data!=='\x1b[O'));
 const terminalFocused=(page:Page)=>page.evaluate(()=>document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea'));
 const center=async(target:Locator):Promise<Point>=>{const box=(await target.boundingBox())!;return {x:box.x+box.width/2,y:box.y+box.height/2};};

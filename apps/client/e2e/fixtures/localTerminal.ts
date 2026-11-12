@@ -1,4 +1,4 @@
-import {expect,type Page} from '@playwright/test';
+import {expect,type Page,type TestInfo} from '@playwright/test';
 
 declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 
@@ -47,4 +47,19 @@ export async function openClipboardTerminal(page:Page) {
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
   await expect(page.locator('.terminal-canvas:visible .xterm-screen')).toBeVisible();
   await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+}
+
+/** A local terminal whose stored settings are `preferences` (the default toolbar when it has none); returns the toolbar. Input bytes are recorded. */
+export async function openToolbarTerminal(page:Page,testInfo:TestInfo,preferences:Record<string,unknown>={}) {
+  await installLocalTerminal(page);
+  await page.addInitScript(preferences=>{
+    if(sessionStorage.getItem('toolbar-seeded'))return;
+    sessionStorage.setItem('toolbar-seeded','1');
+    localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,composerSendEnter:false,...preferences}));
+  },preferences);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
+  return page.getByLabel('Terminal keys',{exact:true});
 }

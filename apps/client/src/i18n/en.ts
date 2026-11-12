@@ -467,6 +467,7 @@ export const english = {
   terminalArrowLeft: "Arrow left",
   terminalArrowRight: "Arrow right",
   terminalArrowUp: "Arrow up",
+  terminalArrowsKey: "Arrows",
   terminalArrowDown: "Arrow down",
   terminalControlRelease: "Control locked; tap to release",
   terminalControlLock: "Double-tap to lock Control",

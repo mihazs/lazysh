@@ -10,10 +10,10 @@ export const themes = {
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
 } satisfies Record<string, ITheme>;
-export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
+export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "arrows", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
 export function toolbarKeyLabel(key: ToolbarKey): string {
-  return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key === "agents" ? t("appAgents") : key === "workspaces" ? t("navigationWorkspaces") : key;
+  return key === "arrows" ? t("terminalArrowsKey") : key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key === "agents" ? t("appAgents") : key === "workspaces" ? t("navigationWorkspaces") : key;
 }
 /** Toolbar keys that open a navigation view instead of typing. */
 export const toolbarNavigationActions = {agents: "openAgents", workspaces: "openWorkspaces"} as const satisfies Partial<Record<ToolbarKey, GestureAction>>;
@@ -25,6 +25,7 @@ const legacyToolbars: readonly (readonly string[])[] = [
   ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"],
   ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"],
   ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "left", "down", "right"],
+  ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter", "left", "down", "right"],
 ];
 export const maxToolbarRows = 3;
 /** Terminal toolbar key height in CSS pixels: below the minimum a key is too small to hit, above the maximum two rows crowd a phone's screen. */
@@ -71,8 +72,8 @@ export const levelGestureSlots = ["pinch", "pullShallow", "pullDeep"] as const;
 export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight", ...levelGestureSlots] as const;
 export type GestureSlot = typeof gestureSlots[number];
 export type ToolbarAlternate = {action: GestureAction; keys?: string};
-/** Modifier keys keep their tap and lock cycle; every other key can carry a long-press action. */
-export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr"; }
+/** Modifier keys keep their tap and lock cycle and Arrows is four keys; every other key can carry a long-press action. */
+export function toolbarKeyHasAlternate(key: ToolbarKey) { return key !== "ctrl" && key !== "meta" && key !== "shift" && key !== "altgr" && key !== "arrows"; }
 export const gestureLabelKeys = {"none":"gestureNoAction","auto":"gestureLevelAware","nextTab":"gestureNextTab","previousTab":"gesturePreviousTab","nextPane":"gestureNextPane","previousPane":"gesturePreviousPane","zoomPane":"gestureZoomPane","fontSize":"gestureFontSize","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","openAgents":"gestureOpenAgents","openWorkspaces":"gestureOpenWorkspaces","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
 export const edgeGestureIds = ["leftMenu", "bottomMenu", "viewSwitch"] as const;
@@ -133,8 +134,8 @@ export const defaults: Preferences = {
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false, dismissKeyboardOnOverscroll: false,
-  // Two full rows of nine: the arrows form an inverted T under Home, Up and End. Find, Copy and the saved snippets are on the pages after the keys.
-  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "up", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter", "left", "down", "right"], snippets: [],
+  // Two full rows of nine: the Arrows component draws an inverted T, Up between Home and End with Left, Down and Right under them. Find, Copy and the saved snippets are on the pages after the keys.
+  toolbar: ["keyboard", "attach", "esc", "tab", "paste", "/", "Home", "arrows", "End", toolbarRowBreak, "shift", "ctrl", "meta", "c", "d", "enter"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "auto", right: "auto", up: "auto", down: "auto"}, autoHideToolbar: false, composerSendEnter: true,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none", pinch: "auto", pullShallow: "auto", pullDeep: "auto"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
