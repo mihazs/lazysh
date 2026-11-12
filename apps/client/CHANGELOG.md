@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.42.0
+
+### Minor Changes
+
+- d356489: Read the whole session in the Agent view: scroll up to load earlier messages without losing your place, Jump to start for the first message, read forward again from there, with at most 400 messages held at a time. Needs the new host companion; an older one keeps the latest messages and asks you to update.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.42.0
+  - @lazysh/common@1.42.0
+  - @lazysh/display-idle@1.42.0
+  - @lazysh/et-transport@1.42.0
+  - @lazysh/mosh-transport@1.42.0
+
 ## 1.41.0
 
 ### Minor Changes
