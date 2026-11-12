@@ -238,7 +238,6 @@ test('phone never offers Both',async({page},testInfo)=>{
   expect(await page.evaluate(()=>Boolean(document.activeElement?.closest('.terminal-pane')))).toBe(false);
 });
 
-/** Stock Herdr host: six live agents, fifty ended hook reports without pane identity, and a companion that may predate conversation reading. */
 /** What a real Claude Code transcript holds around a harness event: usage counters, a background-task notification typed by the harness and tool activity. */
 const richConversation=[
   {id:'p0',role:'user',blocks:[{type:'text',text:'Explain the build'}]},
@@ -248,24 +247,33 @@ const richConversation=[
   {id:'t1',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'gh pr list'},{type:'tool_use',name:'Monitor',text:'watch'}]},
   {id:'a1',role:'assistant',blocks:[{type:'text',text:'v0.158.0 is published.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
 ];
-async function openHerdr(page:Page,companion:boolean,rich=false) {
+/** Stock Herdr host: six live agents (one per workspace `w0`..`w5`), fifty ended hook reports without pane identity, and a companion that may predate conversation reading.
+ * `focus` is the focused pane (`w2:p1`); the page can move it later through `herdrFixture.focus`. `agents` limits how many agents run. */
+async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:string;agents?:number;launch?:boolean}={}) {
   await installBaseHost(page);
-  await page.addInitScript(({companion,rich,richConversation})=>{
+  await page.addInitScript(({companion,rich,richConversation,start})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached:{kind:'herdr',name:'owned'}}]));
     const sessions=['claude-0','claude-1','claude-2','claude-3','claude-4','claude-5'];
-    const panes=sessions.map((id,index)=>({workspace_id:`w${index}`,tab_id:`w${index}:t1`,pane_id:`w${index}:p1`,terminal_id:`term-${index}`,cwd:`/home/owner/dev/project-${index}`,focused:false,agent_status:index===1?'working':'idle'}));
-    const tree={workspaces:panes.map((pane,index)=>({workspace_id:pane.workspace_id,label:`[${index+1}] project-${index}`,focused:false,agent_status:pane.agent_status})),
-      tabs:panes.map((pane,index)=>({workspace_id:pane.workspace_id,tab_id:pane.tab_id,label:`tab ${index}`,number:1,focused:false,agent_status:pane.agent_status})),panes,
-      agents:panes.map((pane,index)=>({terminal_id:pane.terminal_id,workspace_id:pane.workspace_id,tab_id:pane.tab_id,pane_id:pane.pane_id,name:null,agent:'claude',agent_status:pane.agent_status,
-        agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
+    const base=sessions.map((id,index)=>({workspace_id:`w${index}`,tab_id:`w${index}:t1`,pane_id:`w${index}:p1`,terminal_id:`term-${index}`,cwd:`/home/owner/dev/project-${index}`,agent_status:index===1?'working':'idle'}));
+    // A shell pane without an agent sits in its own tab of workspace w0.
+    const shell={workspace_id:'w0',tab_id:'w0:t2',pane_id:'w0:p2',terminal_id:'term-shell',cwd:'/home/owner/dev/project-0',agent_status:'idle'};
+    const count=start.agents??6;
+    const tree=()=>{
+      const focus=(window as unknown as {herdrFixture:{focus:string}}).herdrFixture.focus;
+      const panes=[...base,shell].map(pane=>({...pane,focused:pane.pane_id===focus}));
+      return {workspaces:base.map((pane,index)=>({workspace_id:pane.workspace_id,label:`[${index+1}] project-${index}`,focused:pane.workspace_id===focus.split(':')[0],agent_status:pane.agent_status})),
+        tabs:[...base,shell].map((pane,index)=>({workspace_id:pane.workspace_id,tab_id:pane.tab_id,label:`tab ${index}`,number:1,focused:pane.pane_id===focus,agent_status:pane.agent_status})),panes,
+        agents:base.slice(0,count).map((pane,index)=>({terminal_id:pane.terminal_id,workspace_id:pane.workspace_id,tab_id:pane.tab_id,pane_id:pane.pane_id,name:null,agent:'claude',agent_status:pane.agent_status,
+          agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
+    };
     const reports=Array.from({length:50},(_,index)=>({sessionId:`ended-${index}`,agent:'Claude Code',project:`/home/owner/old-${index}`,state:'done',updatedAt:new Date().toISOString(),summary:'Session ended',paneId:null,eventCount:3}));
-    (window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture={conversations:[],entered:[]};
-    const record=(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture;
+    (window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];focus:string}}).herdrFixture={conversations:[],entered:[],focus:start.focus??''};
+    const record=(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];focus:string}}).herdrFixture;
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
       if(command==='attach_multiplexer')return {sessionId:'display-owned'};
       if(command==='multiplexer_sessions')return [{name:'owned'}];
-      if(command==='herdr_tree')return tree;
+      if(command==='herdr_tree')return tree();
       if(command==='herdr_action'){record.entered.push(args.action);return;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
       if(command==='agent_reported_history')return {schemaVersion:1,sessionId:String(args.agentSessionId),status:'missing'};
@@ -275,15 +283,16 @@ async function openHerdr(page:Page,companion:boolean,rich=false) {
         return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:rich?richConversation:[
           {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'t',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'ls'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
       }
-      if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.3',support:'full',missing:[]}],sessions:[]};
+      if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.3',support:start.launch?'full':'navigationOnly',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
-  },{companion,rich,richConversation});
+  },{companion,rich,richConversation,start});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
 }
 const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[]}}).herdrFixture);
+const focusPane=(page:Page,pane:string)=>page.evaluate(pane=>{(window as unknown as {herdrFixture:{focus:string}}).herdrFixture.focus=pane;},pane);
 
 test('stock Herdr: the Agent view lists the live agents, and selecting one opens its native chat',async({page})=>{
   await openHerdr(page,true);
@@ -466,4 +475,43 @@ test('leaving the Agent view closes the channel and coming back opens a new one'
   await expect.poll(async()=>(await fixture(page)).watchStops).toBe(1);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+});
+
+test('Herdr: the Agent view opens the focused pane\'s chat by itself and re-links when focus moves',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w2:p1'});
+  const agent=agentView(page);
+  // No list and no pick: the agent of the focused pane is the chat, named by its folder.
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+  await expect(agent.locator('header')).toContainText('Claude Code · project-2');
+  await expect(agent.locator('article.agent-card')).toHaveCount(0);
+  expect([...new Set((await herdrFixture(page)).conversations)]).toEqual(['00000002-0000-4000-8000-000000000000']);
+  // Focusing another workspace re-links within one poll; the old pane's chat does not stay.
+  await focusPane(page,'w4:p1');
+  await expect(agent.locator('header')).toContainText('Claude Code · project-4',{timeout:8000});
+  expect([...new Set((await herdrFixture(page)).conversations)].at(-1)).toBe('00000004-0000-4000-8000-000000000000');
+  // A pane without an agent while agents run: the live list, with the reason, never the previous chat.
+  await focusPane(page,'w0:p2');
+  await expect(agent.getByText('No agent runs in the focused pane. Choose a live agent.',{exact:true})).toBeVisible({timeout:8000});
+  await expect(agent.locator('article.agent-card')).toHaveCount(6);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toHaveCount(0);
+  // Picking one marks it as not this pane's; moving focus back to an agent pane drops the pick.
+  await agent.locator('article.agent-card').filter({hasText:'project-5'}).getByRole('button',{name:/Open conversation/}).click();
+  await expect(agent.locator('header')).toContainText('Not this pane');
+  await focusPane(page,'w1:p1');
+  await expect(agent.locator('header')).toContainText('Claude Code · project-1',{timeout:8000});
+  await expect(agent.locator('header')).not.toContainText('Not this pane');
+});
+
+test('Herdr: with no agent running the Agent view offers to start one through the workspace launcher',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w0:p2',agents:0,launch:true});
+  const agent=agentView(page);
+  await expect(agent.getByText('No agent is running in this session.',{exact:true})).toBeVisible();
+  await expect(agent.locator('article.agent-card')).toHaveCount(0);
+  await expect(agent.getByRole('button',{name:'Start Claude Code',exact:true})).toBeVisible();
+  await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
+  await agent.getByRole('button',{name:'Start an agent',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'New Herdr workspace'});
+  await expect(dialog.getByRole('radio',{name:'Yes, start an agent'})).toBeChecked();
+  await dialog.getByRole('button',{name:'Cancel'}).click();
+  expect((await herdrFixture(page)).entered).toEqual([]);
 });

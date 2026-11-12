@@ -104,6 +104,12 @@ it('shows the fallback without a transcript picker when no hook report names thi
   expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
   fireEvent.click(screen.getByRole('button',{name:'Show terminal'}));expect(showTerminal).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole('button',{name:'Choose transcript'})).toBeNull();
+  // No agent in this pane: starting one stages its command in the terminal composer for review; nothing is sent from here.
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+  fireEvent.click(screen.getByRole('button',{name:'Start Claude Code'}));
+  expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'claude'});
+  window.removeEventListener('lazysh-prompt-draft',staged);
+  expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
 });
 
 it('labels a detected agent without a reported conversation as partial and never reads a transcript',async()=>{
@@ -159,7 +165,7 @@ it('enters the exact selected Herdr pane without reading a conversation',async()
   expect(calls('agent_transcript')).toEqual([]);
 });
 
-it('opens a unique Herdr session through the revalidated host resolver without input authority',async()=>{
+it('opens the conversation of the focused Herdr pane by itself through the revalidated host resolver, with Stage but no confirmed input',async()=>{
   const first={...herdrNavigationTree.agents[0],agent_session:{source:'herdr:codex',agent:'codex',kind:'id',value:'session-one'}};
   let available=true;
   vi.mocked(invoke).mockImplementation(async command=>{
@@ -170,17 +176,19 @@ it('opens a unique Herdr session through the revalidated host resolver without i
   });
   render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" terminalInput={{backend:'herdr',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
   await advance(0);
-  expect(calls('agent_herdr_conversation')).toEqual([]);
-  fireEvent.click(screen.getByRole('button',{name:/Open conversation/}));await advance(0);
+  // No click: the agent of the focused pane is the conversation, and no list is in the way.
+  expect(screen.queryByRole('button',{name:/Open conversation/})).toBeNull();expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
   // The standing notices are not in the message flow; the caveat stays one tap away and the conversation grants no input.
   expect(screen.queryByText(/not verified as belonging|association with this pane is unverified/)).toBeNull();
-  expect(within(options()).getByText('Herdr reports this session. Its association with this pane is unverified.')).toBeTruthy();
-  expect(within(options()).getByText(/not verified as belonging to this terminal/)).toBeTruthy();
+  expect(within(options()).getByText(/^Herdr links this conversation to the focused pane of this terminal: Work · Code\./)).toBeTruthy();
   expect(screen.getByText('Verified answer')).toBeTruthy();
   expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'codex',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:pF',terminalId:'term-one'}}]);
   expect(calls('agent_transcript')).toEqual([]);expect(screen.queryByRole('region',{name:'Terminal input'})).toBeNull();
-  // There is nothing to compose: no input box and no Stage or Send control for a conversation not proven to be this pane's.
-  expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();expect(screen.queryByRole('button',{name:'Stage in terminal'})).toBeNull();
+  // A linked conversation can stage a draft into this terminal, but never sends input by itself.
+  expect(screen.getByRole('button',{name:'Stage in terminal'})).toBeTruthy();
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});fireEvent.click(screen.getByRole('button',{name:'Stage in terminal'}));
+  expect(staged).toHaveBeenCalledTimes(1);window.removeEventListener('lazysh-prompt-draft',staged);
   available=false;await advance(2000);expect(calls('agent_herdr_conversation')).toHaveLength(2);
   expect(screen.getByRole('alert').textContent).toContain('Session unavailable');
   expect(calls('agent_transcript')).toEqual([]);
@@ -288,9 +296,12 @@ it('drops a pending session choice when the view is hidden',async()=>{
 });
 
 const claude={...herdrNavigationTree.agents[0],agent:'claude',name:null,agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:'session-one'}};
+/** The agent's pane is not the focused one: a shell pane next to it is, so the agent is a list row to pick. */
+const shell={...herdrNavigationTree.panes[0],pane_id:'w2E:pS',terminal_id:'term-shell',cwd:'/work/shell',focused:true,agent_status:'idle'};
+const away={...herdrNavigationTree,panes:[{...herdrNavigationTree.panes[0],focused:false},shell]};
 const stock=(...agents:unknown[])=>vi.mocked(invoke).mockImplementation(async command=>{
   if(command==='multiplexer_sessions')return [{name:'owned'}];
-  if(command==='herdr_tree')return {...herdrNavigationTree,agents};
+  if(command==='herdr_tree')return {...away,agents};
   if(command==='agent_snapshot')return {schemaVersion:1,sessions:[row('Claude Code',null),row('Codex',null,'done')]};
   throw new Error('unavailable');
 });
@@ -311,13 +322,15 @@ it('lists only the live Herdr agents, never the last-reported sessions of the ho
 
 it('opens the agent chat when its row is clicked anywhere and still offers the exact pane',async()=>{
   stock(claude);
-  vi.mocked(invoke).mockImplementation(async(command)=>command==='agent_herdr_conversation'?page('claude',turn('Prompt','Native answer')):command==='multiplexer_sessions'?[{name:'owned'}]:{...herdrNavigationTree,agents:[claude]});
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='agent_herdr_conversation'?page('claude',turn('Prompt','Native answer')):command==='multiplexer_sessions'?[{name:'owned'}]:{...away,agents:[claude]});
   const enter=vi.fn(async()=>{});
   render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
   await advance(0);
   fireEvent.click(screen.getByText('/work/codex'));await advance(0);
   const header=screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
   expect(within(header).getByText('Claude Code · codex')).toBeTruthy();expect(within(header).getByText('Working')).toBeTruthy();
+  // A hand-picked agent of another pane says so, and says it again in the caveat.
+  expect(within(header).getByText('Not this pane')).toBeTruthy();
   expect(screen.getByText('Native answer')).toBeTruthy();
   expect(within(screen.getByRole('region',{name:'Turn'})).getByRole('article',{name:'user'})).toBeTruthy();
   // Back and Enter wait behind the options button instead of taking a row of their own.
@@ -326,13 +339,17 @@ it('opens the agent chat when its row is clicked anywhere and still offers the e
   expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
 });
 
-it('tells the user to update an old companion and still lets them enter the pane',async()=>{
-  stock(claude);
+/** A host companion that predates `herdr-conversation`: reading any conversation fails with the update requirement. */
+function oldCompanion() {
   const fallback=vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
     if(command==='agent_herdr_conversation')throw {kind:'herdr_conversation_companion_required',message:'Update the companion'};
     return fallback(command,args,options);
   });
+}
+it('tells the user to update an old companion and still lets them enter the pane',async()=>{
+  stock(claude);
+  oldCompanion();
   const enter=vi.fn(async()=>{throw new Error('Pane is gone');});const setup=vi.fn();
   render(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onOpenCompanion={setup} onShowTerminal={()=>{}}/>);
   await advance(0);
@@ -357,6 +374,122 @@ it('explains a row without one reported conversation instead of hiding its actio
   expect(screen.getAllByText(/^No single conversation is reported for this agent/)).toHaveLength(3);
   expect(screen.queryByRole('button',{name:/Open conversation/})).toBeNull();
   expect(screen.getAllByRole('button',{name:'Enter session'})).toHaveLength(3);
+});
+
+/** A Herdr server with a Claude Code pane `w2E:p1` in `/work/one`, a Codex pane `w2E:p2` in `/work/two` and a shell pane `w2E:p3`; `focus` is the focused pane. */
+function server(state:{focus:string;agents?:string[]}) {
+  const place=(id:string,cwd:string)=>({...herdrNavigationTree.panes[0],pane_id:id,terminal_id:`term-${id}`,cwd,focused:state.focus===id});
+  const live=(id:string,agent:'claude'|'codex',session:string)=>({...herdrNavigationTree.agents[0],agent,name:null,pane_id:id,terminal_id:`term-${id}`,agent_session:{source:`herdr:${agent}`,agent,kind:'id',value:session}});
+  const agents=[live('w2E:p1','claude','session-one'),live('w2E:p2','codex','session-two')].filter(agent=>(state.agents??['w2E:p1','w2E:p2']).includes(agent.pane_id));
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command==='multiplexer_sessions')return [{name:'owned'}];
+    if(command==='herdr_tree')return {...herdrNavigationTree,panes:[place('w2E:p1','/work/one'),place('w2E:p2','/work/two'),place('w2E:p3','/work/shell')].filter(pane=>pane.pane_id!=='w2E:p3' || true),agents};
+    if(command==='agent_herdr_conversation'){const target=(args as {target:{agent:'claude'|'codex';agentSessionId:string}}).target;return page(target.agent,turn('Prompt',`Answer of ${target.agentSessionId}`));}
+    throw new Error(`Unexpected ${command}`);
+  });
+}
+const view=(extra:Partial<Parameters<typeof AgentView>[0]>={})=><AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={vi.fn()} onShowTerminal={()=>{}} {...extra}/>;
+
+it('shows the agent of the focused Herdr pane without a pick, and follows focus, tab and agent changes',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  render(view());await advance(0);
+  const header=()=>screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
+  expect(within(header()).getByText('Claude Code · one')).toBeTruthy();expect(screen.getByText('Answer of session-one')).toBeTruthy();
+  expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
+  expect(calls('agent_herdr_conversation')).toEqual([{sessionId:'ssh',target:{agent:'claude',agentSessionId:'session-one',herdrSession:'owned',paneId:'w2E:p1',terminalId:'term-w2E:p1'}}]);
+  // Focus another pane: the other agent's conversation replaces it within one poll and the old one is gone.
+  state.focus='w2E:p2';await advance(3000);await advance(0);
+  expect(within(header()).getByText('Codex · two')).toBeTruthy();expect(screen.getByText('Answer of session-two')).toBeTruthy();expect(screen.queryByText('Answer of session-one')).toBeNull();
+  expect(calls('agent_herdr_conversation').at(-1)).toMatchObject({target:{agent:'codex',agentSessionId:'session-two',paneId:'w2E:p2'}});
+  // A pane without an agent while others run: the live list, never the previous pane's chat.
+  state.focus='w2E:p3';await advance(3000);await advance(0);
+  expect(screen.queryByText('Answer of session-two')).toBeNull();expect(screen.getByRole('region',{name:'Live Herdr agents'})).toBeTruthy();
+  expect(screen.getByText('No agent runs in the focused pane. Choose a live agent.')).toBeTruthy();
+  expect(screen.getAllByRole('button',{name:/Open conversation/})).toHaveLength(2);
+});
+
+it('lets the user look at another agent and come back to the pane\'s own, keeping its draft',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  render(view());await advance(0);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Keep this draft'}});
+  fireEvent.click(within(options()).getByRole('button',{name:'Choose another agent'}));await advance(0);
+  expect(screen.getByRole('region',{name:'Live Herdr agents'})).toBeTruthy();
+  fireEvent.click(within(options()).getByRole('button',{name:"This pane's agent"}));await advance(0);
+  expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
+  expect(screen.getByText('Answer of session-one')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
+});
+
+it('drops a hand-picked conversation when focus moves to another pane',async()=>{
+  const state={focus:'w2E:p3'};server(state);
+  render(view());await advance(0);
+  fireEvent.click(within(screen.getByText('/work/two').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();
+  state.focus='w2E:p1';await advance(3000);await advance(0);
+  expect(screen.queryByText('Answer of session-two')).toBeNull();expect(screen.getByText('Answer of session-one')).toBeTruthy();
+  expect(screen.queryByText('Not this pane')).toBeNull();
+});
+
+it('offers to start an agent when none runs, staging the command for review instead of running it',async()=>{
+  const state={focus:'w2E:p3',agents:[] as string[]};server(state);
+  const shown=vi.fn(),staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+  render(view({herdrLaunch:true,onShowTerminal:shown}));await advance(0);
+  expect(screen.getByText('No agent is running in this session.')).toBeTruthy();expect(screen.queryByRole('region',{name:'Live Herdr agents'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Start Codex'}));
+  expect(staged).toHaveBeenCalledTimes(1);expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'codex'});
+  window.removeEventListener('lazysh-prompt-draft',staged);
+  expect(calls('herdr_action')).toEqual([]);expect(calls('agent_herdr_conversation')).toEqual([]);
+  // The launcher flow of the Herdr workspace dialog opens with "start an agent" already chosen.
+  fireEvent.click(screen.getByRole('button',{name:'Start an agent'}));
+  const dialog=screen.getByRole('dialog',{name:'New Herdr workspace'});
+  expect((within(dialog).getByRole('radio',{name:'Yes, start an agent'}) as HTMLInputElement).checked).toBe(true);
+  expect(within(screen.getByRole('region',{name:'Agent view'})).getByRole('button',{name:'Show terminal'})).toBeTruthy();
+});
+
+it('keeps the linked reader and its draft while the view is hidden, without showing it until the pane is read again',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  const rendered=render(view());await advance(0);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Keep this draft'}});
+  rendered.rerender(view({shown:false}));await advance(5000);
+  rendered.rerender(view());
+  // Until Herdr answers again nothing is known about the focused pane, so nothing of the old chat is shown.
+  expect(document.querySelector('section.chat-panel')!.hasAttribute('hidden')).toBe(true);
+  await advance(0);
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
+  expect(screen.getByText('Answer of session-one')).toBeTruthy();
+  // The pane moved on while hidden: the draft goes with the old conversation and the new one shows.
+  rendered.rerender(view({shown:false}));state.focus='w2E:p2';rendered.rerender(view());await advance(0);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();expect(screen.queryByText('Answer of session-one')).toBeNull();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','');
+});
+
+it('keeps asking Herdr only while shown, every 3 seconds',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  const rerender=render(view({shown:false}));await advance(10_000);expect(invoke).not.toHaveBeenCalled();
+  rerender.rerender(view());await advance(0);const first=calls('herdr_tree').length;expect(first).toBe(1);
+  await advance(3000);expect(calls('herdr_tree')).toHaveLength(first+1);
+  rerender.rerender(view({shown:false}));const idle=calls('herdr_tree').length;await advance(10_000);expect(calls('herdr_tree')).toHaveLength(idle);
+});
+
+it('keeps the update-your-companion message and button for the linked agent of an old companion',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  oldCompanion();
+  const setup=vi.fn();
+  render(view({onOpenCompanion:setup}));await advance(0);
+  expect(screen.getByRole('alert').textContent).toMatch(/companion on this host is too old to read agent conversations/);
+  fireEvent.click(screen.getByRole('button',{name:'Host companion installation'}));expect(setup).toHaveBeenCalledTimes(1);
+});
+
+it('says an agent without a readable conversation runs in the focused pane and lists the others',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+    const tree=await fallback(command,args,options) as {agents?:{pane_id:string;agent_session?:unknown}[]};
+    return command==='herdr_tree'?{...tree,agents:tree.agents!.map(agent=>agent.pane_id==='w2E:p1'?{...agent,agent_session:undefined}:agent)}:tree;
+  });
+  render(view());await advance(0);
+  expect(screen.getByText(/^claude runs in the focused pane, but Herdr has not reported its conversation yet/)).toBeTruthy();
+  expect(calls('agent_herdr_conversation')).toEqual([]);expect(screen.getByRole('region',{name:'Live Herdr agents'})).toBeTruthy();
 });
 
 it('binds on the next poll once a conversation missing at first is reported',async()=>{

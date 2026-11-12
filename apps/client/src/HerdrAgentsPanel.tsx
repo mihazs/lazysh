@@ -20,10 +20,12 @@ export function EnterSessionButton({server,target,lease,enabled,owner,onEnterHer
   </>;
 }
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
-export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,onRestoreHostTools,onEnterHerdr,onChooseSession}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;onRestoreHostTools?:(restored:()=>void)=>void;onEnterHerdr?:Enter;onChooseSession?:(row:LiveAgent&{agent_session:ReportedSessionRef},server:string)=>void}) {
+/** `navigation` is a reader its owner already runs (the Agent view keeps one to follow the focused pane); without it the panel reads on its own. */
+export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,navigation,onRestoreHostTools,onEnterHerdr,onChooseSession}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;navigation?:ReturnType<typeof useHerdrNavigation>;onRestoreHostTools?:(restored:()=>void)=>void;onEnterHerdr?:Enter;onChooseSession?:(row:LiveAgent&{agent_session:ReportedSessionRef},server:string)=>void}) {
   useUi();
   useAccessSnapshot();
-  const {data:loaded,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=useHerdrNavigation({sessionId,herdrSession,visible,reports});
+  const own=useHerdrNavigation({sessionId,herdrSession,visible:visible && !navigation,reports});
+  const {data:loaded,agentFailure:failure,busy,query,setQuery,lease,refresh,selectServer}=navigation??own;
   const fromAgent=!!onEnterHerdr || !!onChooseSession;
   const data=fromAgent && (!visible || !lease.current())?null:loaded;
   const current=useRef({sessionId,visible,server:data?.server});current.current={sessionId,visible,server:data?.server};
