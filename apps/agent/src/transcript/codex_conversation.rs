@@ -484,5 +484,6 @@ fn project(
             other => other,
         },
         queued: Vec::new(),
+        work: None,
     })
 }

@@ -1,6 +1,7 @@
 import {useId, useMemo, useState} from 'react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
-import {deriveStatus, runningOf, type StatusItem, type StatusKind} from './agentBackgroundWork';
+import {deriveStatus, fromWork, runningOf, type StatusItem, type StatusKind} from './agentBackgroundWork';
+import type {WorkItem} from './agentWork';
 import {formatNumber, t} from './i18n/core';
 import {formatCountdown, useNow} from './relativeTime';
 import './AgentStatusPanel.css';
@@ -8,26 +9,36 @@ import './AgentStatusPanel.css';
 type Shape = Parameters<typeof deriveStatus>[0];
 const shown = 3;
 const kinds = {shell: 'agentStatusShells', monitor: 'agentStatusMonitors', agent: 'agentStatusAgents', workflow: 'agentStatusWorkflows'} as const;
-const states = {running: 'agentStatusRunning', done: 'agentStatusDone', failed: 'agentStatusFailed', stopped: 'agentStatusStopped'} as const;
+const states = {running: 'agentStatusRunning', done: 'agentStatusDone', failed: 'agentStatusFailed', stopped: 'agentStatusStopped', unknown: 'agentStatusUnknown'} as const;
 
 function Row({item, now}: {item: StatusItem; now: number}) {
   const end = item.endedAt ?? now, elapsed = item.startedAt !== undefined && end >= item.startedAt ? formatCountdown(end - item.startedAt) : undefined;
-  return <li data-state={item.state}>
+  const head = <>
     <span className="agent-status-label">{item.label || t(kinds[item.kind], {count: 1})}</span>
     {item.type && <span className="agent-status-type">{item.type}</span>}
     <span className="agent-status-meta">{[t(states[item.state]), elapsed, item.tokens !== undefined && t('agentStatusTokens', {tokens: formatNumber(item.tokens, {notation: 'compact'})})].filter(Boolean).join(' · ')}</span>
+  </>;
+  // The command and what it printed come from the companion's whole-conversation record.
+  const output = item.events?.length ? item.events.join('\n') : item.last;
+  return <li data-state={item.state}>{item.command || output ? <details><summary>{head}</summary>
+    {item.command && <pre>{item.command}</pre>}
+    {output && <pre aria-label={t('agentStatusOutput')}>{output}</pre>}
+  </details> : head}
     {item.detail && item.kind !== 'agent' && <small>{item.detail}</small>}
   </li>;
 }
 
 /** The area under the prompt in the Claude Code TUI: counters for background shells and monitors that open their list, and the
  * tree of sub-agents and workflows. Compact (one row) until opened; nothing while no background work runs. */
-export default function AgentStatusPanel({messages}: {messages: Shape}) {
-  const items = useMemo(() => deriveStatus(messages), [messages]);
-  const live = items.some(item => item.state === 'running');
+export default function AgentStatusPanel({messages, work}: {messages: Shape; work?: readonly WorkItem[]}) {
+  // The companion reads the whole conversation; without it the loaded messages are all there is.
+  const derived = useMemo(() => work ? fromWork(work) : deriveStatus(messages), [messages, work]);
+  const live = derived.some(item => item.state === 'running' || item.state === 'unknown');
   const now = useNow(1000, live);
+  const items = useMemo(() => work ? fromWork(work, now) : derived, [work, derived, now]);
   const [open, setOpen] = useState(false), [more, setMore] = useState(false), [viewer, setViewer] = useState<StatusKind>();
   const treeId = useId(), viewerId = useId();
+  const running = items.filter(item => item.state === 'running').length;
   if (!live) return null;
   const counters = (['shell', 'monitor'] as const).map(kind => [kind, runningOf(items, kind)] as const).filter(([, count]) => count > 0);
   const tree = items.filter(item => item.kind === 'agent' || item.kind === 'workflow').sort((a, b) => Number(b.state === 'running') - Number(a.state === 'running') || (b.startedAt ?? 0) - (a.startedAt ?? 0));
@@ -37,7 +48,7 @@ export default function AgentStatusPanel({messages}: {messages: Shape}) {
     <div className="agent-status-bar">
       <button type="button" className="agent-status-toggle" aria-expanded={open} aria-controls={treeId} onClick={() => setOpen(value => !value)}>
         {open ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
-        <span>{t('agentStatusRunningCount', {count: items.filter(item => item.state === 'running').length})}</span>
+        <span>{running > 0 ? t('agentStatusRunningCount', {count: running}) : t('agentStatusUnknownCount', {count: items.filter(item => item.state === 'unknown').length})}</span>
       </button>
       {counters.map(([kind, count]) => <button key={kind} type="button" className="agent-status-counter" aria-expanded={viewer === kind} aria-controls={viewerId}
         onClick={() => setViewer(current => current === kind ? undefined : kind)}>{t(kinds[kind], {count})}</button>)}

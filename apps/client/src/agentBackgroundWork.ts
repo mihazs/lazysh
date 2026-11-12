@@ -1,8 +1,11 @@
 /** What the Claude Code status area shows under the prompt: background shells, monitors, sub-agents and workflows, derived from
  * the conversation page (tool calls, their results and the harness's task notifications). Pure; nothing here reads the terminal. */
+import type {WorkItem} from './agentWork';
 export type StatusKind = 'shell' | 'monitor' | 'agent' | 'workflow';
-export type StatusState = 'running' | 'done' | 'failed' | 'stopped';
-export type StatusItem = {id: string; kind: StatusKind; label: string; type?: string; state: StatusState; startedAt?: number; endedAt?: number; tokens?: number; background: boolean; taskId?: string; detail?: string};
+export type StatusState = 'running' | 'done' | 'failed' | 'stopped' | 'unknown';
+export type StatusItem = {id: string; kind: StatusKind; label: string; type?: string; state: StatusState; startedAt?: number; endedAt?: number; tokens?: number; background: boolean; taskId?: string; detail?: string;
+  /** From the companion only: the command, the lines a monitor reported and the last line of output. */
+  command?: string; events?: readonly string[]; last?: string};
 type Shape = {role: string; timestamp?: string; blocks: {type: string; text?: string; id?: string; name?: string; isError?: boolean}[]};
 
 const tag = (text: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
@@ -53,4 +56,18 @@ export function deriveStatus(messages: readonly Shape[]): StatusItem[] {
   return [...items.values()];
 }
 
-export const runningOf = (items: readonly StatusItem[], kind: StatusKind) => items.filter(item => item.kind === kind && item.state === 'running').length;
+/** A launch with no recorded end this old is shown as unknown rather than running (a monitor: its own timeout plus a minute). */
+const staleAfter = 12 * 3600_000;
+/** The companion's `work` list read from the whole conversation: the same rows as `deriveStatus`, which only sees the loaded window. */
+export function fromWork(work: readonly WorkItem[], now = Date.now()): StatusItem[] {
+  return work.map(item => {
+    const startedAt = Date.parse(item.startedAt ?? '') || undefined, ended = Date.parse(item.endedAt ?? '') || undefined;
+    const stale = item.state === 'running' && startedAt !== undefined && now - startedAt > (item.timeoutMs === undefined ? staleAfter : item.timeoutMs + 60_000);
+    return {id: item.id, kind: item.kind, label: item.title, type: item.subtitle, state: stale ? 'unknown' : item.state, startedAt,
+      endedAt: item.durationMs !== undefined && startedAt !== undefined ? startedAt + item.durationMs : ended, tokens: item.tokens,
+      background: true, taskId: item.taskId, detail: item.summary, command: item.command, events: item.events, last: item.last};
+  });
+}
+
+/** What is still open of a kind: running, or with no end recorded. */
+export const runningOf = (items: readonly StatusItem[], kind: StatusKind) => items.filter(item => item.kind === kind && (item.state === 'running' || item.state === 'unknown')).length;

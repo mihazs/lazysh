@@ -25,6 +25,7 @@ mod grok_checkpoint;
 mod grok_conversation;
 mod herdr_session;
 mod inline_image;
+mod work;
 pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_window};
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
@@ -174,6 +175,9 @@ pub struct TranscriptPage {
     /// Messages typed while the agent works and not yet taken, oldest first (Claude Code only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub queued: Vec<Value>,
+    /// Sub-agents, background commands and monitors recorded in the conversation (Claude Code only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<Vec<Value>>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -345,6 +349,7 @@ fn read_records(
         has_newer: false,
         activity: None,
         queued: Vec::new(),
+        work: None,
     })
 }
 

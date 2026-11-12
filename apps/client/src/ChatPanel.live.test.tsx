@@ -164,4 +164,18 @@ describe('when the stream cannot be had',()=>{
     poll=polled(...first,text('a2','assistant','Polled'));await advance(2000);expect(screen.getByText('Polled')).toBeTruthy();
     await advance(30_000);expect(starts).toHaveLength(1);
   });
+  it('keeps the background-work panel current from the stream: a snapshot carries the work, a delta that changes it replaces it and one that does not leaves it',async()=>{
+    render_();await advance(0);await send(hello);
+    const task=(state:string)=>({id:'b1',kind:'shell',title:'Wait for CI',state,events:[],startedAt:new Date().toISOString()});
+    await send({...snapshot(1,1,first.map(message=>entry(message))),work:[task('running')]});
+    expect(screen.getByRole('button',{name:'1 running'})).toBeTruthy();
+    await send(delta(1,2,[entry(text('a2','assistant','More'))]));
+    expect(screen.getByRole('button',{name:'1 running'})).toBeTruthy();
+    await send(delta(1,3,[],{work:[task('done')]}));
+    expect(screen.queryByRole('button',{name:/running/})).toBeNull();
+    await send(delta(1,4,[],{work:[task('running')]}));
+    expect(screen.getByRole('button',{name:'1 running'})).toBeTruthy();
+    await send(delta(1,5,[],{work:null}));
+    expect(screen.queryByRole('button',{name:/running/})).toBeNull();
+  });
 });

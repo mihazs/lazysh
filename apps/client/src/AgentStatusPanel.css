@@ -10,3 +10,5 @@
 .agent-status-type, .agent-status-meta, .agent-status-tree small { color: var(--muted); }
 .agent-status-meta { grid-column: 1 / -1; font-variant-numeric: tabular-nums; }
 .agent-status-tree small { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.agent-status-tree summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; }
+.agent-status-tree pre { max-height: 30vh; margin: 4px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

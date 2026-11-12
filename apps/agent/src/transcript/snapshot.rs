@@ -90,5 +90,6 @@ pub(super) fn page(
         has_newer: false,
         activity: None,
         queued: Vec::new(),
+        work: None,
     })
 }
