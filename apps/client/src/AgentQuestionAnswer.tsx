@@ -46,7 +46,7 @@ function QuestionAnswer({question, answerer, review, onSent, progress}: {questio
       <button type="button" disabled={busy || !checked.length} onClick={() => void send([...[...checked].sort().map((index): DialogAnswer => ({kind: 'select', option: index + 1, of})), {kind: 'submit', of}, ...(review ? ['review' as const] : [])])}>{t('agentAnswerSubmit')}</button>
     </> : <div className="chat-question-choices">{question.options.map((option, index) =>
       <button type="button" key={index} disabled={busy} onClick={() => void send([{kind: 'select', option: index + 1, of}, ...(review ? ['review' as const] : [])])}>{option.label}</button>)}</div>}
-    <form className="chat-question-other" onSubmit={event => {event.preventDefault(); if (!busy && text.trim()) void send([{kind: 'select', option: of + 1, of: of + 1}, {kind: 'send', text: text.trim()}, ...(review ? ['review' as const] : [])]);}}>
+    <form className="chat-question-other" onSubmit={event => {event.preventDefault(); if (!busy && text.trim()) void send([{kind: 'select', option: of + 1, of: of + 1}, {kind: 'type', text: text.trim()}, ...(review ? ['review' as const] : [])]);}}>
       <input type="text" aria-label={t('agentAnswerOther')} maxLength={1000} disabled={busy} value={text} onChange={event => setText(event.target.value)}/>
       <button type="submit" disabled={busy || !text.trim()}>{t('agentAnswerSendOther')}</button>
     </form>
