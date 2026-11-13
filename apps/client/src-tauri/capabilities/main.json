@@ -34,6 +34,7 @@
     "allow-connect-mosh",
     "allow-connect-et",
     "allow-open-web-url",
+    "allow-start-auth-tunnel", "allow-stop-auth-tunnel", "allow-list-auth-tunnels",
     "allow-list-devices",
     "allow-device-frame",
     "allow-device-action",

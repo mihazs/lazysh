@@ -1,5 +1,5 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
-type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
+pub(crate) type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
 use crate::ssh::{AppState, Result, SshError};
 use serde::Serialize;
 use std::{collections::HashMap, future::Future, sync::Arc, task::Poll, time::Duration};
@@ -36,6 +36,11 @@ struct Forward {
 #[derive(Clone, Default)]
 pub struct PreviewState(Arc<Mutex<HashMap<String, Forward>>>);
 impl PreviewState {
+    /// Whether a preview of this app already listens on `port` of the device loopback.
+    pub(crate) async fn uses_local_port(&self, port: u16) -> bool {
+        let forwards = self.0.lock().await;
+        forwards.values().any(|f| f.preview.local_port == port)
+    }
     pub(crate) async fn cancel_for_lock(&self) {
         let forwards = self.0.lock().await;
         for forward in forwards.values() {
@@ -200,7 +205,7 @@ pub(crate) async fn remote_stream(
 }
 
 // One owner enforces the connection cap and drains all children before returning.
-async fn serve_connections<F, Fut>(
+pub(crate) async fn serve_connections<F, Fut>(
     listener: TcpListener,
     mut cancelled: watch::Receiver<bool>,
     mut stopped: watch::Receiver<bool>,

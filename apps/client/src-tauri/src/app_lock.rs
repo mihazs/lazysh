@@ -244,6 +244,10 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
             .state::<crate::previews::PreviewState>()
             .cancel_for_lock()
             .await;
+        handle
+            .state::<crate::auth_tunnel::AuthTunnelState>()
+            .cancel_for_lock()
+            .await;
         if replacement {
             handle
                 .state::<crate::ssh::AppState>()
@@ -679,6 +683,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "clipboard_cancel"
             | "board_keep_awake_release"
             | "stop_preview"
+            | "stop_auth_tunnel"
             | "device_stream_stop"
             | "agent_watch_stop"
             | "voice_cancel"

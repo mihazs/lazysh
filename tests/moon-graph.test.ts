@@ -59,7 +59,7 @@ const legacy: Record<string, string> = {
   'init:ios': 'client:init-ios', 'build:ios': 'client:build-ios', 'test:ios-workspace': 'client:test-ios-workspace',
   'check:rust': 'client-native:check-rust', 'test:rust': 'client-native:test-rust', lint: 'client-native:lint', 'format:check': 'client-native:format-check',
   'test:resume-policy': 'client-native:test-resume-policy', 'test:openssh': 'client-native:test-openssh',
-  'test:openssh-connections': 'client-native:test-openssh-connections', 'test:host-clipboard': 'client-native:test-host-clipboard',
+  'test:openssh-connections': 'client-native:test-openssh-connections', 'test:openssh-auth-tunnel': 'client-native:test-openssh-auth-tunnel', 'test:host-clipboard': 'client-native:test-host-clipboard',
   'test:local': 'client-native:test-local', 'test:mosh': 'client-native:test-mosh', 'test:et': 'client-native:test-et',
   'test:multiplexers': 'client-native:test-multiplexers', 'test:connection-loss': 'client-native:test-connection-loss', 'test:tmux': 'client-native:test-tmux',
   'test:voice': 'client-native:test-voice', 'test:parakeet-product': 'client-native:test-parakeet-product',

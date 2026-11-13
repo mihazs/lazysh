@@ -19,6 +19,9 @@ tasks:
   test-openssh-connections:
     type: test
     command: 'cargo test --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --ignored'
+  test-openssh-auth-tunnel:
+    type: test
+    command: 'cargo test --locked --lib ssh::tests::auth_tunnel_fixture::openssh_auth_tunnel_ -- --ignored'
   test-host-clipboard:
     type: test
     command: 'cargo test --locked --lib ssh::tests::macos_host_clipboard_roundtrip -- --ignored --exact --nocapture'

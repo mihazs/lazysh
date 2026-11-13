@@ -142,3 +142,35 @@ pub(crate) async fn wait_for_listener(
     .await
     .expect("owned server did not listen in time");
 }
+
+/// The saved host an owned loopback sshd on `port` stands for, pinned to its host key.
+pub(crate) fn owned_host(
+    id: &str,
+    name: &str,
+    port: u16,
+    host_key: &russh::keys::PrivateKey,
+) -> Host {
+    Host {
+        default_multiplexer: None,
+        default_multiplexer_next: None,
+        transport: None,
+        mosh: None,
+        et: None,
+        id: id.into(),
+        name: name.into(),
+        hostname: "127.0.0.1".into(),
+        port,
+        username: std::env::var("USER").unwrap(),
+        fingerprint: Some(
+            host_key
+                .public_key()
+                .fingerprint(HashAlg::Sha256)
+                .to_string(),
+        ),
+        jump_host_id: None,
+        credentials_stored: false,
+        client_environment: false,
+        biometric_unlock: false,
+        forward_agent: false,
+    }
+}
