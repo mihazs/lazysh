@@ -26,6 +26,7 @@ import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './history
 import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
+import AgentToolCard from './AgentToolCard';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
@@ -279,6 +280,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
   // The newest unanswered question is the dialog that may still be open: it stays out of the folded activity, and only it can be answered here.
+  // The Agent view draws a call and its result as one card; a result whose call is not loaded keeps its own block.
+  const toolResults = useMemo(() => timeline ? new Map(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_result' && block.id).map(block => [block.id!, block])) : new Map<string, Block>(), [timeline, messages]);
+  const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && !block.card).map(block => block.id!)), [messages]);
   const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
   const answerer = useDialogAnswerer(sessionId);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
@@ -589,6 +593,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
   const flow = useMemo(() => opened?.view === 'conversation' || timeline ? projectMessages(messages) : messages, [opened?.view, timeline, messages]);
   const turns = useMemo(() => timeline ? groupTurns(flow) : [], [timeline, flow]);
+  // Only a call of the turn in progress can still be running; an older one with no result recorded just has none.
+  const liveCalls = useMemo(() => new Set(activity === 'working' || activity === 'waiting' ? turns.at(-1)?.activity.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id).map(block => block.id!) : []), [activity, turns]);
   // What the person typed, for the composer's receipts: harness events and tool results are not prompts.
   const promptTexts = useMemo(() => flow.filter(message => message.role === 'user' && !message.event).map(message => message.blocks.filter(block => block.type === 'text' && !block.card).map(block => block.text ?? '').join('\n')).filter(Boolean), [flow]);
   useEffect(() => onPrompts?.(promptTexts), [onPrompts, promptTexts]);
@@ -612,13 +618,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
+  const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
   const renderMessage = (message: Message) => message.event ? (
     <article key={message.id} data-anchor={message.id} className="chat-message agent-event">
       {message.event.detail
         ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
         : <p>{eventLabel(message.event)}</p>}
     </article>
-  ) : timeline && message.blocks.every(isPlanBlock) ? null : (
+  ) : (timeline && message.blocks.every(isPlanBlock)) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
     <article key={message.id} data-anchor={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
@@ -630,6 +637,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       </p>}
       {message.blocks.map((block, index) => {
         if (timeline && isPlanBlock(block)) return null;
+        if (paired(block)) return null;
+        if (timeline && block.id && block.type === 'tool_use' && !block.card) return <AgentToolCard key={index} use={block} result={toolResults.get(block.id)} live={liveCalls.has(block.id)} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;

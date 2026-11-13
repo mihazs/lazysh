@@ -206,3 +206,30 @@ describe('when the stream cannot be had',()=>{
     expect(screen.queryByRole('button',{name:/running/})).toBeNull();
   });
 });
+
+describe('tool calls in the timeline',()=>{
+  it('shows a tool call as one card that its result updates in place, without a second block or a scroll jump',async()=>{
+    render_();await advance(0);await goLive();
+    const call={id:'t1',role:'assistant',blocks:[{type:'tool_use',id:'tool-1',name:'Bash',text:JSON.stringify({command:'cargo test'})}]};
+    await send(snapshot(1,2,[...first.map(message=>entry(message)),entry(call as never)],'working'));
+    const card=()=>[...new Set(screen.getAllByText('cargo test').map(node=>node.closest('details.agent-tool')))];
+    expect(card()).toHaveLength(1);
+    expect(card()[0]!.getAttribute('data-status')).toBe('running');
+    const before=card()[0];
+    const result={id:'r1',role:'tool',blocks:[{type:'tool_result',id:'tool-1',text:'Exit code 1\nfailed: 2 tests',isError:true}]};
+    await send(delta(1,3,[entry(result as never)]));
+    expect(card()).toHaveLength(1);
+    expect(card()[0]).toBe(before);
+    expect(card()[0]!.getAttribute('data-status')).toBe('error');
+    expect(screen.getByLabelText('Output').textContent).toBe('failed: 2 tests');
+    expect(screen.queryByText('Recorded tool error')).toBeNull();
+  });
+  it('shows a running mark only on a call of the turn in progress',async()=>{
+    render_();await advance(0);await goLive();
+    const call=(id:string,command:string)=>({id:`m-${id}`,role:'assistant',blocks:[{type:'tool_use',id,name:'Bash',text:JSON.stringify({command})}]});
+    await send(snapshot(1,2,[...first.map(message=>entry(message)),entry(call('old','sleep 1') as never),entry(text('p2','user','Next') as never),entry(call('new','sleep 2') as never)],'working'));
+    const status=(command:string)=>screen.getAllByText(command)[0].closest('details.agent-tool')!.getAttribute('data-status');
+    expect(status('sleep 2')).toBe('running');
+    expect(status('sleep 1')).toBe('unknown');
+  });
+});
