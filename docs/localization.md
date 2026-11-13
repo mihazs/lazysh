@@ -161,6 +161,62 @@ active interface language when the existing listener registration runs; changing
 language does not restart polling/listeners or request OS permission again.
 Native notification body/permission text remains outside this renderer catalog.
 
+## Improving a translation or adding a language
+
+To fix a Brazilian Portuguese or Spanish string, edit its row in
+`apps/client/src/i18n/translations.ts` and run `bun run test src/i18n` from
+`apps/client`; a wording-only PR needs no other step. Keep every `{{placeholder}}`
+and plural suffix unchanged, and keep technical terms, key names and commands exact.
+
+A new language is a cross-component change, not a catalog file alone. Open an issue
+that names its BCP 47 tag (for example `fr`) and who will review the wording, branch
+from current `main`, and do not list the language in the picker until every step
+below is done. Search the repository for `pt-BR` and `es`, test fixtures included,
+to confirm no place is missed.
+
+1. **Catalog.** Supply every key of `en.ts`, typed as
+   `Record<keyof typeof english, string>` so TypeScript rejects missing or unknown
+   keys (a sibling file such as `translations.fr.ts`, or a new column in the
+   `[pt-BR, es]` tuples of `translations.ts`). Add the `<key>_<category>` plural
+   forms for every category `Intl.PluralRules(tag)` reports for the bases listed in
+   `catalogs.test.ts`, and add the language's own name, written in that language
+   (like `Español`), as a `language…` label key in every catalog.
+2. **Selection and negotiation.** In `i18n/core.ts` add the tag to `uiLanguages`, to
+   the `createUiInstance` resources and to `resolveUiLocale`, which decides which
+   system tags select it. Add its label to `languageLabels` in `PreferencesPanel.tsx`
+   and allow its tag in the native-status check in `i18n/nativeLocale.ts`.
+   `preferences.ts` validates through `isUiLanguage`, so an unknown stored value
+   still falls back to System.
+3. **Persistence and sync.** Add the tag to both `uiLanguage` allow-lists in
+   `apps/client/src-tauri/src/sync.rs` (the validator and its test list) so a synced
+   backup carrying it is accepted; older backups without the field stay readable.
+4. **Native authority (Android, iOS, macOS).** Add the choice to `UiLocaleChoice` in
+   `packages/credential-vault/src/ui_locale.rs`, to the macOS resolver
+   `packages/credential-vault/src/macos_ui_locale.rs`, to `UiLocalePolicy` in
+   `packages/credential-vault/android/.../NativeUiLocale.kt` and to
+   `packages/credential-vault/ios/Sources/NativeUiLocale.swift`, with their unit
+   tests (`UiLocalePolicyTest.kt`, `UiLocaleStoreTest.kt`, `NativeUiLocaleTests.swift`).
+   Provide the lock-cover and biometric text in
+   `packages/credential-vault/android/src/main/res/values-<qualifier>/strings.xml`
+   (the app's own `values-<qualifier>/strings.xml` holds the foreground-service
+   notification text) and in
+   `apps/client/src-tauri/apple/Localizations/<tag>.lproj/NativeUI.strings` and
+   `InfoPlist.strings`, with exactly the keys the `en` tables have. Extend the
+   locale lists in `PermissionLocalizationTests.swift`, `NativeUiLocaleTest.kt` and
+   the `plutil -lint` line of the macOS job in `.github/workflows/checks.yml`.
+   Windows and Linux have no native cover and keep frontend authority.
+5. **Acceptance.** Add the tag to every test that enumerates the current locales
+   (`catalogs.test.ts`, `e2e/i18n.spec.ts`, the per-panel `*Locales` specs and
+   tests). `coverage.test.ts` must stay green so no covered component keeps a
+   literal string; the pseudo-locale fixture needs no change. Report which platform
+   checks actually ran: a catalog that passes unit tests is not evidence of native
+   or physical-device language behavior.
+6. **Documentation and release.** Update the supported-language and System
+   resolution paragraphs above, add a `CHANGELOG.md` `[Unreleased]` entry that names
+   the language and states that **System** stays the default (a matching system tag
+   now selects the new catalog instead of English), and add a minor Changesets
+   fragment.
+
 ## Apple permission explanations
 
 The main Apple app bundles English, Brazilian Portuguese and Spanish
