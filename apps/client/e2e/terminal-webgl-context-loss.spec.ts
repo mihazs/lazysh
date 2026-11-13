@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { androidSerial, benchUrl, git, installBenchBridge, require, root, test } from './fixtures/benchEnvironment';
+import { androidDevice, androidSerial, benchUrl, git, installBenchBridge, require, root, test } from './fixtures/benchEnvironment';
 
 // WebGL context-loss run of the renderer shootout (#1323, docs/architecture/terminal-benchmarks.md): the xterm.js WebGL addon
 // on the benchmark page, its context taken away with WEBGL_lose_context, and what the user would see afterwards. Correctness is
@@ -134,7 +134,7 @@ test.afterAll(async () => {
     host: { loadAverageAtEnd: os.loadavg(), cpu: os.cpus()[0]?.model, os: `${os.type()} ${os.release()}` },
     toolchain: { node: process.versions.node, xterm: version('@xterm/xterm'), webglAddon: version('@xterm/addon-webgl'), playwright: version('@playwright/test') },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
-    androidSerial, launchArgs, restoreWindowMs: RESTORE_WINDOW_MS, context, results,
+    androidSerial, device: androidDevice(), launchArgs, restoreWindowMs: RESTORE_WINDOW_MS, context, results,
     limits: `${androidSerial ? 'The Android System WebView of the device with that adb serial' : 'Headless Chromium on a desktop host: not an Android WebView'}, no backgrounding of an app, no GPU process crash; the context is taken away with WEBGL_lose_context. Pixel comparison against a terminal fed the same bytes; times are upper bounds with the resolution of one screenshot unless taken in the page.`
   }, null, 2) + '\n');
 });

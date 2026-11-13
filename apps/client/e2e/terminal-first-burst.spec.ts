@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
+import { androidDevice, androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
 import { summarize, type StyleFamily } from '../bench/workloads';
 
 // What the first appearance of a glyph in a style costs, with the xterm.js DOM renderer and the WebGL addon (#1323,
@@ -68,7 +68,7 @@ test.afterAll(async ({ browser }, info) => {
   writeFileSync(out, JSON.stringify({
     schema: 1, run: 'first burst', mode: full ? 'full' : 'smoke',
     host: { loadAverageAtEnd: os.loadavg(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, cpuGovernor: read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor') },
-    toolchain: { node: process.versions.node, chromium: androidSerial ? null : browser.version(), androidSerial, xterm: JSON.parse(read(require.resolve('@xterm/xterm/package.json')) ?? '{}').version, webglAddon: JSON.parse(read(require.resolve('@xterm/addon-webgl/package.json')) ?? '{}').version },
+    toolchain: { node: process.versions.node, chromium: androidSerial ? null : browser.version(), androidSerial, device: androidDevice(), xterm: JSON.parse(read(require.resolve('@xterm/xterm/package.json')) ?? '{}').version, webglAddon: JSON.parse(read(require.resolve('@xterm/addon-webgl/package.json')) ?? '{}').version },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
     launchArgs, results,
     limits: `${androidSerial ? 'The Android System WebView of the device with that adb serial, in a fresh process per row; no per-process CPU (the WebView has no process list).' : 'Headless Chromium on a desktop host: not an Android WebView.'} A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached.`,
