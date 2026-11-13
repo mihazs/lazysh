@@ -11,6 +11,7 @@ pub mod host_browser;
 pub mod installation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+mod private_json;
 pub mod relay;
 pub mod reported_history;
 pub mod settings;
@@ -23,6 +24,7 @@ pub use storage_observation::take_bootstrap_observation;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
+pub mod update;
 pub mod usage;
 use clap::ValueEnum;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
