@@ -402,6 +402,42 @@ test('picks an option of the open dialog with its digit on a desktop keyboard',a
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
 });
 
+/** Codex asks in the same pane, drawn the way Codex draws a command approval (narrow, with its own wrapping). */
+async function showCodexApproval(page:Page) {
+  await page.evaluate(()=>{
+    const draw=(rows:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${rows.join('\r\n')}`)]});
+    const names=['Yes, proceed (y)',"Yes, and don't ask again for `ls` (p)",'No, and tell Codex why (esc)'];
+    const dialog=(at:number)=>['• Running ls','','','  Would you like to run the following command?','','  $ ls','',...names.map((name,index)=>`${index===at?'› ':'  '}${index+1}. ${name}`),'','  Press enter to confirm or esc to cancel'];
+    let at=0;
+    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['• You canceled the request to run ls','','› Ask Codex to do anything']);else{at+=input.rows as number;draw(dialog(at));}};
+    draw(dialog(at));
+  });
+}
+test('answers a Codex approval from the Agent view, and asks twice before a choice the agent remembers',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  await showCodexApproval(page);
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Would you like to run the following command?'})).toBeVisible({timeout:8000});
+  await expect(dialog.getByText('$ ls',{exact:true})).toBeVisible();
+  const remembered=dialog.getByRole('button',{name:/^Yes, and don't ask again/});
+  await expect(remembered).toBeEnabled();
+  const sent=async(before:number)=>(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  await remembered.click();
+  await expect(dialog.getByRole('note')).toHaveText('This choice stays in effect after this answer: Yes, and don\'t ask again for `ls` (p). Confirm it?');
+  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(await sent(before)).toEqual([]);
+  await dialog.getByRole('button',{name:'Back',exact:true}).click();
+  const no=dialog.getByRole('button',{name:/^No, and tell Codex why/});
+  expect((await no.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await no.click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  expect(await sent(before)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+  await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
+  expect(await terminalText(page)).toContain('You canceled the request');
+});
+
 test('says the agent waits in the terminal for a dialog it cannot read exactly, offers the terminal and sends no key',async({page})=>{
   await open(page);await asClaude(page);
   const agent=await showAgent(page);

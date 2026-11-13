@@ -1,0 +1,18 @@
+  >_ OpenAI Codex (v0.167.0)
+     /tmp/codex-probe/work
+
+
+• Model changed to gpt-5.6-luna medium for Plan mode.
+
+
+› Use the request_user_input tool to ask me which color I prefer: red or blue. Ask nothing else, do not plan.
+
+
+  Question 1/1 (1 unanswered)
+  Which color do you prefer?
+
+  › 1. Red                Choose red.
+    2. Blue               Choose blue.
+    3. None of the above  Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit answer | esc to interrupt

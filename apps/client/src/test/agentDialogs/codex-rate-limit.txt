@@ -1,0 +1,18 @@
+  >_ OpenAI Codex (v0.167.0)
+     /tmp/codex-probe/work
+
+
+› Run exactly this shell command and nothing else: touch probe.txt
+
+
+  Worked for 5s • 7:39 AM
+
+
+  Approaching rate limits
+  Switch to gpt-6-luna for lower credit usage?
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back

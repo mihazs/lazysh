@@ -12,6 +12,10 @@ const fixture = dialogScreen, model = modelScreen;
 const closed = fixture('model-closed');
 
 const answers: DialogAnswer[] = [];
+const publishAnswer = (answer: TerminalControl['answer']) => {
+  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer, cycleMode: vi.fn(async () => undefined)};
+  act(() => publishComposerControl('s', control));
+};
 let screenOf: ReturnType<typeof fakeTerminal>;
 let ahead = 0;
 /** The bound input of a pane running the picker: arrow keys move the highlight on screen, Enter and Escape close it. */
@@ -24,8 +28,7 @@ function bind(react = true) {
     else screenOf.set(closed);
     return true;
   });
-  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer, cycleMode: vi.fn(async () => undefined)};
-  act(() => publishComposerControl('s', control));
+  publishAnswer(answer);
   return answer;
 }
 function mount(rows: string[], props: Partial<Parameters<typeof AgentPickerDock>[0]> = {}) {
@@ -98,7 +101,7 @@ it('finds the chosen option by what it says when the list scrolls as the highlig
     else screenOf.set(closed);
     return true;
   });
-  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control, cycleMode: vi.fn(async () => undefined)}));
+  publishAnswer(control);
   mount(list(0, 0));
   await waitFor(() => expect(option('Three').disabled).toBe(false));
   fireEvent.click(option('Three'));
@@ -162,4 +165,67 @@ it('follows the dialog as output arrives, and goes away when it closes', async (
   await screen.findByRole('region', {name: t('agentPickerTitle')});
   screenOf.set(closed);
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+});
+
+// Codex draws its own dialogs; the same arrows and Enter answer them.
+const approval = () => fixture('codex-approval');
+const highlight = (rows: string[], to: number) => rows.map(row => row.replace(/^› (\d)\./, '  $1.').replace(new RegExp(`^  ${to}\\.`), `› ${to}.`));
+const closes = () => waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+const tap = async (name: RegExp | string) => {const button = await screen.findByRole('button', {name: typeof name === 'string' ? new RegExp(`^${name}`) : name}); await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(button);};
+function bindCodex() {
+  answers.length = 0; ahead = 0;
+  const answer = vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (body.kind === 'pick' && !body.enter) {ahead += body.rows; screenOf.set(highlight(approval(), 1 + ahead));}
+    else screenOf.set(fixture('codex-idle'));
+    return true;
+  });
+  publishAnswer(answer);
+}
+
+it('answers a Codex approval with the arrows and Enter a person presses, once', async () => {
+  bindCodex();
+  mount(approval(), {agent: 'Codex', waiting: 'approval'});
+  const card = await screen.findByRole('region', {name: t('agentPickerTitle')});
+  expect(within(card).getByRole('heading').textContent).toBe('Would you like to run the following command?');
+  expect(card.textContent).toContain('$ touch probe.txt');
+  await tap('No, and tell Codex');
+  await closes();
+  expect(answers.map(body => body.kind === 'pick' && [body.rows, body.enter])).toEqual([[2, false], [0, true]]);
+});
+
+it('presses Enter alone for the plain Yes of a Codex approval', async () => {
+  bindCodex();
+  mount(approval(), {agent: 'Codex', waiting: 'approval'});
+  await tap('Yes, proceed');
+  await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]));
+});
+
+const remembering = /^Yes, and don't ask again/;
+async function startRemembering(open: () => void) {
+  bindCodex();
+  mount(approval(), {agent: 'Codex'});
+  await waitFor(() => expect((screen.getByRole('button', {name: remembering}) as HTMLButtonElement).disabled).toBe(false));
+  open();
+  expect(screen.getByRole('note').textContent).toBe(t('agentPickerRemember', {choice: "Yes, and don't ask again for commands that start with `touch probe.txt` (p)"}));
+  expect(answers).toEqual([]);
+}
+
+it('asks for a second tap that names a choice that outlasts the answer, sends nothing before it, and nothing on Back', async () => {
+  await startRemembering(() => fireEvent.click(screen.getByRole('button', {name: remembering})));
+  fireEvent.click(screen.getByRole('button', {name: t('agentPickerBack')}));
+  expect(answers).toEqual([]);
+  fireEvent.click(await screen.findByRole('button', {name: remembering}));
+  fireEvent.click(screen.getByRole('button', {name: t('agentPickerConfirm')}));
+  await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]));
+});
+
+it('asks for the same second tap when the choice is made with its digit on a desktop keyboard', async () => {
+  await startRemembering(() => fireEvent.keyDown(window, {key: '2'}));
+});
+
+it('does not read a Codex dialog as a Claude Code one: it says the agent waits in the terminal and sends nothing', async () => {
+  mount(approval());
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(answers).toEqual([]);
 });

@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import type {ScreenSource} from '../AgentPickerDock';
-/** Screens captured from Claude Code 2.1.318 in a real 100x40 tmux pane, as the rows tmux drew (`src/test/agentDialogs/*.txt`). */
+/** Screens captured from Claude Code 2.1.318 in a real 100x40 tmux pane, and `codex-*` ones from Codex CLI 0.167.0 (110x40, `codex-model-narrow` 45 wide), as the rows tmux drew (`src/test/agentDialogs/*.txt`). */
 export const dialogScreen = (name: string) => readFileSync(`src/test/agentDialogs/${name}.txt`, 'utf8').split('\n');
 /** What tmux draws for a pane that fills a 100x40 window: the program's rows from the top, then the status row at the bottom. */
 export const onTmux = (rows: string[]) => [...rows, ...Array(39 - rows.length).fill(''), ' [work] 0:node*                                     "host" 12:34 12-Nov-26'];

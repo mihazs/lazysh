@@ -17,7 +17,7 @@ export type LiftedDialog = Readonly<{
 }>;
 /** `none`: no dialog footer on the screen. `unliftable`: a dialog is open that this profile cannot read exactly. */
 export type Lift = Readonly<{kind: 'none' | 'unliftable'} | {kind: 'dialog'; dialog: LiftedDialog}>;
-const none: Lift = {kind: 'none'}, unliftable: Lift = {kind: 'unliftable'};
+export const none: Lift = {kind: 'none'}, unliftable: Lift = {kind: 'unliftable'};
 
 /** The Claude Code 2.1.x profile is data: Esc leaves the dialog, and one of these footers says Enter takes the highlighted row. */
 const escape = /\bEsc to (?:cancel|close|go back|dismiss)\b|\bctrl\+g to edit in\b/i;
@@ -28,10 +28,22 @@ const rule = /^─{20,}$/;
 const marker = /^ {0,3}❯ \S/;
 const numberedMark = /^ {0,3}❯ \d\. \S/;
 const checkbox = /^(?:\[.?\]|[☐☑☒])/;
-const limits = {options: 12, body: 12, hint: 4, text: 300};
-const indent = (line: string) => line.length - line.trimStart().length;
-const lastWhere = <T>(items: readonly T[], test: (item: T, index: number) => boolean) => { let index = items.length; while (--index >= 0 && !test(items[index], index)); return index; };
-const clip = (text: string) => text.length > limits.text ? `${text.slice(0, limits.text - 1)}…` : text;
+export const limits = {options: 12, body: 12, hint: 4, text: 300};
+export const indent = (line: string) => line.length - line.trimStart().length;
+export const lastWhere = <T>(items: readonly T[], test: (item: T, index: number) => boolean) => { let index = items.length; while (--index >= 0 && !test(items[index], index)); return index; };
+export const clip = (text: string) => text.length > limits.text ? `${text.slice(0, limits.text - 1)}…` : text;
+
+/** One option from its screen rows: the label and, after a gap of two or more spaces or on the rows below, its description. */
+export function liftedOption(rows: readonly string[], grouped = false): LiftedDialog['options'][number] {
+  const [label, ...columns] = grouped ? [rows[0]] : rows[0].split(/ {2,}/);
+  const detail = [...columns, ...rows.slice(1)].join(' ');
+  return {label: clip(label.replace(/^\d\.\s+/, '')), ...(detail ? {detail: clip(detail)} : {})};
+}
+export function liftedDialog(title: string, body: readonly string[], options: LiftedDialog['options'], highlighted: number, hint: readonly string[]): Lift {
+  const head = clip(title.trim());
+  return {kind: 'dialog', dialog: Object.freeze({title: head, body: body.map(clip), options: Object.freeze(options), highlighted, hint: hint.map(clip),
+    signature: JSON.stringify([head, body, options.map(option => option.label), hint])})};
+}
 
 export function liftDialog(screen: readonly string[]): Lift {
   const lines = screen.map(line => line.trimEnd());
@@ -81,15 +93,9 @@ export function liftDialog(screen: readonly string[]): Lift {
     body.push(items.shift()!.rows[0]);
     highlighted--;
   }
-  const options = items.map(({rows}) => {
-    const [label, ...columns] = grouped ? [rows[0]] : rows[0].split(/ {2,}/);
-    const detail = [...columns, ...rows.slice(1)].join(' ');
-    return {label: clip(label.replace(/^\d\.\s+/, '')), ...(detail ? {detail: clip(detail)} : {})};
-  });
+  const options = items.map(({rows}) => liftedOption(rows, grouped));
   const hint = lines.slice(footer, esc + 1).map(line => line.trim()).filter(Boolean);
   if (options.length < 2 || options.length > limits.options || options.some(option => checkbox.test(option.label)) || body.length > limits.body
     || hint.length > limits.hint || !enterTakesRow.some(pattern => pattern.test(hint.join(' '))) || questionRows.test(lines.slice(top, esc).join('\n'))) return unliftable;
-  const title = clip(lines[titleRow].trim());
-  return {kind: 'dialog', dialog: Object.freeze({title, body: body.map(clip), options: Object.freeze(options), highlighted, hint: hint.map(clip),
-    signature: JSON.stringify([title, body, options.map(option => option.label), hint])})};
+  return liftedDialog(lines[titleRow], body, options, highlighted, hint);
 }

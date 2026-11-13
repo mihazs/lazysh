@@ -955,14 +955,14 @@ describe('image previews in the user bubble',()=>{
 });
 
 describe('a list dialog open on the terminal',()=>{
-  async function open(rows:string[],state='working',agent='claude',label='Claude Code') {
+  async function open(rows:string[],state='working',agent='claude',label='Claude Code',redraw:(highlight:number)=>string[]=modelScreen,first=5,closed=dialogScreen('model-closed')) {
     host(agent,[row(label,'%3',state)],'available',[turn('Switch model','Done')]);
     const screenOf=fakeTerminal(rows);
     // The terminal answers the keys the composer's bound input delivers: arrows move the highlight, Enter closes the dialog.
     const base=vi.mocked(invoke).getMockImplementation()!;let ahead=0;
     vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
       const input=command==='tmux_chat'?(args as {action:{kind:string;input?:{kind:string;rows?:number;enter?:boolean}}}).action.input:undefined;
-      if(input?.kind==='pick'){if(input.enter)screenOf.set(dialogScreen('model-closed'));else{ahead+=input.rows!;screenOf.set(modelScreen(5+ahead));}}
+      if(input?.kind==='pick'){if(input.enter)screenOf.set(closed);else{ahead+=input.rows!;screenOf.set(redraw(first+ahead));}}
       return base(command,args,options);
     });
     render(<AgentView sessionId="ssh" shown tmux terminal={screenOf.terminal} terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
@@ -980,11 +980,18 @@ describe('a list dialog open on the terminal',()=>{
     // Every key was preceded by a fresh look at which pane the agent runs in.
     expect(calls('tmux_chat').filter(args=>(args as {action:{kind:string}}).action.kind==='snapshot').length).toBeGreaterThan(2);
   });
-  it('shows the dialog read-only for an agent whose keys are not verified against captured dialogs',async()=>{
-    await open(modelScreen(5),'working','codex','Codex');
-    expect(within(dialog()).getByRole('heading',{name:'Select model'})).toBeTruthy();
-    expect(within(dialog()).queryByRole('button',{name:/^Sonnet/})).toBeNull();
-    expect(within(dialog()).getByText('Answer this one in the terminal.')).toBeTruthy();
+  it('answers a Codex approval through the pane the report names with the Codex profile, and does not read it with Claude Code\'s',async()=>{
+    const approval=dialogScreen('codex-approval');
+    await open(approval,'needs_attention','codex','Codex',to=>approval.map(row=>row.replace(/^› (\d)\./,'  $1.').replace(new RegExp(`^  ${to}\\.`),`› ${to}.`)),1,dialogScreen('codex-idle'));
+    expect(within(dialog()).getByRole('heading',{name:'Would you like to run the following command?'})).toBeTruthy();
+    await act(async()=>{fireEvent.click(within(dialog()).getByRole('button',{name:/^No, and tell Codex/}));await vi.advanceTimersByTimeAsync(2000);});
+    expect(keys()).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+    expect(screen.queryByRole('region',{name:'Dialog in the terminal'})).toBeNull();
+  });
+  it.each([['codex-resume'],['model']])('says Codex waits in the terminal for the %s screen, which its profile does not read, and sends nothing',async name=>{
+    await open(name==='model'?modelScreen(5):dialogScreen(name),'working','codex','Codex');
+    expect(within(dialog()).getByRole('status').textContent).toBe('The agent is waiting for you in the terminal.');
+    expect(within(dialog()).queryByRole('button',{name:/Sonnet|Haiku/})).toBeNull();
     expect(keys()).toEqual([]);
   });
   it('shows the agent is waiting in the terminal for a dialog it cannot read, and sends nothing',async()=>{
