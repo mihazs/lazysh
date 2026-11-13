@@ -1,0 +1,19 @@
+/* Rendered HTML stays inside the message: wide tables scroll, pictures are bounded, nothing can restyle the app. */
+.chat-messages > * { min-width: 0; }
+.chat-message :is(img, details) { max-width: 100%; }
+.chat-table-scroll { max-width: 100%; margin-block: 8px; overflow-x: auto; }
+.chat-table-scroll > table { border-collapse: collapse; width: max-content; min-width: 100%; }
+.chat-table-scroll :is(th, td) { overflow-wrap: normal; max-width: 40ch; }
+.chat-message :is(th, td) { padding: 4px 8px; border: 1px solid var(--border); text-align: start; vertical-align: top; }
+.chat-message th { background: var(--theme-control, transparent); }
+.chat-message img { height: auto; max-height: 320px; object-fit: contain; border-radius: 8px; }
+.chat-message summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.chat-message kbd { padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; font: inherit; font-size: 0.85em; background: var(--theme-control, transparent); }
+.chat-message blockquote { margin-inline: 0; padding-inline-start: 12px; border-inline-start: 3px solid var(--border); color: var(--muted); }
+.chat-message a { color: var(--accent); overflow-wrap: anywhere; }
+.chat-remote-image { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); }
+.chat-remote-image > button, .chat-link-consent > button, .chat-html-toggle { min-height: 44px; }
+.chat-html-toggle { display: block; margin-block: 4px; padding-inline: 4px; border: 0; background: none; color: var(--muted); font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+.chat-html-source { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; }
+.chat-link-consent { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.chat-link-consent > p { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }

@@ -33,6 +33,7 @@ import { toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
 import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
 import "./ToolbarRows.css";
 import "./TerminalGestures.css";
+import {webUrl as terminalWebUrl} from "./webPage";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -48,15 +49,7 @@ const pullStart = 12, pullShallow = 56, pullDeep = 144;
 const pinchResize = .08, pinchAction = .25;
 const alternateHold = 500;
 
-export function terminalWebUrl(value: string): string | undefined {
-  if (value.length > 4096 || /[\s\x00-\x1f\x7f-\x9f\\]/.test(value) || !/^https?:\/\//i.test(value)) return;
-  const authority = value.split('://')[1].split(/[/?#]/)[0];
-  if (!authority || authority.includes('@')) return;
-  try {
-    const url = new URL(value);
-    if (url.hostname && !url.username && !url.password && url.href.length <= 4096) return url.href;
-  } catch { /* Ignore malformed remote links. */ }
-}
+export {terminalWebUrl};
 
 export default function TerminalPane({ session, active, swiping = false, typingActivation = false, reportError, onOpenAttachments, controlsTarget, onBackChange, notice, herdrNavigationOnly = false }: {
   session: LiveSession;

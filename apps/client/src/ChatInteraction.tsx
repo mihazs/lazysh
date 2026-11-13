@@ -2,6 +2,7 @@ import {memo} from 'react';
 import Markdown from 'react-markdown';
 import QuestionAnswers, {answerable} from './AgentQuestionAnswer';
 import type {DialogAnswerer} from './ChatTerminalInput';
+import {ChatRich} from './ChatRich';
 import {t} from './i18n/core';
 import {LocalUiError} from './i18n/localError';
 import './ChatInteraction.css';
@@ -123,7 +124,7 @@ export function ChatCard({card,body,answered,onOpenTerminal,answerer}:{card:Card
   </section>;
   if(card.kind==='proposed_plan')return <section className="chat-card chat-proposed-plan-card" aria-label={t('chatProposedPlanTitle')}>
     <h5>{t('chatProposedPlanTitle')}</h5>
-    <ChatMarkdown text={card.text ?? body ?? ''} />
+    <ChatRich text={card.text ?? body ?? ''} />
   </section>;
   return <section className="chat-card chat-question-card" aria-label={t('chatQuestionTitle')}>
     <h5>{t('chatQuestionTitle')}</h5>

@@ -210,6 +210,48 @@ The client validates every field strictly, as ChatPanel does for schema 1.
   message and never several turns. Past the bound, or on a guarded Herdr pane (4,096
   bytes), Send is disabled and the note names the limit; **Stage in terminal** remains.
 
+### HTML in messages
+
+Agent output and pasted text are Markdown that may carry HTML (`ChatRich.tsx`, `chatHtml.ts`).
+
+**Why HTML showed as text.** The reader used `react-markdown` alone. It parses an HTML tag
+in Markdown into a raw node and, with no HTML plugin, draws that node as escaped text, so
+`<table>` or `<details>` appeared as typed (an unlisted `<script>` was never run, which
+is why this was safe but unhelpful). Rendering it takes `rehype-raw` to parse the markup
+and `rehype-sanitize` to keep only what is safe.
+
+**What renders.** The pipeline is `literalTags` → `rehype-raw` → `rehype-sanitize` (own
+allow-list, not the GitHub default) → depth and count caps:
+
+- Elements: headings, `p`, `br`, `hr`, `div`, `span`, lists and definition lists,
+  `blockquote`, `pre`, `code`, emphasis (`em`, `strong`, `b`, `i`, `u`, `s`, `del`, `ins`,
+  `mark`, `small`, `sub`, `sup`, `kbd`, `samp`, `abbr`, `cite`, `q`), `details` and
+  `summary`, `figure`, tables, `a` and `img`.
+- Attributes: `href` and `title` on a link, `src`, `alt` and `title` on an image,
+  `colspan` and `rowspan`, `start`, `open`, and a `language-*` class on `code`. No `id`,
+  `class`, `style`, `srcset`, `target`, event handler or `data-*`, so a message cannot
+  restyle, overlay or script the app.
+- Never: `script`, `style`, `iframe`, `object`, `embed`, `form` and its controls, `meta`,
+  `link`, `base`, `svg`, `math`. A tag outside the list is shown as typed (`Vec<String>`,
+  `<file>`, a harness tag), not dropped.
+- Code fences and inline code are never interpreted. Text past 512,000 characters is
+  Markdown without HTML. Elements nest 32 deep and number 4,000 per message at most; what
+  exceeds that is kept as text.
+- Links: http(s) only, no credentials, no control characters. A tap asks first and then
+  opens the system browser (a new tab on the web) with `noopener`. Other links are text.
+- Images: an embedded PNG, JPEG, GIF or WebP up to 256 KiB shows. A remote image is never
+  requested (the request would tell its host when the message was read, and the app's
+  content security policy does not allow it): a placeholder with the alt text and an
+  **Open image in browser** button, which asks like a link. Everything else is a placeholder.
+- A table sits in a focusable scroll region, so a wide table scrolls inside the message.
+- A message that contains rendered HTML has **Show source** and **Show rendered**.
+- Harness records (`<system-reminder>`, `<task-notification>`, command echoes) are
+  classified by `chatInjected.ts` before a message reaches this pipeline, so they keep
+  their event rows and are not treated as the person's HTML.
+
+Markdown pipe tables are not rendered (no GFM plugin); Files and repository previews keep
+the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
+
 ### Desktop
 
 - Same switch plus **Both** on wide layouts, with the terminal on one side and the

@@ -60,5 +60,8 @@
     "jscpd": "5.4.2",
     "lint-staged": "17.6.0"
   },
+  "overrides": {
+    "hast-util-raw": "9.1.0"
+  },
   "license": "GPL-3.0-or-later"
 }

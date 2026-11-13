@@ -124,8 +124,16 @@ describe('a Zellij session',()=>{
   });
 });
 
+/** A tmux pane whose Claude conversation is `messages`; returns the conversation flow. */
+async function openConversation(messages:unknown[]) {
+  host('claude',[row('Claude Code','%3')],'available',[messages]);
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);
+  return screen.getByRole('region',{name:'Conversation messages'});
+}
+
 it('shows what the harness wrote as compact events and keeps token counters out of the message flow',async()=>{
-  host('claude',[row('Claude Code','%3')],'available',[[
+  const flow=await openConversation([
     {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},
     {id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}],usage:{inputTokens:2,outputTokens:51,cacheReadTokens:157518,cacheWriteTokens:1790}},
     {id:'n',role:'user',blocks:[{type:'text',text:'<task-notification>\n<task-id>bl44ejerw</task-id>\n<summary>Monitor event: "Version PRs"</summary>\n<event>version PR #624 checks green</event>\n</task-notification>'}]},
@@ -133,10 +141,7 @@ it('shows what the harness wrote as compact events and keeps token counters out 
     {id:'t',role:'assistant',blocks:[{type:'thinking',text:''},{type:'tool_use',id:'c',name:'Bash',text:'gh pr list'}]},
     {id:'a2',role:'assistant',blocks:[{type:'text',text:'The version PR is green.'}],usage:{inputTokens:2,outputTokens:114,cacheReadTokens:153532,cacheWriteTokens:472}},
     {id:'o',role:'user',blocks:[{type:'text',text:'<local-command-stdout>Set model to Sonnet</local-command-stdout>'}]},
-  ]]);
-  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
-  await advance(0);
-  const flow=screen.getByRole('region',{name:'Conversation messages'});
+  ]);
   expect(flow.textContent).not.toMatch(/<\/?(task-notification|system-reminder|local-command-stdout)|Context for the model|Tokens:|inputTokens|cacheReadTokens/);
   // Only what the person typed is a bubble; the harness records are one muted line each.
   expect(within(flow).getAllByRole('article',{name:'user'}).map(article=>article.textContent)).toEqual(['Explain the build']);
@@ -146,6 +151,25 @@ it('shows what the harness wrote as compact events and keeps token counters out 
   expect(within(flow).getByText('The version PR is green.')).toBeTruthy();
   // The latest response's counters stay available behind the options button.
   expect(within(options()).getByText('Last response: 2 input, 114 output, 153,532 cache read, 472 cache write tokens')).toBeTruthy();
+});
+
+it('renders HTML in agent output and in pasted text through the allow-list while harness wrappers stay events',async()=>{
+  const flow=await openConversation([
+    {id:'p',role:'user',blocks:[{type:'text',text:'Fix this:\n\n<div><b>pasted</b> <img src="https://tracker.example/x.png" alt="shot" onerror="x()"> <script>x()</script></div>'}]},
+    {id:'n',role:'user',blocks:[{type:'text',text:'<task-notification><event>checks green</event></task-notification>'}]},
+    {id:'a',role:'assistant',blocks:[{type:'text',text:'<table><tr><th>File</th></tr><tr><td>a.ts</td></tr></table>\n\n<details><summary>Why</summary>Because <a href="javascript:x()">it</a> <a href="https://example.com/why">helps</a>.</details>'}]},
+  ]);
+  expect(within(flow).getByRole('columnheader',{name:'File'})).toBeTruthy();
+  expect(within(flow).getByText('Why').closest('details')).not.toBeNull();
+  expect(within(flow).getByRole('link',{name:'helps'}).getAttribute('href')).toBe('https://example.com/why');
+  expect(within(flow).queryByRole('link',{name:'it'})).toBeNull();
+  const prompt=within(flow).getByRole('article',{name:'user'});
+  expect(prompt.querySelector('b')?.textContent).toBe('pasted');
+  expect(prompt.querySelector('img,script')).toBeNull();
+  expect(prompt.textContent).toContain('<script>x()</script>');
+  expect(within(prompt).getByText('shot')).toBeTruthy();
+  expect(within(flow).getByText(/^Task notification/).textContent).toBe('Task notification · checks green');
+  expect(flow.textContent).not.toContain('<task-notification>');
 });
 
 it('shows the fallback without a transcript picker when no hook report names this pane',async()=>{
