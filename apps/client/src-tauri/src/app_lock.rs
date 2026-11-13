@@ -673,6 +673,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "app_lock_configure"
             | "ack_output"
             | "local_ack"
+            | "terminal_core_close"
             | "disconnect"
             | "local_disconnect"
             | "clipboard_cancel"
