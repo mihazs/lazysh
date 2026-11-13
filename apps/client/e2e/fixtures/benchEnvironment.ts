@@ -53,6 +53,11 @@ const retry = async <T>(attempt: () => Promise<T>, times: number): Promise<T> =>
     try { return await attempt(); } catch (error) { if (left <= 1) throw error; await new Promise(resolve => setTimeout(resolve, 500)); }
   }
 };
+/** The device the Android runs measured on, read when they finish: display, build and which window had the focus (a window of another app means the run was disturbed). */
+export const androidDevice = () => androidSerial === null ? null : {
+  serial: androidSerial, release: adb('shell', 'getprop', 'ro.build.version.release'), model: adb('shell', 'getprop', 'ro.product.model'),
+  wmSize: adb('shell', 'wm', 'size'), wmDensity: adb('shell', 'wm', 'density'), focus: /mCurrentFocus=.*/.exec(adb('shell', 'dumpsys window | grep mCurrentFocus'))?.[0] ?? null,
+};
 /** The benchmark page's address; a WebView page has no base URL of its own. */
 export const benchUrl = (baseURL: string | undefined, query: string) => new URL(`/bench/terminal-bench.html?${query}`, baseURL).href;
 
