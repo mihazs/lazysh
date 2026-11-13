@@ -162,6 +162,12 @@ pub struct Fixture {
 }
 
 pub fn session(hub: &Hub, id: &str, config: Config) -> Fixture {
+    session_watched(hub, id, config).0
+}
+
+/// Also returns how many times the session told its (attached) view that the screen may have changed.
+pub fn session_watched(hub: &Hub, id: &str, config: Config) -> (Fixture, Arc<AtomicU64>) {
+    let changes = Arc::new(AtomicU64::new(0));
     let writer = Recorder::new();
     let window = Window::new(config.ingress_bytes);
     let credited = Arc::new(AtomicU64::new(0));
@@ -174,15 +180,21 @@ pub fn session(hub: &Hub, id: &str, config: Config) -> Fixture {
                 window.release(bytes);
             })
         },
-        changed: None,
+        changed: Some({
+            let changes = changes.clone();
+            Box::new(move || {
+                changes.fetch_add(1, SeqCst);
+            })
+        }),
     };
     let session = hub.create(id, config, hooks).expect("create");
-    Fixture {
+    let fixture = Fixture {
         session,
         writer,
         window,
         credited,
-    }
+    };
+    (fixture, changes)
 }
 
 impl Fixture {
