@@ -2231,6 +2231,8 @@ const translations = {
   agentToolShowAll: ["Mostrar tudo", "Mostrar todo"],
   agentToolFewer: ["Mostrar menos", "Mostrar menos"],
   agentToolCopy: ["Copiar saída", "Copiar salida"],
+  agentPastedTitle: ["Texto colado", "Texto pegado"],
+  agentPastedCopy: ["Copiar texto colado", "Copiar texto pegado"],
   agentToolCopied: ["Copiado", "Copiado"],
   agentDiffCounts: ["{{added}} linhas adicionadas, {{removed}} removidas", "{{added}} líneas añadidas, {{removed}} eliminadas"],
   agentDiffWrap: ["Quebrar linhas", "Ajustar líneas"],

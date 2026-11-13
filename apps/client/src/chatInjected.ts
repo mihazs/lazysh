@@ -3,7 +3,7 @@
  * not show their tags as a chat bubble. This runs in the client so it also works against an older host companion. */
 export const recordedEventKinds = ['goal', 'goalMet', 'planMode', 'planModeExit', 'recap', 'hookFailed'] as const;
 export type InjectedEvent = {kind: 'task' | 'output' | 'interrupted' | 'compacted' | 'answer' | typeof recordedEventKinds[number]; text: string; detail?: string};
-type Block = {type: string; text?: string; card?: unknown};
+type Block = {type: string; text?: string; card?: unknown; pasted?: boolean};
 type Shape = {role: string; blocks: Block[]};
 
 /** Context the harness adds for the model. It is never shown. */
@@ -11,6 +11,24 @@ const hiddenTags = new Set(['system-reminder', 'local-command-caveat', 'environm
 const entities: Record<string, string> = {'&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&amp;': '&'};
 const inner = (text: string, tag: string) => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text)?.[1]?.trim();
 const plain = (text: string) => text.replace(/<[^>]+>/g, '').replace(/&(?:lt|gt|quot|amp|#39);/g, entity => entities[entity]).trim();
+
+/** Claude Code wraps pasted text as `<pasted_content id="05cc">…</pasted_content id="05cc">` (the closing tag carries the id too).
+ * The words typed around it stay text blocks; each paste becomes its own block, marked `pasted`. An unclosed one runs to the end. */
+const pastedContent = /<pasted_content(?:\s[^>]*)?>([\s\S]*?)(?:<\/pasted_content(?:\s[^>]*)?>|$)/g;
+function splitPasted<B extends Block>(block: B): B[] {
+  const text = block.text ?? '';
+  const parts: B[] = [];
+  let from = 0;
+  const add = (part: string, pasted?: true) => { if (part.trim()) parts.push({...block, text: part.trim(), ...(pasted && {pasted})}); };
+  for (const match of text.matchAll(pastedContent)) {
+    add(text.slice(from, match.index));
+    add(match[1], true);
+    from = match.index + match[0].length;
+  }
+  if (!from) return [block];
+  add(text.slice(from));
+  return parts;
+}
 
 type Verdict = {hide: true} | {text: string} | {event: InjectedEvent};
 function classify(source: string): Verdict {
@@ -61,7 +79,7 @@ export function projectMessages<M extends Shape>(messages: M[]): (M & {event?: I
       if ('hide' in verdict) return [];
       if ('event' in verdict) {event ??= verdict.event; return [block];}
       kept = true;
-      return [{...block, text: verdict.text}];
+      return splitPasted({...block, text: verdict.text});
     });
     if (!blocks.length) return [];
     // An event record carries nothing else; a mixed record keeps its words and drops no information.

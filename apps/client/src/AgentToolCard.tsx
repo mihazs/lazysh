@@ -10,7 +10,7 @@ const marks = {running: LoaderCircle, ok: Check, error: X, denied: Ban} as const
 const statusText = {running: 'agentToolRunning', ok: 'agentToolOk', error: 'agentToolError', denied: 'agentToolDenied'} as const satisfies Record<ToolStatus, string>;
 const TAIL = 20, DIFF_HEAD = 40;
 
-function CopyButton({text, label}: {text: string; label: 'agentToolCopy' | 'agentDiffCopy'}) {
+export function CopyButton({text, label}: {text: string; label: 'agentToolCopy' | 'agentDiffCopy' | 'agentPastedCopy'}) {
   const [copied, setCopied] = useState(false);
   return <button type="button" className="subtle-button agent-tool-copy" onClick={async () => {
     try {await navigator.clipboard.writeText(text); setCopied(true); window.setTimeout(() => setCopied(false), 1500);} catch {/* the clipboard can be refused; the text stays on screen */}

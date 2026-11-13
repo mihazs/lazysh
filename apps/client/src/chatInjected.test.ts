@@ -58,3 +58,12 @@ it('never turns a message that carries other content into an event',()=>{
   const out=projectMessages([{id:'m',role:'user',blocks:[{type:'text',text:'<task-notification><event>done</event></task-notification>'},{type:'text',text:'And my own words'}]}]);
   expect(out[0].event).toBeUndefined();expect(out[0].blocks.map(block=>block.text)).toContain('And my own words');
 });
+
+it('turns a pasted_content wrapper of any id into a pasted block and keeps the words typed around it',()=>{
+  const [message]=project('Fix this: <pasted_content id="05cc">\nline one\nline two\n</pasted_content id="05cc"> then ship it');
+  expect(message.blocks.map(block=>[block.text,'pasted' in block])).toEqual([['Fix this:',false],['line one\nline two',true],['then ship it',false]]);
+  const [bare,unclosed]=[project('<pasted_content>a</pasted_content>')[0],project('<pasted_content id=x9>cut off')[0]];
+  expect(bare.blocks).toEqual([{type:'text',text:'a',pasted:true}]);
+  expect(unclosed.blocks).toEqual([{type:'text',text:'cut off',pasted:true}]);
+  expect(project('<pasted_content id="1">a</pasted_content id="1"><pasted_content id="2">b</pasted_content id="2">')[0].blocks.map(block=>block.text)).toEqual(['a','b']);
+});

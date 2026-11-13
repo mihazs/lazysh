@@ -27,8 +27,7 @@
 /* Prompt and answer read as chat bubbles: the prompt on the trailing side, the answer as plain text. */
 .agent-view .agent-bubble { border: 0; padding: 0; }
 .agent-view .agent-turn > .agent-bubble-user { justify-self: end; max-width: min(85%, 640px); padding: 10px 14px; border-radius: 16px 16px 4px 16px; background: var(--ui-fill-selected, var(--surface)); }
-/* While the reply is being written the prompt it answers stays at the top of the thread. */
-.agent-view .agent-turn[data-running] > .agent-bubble-user { position: sticky; top: 0; z-index: 1; max-height: 25vh; overflow: auto; }
+/* Every message stays in normal flow: a pinned prompt is drawn over the reply it scrolls with, hiding it. */
 .agent-view .agent-turn > .agent-bubble-user > :is(p, div):first-child { margin-top: 0; }
 .agent-view .agent-turn > .agent-bubble-user > :is(p, div):last-child { margin-bottom: 0; }
 .agent-view .agent-turn-activity .agent-bubble { padding-inline-start: 12px; border-inline-start: 2px solid var(--theme-border, var(--border)); }
@@ -67,3 +66,8 @@
 .agent-view .agent-queued-card { max-width: min(85%, 640px); padding: 8px 12px; border: 1px dashed var(--theme-border, var(--border)); border-radius: 16px 16px 4px 16px; color: var(--muted); }
 .agent-view .agent-queued-card > small { display: block; font-size: 12px; }
 .agent-view .agent-queued-card > p { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* Pasted text: a compact block with a short preview; it never grows past a few lines until expanded. */
+.agent-view .agent-pasted { min-width: 0; }
+.agent-view .agent-pasted > h5 { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.agent-view .agent-pasted > pre { margin: 0; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.agent-view .agent-pasted > .agent-tool-actions { padding: 0; }
