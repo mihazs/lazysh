@@ -7,12 +7,13 @@ import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inact
 export function mountAgentBoard(host?:{key:string;label:string}){
   const calls:{command:string;args:unknown}[]=[];
   let reports=[agentBoardRecord];
+  let update:{state:string;from:string;to:string;reason?:string}|undefined;
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic agent board authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
   acknowledgeAccessReady(accessSnapshot().epoch);
   Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:unknown)=>{
     calls.push({command,args});
-    if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports};
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports,...(update?{update}:{})};
     if(command==='agent_approvals')return {schemaVersion:1,requests:decided?[]:[approval]};
     if(command==='get_companion_settings')return companionSettings;
     if(command==='update_companion_settings'){const {expectedRevision:_,...settings}=(args as {settings:typeof companionSettings & {expectedRevision:number}}).settings;return {...companionSettings,...settings,revision:8};}
@@ -23,5 +24,5 @@ export function mountAgentBoard(host?:{key:string;label:string}){
   const container=document.createElement('div');container.className='agent-board-fixture';
   Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
   const root=createRoot(container);root.render(<AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/>);
-  return {calls,setReports(rows:typeof reports){reports=rows;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
+  return {calls,setReports(rows:typeof reports){reports=rows;},setUpdate(next?:typeof update){update=next;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
 }
