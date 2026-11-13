@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.52.0
+
+### Minor Changes
+
+- fc4e7e8: Report the files a Codex session changed as `apply_patch` calls with their outcome in the conversation view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.52.0
+  - @lazysh/common@1.52.0
+  - @lazysh/notification-client@1.52.0
+
 ## 1.51.0
 
 ### Minor Changes
