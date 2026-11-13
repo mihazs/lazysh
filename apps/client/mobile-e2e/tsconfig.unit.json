@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": { "types": ["node", "bun"] },
-  "include": ["support/device.ts", "support/fakeAdb.ts", "support/guards.ts", "support/*.test.ts"]
+  "include": ["support/device.ts", "support/fakeAdb.ts", "support/guards.ts", "support/hosts.ts", "support/*.test.ts"]
 }

@@ -11,12 +11,13 @@ export interface FakeDevice {
   navigation: string;
   settings: Record<string, string>;
   permissions: Record<string, boolean>;
+  reverses: string[];
   failOn: string[];
   calls: string[];
 }
 
 export const initialDevice = (): FakeDevice => ({
-  size: null, density: null, navigation: 'threebutton', failOn: [], calls: [],
+  size: null, density: null, navigation: 'threebutton', failOn: [], calls: [], reverses: [],
   settings: {
     'secure.default_input_method': 'com.android.inputmethod.latin/.LatinIME', 'system.user_rotation': '0',
     'system.accelerometer_rotation': '0', 'global.window_animation_scale': '1.0', 'global.transition_animation_scale': '1.0',
@@ -33,7 +34,13 @@ const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 const args = process.argv.slice(2);
 state.calls.push(args.join(' '));
 const done = (out = '', code = 0) => { fs.writeFileSync(file, JSON.stringify(state)); fs.rmdirSync(file + '.lock'); process.stdout.write(out); process.exit(code); };
-if (args[0] !== '-s' || !args[1] || args[2] !== 'shell') { process.stderr.write('error: device not pinned'); done('', 1); }
+if (args[0] !== '-s' || !args[1] || !['shell', 'reverse'].includes(args[2])) { process.stderr.write('error: device not pinned'); done('', 1); }
+if (args[2] === 'reverse') {
+  const [flag, port] = args.slice(3);
+  if (flag === '--no-rebind' && state.reverses.includes(args[4])) { process.stderr.write('error: already forwarded'); done('', 1); }
+  if (flag === '--no-rebind') state.reverses.push(args[4]); else state.reverses = state.reverses.filter(entry => entry !== port);
+  done();
+}
 const [command, ...rest] = args.slice(3);
 const line = rest.join(' ');
 if (state.failOn.some(text => (command + ' ' + line).includes(text))) { process.stderr.write('error: injected failure'); done('', 1); }

@@ -24,7 +24,15 @@ export default abstract class Page {
   }
 
   protected enter(select: () => ChainablePromiseElement, value: string | number) {
-    return this.in(async () => { const element = select(); await element.waitForDisplayed({timeoutMsg: `${this.constructor.name}: element was not displayed`}); await element.setValue(value); });
+    return this.in(async () => {
+      const element = select();
+      await element.waitForDisplayed({timeoutMsg: `${this.constructor.name}: element was not displayed`});
+      // Selects and types over the text, as a user does. `setValue` clears first, and clearing a pre-filled number field (the port
+      // starts at 22) was seen to leave the old digits in front of the new ones.
+      await element.click();
+      await browser.keys(['Control', 'a']);
+      await element.addValue(String(value));
+    });
   }
 
   /**
