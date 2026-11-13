@@ -335,7 +335,60 @@ Each statement is about this host, headless Chromium and these runs.
 - **Per-session memory did not grow.** With ten sessions, background sessions (hidden panes) cost 6.5 to 6.8 MiB of renderer resident memory each with WebGL against 7.3 to 7.7 with the DOM renderer (with five, 7.6 to 7.8 against 7.3 to 8.0); the fixed cost above applies once per page.
 - **The custom bold color seam does not survive a renderer change.** `terminalBold.ts` reaches into the DOM renderer's row factory. Run on the live terminal in smoke runs of the same harness (not part of the raw files above, which predate the probe), `configureTerminalBold` applied on the DOM renderer and was refused with "This terminal cannot apply custom bold colors." on both the canvas and the WebGL renderer. Adopting either renderer needs another mechanism for that preference.
 
-Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, a WebGL context loss and recovery, background and resume (W11), accessibility with a canvas renderer, the phone viewport, W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
+#### WebGL at the phone viewport, and its first ANSI-heavy burst ([#1323](https://github.com/mihazs/lazysh/issues/1323))
+
+The same harness and the same flags as the hardware-GL runs above, on the `phone` project (viewport 390 by 844 CSS px, devicePixelRatio 3, 46 columns by 37 rows, touch emulation; a viewport emulated in desktop Chromium, not a phone). DOM and WebGL addon (hardware GL, RX 5500 XT through RADV) were each run twice, alternating DOM, WebGL, DOM, WebGL, on 2026-11-13 from a clean committed tree (`dirty` is false in every file; load average at the start of an invocation 6 to 15). Raw files: `benchmarks/terminal-shootout-xterm-dom-phone.json`, `-dom-repeat-phone.json`, `-webgl-hw-phone.json`, `-webgl-hw-repeat-phone.json`. Every workload ended on the expected screen in all four invocations (14 results each). The cells give the two invocations (first / second); medians are the harness's median over five runs unless a row says otherwise.
+
+| Metric | DOM | WebGL, hardware GL |
+|---|---|---|
+| W2 MiB/s through `xterm.write` | 33.3 / 20.8 | 32.9 / 38.2 |
+| W2 total process CPU ms (median of 5 runs, all processes) | 230 / 340 | 240 / 190 |
+| W3 MiB/s | 17.9 / 17.4 | 25.0 / 30.4 |
+| W3 total process CPU ms (median of 5 runs) | 270 / 260 | 500 / 400 |
+| **W3 first run**: MiB/s | 11.6 / 11.1 | **0.26 / 0.30** |
+| **W3 first run**: total process CPU ms | 380 / 460 | **15050 / 12700** |
+| **W3 first run**: dropped frames, frame interval p99 ms | 1, 32 / 0, 17 | **343, 117 / 285, 114** |
+| W3 runs 2 to 5: dropped frames, frame interval p99 ms | 0, 16.7 to 16.8 (all 8 runs) | 0, 16.7 to 16.8 (all 8 runs) |
+| W4 MiB/s | 43.9 / 43.7 | 42.5 / 44.6 |
+| W4 total process CPU ms (median of 5 runs) | 150 / 130 | 310 / 270 |
+| W0 idle, cursor blink on, 10 s: main thread task ms, style recalculations | 134, 626 / 165, 612 | 29.4, 0 / 27.5, 0 |
+| W0 idle, cursor blink on: renderer process CPU ms | 230 / 290 | 80 / 70 |
+| W0 idle, cursor blink off: main thread task ms | 15.1 / 18.2 | 19.5 / 12.3 |
+| W12 one key at a time: p50, p99 ms | 2.10, 16.7 / 2.35, 17.0 | 2.20, 17.4 / 1.70, 16.7 |
+| W12 keys during sustained output: p50, p99 ms | 14.1, 31.5 / 14.4, 31.6 | 13.9, 32.2 / 13.8, 32.2 |
+| W12 IME commit: p50, p99 ms | 9.10, 17.2 / 9.00, 17.4 | 9.70, 17.8 / 9.40, 17.4 |
+| W9 5 sessions: echo p50, p99 ms | 12.0, 16.4 / 12.3, 16.6 | 8.70, 16.5 / 8.40, 16.2 |
+| W9 10 sessions: echo p50, p99 ms | 11.1, 19.8 / 11.1, 19.4 | 7.35, 16.2 / 7.40, 15.7 |
+| W9 renderer RSS per session MiB (5 sessions; 10 sessions) | 6.89, 7.52 / 7.25, 7.22 | 7.46, 6.61 / 8.37, 6.74 |
+| W10 5000 lines: JS heap MiB; renderer RSS MiB | 31.6; 182 / 31.7; 191 | 54.3; 213 / 53.8; 171 |
+| Custom bold color seam (`configureTerminalBold`) | applied | refused (all four invocations) |
+
+What this adds, for this host and viewport:
+
+- **The desktop frame-pacing regression is not the steady state at the phone size; the cold first ANSI-heavy burst is the problem.** In both WebGL invocations the first of the five W3 runs took 6.7 to 7.7 s of wall time and used 12.7 to 15.1 s of CPU (renderer process 8.1 to 9.6 s, GPU process 4.6 to 5.4 s, 57 to 79 long tasks, 285 to 343 dropped frames) for the same 2 MiB, against 66 to 82 ms and 0.35 to 0.52 s in runs 2 to 5 of the same page, which paced like the DOM renderer. The five runs replay the same bytes, so the difference is state, not input. Its cause was not isolated; a cold glyph atlas filling with the style combinations of the workload is consistent with it but was not tested. The harness reports the median of five runs, which hides it: the figures above come from the first entry of `runs` in the raw files. The desktop runs show the same shape at another size (per-run W3 throughput 2.5, 11.7, 5.6, 28 and 6.1 MiB/s in the first desktop invocation, with the same pattern in the two repeats), so the desktop "regression" was also state-dependent across runs, not a constant cost. The DOM renderer's W3 runs ranged from 11.1 to 18.5 MiB/s over its ten runs, none of them near the 0.26 to 0.30 MiB/s of the WebGL first runs.
+- **At the phone size WebGL's steady-state CPU on streaming output is higher, not lower.** Total process CPU for the median W3 run was 400 to 500 ms against 260 to 270 and for W4 270 to 310 ms against 130 to 150 (1.5 to 2.1 times, a difference of 0.14 to 0.23 s per workload). On the 152-column desktop grid WebGL was cheaper on W3 (0.8 to 1.0 s against 2.1 to 2.9 s). Which side of the crossover a device is on depends on the grid and the host, so this is not an Android prediction.
+- **WebGL is still cheaper at idle with a blinking cursor** (27 to 29 ms of main-thread time and no style recalculations per 10 s against 134 to 165 ms and 612 to 626), the one place its advantage held on both viewports. With the cursor not blinking the two are equal.
+- **Echo latency with several sessions mounted and streaming is lower with WebGL** (p50 8.4 to 8.7 ms against 12.0 to 12.3 with five sessions and 7.35 to 7.40 against 11.1 with ten; p99 15.7 to 16.2 against 19.4 to 19.8 with ten). As in the desktop runs it holds for every non-DOM renderer and the harness does not explain it. Idle keystrokes, sustained-output echo and IME commits are equal within one frame (the p99 of sustained-output echo is 2 % higher with WebGL again).
+- **The fixed memory cost is the JS heap** (about 22 MiB more at W10, in both invocations); the resident-set figures overlap between the renderers (171 to 213 against 182 to 191), and per-session resident memory does not separate them (6.6 to 8.4 against 6.9 to 7.5).
+- **The bold-color seam is refused by WebGL here too**, as on desktop.
+
+#### WebGL context loss and recovery ([#1323](https://github.com/mihazs/lazysh/issues/1323))
+
+`e2e/terminal-webgl-context-loss.spec.ts` (run by `bun run bench:terminal terminal-webgl-context-loss`, and skipped where the browser has no WebGL2 so it also runs in the normal Playwright suite) takes the WebGL context away from the benchmark page's terminal with `WEBGL_lose_context` and gives it back. Correctness is pixels: a screenshot of the terminal against one from a terminal that never lost its context and was fed the same bytes (60 rows of ANSI colour, bold, 256-colour backgrounds, accents, CJK and an emoji). `@xterm/addon-webgl` 0.18.0 waits 3000 ms for the browser to restore a lost context and only then fires `onContextLoss`, which is what the benchmark page uses to dispose the addon and leave the DOM renderer; the benchmark page, not the app, has that handler (the app does not load the addon). Three invocations on the committed tree: hardware GL twice and SwiftShader (software GL) once; every scenario passed in all three. Raw files: `benchmarks/terminal-context-loss-xterm-webgl-hw-desktop.json`, `-hw-repeat-desktop.json` and `-sw-desktop.json`.
+
+| Scenario | Result (hardware GL, two invocations; software GL in brackets where it differs) |
+|---|---|
+| Method check: pixels while the context is lost | Different from the never-lost terminal in every scenario, so "identical after restore" is not vacuous. |
+| Restored 0.3 s and 2.0 s after the loss (inside the grace period) | The addon recovers on its own and the app is never asked to fall back (`onContextLoss` fired 0 times). The first screenshot taken after the restore was already identical to the never-lost terminal; taking it cost 102 to 120 ms (173 to 194 ms in software), so that is an upper bound on recovery. The canvas `webglcontextlost` event arrived 2.3 to 4.6 ms after the loss (6.1 to 6.9 in software) and `webglcontextrestored` 5.9 to 9.0 ms after the restore (5.7 to 6.3). |
+| 684 bytes of output written while the context was lost, then restored | Pixel-identical to a never-lost terminal that received the same bytes, 120 to 121 ms upper bound (185 in software). |
+| Never restored | `onContextLoss` fired 3002 to 3005 ms after the loss. Disposing the addon there left the DOM renderer (0 canvases) with pixels identical to a DOM terminal fed the same bytes and the buffer intact, including the output written while the context was lost. A restore arriving after the fallback changed nothing on screen. Loading a new addon then drew pixels identical to a never-lost WebGL terminal with 2 canvases again, 126 to 142 ms upper bound (213 in software). |
+| Page errors | None in any scenario (asserted). |
+
+Observed mutation check: if the benchmark page's handler does not dispose the addon on `onContextLoss`, the never-restored scenario fails (2 canvases left instead of 0).
+
+What this shows is that the addon's public surface (`onContextLoss`, `dispose`, loading a new addon) is enough for an application to fall back to the DOM renderer and return to WebGL without losing the buffer or changing pixels, and that the browser's restore path repairs the terminal itself. It does not show that the app does this: the app has no such handler, and writing it is part of adopting the addon. Not covered, and the reason the Android gate in [the procedure below](#android-procedure-manual-gate-not-run) stays open: an Android WebView (the loss there comes from the GPU process being killed, memory pressure or the app being backgrounded, not from a script calling `loseContext`), a crash and restart of the GPU process (every context of the page is lost at once), many terminals losing contexts together (browsers cap the number of live WebGL contexts per page; ten mounted terminals ran in W9 but more were not tried), background and resume (W11), and the cost of re-uploading the glyph atlas on a phone GPU. The recorded times are screenshot-bound upper bounds taken on a shared host.
+
+Not shown: anything about Android, an Android WebView (which is Chromium, but its GPU, driver, memory pressure and context-loss behaviour are exactly what is unknown), the Linux desktop WebView (WebKitGTK, not Chromium), macOS or iOS (WKWebView), Windows (WebView2), energy, thermal behaviour, context loss in an Android WebView (the scripted loss above is the only one run), background and resume (W11), accessibility with a canvas renderer, a phone GPU (the phone viewport above is emulated on the desktop one), W5 to W8 and W13. WebGL numbers here come from a discrete desktop GPU shared with other work; they do not transfer to a phone GPU.
 
 ### Android procedure (manual gate, not run)
 
