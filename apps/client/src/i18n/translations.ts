@@ -1401,6 +1401,8 @@ const translations = {
   chatHtmlOpenImage: ["Abrir imagem no navegador", "Abrir imagen en el navegador"],
   chatHtmlLinkConfirm: ["Abrir este endereço?", "¿Abrir esta dirección?"],
   chatHtmlTable: ["Tabela", "Tabla"],
+  chatCodeBlock: ["Código", "Código"],
+  chatMessageTime: ["Enviada {{time}}", "Enviado {{time}}"],
   chatToolStatus: ["Status registrado: {{status}} · ID da ferramenta: {{id}}", "Estado registrado: {{status}} · ID de herramienta: {{id}}"],
   chatToolError: ["Erro registrado da ferramenta", "Error registrado de la herramienta"],
   chatToolErrorWithId: ["Erro registrado da ferramenta · ID da ferramenta: {{id}}", "Error registrado de la herramienta · ID de herramienta: {{id}}"],

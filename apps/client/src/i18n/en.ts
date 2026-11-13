@@ -1395,6 +1395,8 @@ export const english = {
   chatHtmlOpenImage: "Open image in browser",
   chatHtmlLinkConfirm: "Open this address?",
   chatHtmlTable: "Table",
+  chatCodeBlock: "Code",
+  chatMessageTime: "Sent {{time}}",
   chatToolStatus: "Recorded status: {{status}} · Tool ID: {{id}}",
   chatToolError: "Recorded tool error",
   chatToolErrorWithId: "Recorded tool error · Tool ID: {{id}}",

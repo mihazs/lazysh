@@ -1,0 +1,15 @@
+/* A code block: language and Copy on top, the code below scrolling sideways. Colours come from the theme tokens. */
+.chat-code { margin: 0; overflow: hidden; border-radius: 12px; background: var(--av-code, color-mix(in srgb, var(--theme-text, #e4e9df) 7%, var(--theme-bg, #101311))); font-size: 13px; }
+.chat-code > figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 0 4px 0 14px; background: var(--av-code-head, color-mix(in srgb, var(--theme-text, #e4e9df) 12%, var(--theme-bg, #101311))); color: var(--muted); font-size: 12px; }
+.chat-code-language { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; letter-spacing: 0.02em; }
+/* The tap area is 44px tall while the bar stays slim: it overlaps the bar's edges, not another control. */
+.chat-code .chat-code-copy { display: inline-flex; align-items: center; gap: 6px; width: auto; height: auto; min-width: 0; min-height: 44px; margin-block: -4px; padding: 0 10px; border-radius: 8px; background: transparent; color: inherit; font-size: 12px; opacity: 1; }
+.chat-code .chat-code-copy:hover:not(:disabled) { color: var(--theme-text); }
+.chat-code .chat-code-pre { margin: 0; padding: 12px 14px; max-height: none; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; white-space: pre; overflow-wrap: normal; font-size: inherit; line-height: 1.55; tab-size: 2; -webkit-text-size-adjust: none; }
+.chat-code .chat-code-pre > code { font: inherit; background: none; padding: 0; }
+.chat-code .hljs-keyword, .chat-code .hljs-selector-tag, .chat-code .hljs-meta { color: var(--theme-accent, #c4eb89); }
+.chat-code .hljs-string, .chat-code .hljs-regexp, .chat-code .hljs-addition { color: var(--theme-warning, #dfc58a); }
+.chat-code .hljs-number, .chat-code .hljs-literal, .chat-code .hljs-type, .chat-code .hljs-attr, .chat-code .hljs-attribute, .chat-code .hljs-property { color: var(--theme-blue, #9fc5df); }
+.chat-code .hljs-title, .chat-code .hljs-built_in, .chat-code .hljs-symbol, .chat-code .hljs-section { color: var(--theme-purple, #c7a8ff); }
+.chat-code .hljs-comment, .chat-code .hljs-quote { color: var(--muted); font-style: italic; }
+.chat-code .hljs-deletion { color: var(--theme-danger, #e2b2a2); }
