@@ -10,11 +10,12 @@ import type {Adb} from './device';
 // Owned SSH, Herdr and tmux hosts for the suite: the fixtures of the instrumented and desktop suites, started in onPrepare
 // and reached from the guest through `adb reverse`. Nothing here ever touches a personal Herdr, tmux or SSH server.
 
-export type HostKind = 'ssh' | 'herdr' | 'tmux';
-export const HOST_KINDS: readonly HostKind[] = ['ssh', 'herdr', 'tmux'];
+export type HostKind = 'ssh' | 'sftp' | 'herdr' | 'herdr-agents' | 'tmux';
+export const HOST_KINDS: readonly HostKind[] = ['ssh', 'sftp', 'herdr', 'herdr-agents', 'tmux'];
 /** What a spec needs to reach one owned host. `privateKey` is a secret: never log it or put it on a screen that is captured. */
-export interface Endpoint {kind: HostKind; host: string; port: number; username: string; fingerprint: string; privateKey: string; prompt: string}
-export interface Fixture {ssh: Pick<SshFixture, 'port' | 'username' | 'fingerprint' | 'privateKey' | 'prompt'>; stop(): Promise<void>}
+/** `home` is the host's home and working directory, where `~` resolves. */
+export interface Endpoint {kind: HostKind; host: string; port: number; username: string; fingerprint: string; privateKey: string; prompt: string; home: string}
+export interface Fixture {ssh: Pick<SshFixture, 'port' | 'username' | 'fingerprint' | 'privateKey' | 'prompt' | 'directory'>; stop(): Promise<void>}
 export type FixtureFactories = Partial<Record<HostKind, () => Promise<Fixture>>>;
 
 // Variables that point at a live Herdr or tmux. They are removed from this process while the fixtures run, so no child can inherit them.
@@ -22,7 +23,15 @@ const LIVE_VARIABLES = ['HERDR_SOCKET_PATH', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERD
 
 export const defaultFixtures: FixtureFactories = {
   ssh: async () => { const ssh = await SshFixture.start(); return {ssh, stop: () => ssh.stop()}; },
+  // An SSH host with the SFTP subsystem (Files) and the long shell budget of the companion fixtures, not the 90 s of a plain shell.
+  sftp: async () => { const ssh = await SshFixture.start(undefined, {companion: true}); return {ssh, stop: () => ssh.stop()}; },
   herdr: async () => { const herdr = await HerdrFixture.start(herdrTools()); return {ssh: herdr.ssh, stop: () => herdr.stop()}; },
+  // Stock Herdr with a Codex conversation, a blocked and a Claude agent, and a recorded account report (see `agentsFixture`).
+  'herdr-agents': async () => {
+    const herdr = await HerdrFixture.start(herdrTools(), undefined, false, true);
+    try { await herdr.startAgents(); } catch (error) { await herdr.stop().catch(() => undefined); throw error; }
+    return {ssh: herdr.ssh, stop: () => herdr.stop()};
+  },
   tmux: async () => { const tmux = await TmuxFixture.start(); return {ssh: tmux.ssh, stop: () => tmux.stop()}; },
 };
 
@@ -69,7 +78,7 @@ export async function startHosts({adb, kinds, fixtures = defaultFixtures}: Start
       // --no-rebind: never replace a forward somebody else owns.
       await adb('reverse', '--no-rebind', `tcp:${ssh.port}`, `tcp:${ssh.port}`);
       reversed.push(ssh.port);
-      endpoints[kind] = {kind, host: '127.0.0.1', port: ssh.port, username: ssh.username, fingerprint: ssh.fingerprint, privateKey: ssh.privateKey, prompt: ssh.prompt};
+      endpoints[kind] = {kind, host: '127.0.0.1', port: ssh.port, username: ssh.username, fingerprint: ssh.fingerprint, privateKey: ssh.privateKey, prompt: ssh.prompt, home: ssh.directory};
     }
     const endpointFile = join(directory, 'endpoints.json');
     await writeFile(endpointFile, JSON.stringify({nonce, endpoints}), {mode: 0o600});
@@ -99,9 +108,9 @@ export const runNonce = (nonce = process.env.LAZYSH_E2E_NONCE) => {
 /** A per-run unique host name, so tests never collide with each other or with a leftover from an earlier run. */
 export const hostName = (label: string, nonce = runNonce()) => `e2e-${nonce}-${label}`;
 
-/** The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH, plus Herdr when its three binaries are given (the Agent view journey needs it). */
+/** The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH and SSH with SFTP, plus both Herdr hosts when the three binaries are given (the Agent view specs need them). */
 export const defaultHostKinds = (env: NodeJS.ProcessEnv = process.env) =>
-  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,herdr' : 'ssh';
+  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,sftp,herdr,herdr-agents' : 'ssh,sftp';
 
 export function hostKinds(value = process.env.LAZYSH_E2E_HOSTS ?? defaultHostKinds()): HostKind[] {
   const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean);

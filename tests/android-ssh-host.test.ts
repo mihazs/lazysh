@@ -3,7 +3,7 @@ import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncat
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE} from './support/androidSsh';
-import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {HerdrFixture,agentsFixture,herdrTools} from './support/androidHerdr';
 import {TmuxFixture} from './support/androidTmux';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
@@ -411,6 +411,33 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
   } finally {await owned.stop();}
   await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },20_000);
+
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr agents fixture reports sessions, delivers a prompt to the focused agent only and refuses the blocked one',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,false,true);
+  try {
+    await owned.startAgents();
+    const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    const bySession=(id:string)=>snapshot.agents.find((row:{agent_session?:{value:string}})=>row.agent_session?.value===id);
+    expect(snapshot.agents.map((row:{agent:string})=>row.agent).sort()).toEqual(['claude','codex','codex','codex']);
+    expect(bySession(agentsFixture.codexSession).focused).toBe(true);
+    expect(bySession(agentsFixture.blockedSession).agent_status).toBe('blocked');
+    // The companion the app runs on the host reads the recorded conversation and the recorded account report, never a provider.
+    const read=async(command:string)=>JSON.parse(await (await owned.ssh.client(true,command)).finish('owned companion read',15000));
+    const conversation=await read(`lazysh-agent herdr-conversation --agent codex --session-id ${agentsFixture.codexSession}`);
+    expect(conversation.messages.map((message:{blocks:{text:string}[]})=>message.blocks[0].text)).toEqual([agentsFixture.prompt,agentsFixture.reply]);
+    const usage=await read('lazysh-agent account-usage');
+    expect(usage.source).toBe('external_cli');
+    expect(usage.report.primary).toBe('copilot');
+    expect(usage.report.entries.map((entry:{id:string})=>entry.id)).toEqual(['anthropic','openai','copilot']);
+    // Herdr's own agent prompt reaches the focused agent byte for byte and is refused for the one waiting for an answer.
+    await owned.run(['agent','prompt',bySession(agentsFixture.codexSession).pane_id,'hello']);
+    await owned.expectBytes(Buffer.from('hello\r'),join(owned.ssh.directory,agentsFixture.receiver,'received-bytes'));
+    await expect(owned.run(['agent','prompt',bySession(agentsFixture.blockedSession).pane_id,'hello'])).rejects.toThrow();
+    await owned.expectBytes(Buffer.alloc(0),join(owned.ssh.directory,agentsFixture.blockedReceiver,'received-bytes'));
+  } finally {await owned.stop();}
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
 
 
 

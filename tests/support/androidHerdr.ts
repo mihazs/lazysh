@@ -1,4 +1,4 @@
-import {mkdir,open,readFile,stat,writeFile,lstat,realpath} from 'node:fs/promises';
+import {mkdir,open,readFile,stat,symlink,writeFile,lstat,realpath} from 'node:fs/promises';
 import {createConnection} from 'node:net';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -9,6 +9,15 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
 type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
+/** What `startAgents` seeds, for the specs that read it: the session and prompt on screen, the tabs to choose an agent by, the receiver directory and the recorded account report. */
+export const agentsFixture={
+  codexSession:'11111111-1111-4111-8111-111111111111',claudeSession:'22222222-2222-4222-8222-222222222222',
+  prompt:'Owned conversation prompt',reply:'Owned conversation reply',codexTab:'E2E_CODEX',claudeTab:'E2E_CLAUDE',receiver:'composer',
+  blockedSession:'33333333-3333-4333-8333-333333333333',blockedTab:'E2E_BLOCKED',shellTab:'E2E_SHELL',blockedReceiver:'blocked',
+  // The host default is a third account, so a bar that shows Claude or Codex followed the pane and not the default.
+  usage:()=>({schema_version:1,primary:'copilot',entries:[['anthropic','Claude','cld',100],['openai','Codex','gpt',35],['copilot','GitHub Copilot','ghc',7]].map(([id,name,short,used])=>({id,display_name:name,short_name:short,plan:'Pro',status:'ready',stale:false,
+    fetched_at:new Date().toISOString(),sections:[{type:'metric',label:'Weekly',value:`${used}%`,percent:used,headline:'percent',reading:'used'}]}))}),
+};
 export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];tabs:Record<string,unknown>[]},agent:ReportedAgent,cwd:unknown,directory:string) {
   const workspaces=snapshot.workspaces.filter(value=>value.workspace_id===agent.workspaceId);
   const tabs=snapshot.tabs.filter(value=>value.tab_id===agent.tabId && value.workspace_id===agent.workspaceId);
@@ -53,6 +62,7 @@ export class HerdrFixture {
   private historyReceiver:OwnedPid|undefined;
   private stopped=false;
   private navigationReceivers:{directory:string;receiver:OwnedPid}[]=[];
+  private agentReceivers:OwnedPid[]=[];
   private navigation: {source:ReportedAgent & {marker:string;label:string};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string};workspaceLabel:string}|undefined;
   private constructor(readonly ssh:SshFixture) {
     this.name='owned-guard';
@@ -68,8 +78,9 @@ export class HerdrFixture {
     return new OwnedProcess(join(this.ssh.directory,'bin/herdr'),['--session',this.name,...args],this.ssh.directory,env)
       .finish('owned Herdr command',3000);
   }
-  static async start(tools:HerdrTools,moshBinary?:string,navigation=false) {
-    const ssh=await SshFixture.start(tools,moshBinary?{moshBinary,privateTtyGroup:true,observeMoshBootstraps:true}:{sharedNavigation:navigation});
+  static async start(tools:HerdrTools,moshBinary?:string,navigation=false,longLived=false) {
+    // `longLived` gives a UI session the 600 s command budget of the navigation fixture instead of the 90 s of a plain shell.
+    const ssh=await SshFixture.start(tools,moshBinary?{moshBinary,privateTtyGroup:true,observeMoshBootstraps:true}:{sharedNavigation:navigation||longLived});
     const owned=new HerdrFixture(ssh);
     try {
       for(const name of ['herdr','herdr-dev']) {
@@ -140,8 +151,8 @@ export class HerdrFixture {
       throw error;
     }
   }
-  private async startReceiver(pane:string,directory:string,marker?:string,prefix='') {
-    const command=prefix+(marker?"printf '\\033[2J\\033[H%s' "+quote(marker)+"; ":'')+'exec '+quote(join(this.ssh.directory,'bin/owned-terminal-receiver'))+' '+quote(directory);
+  private async startReceiver(pane:string,directory:string,marker?:string,prefix='',executable='owned-terminal-receiver') {
+    const command=prefix+(marker?"printf '\\033[2J\\033[H%s' "+quote(marker)+"; ":'')+'exec '+quote(join(this.ssh.directory,'bin',executable))+' '+quote(directory);
     await this.run(['pane','run',pane,command]);
     const deadline=performance.now()+3000;
     while(true) {
@@ -188,6 +199,47 @@ export class HerdrFixture {
       console.log(`Owned navigation binary ${name} sha256=${hash.digest('hex')}`);
     }
     await this.expectNavigationBytes();
+  }
+  /**
+   * What the Agent view and the usage item need on a stock Herdr: a Claude agent in one tab, and in the focused tab a Codex agent
+   * with a conversation (a session file under HOME) whose pane records what it is sent (the receiver run under the name `codex`).
+   * Herdr admits a lifecycle report only while it detects the agent, so each pane runs a process of that name. The host also gets a
+   * recorded account report, which the companion reads through the external `ai-usagebar` command, so no provider is asked.
+   */
+  async startAgents() {
+    const {ssh}=this,{workspaceId}=this.agent!,bin=join(ssh.directory,'bin'),sessions=join(ssh.directory,'.codex','sessions','2026','11','10');
+    await mkdir(sessions,{recursive:true,mode:0o700});
+    for(const id of [agentsFixture.codexSession,agentsFixture.blockedSession]) {
+      const records=[{type:'session_meta',payload:{id,history_mode:'legacy'}},{type:'event_msg',payload:{type:'user_message',message:agentsFixture.prompt}},{type:'event_msg',payload:{type:'agent_message',message:agentsFixture.reply}}];
+      await writeFile(join(sessions,`rollout-2026-11-10T00-00-00-${id}.jsonl`),records.map(row=>JSON.stringify(row)).join('\n')+'\n',{mode:0o600});
+    }
+    await symlink(join(bin,'owned-terminal-receiver'),join(bin,'codex'));await symlink('/bin/sleep',join(bin,'claude'));
+    const startPane=async(agent:'codex'|'claude',session:string,tab:string,focus:boolean,start:(pane:string)=>Promise<unknown>,status?:string)=>{
+      const pane=JSON.parse(await this.run(['tab','create','--workspace',workspaceId,'--cwd',ssh.directory,'--label',tab,focus?'--focus':'--no-focus'])).result.root_pane.pane_id as string;
+      await start(pane);
+      const deadline=Date.now()+10_000;
+      while(!JSON.parse(await this.run(['api','snapshot'])).result.snapshot.agents.some((row:{pane_id:string;agent:string})=>row.pane_id===pane && row.agent===agent)) {
+        if(Date.now()>deadline)throw new Error('Owned agent stand-in was not detected');
+        await delay(100);
+      }
+      // Herdr reads a blocked title only on a pane in front, so the pane is waited for before the next tab takes the focus.
+      while(status && JSON.parse(await this.run(['api','snapshot'])).result.snapshot.agents.find((row:{pane_id:string})=>row.pane_id===pane)?.agent_status!==status) {
+        if(Date.now()>deadline+10_000)throw new Error('Owned agent stand-in did not reach '+status);
+        await delay(100);
+      }
+      await this.run(['pane','report-agent',pane,'--source','herdr:'+agent,'--agent',agent,'--state','idle']);
+      await this.run(['pane','report-agent-session',pane,'--source','herdr:'+agent,'--agent',agent,'--agent-session-id',session]);
+    };
+    const receiver=(name:string,prefix='')=>async(pane:string)=>{const path=join(ssh.directory,name);await mkdir(path,{mode:0o700});this.agentReceivers.push(await this.startReceiver(pane,path,undefined,prefix,'codex'));};
+    // A tab with no agent, to show the bar of a pane that has none.
+    await this.run(['tab','create','--workspace',workspaceId,'--cwd',ssh.directory,'--label',agentsFixture.shellTab,'--no-focus']);
+    await startPane('claude',agentsFixture.claudeSession,agentsFixture.claudeTab,false,pane=>this.run(['pane','run',pane,`exec ${quote(join(bin,'claude'))} 86400`]));
+    // Herdr refuses a prompt for an agent that waits for an answer, which is how a send fails on a real host. Codex says so in its terminal title.
+    await startPane('codex',agentsFixture.blockedSession,agentsFixture.blockedTab,true,receiver(agentsFixture.blockedReceiver,"printf '\\033]0;Action Required\\007'; "),'blocked');
+    await startPane('codex',agentsFixture.codexSession,agentsFixture.codexTab,true,receiver(agentsFixture.receiver));
+    const config=join(ssh.environment!.XDG_CONFIG_HOME!,'lazysh');await mkdir(config,{recursive:true,mode:0o700});
+    await writeFile(join(config,'account-usage.toml'),'# The companion asks the stand-in ai-usagebar, which prints a recorded report, instead of the providers.\n[context]\nenabled = false\n[notifications]\nenabled = false\n',{mode:0o600});
+    await writeFile(join(bin,'ai-usagebar'),`#!/bin/sh\ncat <<'REPORT'\n${JSON.stringify(agentsFixture.usage())}\nREPORT\n`,{mode:0o700});
   }
   async expectNavigationBytes() {
     if(!this.navigation)throw new Error('Owned navigation topology required');
@@ -308,6 +360,7 @@ export class HerdrFixture {
   async stop() {
     if(this.stopped)return;
     await stopOwnedServer(this.ssh,this.server,'Herdr',async()=>await this.receiverAlive() || await this.receiverAlive(this.historyReceiver)
+      || (await Promise.all(this.agentReceivers.map(receiver=>this.receiverAlive(receiver)))).some(Boolean)
       || (await Promise.all(this.navigationReceivers.map(({receiver})=>this.receiverAlive(receiver)))).some(Boolean));
     this.stopped=true;
   }
