@@ -74,6 +74,9 @@ export type TerminalModes = {
   applicationCursorKeys: boolean;
 };
 
+/** The drawn screen's rectangle in client (viewport) coordinates. */
+export type TerminalBounds = {left: number; top: number; width: number; height: number};
+
 /** `top` is the first visible absolute row; `length` the rows held; `following` means the view shows live output. */
 export type TerminalViewport = {top: number; rows: number; length: number; following: boolean};
 
@@ -86,8 +89,12 @@ export type TerminalEvent =
   | {type: 'resizeIntent'; size: TerminalSize}
   /** The terminal's own size changed. `transport` authority is Mosh's canonical framebuffer. */
   | {type: 'geometry'; size: TerminalSize; authority: 'local' | 'transport'}
+  /** The visible rows or their place on screen changed: scrolling, new output that moves the view, a redraw or a font change. */
   | {type: 'viewport'; viewport: TerminalViewport}
-  | {type: 'selection'; selection: TerminalSelection | undefined}
+  /** Bytes written to the terminal were parsed; the screen may differ now. Fires once per applied write. */
+  | {type: 'output'}
+  /** The selection changed; `range` is undefined once nothing is selected. Read `selectedText()` for the text. */
+  | {type: 'selection'; range: TerminalRange | undefined}
   | {type: 'modes'; modes: TerminalModes}
   | {type: 'title'; title: string}
   | {type: 'bell'}
@@ -147,14 +154,26 @@ export interface TerminalAdapter {
   paste(text: string): void;
 
   requestSize(size: TerminalSize): void;
-  metrics(): {columns: number; rows: number; cellWidth: number; cellHeight: number};
+  /** The grid's size; free to call on every event, unlike `metrics`, which measures the drawn screen. */
+  size(): {columns: number; rows: number};
+  metrics(): {columns: number; rows: number; cellWidth: number; cellHeight: number; scrollbackLines: number};
+  /** Where the screen is drawn, so overlays (selection handles) can be placed; undefined while nothing is mounted. */
+  screenBounds(): TerminalBounds | undefined;
   applyPreferences(preferences: TerminalPreferences): void;
   scroll(action: TerminalScrollAction): void;
   viewport(): TerminalViewport;
+  /** True only while the primary screen shows live output (not history, not the alternate screen). Fails closed: false when the backend cannot tell. */
+  atLiveScreen(): boolean;
   modes(): TerminalModes;
 
   cellAt(clientX: number, clientY: number): TerminalCell | undefined;
   getSelection(): TerminalSelection | undefined;
+  /** Cheap: `getSelection() !== undefined` without building the text. */
+  hasSelection(): boolean;
+  /** The selected cells without their text, so selection handles can follow a large selection cheaply. */
+  selectionRange(): TerminalRange | undefined;
+  /** The selected text, or '' when nothing is selected. */
+  selectedText(): string;
   select(range: TerminalRange): void;
   selectWordAt(cell: TerminalCell): TerminalRange;
   selectAll(): void;
@@ -164,9 +183,17 @@ export interface TerminalAdapter {
   /** Wraps around the buffer; `from` is the previous hit's row. */
   search(query: string, direction: 1 | -1, from?: number): TerminalSearchHit | undefined;
 
+  /** The cursor's row in the live screen (0 is its first row) and column. */
+  cursor(): {x: number; y: number};
+  /** Return a reader who scrolled back to the live screen, as typed input would, unless the backend is configured to keep the reader's place. */
+  followLive(): void;
+  /** Deliver one wheel notch where the pointer is: a mouse report when the program tracks the mouse, a scroll otherwise. */
+  wheel(input: {clientX: number; clientY: number; deltaY: number; unit: 'pixel' | 'line'}): void;
+
   focus(): void;
   blur(): void;
 
   /** Listeners run in order and never outlive `dispose`. */
-  subscribe(listener: (event: TerminalEvent) => void): Disposable;
+  /** `types` limits delivery to those event types; a backend then wires only what was asked for. */
+  subscribe(listener: (event: TerminalEvent) => void, types?: readonly TerminalEvent['type'][]): Disposable;
 }

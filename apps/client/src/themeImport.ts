@@ -1,8 +1,8 @@
 import {LocalUiError} from './i18n/localError';
-import type { ITheme } from '@xterm/xterm';
+import type { TerminalTheme } from './terminalAdapter';
 
 export type ThemeInfo = {name: string; mode: 'dark' | 'light'};
-export type ThemeColors = ITheme & {bold?: 'bright' | `#${string}`};
+export type ThemeColors = TerminalTheme & {bold?: 'bright' | `#${string}`};
 export type ImportedTheme = ThemeInfo & {v: 1; colors: ThemeColors};
 const colorKeys = ['background','foreground','cursor','cursorAccent','selectionBackground','selectionForeground','selectionInactiveBackground','black','red','green','yellow','blue','magenta','cyan','white','brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'];
 const bytes = (value: string) => new TextEncoder().encode(value);

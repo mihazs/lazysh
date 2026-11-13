@@ -1,7 +1,7 @@
 import {useEffect, useRef, type PointerEvent as ReactPointerEvent} from 'react';
-import type {Terminal} from '@xterm/xterm';
 import {t} from './i18n/core';
-import {edgeOverflow, edgeScrollRate, edgeScrollStep, inclusiveEnd, rangeBetween, selectTerminalRange, terminalCellAt, type TerminalCell} from './terminalTouchSelection';
+import type {TerminalAdapter} from './terminalAdapter';
+import {edgeOverflow, edgeScrollRate, edgeScrollStep, rangeBetween, type TerminalCell} from './terminalTouchSelection';
 
 const HANDLE = 28;
 type Handle = 'start' | 'end';
@@ -13,23 +13,24 @@ type Drag = {pointer: number; fixed: TerminalCell; dx: number; dy: number; x: nu
  * history, so a selection can span more than one screen. Positions follow
  * scrolling and output only while this is mounted.
  */
-export default function TerminalSelectionTools({terminal, handles, onCopy, onDone}: {
-  terminal: Terminal; handles: boolean; onCopy: (text: string) => void; onDone: () => void;
+export default function TerminalSelectionTools({adapter, handles, onCopy, onDone}: {
+  adapter: TerminalAdapter; handles: boolean; onCopy: (text: string) => void; onDone: () => void;
 }) {
   const start = useRef<HTMLDivElement>(null), end = useRef<HTMLDivElement>(null), bar = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const done = useRef(onDone);
   done.current = onDone;
-  const screen = () => terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect();
 
   useEffect(() => {
     let frame = 0;
     const place = () => {
       frame = 0;
-      const position = terminal.getSelectionPosition(), rect = screen();
-      if (!position || !rect || !terminal.cols || !terminal.rows) return;
-      const width = rect.width / terminal.cols, height = rect.height / terminal.rows, top = terminal.buffer.active.viewportY;
-      const row = (y: number) => y - top, visible = (y: number) => row(y) >= 0 && row(y) < terminal.rows;
+      const range = adapter.getSelection()?.range, rect = adapter.screenBounds(), {columns, rows} = adapter.size();
+      if (!range || !rect || !columns || !rows) return;
+      // Handles sit on cell edges: the end handle after the last selected cell.
+      const position = {start: range.start, end: {x: range.end.x + 1, y: range.end.y}};
+      const width = rect.width / columns, height = rect.height / rows, top = adapter.viewport().top;
+      const row = (y: number) => y - top, visible = (y: number) => row(y) >= 0 && row(y) < rows;
       const put = (node: HTMLElement | null, x: number, y: number) => {
         if (!node) return;
         node.style.display = visible(y) ? '' : 'none';
@@ -42,52 +43,54 @@ export default function TerminalSelectionTools({terminal, handles, onCopy, onDon
       const size = tools.getBoundingClientRect();
       const above = visible(position.start.y) && rect.top + row(position.start.y) * height - size.height - 6 >= rect.top;
       const y = above ? rect.top + row(position.start.y) * height - size.height - 6
-        : visible(position.end.y) && rect.top + (row(position.end.y) + 1) * height + HANDLE + size.height <= rect.bottom ? rect.top + (row(position.end.y) + 1) * height + HANDLE
+        : visible(position.end.y) && rect.top + (row(position.end.y) + 1) * height + HANDLE + size.height <= rect.top + rect.height ? rect.top + (row(position.end.y) + 1) * height + HANDLE
         : rect.top + 6;
-      const x = Math.max(rect.left, Math.min(rect.right - size.width, rect.left + (visible(position.start.y) ? position.start.x * width : 0)));
+      const x = Math.max(rect.left, Math.min(rect.left + rect.width - size.width, rect.left + (visible(position.start.y) ? position.start.x * width : 0)));
       tools.style.transform = `translate(${x}px, ${y}px)`;
     };
     const schedule = () => {if (!frame) frame = requestAnimationFrame(place);};
-    const changed = () => {if (terminal.hasSelection()) schedule(); else done.current();};
-    const listeners = [terminal.onSelectionChange(changed), terminal.onScroll(schedule), terminal.onRender(schedule), terminal.onResize(schedule)];
+    const listener = adapter.subscribe(event => {
+      if (event.type === 'selection') {if (event.range) schedule(); else done.current();}
+      else schedule();
+    }, ['selection', 'viewport', 'geometry']);
     window.addEventListener('resize', schedule);
     schedule();
     return () => {
       cancelAnimationFrame(frame);
       if (drag.current) cancelAnimationFrame(drag.current.frame);
       drag.current = null;
-      listeners.forEach(listener => listener.dispose());
+      listener.dispose();
       window.removeEventListener('resize', schedule);
     };
-  }, [terminal]);
+  }, [adapter]);
 
   /** Selects from the fixed endpoint through the cell under the dragged point, clamped to the screen. */
   function extend(state: Drag) {
-    const cell = terminalCellAt(terminal, state.x - state.dx, state.y - state.dy);
-    if (cell) selectTerminalRange(terminal, rangeBetween(state.fixed, cell));
+    const cell = adapter.cellAt(state.x - state.dx, state.y - state.dy);
+    if (cell) adapter.select(rangeBetween(state.fixed, cell));
   }
   function edge(now: number) {
-    const state = drag.current, rect = screen();
+    const state = drag.current, rect = adapter.screenBounds();
     if (!state || !rect) return;
-    const rate = edgeScrollRate(edgeOverflow(state.y - state.dy, rect.top, rect.bottom), rect.height / terminal.rows);
+    const rate = edgeScrollRate(edgeOverflow(state.y - state.dy, rect.top, rect.top + rect.height), rect.height / adapter.size().rows);
     if (!rate) {state.frame = 0; return;}
     const step = edgeScrollStep(rate, state.last ? now - state.last : 16, state.carry);
     state.carry = step.carry; state.last = now;
-    if (step.rows) terminal.scrollLines(step.rows);
+    if (step.rows) adapter.scroll({kind: 'lines', delta: step.rows});
     extend(state);
     state.frame = requestAnimationFrame(edge);
   }
   function grab(which: Handle) {
     return {
       onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-        const position = terminal.getSelectionPosition(), rect = screen();
-        if (!position || !rect || event.button !== 0) return;
+        const range = adapter.getSelection()?.range, rect = adapter.screenBounds(), {columns, rows} = adapter.size();
+        if (!range || !rect || !columns || !rows || event.button !== 0) return;
         event.preventDefault(); event.stopPropagation();
         try {event.currentTarget.setPointerCapture(event.pointerId);} catch {/* Without capture, moves still arrive while over the handle. */}
-        const width = rect.width / terminal.cols, height = rect.height / terminal.rows, handle = event.currentTarget.getBoundingClientRect();
+        const width = rect.width / columns, height = rect.height / rows, handle = event.currentTarget.getBoundingClientRect();
         // The dragged point is the selected cell's centre, which sits above the handle.
         const cellX = handle.left + HANDLE / 2 + (which === 'start' ? width / 2 : -width / 2), cellY = handle.top - height / 2;
-        const fixed = which === 'end' ? position.start : inclusiveEnd(position.end, terminal.cols);
+        const fixed = which === 'end' ? range.start : range.end;
         drag.current = {pointer: event.pointerId, fixed, dx: event.clientX - cellX, dy: event.clientY - cellY, x: event.clientX, y: event.clientY, frame: 0, last: 0, carry: 0};
       },
       onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -107,7 +110,7 @@ export default function TerminalSelectionTools({terminal, handles, onCopy, onDon
   }
   function copyAndClose(text: string) {
     if (text) onCopy(text);
-    terminal.clearSelection();
+    adapter.clearSelection();
   }
   const handle = (which: Handle) => <div ref={which === 'start' ? start : end} role="button" tabIndex={-1}
     aria-label={t(which === 'start' ? 'terminalSelectionStart' : 'terminalSelectionEnd')} data-selection-handle={which} data-edge-gestures-ignore="" {...grab(which)}
@@ -118,9 +121,13 @@ export default function TerminalSelectionTools({terminal, handles, onCopy, onDon
     {handles && handle('end')}
     <div ref={bar} className="terminal-selection-tools" role="toolbar" data-edge-gestures-ignore="" aria-label={t('terminalSelectionTools')} onPointerDown={event => event.preventDefault()}
       style={{position: 'fixed', left: 0, top: 0, zIndex: 1001, display: 'flex', gap: 4, padding: 4, borderRadius: 8}}>
-      <button type="button" onClick={() => copyAndClose(terminal.getSelection())}>{t('terminalCopy')}</button>
-      <button type="button" onClick={() => terminal.selectAll()}>{t('terminalSelectAll')}</button>
-      <button type="button" onClick={() => {terminal.select(0, terminal.buffer.active.viewportY, terminal.rows * terminal.cols); copyAndClose(terminal.getSelection());}}>{t('terminalCopyScreen')}</button>
+      <button type="button" onClick={() => copyAndClose(adapter.selectedText())}>{t('terminalCopy')}</button>
+      <button type="button" onClick={() => adapter.selectAll()}>{t('terminalSelectAll')}</button>
+      <button type="button" onClick={() => {
+        const {columns, rows} = adapter.size(), top = adapter.viewport().top;
+        adapter.select({start: {x: 0, y: top}, end: {x: columns - 1, y: top + rows - 1}});
+        copyAndClose(adapter.selectedText());
+      }}>{t('terminalCopyScreen')}</button>
     </div>
   </>;
 }
