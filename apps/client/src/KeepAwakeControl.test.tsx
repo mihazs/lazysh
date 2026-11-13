@@ -372,7 +372,8 @@ it('keeps an initially hidden board idle and releases its owned ticket on sideba
   await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active();
   const checkbox=toggle(),board=checkbox.closest('section')!;
   view.rerender(<KeepAwakeControl sessionId="nav-board" visible={false}/>);await waitFor(()=>expect(native.active()).toBeUndefined());
-  expect(board).toHaveProperty('hidden',true);expect(checkbox).toHaveProperty('checked',true);expect(checkbox).toHaveProperty('disabled',true);
+  // Settings shows the switch while the board is covered, so the preference stays editable; only ownership waits for the board.
+  expect(board).toHaveProperty('hidden',false);expect(checkbox).toHaveProperty('checked',true);expect(checkbox).toHaveProperty('disabled',false);
   expect(view.container.querySelector('.keep-awake-control')).toBe(board);
   expect(board.textContent).toContain('Keep awake is paused until this board is visible and focused.');
   expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:owner});const calls=vi.mocked(invoke).mock.calls.length;

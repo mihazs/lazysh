@@ -2,7 +2,7 @@
 
 ## Managed lifecycle hook setup
 
-Opening **Agents → Agent hook setup** detects installed agents and known profile
+Opening **Preferences → Agents and notifications → Agents → Agent hook setup** (an empty Activity list opens it directly) detects installed agents and known profile
 locations on the connected SSH host. Select an agent and profile, then choose
 **Inspect setup**. Detection does not execute agents or install hooks. A found
 profile is shown separately from an installed executable; manual-only adapters

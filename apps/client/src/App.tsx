@@ -93,6 +93,8 @@ import type {HerdrTree} from "./useHerdrNavigation";
 import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import AgentSetupSettings from "./AgentSetupSettings";
+import PullToRefresh from "./PullToRefresh";
 import { useClientAppearance } from "./appearance";
 import { usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
@@ -1225,6 +1227,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   usePaletteShortcut(() => setPalette(true));
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  /** Set when something else sends the user to Settings > Agents; `reveal` opens the hook setup there. */
+  const [agentSetup,setAgentSetup]=useState<{reveal?:Readonly<{sessionId:string}>}>();
+  useEffect(()=>{if(!preferences)setAgentSetup(undefined);},[preferences]);
   const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
@@ -1563,11 +1568,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   };
   const latestAgentViewToggle=useRef(toggleAgentView);latestAgentViewToggle.current=toggleAgentView;
   useCapturedShortcut(agentViewShortcut,toggleAgentView);
-  function showAgentSetup(source:LiveSession) {
+  /** The host companion, keep-awake and Herdr server setup live in Settings > Agents. */
+  function showAgentSetup(source:LiveSession,reveal?:'hooks') {
     if(!mounted.current || !lease.current() || document.hidden || source.disposed || !source.connected || closingSessions.current.has(source.id)
       || sessionsRef.current.find(session=>session.id===currentView.current.activeId)!==source)return;
-    setAgentSections(previous=>({...previous,[source.id]:'activity'}));
-    showNavigation('agents');
+    setAgentSetup({reveal:reveal&&{sessionId:source.id}});
+    setPreferences(true);
   }
   function jumpAgentContent(section:'live'|'activity') {
     const scroller=agentScroll.current,target=section==='live'?liveAgentContent.current:reportedAgentContent.current;
@@ -2335,8 +2341,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <button type="button" className="subtle-button" aria-label={t('agentsReportedActivity')} aria-controls={`${agentContentId}-activity`} aria-pressed={agentSection==='activity'} onClick={()=>jumpAgentContent('activity')}>{t('agentsJumpActivity')}</button>
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
+        <PullToRefresh scroller={agentScroll} enabled={agentsVisible}/>
         <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{remoteActive && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
-        {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+        {remoteActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} showHerdr={false} activityVisible={agentSection==='activity'} onOpenSetup={reveal=>showAgentSetup(active,reveal)} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
@@ -2704,7 +2711,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
-          <PreferencesPanel footer={t('settingsVersionFooter',{version:appVersion})} usageAccounts={accountUsage.response?.report?.entries} pages={[
+          <PreferencesPanel start={agentSetup?'agents':undefined} footer={t('settingsVersionFooter',{version:appVersion})} usageAccounts={accountUsage.response?.report?.entries} pages={[
             ...(native?[{id:'connections',section:'general',title:t('preferencesCategoryConnections'),value:t('syncHostCount',{count:hosts.length,value:formatNumber(hosts.length)}),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
@@ -2713,7 +2720,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </section>}]:[]),
             {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
             {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setInbox(true);}},
-            {id:'agents',section:'agents',title:t('appAgents'),disabled:!remoteActive||pendingMuxRequest,value:remoteActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
+            {id:'agents',section:'agents',title:t('appAgents'),disabled:!remoteActive,value:remoteActive?active?.name:t('settingsNeedsSession'),content:remoteActive && active?<AgentSetupSettings key={active.id} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reveal={agentSetup?.reveal} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}}/>:<p role="status">{t('settingsNeedsSession')}</p>},
             {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
             {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},

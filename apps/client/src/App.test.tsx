@@ -1,3 +1,4 @@
+import {refreshAgents} from './agentsRefresh';
 import {LocalUiError} from './i18n/localError';
 import {t,uiI18n} from './i18n/core';
 // @vitest-environment jsdom
@@ -215,7 +216,8 @@ it.each(['success','failure','same-snapshot-failure','server','mode','viewport',
   else await act(async()=>finish({...herdrNavigationTree}));
   expect(scroller.scrollTop).toBe(outcome==='success'?731:0);
   if(outcome==='failure'||outcome==='same-snapshot-failure'){
-    await user.click(screen.getByRole('button',{name:t('herdrRefresh')}));await act(async()=>finish({...herdrNavigationTree}));expect(scroller.scrollTop).toBe(0);
+    // The Live agents view has no refresh button: pulling the page, or Settings, asks the reader to read again.
+    act(()=>refreshAgents());await act(async()=>finish({...herdrNavigationTree}));expect(scroller.scrollTop).toBe(0);
   }
   expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
@@ -267,14 +269,15 @@ it.each([false,true])('returns to the opening session or skips its closed origin
   expect(mocks.api.connect).toHaveBeenCalledTimes(2);expect(mocks.api.disconnect).toHaveBeenCalledTimes(closeOrigin?1:0);
 });
 
-it('opens the existing Agents sidebar installer from account usage setup without starting installation',async()=>{
+it('opens the companion installer in Settings > Agents from account usage setup without starting installation',async()=>{
   mocks.accountUsageCompanionRequired=true;mocks.realAgents=true;
   mocks.api.connect.mockResolvedValue({sessionId:'usage-needs-companion'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
   await user.click(await screen.findByRole('button',{name:'Install or update companion'}));
-  expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
-  expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
+  const preferences=await screen.findByRole('dialog',{name:t('appPreferences')});
+  expect(within(preferences).getByRole('heading',{name:t('appAgents')})).toBeTruthy();
+  expect((await within(preferences).findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
   expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
@@ -1993,15 +1996,15 @@ it('opens Agents on the attached default Herdr session among several running ser
   await screen.findByText('Live SSH terminal');
   expect(mocks.invoke.mock.calls.filter(([command])=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command))).toEqual([]);
   await chooseWorkspaceTool(user,'Agents');
-  await user.click(await screen.findByRole('button',{name:t('herdrAgentsServer')}));
-  const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
+  // The Live agents view opens on the attached server; its chooser is in Settings > Agents, not behind a button here.
+  const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer'),hidden:true});
+  expect(screen.queryByRole('button',{name:t('herdrAgentsServer')})).toBeNull();
   await waitFor(()=>expect(select).toHaveProperty('disabled',false));
   expect(select).toHaveProperty('value','named-work');
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='herdr_tree')).toEqual([
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
   const live=screen.getByRole('region',{name:t('herdrNavigationTitle')});
-  await user.click(within(live).getByRole('button',{name:t('navigationBack')}));
   const summary=within(live).getByText('Reported session');
   await user.click(summary);
   expect(within(live).getByText('/project')).toBeTruthy();
@@ -2225,8 +2228,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   const live=screen.getByRole('group',{name:'Live Herdr agents'});
   await user.click(screen.getByRole('button',{name:'Reported agent activity'}));
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
-  await user.click(screen.getByRole('button',{name:'Setup'}));
-  const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
+  expect(screen.queryByRole('button',{name:'Setup'})).toBeNull();expect(screen.queryByRole('button',{name:'Refresh'})).toBeNull();
   const jumps=screen.getByRole('navigation',{name:'Agent sections'});
   const activity=screen.getByRole('group',{name:'Reported agent activity'});
   const scroller=activity.closest('.workspace-navigation-scroll') as HTMLDivElement;
@@ -2238,7 +2240,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(document.activeElement).toBe(live);expect(scroller.scrollTop).toBe(0);expect(pageScroll).not.toHaveBeenCalled();
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(readsBeforeJump);
   fireEvent.click(activityButton);expect(scroller.scrollTop).toBe(30);
-  expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(settings).toHaveProperty('checked',false);
+  expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);
 
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
   expect(screen.getAllByRole('region',{name:'Agent activity'})).toHaveLength(1);
@@ -2248,8 +2250,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   const focusBeforeHiddenJump=document.activeElement;fireEvent.click(activityButton);expect(document.activeElement).toBe(focusBeforeHiddenJump);
   await user.click(screen.getByRole('button',{name:'Agents navigation'}));
   await screen.findByRole('searchbox',{name:'Search reported agents'});expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(search).toHaveProperty('value','/project');
-  expect(settings).toHaveProperty('checked',false);
-  expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(0);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledOnce();
   const connections=screen.getByRole('button',{name:'Connections'});

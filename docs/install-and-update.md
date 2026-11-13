@@ -35,7 +35,7 @@ installation. These artifacts
 do not install hooks, enable publishing or change existing companion settings.
 
 Starting with 1.2.0, connect to the intended Linux or macOS account and open
-**Agents → Install companion** (or **Update companion**). This action is available
+**Preferences → Agents and notifications → Agents → Install companion** (or **Update companion**). This action is available
 even when the helper is missing; on phones, open Agents through **More**.
 The app verifies a stable published executable,
 transfers it through the existing SSH connection and checks the installation.

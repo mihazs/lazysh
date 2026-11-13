@@ -1,5 +1,6 @@
 import {createRoot} from 'react-dom/client';
 import AgentPanel from '../../src/AgentPanel';
+import AgentSetupSettings from '../../src/AgentSetupSettings';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src/access';
 import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,inactiveBoardDisplay} from '../../src/test/agentBoardData';
 
@@ -22,6 +23,7 @@ export function mountAgentBoard(host?:{key:string;label:string}){
   }}});
   const container=document.createElement('div');container.className='agent-board-fixture';
   Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
-  const root=createRoot(container);root.render(<AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/>);
+  const root=createRoot(container);// The board's setup lives in Settings > Agents; it renders beside the board so one root holds both.
+  root.render(<><AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/><AgentSetupSettings sessionId={agentBoardSession}/></>);
   return {calls,setReports(rows:typeof reports){reports=rows;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
 }

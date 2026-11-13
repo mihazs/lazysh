@@ -127,14 +127,15 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{
     };
   },[sessionId,enabled,foreground,epoch,native,invoke,access,mounted,boardVisible]);
   function toggle(checked:boolean) {
-    if(!shown.current || !access.current())return;
+    if(!access.current())return;
     requireOptIn.current=false;
     desired.current=checked;setEnabled(checked);setError(cleanupFailure.current);
     try {localStorage.setItem(boardAwakeKey,String(checked));setPreferenceError('');}
     catch {setPreferenceError(new LocalUiError('keepAwakeSaveFailed'));}
   }
-  return <section hidden={!boardVisible} style={boardVisible?undefined:{display:'none'}} className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
-    <label><input type="checkbox" checked={enabled} disabled={!boardVisible || !native || !access.current() || (!enabled && !status?.available)}
+  // Settings > Agents shows this while the board is covered, so the preference stays editable then; only owning the display needs the visible board.
+  return <section className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
+    <label><input type="checkbox" checked={enabled} disabled={!native || !access.current() || (!enabled && !!status && !status.available)}
       onChange={event=>toggle(event.target.checked)}/>{t('keepAwakeLabel')}</label>
     <p role="status">{!native?t('keepAwakeNative'):phase==='active'?t('keepAwakeActive'):
       phase==='held'?(enabled?t('keepAwakeHeldOn'):t('keepAwakeHeldOff')):

@@ -3,16 +3,16 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 
-import { Archive, ArchiveRestore, ArrowLeft, Bot, ChevronRight, RefreshCw, Search, Settings2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Bot, ChevronRight, Search, Settings2 } from 'lucide-react';
 import {StatusRing,agentKind,reportedTones} from './AgentStatus';
 import {formatRelativeTime,pathBasename,useNow} from './relativeTime';
 import ApprovalPanel from './ApprovalPanel';
 import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
+import {createPortal} from 'react-dom';
+import {onAgentsRefresh} from './agentsRefresh';
 import KeepAwakeControl from './KeepAwakeControl';
-import CompanionSettingsPanel from './CompanionSettingsPanel';
-import CompanionInstallPanel from './CompanionInstallPanel';
-import CompanionHooksPanel from './CompanionHooksPanel';
+import {useKeepAwakeSlot} from './keepAwakeSlot';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {archiveReport,isArchived,readArchive,reconcileArchive,restoreReport,saveArchive,type ArchivedReport} from './agentArchive';
 import './AgentPanel.css';
@@ -84,7 +84,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId,onOpenSetup }: { sessionId: string;hostKey?:string;hostLabel?:string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onOpenSetup?:(reveal?:'hooks')=>void;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
@@ -94,8 +94,6 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [setupSource,setSetupSource]=useState<string>();
-  const [hookSetupRequest,setHookSetupRequest]=useState<Readonly<{sessionId:string}>>();
   const [loadedSessionId, setLoadedSessionId] = useState<string>();
   const archiveHost=hostKey ?? sessionId;
   const [archiveState,setArchive]=useState<{host:string;rows:readonly ArchivedReport[]}>(()=>({host:archiveHost,rows:readArchive(archiveHost)}));
@@ -123,7 +121,6 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const reportReturn=useRef<{target:HTMLButtonElement|null;scroll:ScrollPosition|null;source:string}|null>(null);
   useEffect(()=>{if(selection && visibility.current && selectedSource.current===selection.source && access.current() && !document.hidden)selectedReport.current?.focus();},[selection]);
   const ready=loaded && loadedSessionId===sessionId;
-  const setupOpen=setupSource===sessionId || !!error;
   const reports=ready && !error ? sessions : [];
   const currentReports=useRef(reports);currentReports.current=reports;
   const archivedReports=reports.filter(row=>isArchived(archived,row));
@@ -190,6 +187,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     }
   }
   useEffect(()=>{setSessions([]);setLoaded(false);setError('');},[sessionId]);
+  useEffect(()=>onAgentsRefresh(force=>{if(force){request.current++;snapshotFlight.current=null;}void refresh();}),[sessionId,panelVisible]);
   useEffect(()=>{
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
@@ -235,18 +233,13 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     window.addEventListener('lazysh-workspace-back',back,true);return()=>window.removeEventListener('lazysh-workspace-back',back,true);
   },[selected,panelVisible,activityVisible,sessionId,mobile]);
   const approvals=<ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />;
+  const awakeSlot=useKeepAwakeSlot();
+  /** The display is owned by this board while it is visible; its switch is shown in Settings > Agents when that is open. */
+  const keepAwake=<KeepAwakeControl sessionId={sessionId} visible={panelVisible} />;
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
     {!renderNavigation&&approvals}
-    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><label className="agent-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('agentsSearch')}</span><input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
-    {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
-    <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
-      <h3>{t('agentsSetupAction')}</h3>
-      <p className="agent-note">{t('agentsReportedHint')}</p>
-      <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
-      <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>
-      <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
-      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
-    </section>
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><label className="agent-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('agentsSearch')}</span><input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label></div>
+    {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p>{onOpenSetup && <button type="button" className="subtle-button" onClick={()=>onOpenSetup()}><Settings2 size={15} aria-hidden="true"/>{t('agentsOpenSetup')}</button>}</div>}
     {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <div className="agent-discovery">
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
@@ -269,14 +262,15 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     {historyError && <div><p className="inline-error" role="alert">{uiErrorText(historyError)}</p><p>{t('agentsHistoryManual')}</p></div>}
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
-    {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
+    {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{onOpenSetup && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;onOpenSetup('hooks');}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
     {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{projectGroups(visible.filter(s => s.state === state)).map(([project,rows])=><section key={project} className="agent-project-group" aria-label={hostLabel?t('agentsProjectGroup',{project:pathBasename(project),host:hostLabel}):pathBasename(project)}><h5 className="agent-project-heading"><span className="agent-project-name" title={project}>{pathBasename(project)}</span>{hostLabel && <span className="agent-project-host">{hostLabel}</span>}<span className="status-group-count">{formatNumber(rows.length)}</span></h5>{rows.map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><StatusRing tone={reportedTones[s.state]}/><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small><time dateTime={s.updatedAt} title={t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}>{formatRelativeTime(s.updatedAt,now)}</time></small></span></span><ChevronRight className="row-chevron" size={18} aria-hidden="true"/></button><div className="agent-card-actions">{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}<button type="button" className="text-button agent-archive" aria-label={t('agentsArchiveReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>archive(s)}><Archive size={14} aria-hidden="true"/>{t('agentsArchive')}</button></div></article>)}</section>)}</section>)}</div>}
     {archivedReports.length>0 && <section className="agent-archived" aria-label={t('agentsArchivedTitle')}>
       <button ref={archiveToggle} type="button" className="subtle-button agent-archive-toggle" aria-expanded={showArchived} onClick={()=>setShowArchived(value=>!value)}><Archive size={15} aria-hidden="true"/>{t('agentsArchived',{total:formatNumber(archivedReports.length)})}</button>
       {showArchived && <><p className="agent-note">{t('agentsArchivedHint')}</p>{archivedReports.map(s=><article className="agent-archived-card" key={reportKey(s)}><span className="agent-row-body"><span className="agent-row-summary">{s.summary}</span><span className="row-tags"><span className="row-tag" data-tone="project" title={s.project}>{pathBasename(s.project)}</span><strong className="row-tag" data-agent-kind={agentKind(s.agent)}>{s.agent}</strong><small>{t(names[s.state])}</small></span></span><button type="button" className="text-button agent-restore" aria-label={t('agentsRestoreReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>restore(s)}><ArchiveRestore size={14} aria-hidden="true"/>{t('agentsRestore')}</button></article>)}</>}
     </section>}
   </section>;
-  return renderNavigation?<>{approvals}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
+  const awake=awakeSlot?createPortal(keepAwake,awakeSlot):<div hidden>{keepAwake}</div>;
+  return renderNavigation?<>{approvals}{awake}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:<>{panel}{awake}</>;
 }
 
 export default AgentPanel;

@@ -67,10 +67,10 @@ input[type="search"] {
 .sidebar > .workspace-destination-heading { order: 0; padding: 2px 0 12px; gap: 4px; }
 .workspace-destination-heading h2 { flex: 1; min-width: 0; font-size: 28px; font-weight: 700; letter-spacing: -.8px; }
 .workspace-destination-heading > .icon-button:last-child:not(:first-child) { margin-left: 0; }
-.workspace-destination-heading > .icon-button, .herdr-navigation > header .icon-button, .agent-panel .agent-tool {
+.workspace-destination-heading > .icon-button, .herdr-navigation > header .icon-button {
   width: 44px; height: 44px; min-width: 44px; min-height: 44px; color: var(--theme-text); background: transparent;
 }
-.workspace-destination-heading > .icon-button:hover, .herdr-navigation > header .icon-button:hover:not(:disabled), .agent-panel .agent-tool:hover:not(:disabled) { background: var(--theme-control); }
+.workspace-destination-heading > .icon-button:hover, .herdr-navigation > header .icon-button:hover:not(:disabled) { background: var(--theme-control); }
 .sidebar-bottom { order: 9; padding: 16px 4px 0; }
 .sidebar-bottom > div { margin-bottom: 4px; font-size: 11px; }
 .sidebar-bottom .about-button { padding-block: 8px; font-size: 12px; }
@@ -284,7 +284,6 @@ input[type="search"] {
 .agent-panel > .tool-bar > .agent-search { position: relative; flex: 1; display: flex; align-items: center; min-width: 0; margin: 0 4px 0 0; }
 .agent-panel > .tool-bar > .agent-search > svg { position: absolute; left: 15px; color: var(--theme-muted); pointer-events: none; }
 .agent-panel > .tool-bar > .agent-search input { width: 100%; padding-left: 40px; background-image: none; font-size: 15px; }
-.agent-panel .agent-tool[aria-expanded="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .workspace-navigation-agents .agent-discovery, .agent-panel .agent-discovery { padding: 0; }
 .agent-panel .agent-filters {
   display: flex; flex-wrap: nowrap; gap: 6px; margin: 4px 0 2px; padding: 0 0 2px; border: 0;
@@ -335,15 +334,6 @@ input[type="search"] {
 .agent-panel .panel-empty p { max-width: 32ch; margin: 0 auto 16px; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
 .agent-panel .panel-empty .subtle-button { border-radius: 999px; padding-inline: 18px; }
 
-/* Setup lives behind one entry; when it opens it reads as one grouped card. */
-.agent-panel .agent-configuration:not([hidden]) {
-  display: grid; gap: 12px; margin: 4px 0 8px; padding: 16px; border-radius: var(--ui-radius); background: var(--ui-row);
-  animation: surface-rise 200ms var(--ui-ease);
-}
-.agent-panel .agent-configuration > h3 { margin: 0; font-size: 17px; font-weight: 650; }
-.agent-panel .agent-configuration .agent-note, .agent-panel .agent-configuration p { margin: 0; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
-.agent-panel .agent-configuration details { border-top: 1px solid var(--ui-hairline); padding-top: 4px; }
-.agent-panel .agent-configuration summary { min-height: 44px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
 .agent-panel .agent-setup { margin: 4px 0 8px; padding: 18px; border-radius: var(--ui-radius); background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 16%, var(--ui-row)), var(--ui-row) 60%); }
 .agent-panel .agent-setup h3 { margin: 8px 0 6px; font-size: 18px; }
 .agent-panel .agent-setup p { margin: 0 0 6px; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
@@ -460,10 +450,13 @@ input[type="search"] {
 .preferences-content [data-settings-page] > p { margin: -2px 16px 18px; color: var(--theme-muted); font-size: 12.5px; line-height: 1.5; }
 .preferences-content [data-settings-page] > :is(section, details, fieldset, ul, div:not(.settings-category-list)) { margin: 8px 0 16px; }
 .preferences-content [data-settings-page] > details { padding: 4px 16px; border-radius: var(--ui-radius); background: var(--ui-row); }
-.preferences-content [data-settings-page] fieldset, .agent-panel .agent-configuration fieldset { border: 0; border-radius: var(--ui-radius); background: var(--ui-row); padding: 12px 16px; }
-.agent-panel .agent-configuration fieldset { background: var(--ui-row-pressed); }
-.preferences-content [data-settings-page] fieldset > legend, .agent-panel .agent-configuration fieldset > legend { float: left; width: 100%; margin: 0 0 8px; padding: 0; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.preferences-content [data-settings-page] fieldset { border: 0; border-radius: var(--ui-radius); background: var(--ui-row); padding: 12px 16px; }
+.preferences-content [data-settings-page] fieldset > legend { float: left; width: 100%; margin: 0 0 8px; padding: 0; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .preferences-content [data-settings-page] fieldset > legend + * { clear: both; }
+/* The Agents board's keep-awake switch is shown in Settings > Agents as one grouped card. */
+.preferences-content .keep-awake-control { display: grid; gap: 8px; padding: 14px 16px; border-radius: var(--ui-radius); background: var(--ui-row); }
+.preferences-content .keep-awake-control label { display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 15px; font-weight: 500; }
+.preferences-content .keep-awake-control :is(p, small) { margin: 0; color: var(--theme-muted); font-size: 12.5px; line-height: 1.5; }
 .preferences-content [data-settings-page] > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 500; }
 .preferences-content [data-settings-page] > ul { padding: 4px 16px; border-radius: var(--ui-radius); background: var(--ui-row); list-style: none; }
 .preferences-content [data-settings-page] > ul:empty { display: none; }
@@ -496,7 +489,7 @@ input[type="search"] {
 .sidebar { transition: transform .18s var(--ui-ease); }
 @media (prefers-reduced-motion: reduce) {
   .status-ring[data-tone="working"] > .status-ring-svg,
-  .dialog-backdrop, .dialog, .agent-panel .agent-configuration:not([hidden]) { animation: none; }
+  .dialog-backdrop, .dialog { animation: none; }
   .sidebar, .sidebar .workspace-navigation-modes button, .agent-section-jumps button, .agent-section-jumps button::before, .status-group-toggle svg,
   .herdr-navigation[data-mode=agents] .herdr-agent-row, .agent-panel .agent-card,
   .preferences-content [data-settings-page] > label > input[type="checkbox"],

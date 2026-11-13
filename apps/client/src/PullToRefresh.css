@@ -1,0 +1,12 @@
+/* Sits at the top of the scroller and grows under the finger; nothing is reserved while idle. */
+.pull-refresh { position: relative; height: var(--pull, 0px); overflow: hidden; display: flex; align-items: flex-end; justify-content: center; color: var(--theme-muted); font-size: 12px; transition: height 160ms var(--ui-ease, ease); }
+.pull-refresh[data-pulling] { transition: none; }
+.pull-refresh[data-reading] { height: 36px; }
+.pull-refresh > span { display: inline-flex; align-items: center; gap: 8px; padding-bottom: 8px; }
+.pull-refresh[data-reading] svg { animation: pull-refresh-spin 900ms linear infinite; }
+@keyframes pull-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .pull-refresh { transition: none; }
+  .pull-refresh[data-reading] svg { animation: none; }
+}
+.workspace-navigation-scroll { overscroll-behavior-y: contain; }

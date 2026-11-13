@@ -19,7 +19,7 @@ async function mount(page:import('@playwright/test').Page,rows:unknown[]) {
     window.agentBoard.setReports(rows as never);
   },rows);
   const root=page.locator('.agent-board-fixture');
-  await root.getByRole('button',{name:'Refresh',exact:true}).click();
+  await page.evaluate(async()=>{const {refreshAgents}=await import('/src/agentsRefresh.ts');refreshAgents();});
   return root;
 }
 
@@ -53,7 +53,7 @@ test('reports group by project on the host and archive until the agent reports a
 
   // A newer event from the same session returns it to the board.
   await page.evaluate(rows=>window.agentBoard.setReports(rows as never),[{...reports[0],summary:'Parser follow-up',updatedAt:'2026-10-25T12:45:00.000Z'},...reports.slice(1)]);
-  await root.getByRole('button',{name:'Refresh',exact:true}).click();
+  await page.evaluate(async()=>{const {refreshAgents}=await import('/src/agentsRefresh.ts');refreshAgents();});
   await expect(root.getByRole('region',{name:'api on Build box',exact:true}).first()).toContainText('Parser follow-up');
   await expect(root.getByRole('button',{name:/^Archived/})).toHaveCount(0);
 

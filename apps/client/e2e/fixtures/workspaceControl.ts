@@ -56,12 +56,6 @@ export async function openThemeImport(page: Page) {
   await page.getByText('Import and share theme',{exact:true}).click();
 }
 
-export async function openAgentSetup(page: Page) {
-  const label=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('agentsSetupAction');});
-  const button=page.getByRole('button',{name:label,exact:true});
-  if(await button.getAttribute('aria-expanded')!=='true')await button.click();
-}
-
 /** Opens Preferences → Input → Toolbar keys and order. */
 export async function openToolbarSettings(page:Page) {
   await (await workspaceControl(page,'Preferences')).click();

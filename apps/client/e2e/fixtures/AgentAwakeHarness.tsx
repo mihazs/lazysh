@@ -1,5 +1,6 @@
 import {createRoot} from 'react-dom/client';
 import AgentPanel from '../../src/AgentPanel';
+import AgentSetupSettings from '../../src/AgentSetupSettings';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 export function mountAgentAwakeHarness() {
   function access(locked:boolean) {
@@ -11,6 +12,6 @@ export function mountAgentAwakeHarness() {
   Object.assign(host.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--background)',padding:'16px'});
   document.body.append(host);
   const root=createRoot(host);
-  root.render(<AgentPanel sessionId="awake-fixture"/>);
+  root.render(<><AgentPanel sessionId="awake-fixture"/><AgentSetupSettings sessionId="awake-fixture"/></>);
   return {revoke(){access(true);access(false);},close(){root.unmount();host.remove();}};
 }

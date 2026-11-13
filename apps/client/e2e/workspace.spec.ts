@@ -1,10 +1,30 @@
 import {setKeyboard} from './fixtures/softKeyboard';
 import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWith} from './fixtures/workspaceControl';
 import {controlContrast} from './fixtures/controlContrast';
+import {swipe} from './fixtures/touchSwipe';
 import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {readFileSync} from 'node:fs';
+
+/** What pull-to-refresh and Settings > Agents do: the mounted Agents readers read now. */
+const refreshAgentLists=(page:Page)=>page.evaluate(async()=>{const {refreshAgents}=await import('/src/agentsRefresh.ts');refreshAgents();});
+
+/** The host now has a companion that reports one working agent, and Activity shows it. */
+async function showReportedActivity(page:Page) {
+  await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{installed:boolean}}).workspaceNavigationState.installed=true);
+  await selectAgentSection(page,'activity');
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});
+  await page.clock.runFor(5000);
+  await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
+  return board;
+}
+
+/** The host runs two Herdr servers, so the Live agents server can be chosen. */
+const offerTwoHerdrServers=(page:Page)=>page.evaluate(()=>{
+  const original=window.nativeFixtureInvoke;
+  window.nativeFixtureInvoke=async(command,args)=>command==='multiplexer_sessions'?[{name:'default'},{name:'review'}]:original(command,args);
+});
 
 test('browser preview is honest, usable at phone width and keyboard navigable', async ({ page }, testInfo) => {
   const errors: string[] = [];
@@ -340,29 +360,26 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
-  await expect(board.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();
+  // The page has no setup or refresh buttons; a missing companion points at Settings > Agents, where it is installed.
+  await expect(board.getByRole('button',{name:'Install companion',exact:true})).toHaveCount(0);
+  for(const name of ['Setup','Refresh'])await expect(board.getByRole('button',{name,exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
-  await board.getByRole('button',{name:'Install companion',exact:true}).click();
-  await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
-  const setup=board.getByRole('button',{name:'Setup',exact:true});
-  await expect(setup).toHaveAttribute('aria-expanded','true');
-  await setup.click();
-  await expect(setup).toHaveAttribute('aria-expanded','false');
-  await expect(board.getByRole('region',{name:'Host companion settings',exact:true})).toBeHidden();
-  await setup.click();
-  await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
-  await setup.click();
+  await board.getByRole('button',{name:'Open agent setup in Preferences',exact:true}).click();
+  const settingsPage=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await expect(settingsPage.getByRole('heading',{name:'Agents',exact:true})).toBeVisible();
+  await settingsPage.getByRole('button',{name:'Install companion',exact:true}).click();
+  await expect(settingsPage.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  await expect(settingsPage.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
+  await closePreferences(page);
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await selectAgentSection(page,'live');
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
-  const serverSetup=live.locator('.herdr-server-setup');
-  await expect(serverSetup).toBeHidden();
-  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
-  await live.getByRole('button',{name:'Herdr server',exact:true}).click();
-  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
-  await live.getByRole('button',{name:'Back',exact:true}).click();
+  // The Live agents view has no server setup button: the server is chosen in Settings > Agents.
+  await expect(live.locator('.herdr-server-setup')).toBeHidden();
+  await expect(live.getByRole('button',{name:'Herdr server',exact:true})).toHaveCount(0);
+  await expect(live.getByRole('button',{name:'Refresh Herdr tree',exact:true})).toHaveCount(0);
   if(phone){
     await page.setViewportSize({width:393,height:852});
     const navigation=await page.locator('.sidebar').boundingBox();
@@ -437,22 +454,19 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.screenshot({path:testInfo.outputPath('herdr-live-discovery.png')});
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{missing:boolean}}).workspaceNavigationState.missing=true;});
   await selectAgentSection(page,'activity');
-  await board.getByRole('button',{name:'Refresh',exact:true}).click();
+  await refreshAgentLists(page);
   await expect(board.getByRole('alert')).toHaveText('Owned fixture companion unavailable');
   await selectAgentSection(page,'live');
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{missing:boolean}}).workspaceNavigationState.missing=false;});
   await selectAgentSection(page,'activity');
-  await board.getByRole('button',{name:'Refresh',exact:true}).click();
+  await refreshAgentLists(page);
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
-  await setup.click();
-  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
-  const original=await settings.elementHandle();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
   await page.clock.runFor(5000);
   await expect(board.getByText('Refreshed work',{exact:true})).toBeVisible();
-  await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
+  await expect(search).toHaveValue('/nav');
   if(phone)await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
   else await modes.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(board).toBeHidden();
@@ -461,10 +475,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
   await selectAgentSection(page,'activity');
-  await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
-  const installer=board.getByRole('button',{name:'Update companion',exact:true,includeHidden:true});
-  await expect(installer).toHaveCount(1);await expect(installer).toBeHidden();
-  expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');
   expect((await commands()).filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
   await search.scrollIntoViewIfNeeded();
   expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
@@ -492,7 +503,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(board).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
   await selectAgentSection(page,'activity');
-  await board.getByRole('button',{name:'Refresh',exact:true}).click();
+  await refreshAgentLists(page);
   await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishOldReport?:()=>void}).finishOldReport)).toBe('function');
   await modes.getByRole('button',{name:'Connections',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Other navigation host',exact:true}).click();
@@ -737,51 +748,125 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
 });
 
 
-test('empty Activity opens inspected hook repair without inventing reports',async({page},testInfo)=>{
+test('empty Activity sends the user to Settings > Agents for inspected hook repair without inventing reports',async({page},testInfo)=>{
   await installWorkspaceNavigation(page,true);
   await page.goto('/');
   await openConnectedAgents(page,testInfo.project.name==='phone');
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
-  await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
+  await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveCount(0);
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
-  const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
-  const setup=board.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
+  const settings=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await expect(settings.getByRole('heading',{name:'Agents',exact:true})).toBeVisible();
+  const provider=settings.getByRole('combobox',{name:'Hook provider',exact:true});
+  const setup=settings.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
   await expect(setup).toBeFocused();await expect(setup).toBeInViewport();
   const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
   expect(await actions()).toEqual([]);
-  await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
+  await expect(settings.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
   await expect(provider).toHaveValue('');
-  const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
+  const detected=settings.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([3]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
   await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
+  await expect(settings.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
   expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
   expect(await detected.evaluate(node=>node.scrollHeight>node.clientHeight&&node.clientHeight<=260)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('detected-agent-list.png')});
   await codex.click();await expect(provider).toHaveValue('codex');
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
-  await expect(board.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
+  await expect(settings.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
+  await expect(settings.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
+  await expect(settings.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
   expect(await actions()).toEqual([]);
   for(const row of await detected.getByRole('button').all())expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await page.screenshot({path:testInfo.outputPath('detected-agent-selection.png')});
-  await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
-  await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
+  await settings.getByRole('button',{name:'Inspect setup',exact:true}).click();
+  await expect(settings.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status']);
-  await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
-  await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
-  await expect(board.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
+  await settings.getByRole('button',{name:'Install or update hooks',exact:true}).click();
+  await expect(settings.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(settings.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);
-  expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-  const source=await page.request.get('/src/AgentPanel.tsx');
-  expect(await source.text()).toContain('setHookSetupRequest');
+  expect(await settings.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('empty-activity-hook-setup.png')});
+});
+
+test('the Agents page keeps search, the view switch and status chips; setup and refresh live in Settings > Agents',async({page},testInfo)=>{
+  await installWorkspaceNavigation(page);await page.goto('/');
+  const phone=testInfo.project.name==='phone';
+  await openConnectedAgents(page,phone);
+  await offerTwoHerdrServers(page);
+  const board=await showReportedActivity(page);
+  // What stays: search, the Live agents / Activity switch and the status chips.
+  await expect(board.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeVisible();
+  await expect(page.getByRole('navigation',{name:'Agent sections',exact:true}).getByRole('button')).toHaveCount(2);
+  for(const chip of ['All','Attention','Working','Done'])await expect(board.getByRole('button',{name:new RegExp(`^${chip}`)})).toBeVisible();
+  // What went: the setup (sliders) and refresh buttons, in both views.
+  for(const name of ['Setup','Refresh','Install companion'])await expect(board.getByRole('button',{name,exact:true})).toHaveCount(0);
+  const calls=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  const snapshots=async()=>(await calls()).filter(command=>command==='agent_snapshot').length;
+  // Settings > Agents holds all of it. A phone leaves the navigation page for the sheet that opens Preferences.
+  const openSettings=async()=>{
+    if(phone&&await page.locator('.sidebar.sidebar-open').count())await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
+    await (await workspaceControl(page,'Preferences')).click();
+  };
+  await openSettings();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const settings=dialog.locator('.settings-navigation');
+  await settings.getByRole('button',{name:'Agents',exact:true}).click();
+  const page_=settings.locator('[data-settings-page]:visible');
+  await expect(page_.getByRole('heading',{name:'Agents',exact:true})).toBeVisible();
+  await expect(page_.getByRole('combobox',{name:'Herdr server',exact:true})).toBeVisible();
+  await expect(page_.getByRole('checkbox',{name:'Keep display awake while this board is open'})).toBeVisible();
+  await expect(page_.getByText('Host companion installation',{exact:true})).toBeVisible();
+  await expect(page_.getByText('Agent hook setup',{exact:true})).toBeVisible();
+  await expect(page_.getByRole('checkbox',{name:'Recorded usage inspection',exact:true})).toBeVisible();
+  // A keyboard or screen reader refreshes from here; the page itself refreshes by pull and on its own.
+  const before=await snapshots();
+  await page_.getByRole('button',{name:'Refresh agent lists',exact:true}).click();
+  await expect.poll(snapshots).toBeGreaterThan(before);
+  // The Live agents server chosen here is what the page reads, and it is kept when Settings reopens.
+  await page_.getByRole('combobox',{name:'Herdr server',exact:true}).selectOption('review');
+  await closePreferences(page);
+  await openSettings();
+  await settings.getByRole('button',{name:'Agents',exact:true}).click();
+  await expect(page_.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('review');
+  await page.screenshot({path:testInfo.outputPath('settings-agents.png')});
+  // Settings search finds the moved controls by name.
+  await settings.getByRole('button',{name:'Back',exact:true}).click();
+  await settings.getByRole('searchbox',{name:'Search settings',exact:true}).fill('refresh agent');
+  await expect(settings.getByRole('navigation',{name:'Search results',exact:true}).getByRole('button',{name:/Refresh agent lists/})).toBeVisible();
+  await closePreferences(page);
+});
+
+test('pulling the Agents page down with a finger refreshes it, and a short pull does not',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Pull-to-refresh is a touch gesture.');
+  await installWorkspaceNavigation(page);await page.goto('/');
+  await openConnectedAgents(page,true);
+  await showReportedActivity(page);
+  const snapshots=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='agent_snapshot').length);
+  const scroller=page.locator('.workspace-navigation-scroll');
+  expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
+  const before=await snapshots();
+  await swipe(page,[200,320],[200,360]);
+  await page.waitForTimeout(100);
+  expect(await snapshots()).toBe(before);
+  const touch=await page.context().newCDPSession(page);
+  const at=(y:number)=>({x:200,y,id:1});
+  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[at(320)]});
+  for(let y=340;y<=560;y+=20)await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[at(y)]});
+  await expect(page.locator('.pull-refresh')).toHaveAttribute('data-pulling','true');
+  await expect(page.locator('.pull-refresh')).toContainText('Release to refresh');
+  await page.screenshot({path:testInfo.outputPath('pulling-to-refresh.png')});
+  await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await expect.poll(snapshots).toBeGreaterThan(before);
+  await expect(page.locator('.pull-refresh')).toHaveAttribute('data-reading','true');
+  await page.clock.runFor(1000);
+  await expect(page.locator('.pull-refresh')).not.toHaveAttribute('data-reading','true');
 });
 
 test('usage returns to its exact terminal and Agents context without expanding mobile chrome',async({page},testInfo)=>{
@@ -873,16 +958,13 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   await expect(activity).toBeFocused();await expect(sidebar.getByRole('heading',{name:'Agents',exact:true})).toBeInViewport({ratio:0.9});
   await expect(board.getByRole('searchbox',{name:'Search reported agents',exact:true})).toBeInViewport({ratio:0.9});
   expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
-  await expect(board.getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
+  await expect(board.getByRole('button',{name:'Refresh',exact:true})).toHaveCount(0);
   if(empty)await expect(board.getByRole('button',{name:'Agent hook setup',exact:true})).toHaveCount(1);
   else await expect(board.getByText('Reported work',{exact:true})).toHaveCount(1);
   expect(await page.evaluate(()=>({x:scrollX,y:scrollY}))).toEqual(windowScroll);expect(await calls()).toEqual(before);
   await expect(jumps.getByRole('button',{name:'Live Herdr agents',exact:true})).toBeInViewport({ratio:0.9});
   await page.screenshot({path:testInfo.outputPath('direct-activity.png'),animations:'disabled'});
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
-  await board.getByRole('button',{name:'Setup',exact:true}).click();
-  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
-  await board.getByRole('button',{name:'Setup',exact:true}).click();
   await jumps.getByRole('button',{name:'Live Herdr agents',exact:true}).click();
   await expect(sidebar.getByRole('group',{name:'Live Herdr agents',exact:true})).toBeFocused();
   expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
@@ -894,7 +976,6 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   // The independent #665 restoration preserves the offset; jump controls remain directly reachable.
   await expect(jumpActivity).toBeInViewport({ratio:0.9});await expect(search).toHaveValue('/nav');
   await jumpActivity.click();
-  await board.getByRole('button',{name:'Setup',exact:true}).click();await expect(settings).not.toBeChecked();
   expect(await originalBoard!.evaluate(node=>node.isConnected)).toBe(true);expect(await originalCanvas!.evaluate(node=>node.isConnected)).toBe(true);
   const after=await calls();expect(after.filter(command=>['disconnect','write_stdin','install_companion','companion_hooks','attach_multiplexer','herdr_action'].includes(command))).toEqual([]);
   expect(after.filter(command=>command==='connect')).toHaveLength(1);
@@ -1146,10 +1227,7 @@ test('Workspaces prioritizes current app sessions and discloses healthy server s
   expect(commands.filter(command=>command==='connect')).toHaveLength(2);
   expect(commands.filter(command=>['herdr_action','attach_multiplexer','write_stdin','disconnect'].includes(command))).toEqual([]);
   await page.screenshot({path:testInfo.outputPath('workspace-session-priority.png')});
-  await page.evaluate(()=>{
-    const original=window.nativeFixtureInvoke;
-    window.nativeFixtureInvoke=async(command,args)=>command==='multiplexer_sessions'?[{name:'default'},{name:'review'}]:original(command,args);
-  });
+  await offerTwoHerdrServers(page);
   await live.getByRole('button',{name:'Refresh Herdr tree',exact:true}).click();
   const selector=live.getByRole('combobox',{name:'Herdr server',exact:true});
   await expect(setup).toBeVisible();
@@ -1211,9 +1289,13 @@ function nativeCompanionReadiness(action:string,initialOutcome:string){
 test('native companion action stays owned during installed and reused results',async({page},testInfo)=>{
   if(testInfo.project.name==='phone')await page.setViewportSize({width:411,height:659});
   await openClockedNavigation(page);
-  await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
-  const activity=/val companionActivity = "([^"]+)"/.exec(nativeWorkspaceSource)?.[1];
-  if(activity)await page.locator(activity).click();
+  const phone=testInfo.project.name==='phone';
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);await page.clock.runFor(200);
+  // The companion is installed from Preferences > Agents, as the native test opens it.
+  if(phone)await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
+  await page.locator('.settings-navigation').getByRole('button',{name:'Agents',exact:true}).click();
   await expect(page.locator(nativeCompanionReadiness('Install companion','idle').panel)).toBeVisible();
   const initial=nativeCompanionReadiness('Install companion','idle');
   await page.evaluate(()=>{
@@ -1221,11 +1303,11 @@ test('native companion action stays owned during installed and reused results',a
     const foreign=panel.cloneNode(true) as HTMLDetailsElement;foreign.hidden=false;foreign.open=true;
     Object.assign(foreign.style,{position:'fixed',top:'0',left:'0',width:'160px',height:'120px',overflow:'hidden',zIndex:'10000'});
     document.body.append(foreign);Reflect.set(window,'nativeForeignCompanion',foreign);
-    panel.closest<HTMLElement>('.workspace-navigation-agents')!.hidden=true;
+    panel.closest<HTMLElement>('[data-settings-page]')!.hidden=true;
   });
   await expect(page.locator('body > details.companion-install')).toBeVisible();
   expect(await page.evaluate(initial.expression)).toMatchObject({panelPresent:false,expectedActionVisible:false,matchingExpectedActionEnabled:false});
-  await page.evaluate(()=>{document.querySelector<HTMLElement>('.workspace-navigation-agents')!.hidden=false;Reflect.get(window,'nativeForeignCompanion').remove();});
+  await page.evaluate(()=>{document.querySelector<HTMLElement>('[data-settings-page="agents"]')!.hidden=false;Reflect.get(window,'nativeForeignCompanion').remove();});
   await expect(page.locator(initial.panel)).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
   const records:unknown[]=[];

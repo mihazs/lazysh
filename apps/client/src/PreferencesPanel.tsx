@@ -34,7 +34,7 @@ const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):
 const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFixed",hidden:"preferencesUsageHidden"} as const satisfies Record<UsageBarMode,UiKey>;
 
 /** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
-export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[]}={}) {
+export default function PreferencesPanel({pages=[],footer,usageAccounts=[],start}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[];start?:string}={}) {
   useUi();
   const preferences = usePreferences();
   const topBar = useShowTopBar();
@@ -220,6 +220,6 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[]}:{pag
   return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
     {error && <p role="alert">{uiErrorText(error)}</p>}
     {languageError && <p role="alert">{t(languageError==='settings'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed')}</p>}
-    <SettingsNavigation sections={settingsSections()} footer={footer} pages={[...own,...pages]}/>
+    <SettingsNavigation sections={settingsSections()} footer={footer} start={start} pages={[...own,...pages]}/>
   </section>;
 }

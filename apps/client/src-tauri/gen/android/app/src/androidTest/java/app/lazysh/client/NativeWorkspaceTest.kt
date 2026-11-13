@@ -4014,6 +4014,13 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, companionActivity))
                 .perform(webScrollIntoView()).perform(webClick())
         }
+        // The host companion's install, hook setup and settings live in Preferences > Agents, not on the Agents page.
+        fun openAgentSetup() {
+            if (evaluate(scenario, workspaceElementVisible("button[aria-label='Preferences']")) == "true")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+            else workspaceMenuAction(scenario, "Preferences")
+            preferencesCategory(scenario, "agents")
+        }
         fun returnToTerminal() {
             awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
             onWebView().withElement(findElement(Locator.XPATH,
@@ -4083,8 +4090,8 @@ class NativeWorkspaceTest {
             require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/data/lazysh/companion/lazysh-agent").matches(destination))
             val originalProcess = android.os.Process.myPid()
             terminalProof(false)
-            openReportedActivity()
-            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
+            openAgentSetup()
+            val panel = ".settings-navigation [data-settings-page='agents']:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
@@ -4117,7 +4124,6 @@ class NativeWorkspaceTest {
                         outcome:closed(outcome,['idle','pending','failed','uncertain','installed','reused']),
                         phase:closed(p?.getAttribute('data-install-phase'),${JSONArray(phases)}),
                         failure:closed(p?.getAttribute('data-install-failure'),${JSONArray(failures)}),
-                        parentAgentErrorPresent:!!p?.closest('.agent-panel')?.querySelector('.agent-setup [role=alert]')
                       };})()
                 """
                 awaitDocument(scenario, "owned companion $expected action ready", workspaceButtonVisible(panel, action) +
@@ -4172,7 +4178,7 @@ class NativeWorkspaceTest {
                     proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
-            returnToTerminal()
+            closePreferences()
             terminalProof(true)
             println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")
             verifyCompanionHookBoard()

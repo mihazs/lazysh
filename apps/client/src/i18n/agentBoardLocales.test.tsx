@@ -3,6 +3,7 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/reac
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import AgentPanel from '../AgentPanel';
+import AgentSetupSettings from '../AgentSetupSettings';
 import ApprovalPanel from '../ApprovalPanel';
 import CompanionSettingsPanel from '../CompanionSettingsPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
@@ -17,8 +18,8 @@ afterEach(async()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.clearAl
 async function languagesKeep(check:()=>void){const calls=[...vi.mocked(invoke).mock.calls];for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);}}
 it('preserves reported rows, unsaved switches and all child ownership while translating the complete board',async()=>{
   vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:inactiveBoardDisplay);
-  const view=render(<AgentPanel sessionId={agentBoardSession}/>);
-  await screen.findByText(agentBoardRecord.summary);fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
+  const view=render(<><AgentPanel sessionId={agentBoardSession}/><AgentSetupSettings sessionId={agentBoardSession}/></>);
+  await screen.findByText(agentBoardRecord.summary);const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
   const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
   await languagesKeep(()=>{
     expect(screen.getByLabelText(t('companionUsage'))).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(document.activeElement).toBe(usage);

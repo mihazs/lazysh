@@ -35,10 +35,10 @@ function settingNames(page:Element) {
 }
 
 /** Navigation state is local; every editor remains mounted while its page is hidden. */
-export default function SettingsNavigation({pages,sections=[],footer}:{pages:SettingsPage[];sections?:SettingsSection[];footer?:ReactNode}) {
+export default function SettingsNavigation({pages,sections=[],footer,start}:{pages:SettingsPage[];sections?:SettingsSection[];footer?:ReactNode;/** A page to open first, as when another surface sends the user to its setup. */start?:string}) {
   useUi();
   const ids=useId();
-  const [selected,setSelected]=useState<string>();
+  const [selected,setSelected]=useState<string|undefined>(start);
   const [query,setQuery]=useState('');
   // Bumped on every chosen row so a result on the page already open still reveals its setting.
   const [revealing,setRevealing]=useState(0);
