@@ -17,7 +17,7 @@ export type LiftedDialog = Readonly<{
 }>;
 /** `none`: no dialog footer on the screen. `unliftable`: a dialog is open that this profile cannot read exactly. */
 export type Lift = Readonly<{kind: 'none' | 'unliftable'} | {kind: 'dialog'; dialog: LiftedDialog}>;
-const none: Lift = {kind: 'none'}, unliftable: Lift = {kind: 'unliftable'};
+export const none: Lift = {kind: 'none'}, unliftable: Lift = {kind: 'unliftable'};
 
 /** The Claude Code 2.1.x profile is data: Esc leaves the dialog, and one of these footers says Enter takes the highlighted row. */
 const escape = /\bEsc to (?:cancel|close|go back|dismiss)\b|\bctrl\+g to edit in\b/i;
@@ -28,10 +28,10 @@ const rule = /^─{20,}$/;
 const marker = /^ {0,3}❯ \S/;
 const numberedMark = /^ {0,3}❯ \d\. \S/;
 const checkbox = /^(?:\[.?\]|[☐☑☒])/;
-const limits = {options: 12, body: 12, hint: 4, text: 300};
+export const limits = {options: 12, body: 12, hint: 4, text: 300};
 const indent = (line: string) => line.length - line.trimStart().length;
 const lastWhere = <T>(items: readonly T[], test: (item: T, index: number) => boolean) => { let index = items.length; while (--index >= 0 && !test(items[index], index)); return index; };
-const clip = (text: string) => text.length > limits.text ? `${text.slice(0, limits.text - 1)}…` : text;
+export const clip = (text: string) => text.length > limits.text ? `${text.slice(0, limits.text - 1)}…` : text;
 
 export function liftDialog(screen: readonly string[]): Lift {
   const lines = screen.map(line => line.trimEnd());

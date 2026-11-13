@@ -1,0 +1,17 @@
+• Running touch note.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I create note.txt as requested?
+
+  $ touch note.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch note.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

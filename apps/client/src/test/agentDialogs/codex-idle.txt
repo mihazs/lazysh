@@ -1,0 +1,4 @@
+› Ask Codex to do anything
+
+  GPT-6.1 Terra medium · /tmp/lazysh-codex-cap/work · Create note.txt
+  esc again to edit previous message

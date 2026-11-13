@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {dialogScreen, fakeTerminal, modelScreen} from './test/agentDialogScreens';
+import {dialogScreen, fakeTerminal, modelScreen, onTmux} from './test/agentDialogScreens';
 import {act, cleanup, configure, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import AgentPickerDock from './AgentPickerDock';
 import {publishComposerControl} from './agentDialogAnswer';
@@ -162,4 +162,44 @@ it('follows the dialog as output arrives, and goes away when it closes', async (
   await screen.findByRole('region', {name: t('agentPickerTitle')});
   screenOf.set(closed);
   await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+});
+
+/** Codex's approval prompt as the TUI redraws it with the highlight on option `to` (1 to 3): the real captured screen with the marker moved. */
+const codexApproval = (to: number) => onTmux(fixture('codex-approval')).map(row => row.replace(/^[› ] (\d)\. /, (_: string, digit: string) => `${digit === String(to) ? '›' : ' '} ${digit}. `));
+
+it('answers a Codex approval prompt: moves the highlight to the chosen row, reads it back, then presses Enter', async () => {
+  bind(false);
+  const control = vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (body.kind === 'pick' && !body.enter) {ahead += body.rows; screenOf.set(codexApproval(1 + ahead));} else screenOf.set(onTmux([]));
+    return true;
+  });
+  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control, cycleMode: vi.fn(async () => undefined)}));
+  mount(codexApproval(1), {agent: 'Codex', waiting: 'approval'});
+  const card = await screen.findByRole('region', {name: t('agentPickerTitle')});
+  expect(within(card).getByRole('heading', {name: 'Would you like to run the following command?'})).toBeTruthy();
+  expect(card.textContent).toContain('$ touch note.txt');
+  await waitFor(() => expect(option('Yes, and').disabled).toBe(false));
+  fireEvent.click(option('Yes, and'));
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+  expect(answers).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+});
+
+it('reads each agent\'s own dialogs only: another agent\'s screen is never answerable', async () => {
+  const unanswerable = async (rows: string[], agent: string) => {
+    mount(rows, {agent});
+    await act(async () => {await new Promise(resolve => setTimeout(resolve, 200));});
+    expect(screen.queryAllByRole('button').map(button => button.textContent)).not.toContain('Yes, proceed (y)');
+    expect(screen.queryAllByRole('button').map(button => button.textContent)).not.toContain('Sonnet');
+    cleanup();
+  };
+  await unanswerable(codexApproval(1), 'Claude Code');
+  await unanswerable(model(5), 'Codex');
+  await unanswerable(codexApproval(1), 'Gemini');
+});
+
+it('says a Codex dialog it cannot read waits in the terminal, even while Codex reports an approval', async () => {
+  mount(onTmux(fixture('codex-resume').slice(1, 40)), {agent: 'Codex', waiting: 'approval'});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(answers).toEqual([]);
 });
