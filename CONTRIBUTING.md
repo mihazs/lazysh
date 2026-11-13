@@ -82,7 +82,7 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 | Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, Herdr navigation, tmux, auxiliary, ntfy (Google) |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
 | Herdr: `packages/herdr-{upstream,guard}/**` | Herdr and its Linux GUI, Linux runtime, Android runtime and Herdr navigation consumers |
-| Terminal runtime: `packages/terminal-runtime/**` | Herdr only: its tests run in that job against the same libghostty-vt build |
+| Terminal runtime and renderer: `packages/terminal-{runtime,renderer-wgpu}/**` | Herdr only: their tests run in that job against the same libghostty-vt build (the renderer's on Mesa software Vulkan) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | everything, with both ntfy variants |
 
