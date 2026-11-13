@@ -2411,6 +2411,10 @@ pub async fn resize(
                 .send(Input::Resize(cols, rows, lease.clone()))
                 .await
                 .map_err(|_| SshError::new("disconnected", "Session is disconnected"))?;
+            session
+                .core
+                .resize(cols, rows)
+                .map_err(|message| SshError::new("native_terminal", message))?;
             Ok(())
         })
         .await
@@ -5326,6 +5330,39 @@ mod tests {
             server_task.abort();
             core_server.abort();
         }
+    }
+    #[tokio::test]
+    async fn a_resize_command_reaches_the_remote_pty_and_the_core_of_a_core_fed_session() {
+        use tauri::Manager;
+        let (host, server, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, _) = counted_events_with_core();
+        let connected = spawn_terminal(&state, access_lease(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        let id = connected.session_id;
+        resize(access_lease(), app.state(), id.clone(), 132, 43)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        assert!(resize(access_lease(), app.state(), id.clone(), 0, 43)
+            .await
+            .is_err());
+        assert_eq!(*core.sizes.lock().unwrap(), [(132, 43)]);
+        timeout(Duration::from_secs(5), async {
+            while !server.sizes.lock().unwrap().contains(&(132, 43)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the remote PTY was resized too");
+        crate::terminal_core::close(&id);
+        server_task.abort();
     }
     #[tokio::test(start_paused = true)]
     async fn core_output_respects_the_lock_and_background_gates_like_the_channel() {

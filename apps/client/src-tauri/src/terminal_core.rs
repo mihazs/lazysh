@@ -45,6 +45,8 @@ pub(crate) trait Core: Send + Sync {
     fn feed(&self, chunk: Vec<u8>) -> Result<(), String>;
     /// Text of the visible rows, on request: React never receives cells.
     fn viewport_text(&self) -> Result<String, String>;
+    /// The renderer's grid changed: the terminal's size, so the transport's output wraps as drawn.
+    fn resize(&self, cols: u32, rows: u32) -> Result<(), String>;
     /// Free the core now. Idempotent.
     fn close(&self);
 }
@@ -91,6 +93,13 @@ impl CoreSlot {
     /// A renderer must not acknowledge output a core consumes: the core alone returns that credit.
     pub(crate) fn is_attached(&self) -> bool {
         self.0.get().is_some()
+    }
+
+    /// A resize the renderer sent to the transport, for the core to follow (a no-op without a core).
+    pub(crate) fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+        self.0
+            .get()
+            .map_or(Ok(()), |(_, core)| core.resize(cols, rows))
     }
 
     /// Free the core of a session whose id the renderer will never receive (the connect failed or was
@@ -320,6 +329,15 @@ mod native {
                 .map_err(|error| error.to_string())
         }
 
+        fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+            let size = Size::new(cols as u16, rows as u16);
+            self.0
+                .with(|runtime| runtime.request_size(size))
+                .map_err(|error| error.to_string())?
+                .map(drop)
+                .map_err(|error| error.to_string())
+        }
+
         fn close(&self) {
             self.0.close();
         }
@@ -374,6 +392,7 @@ pub(crate) mod fake {
         /// Bytes fed and not yet credited back, at their peak.
         pub(crate) peak_queued: Arc<AtomicUsize>,
         pub(crate) feeds: Arc<AtomicUsize>,
+        pub(crate) sizes: Mutex<Vec<(u32, u32)>>,
         pub(crate) closed: std::sync::atomic::AtomicBool,
         queued: Arc<AtomicUsize>,
     }
@@ -393,6 +412,7 @@ pub(crate) mod fake {
                 seen: Arc::default(),
                 peak_queued: Arc::default(),
                 feeds: Arc::default(),
+                sizes: Mutex::default(),
                 closed: Default::default(),
                 queued: Arc::default(),
             });
@@ -441,6 +461,11 @@ pub(crate) mod fake {
 
         fn viewport_text(&self) -> Result<String, String> {
             Ok(String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned())
+        }
+
+        fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+            self.sizes.lock().unwrap().push((cols, rows));
+            Ok(())
         }
 
         fn close(&self) {
