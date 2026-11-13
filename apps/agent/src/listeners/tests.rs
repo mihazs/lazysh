@@ -134,20 +134,15 @@ fn output_is_filtered_by_port_sorted_and_capped_at_256() {
     let many: Vec<Listener> = (1..=300u16)
         .map(|port| listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 2000 + port).unwrap())
         .collect();
-    let at = chrono::Utc::now();
-    let capped = finish(many.clone(), &[], at);
+    let capped = finish(many.clone(), &[]);
     assert_eq!(capped["listeners"].as_array().unwrap().len(), MAX_LISTENERS);
     assert_eq!(capped["truncated"], true);
     assert_eq!(ports(&capped)[0], 2001);
-    let one = finish(many, &[2100, 9], at);
+    let one = finish(many, &[2100, 9]);
     assert_eq!(ports(&one), [2100]);
     assert!(one.get("truncated").is_none());
     assert_eq!(one["schemaVersion"], 1);
     assert_eq!(one["event"], "snapshot");
-    assert_eq!(
-        one["observedAt"],
-        at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    );
 }
 
 #[cfg(all(unix, target_endian = "little"))]
@@ -155,6 +150,8 @@ mod fake_proc {
     use super::*;
     use std::{fs, os::unix::fs::symlink, path::Path};
 
+    /// 100 seconds after the described process started (btime 1700000000 + 12345 ticks / 100).
+    const NOW: i64 = 1_700_000_223;
     const HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
     fn row(local: &str, state: &str, uid: u32, inode: u64) -> String {
         format!("   0: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000  {uid}        0 {inode} 1 0000000000000000 100 0 0 10 0\n")
@@ -210,7 +207,7 @@ mod fake_proc {
     #[test]
     fn linux_listeners_have_owner_name_start_time_and_only_loopback_or_wildcard_binds() {
         let root = host();
-        let listeners = proc::read(root.path(), 1000, 100).unwrap();
+        let listeners = proc::read(root.path(), 1000, 100, NOW).unwrap();
         let by_port = |port: u16| listeners.iter().filter(move |entry| entry.port == port);
         assert_eq!(
             by_port(53000).count(),
@@ -235,6 +232,7 @@ mod fake_proc {
         assert!(v4.owned_by_session_user && v4.uid == Some(1000));
         // btime 1700000000 + 12345 ticks / 100 per second, rounded down.
         assert_eq!(v4.started_at.as_deref(), Some("2023-11-14T22:15:23Z"));
+        assert_eq!(v4.age_seconds, Some(100));
         let v6 = web.iter().find(|entry| entry.family == "tcp6").unwrap();
         assert_eq!(
             (v6.address.as_str(), v6.bind, v6.pid),
@@ -282,9 +280,8 @@ mod fake_proc {
         )
         .unwrap();
         let text = serde_json::to_string(&finish(
-            proc::read(root.path(), 1000, 100).unwrap(),
+            proc::read(root.path(), 1000, 100, NOW).unwrap(),
             &[],
-            chrono::Utc::now(),
         ))
         .unwrap();
         assert!(!text.contains("secret"), "{text}");
@@ -293,9 +290,9 @@ mod fake_proc {
     #[test]
     fn a_host_without_proc_is_an_error_and_without_ipv6_is_not() {
         let root = tempfile::tempdir().unwrap();
-        assert!(proc::read(root.path(), 1000, 100).is_err());
+        assert!(proc::read(root.path(), 1000, 100, NOW).is_err());
         fs::create_dir_all(root.path().join("net")).unwrap();
         fs::write(root.path().join("net/tcp"), HEADER).unwrap();
-        assert!(proc::read(root.path(), 1000, 100).unwrap().is_empty());
+        assert!(proc::read(root.path(), 1000, 100, NOW).unwrap().is_empty());
     }
 }

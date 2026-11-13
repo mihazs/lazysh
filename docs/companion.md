@@ -1029,8 +1029,8 @@ lazysh-agent listeners [--port N]... [--json] [--watch [--interval-ms 250..5000]
 One JSON object per line, `"schemaVersion": 1`; the app ignores fields it does not know.
 
 ```json
-{"schemaVersion":1,"event":"snapshot","observedAt":"2026-11-13T10:00:03Z","listeners":[
-  {"family":"tcp4","address":"0.0.0.0","bind":"wildcard","port":36871,"uid":1000,"ownedBySessionUser":true,"pid":4029144,"comm":"aws","startedAt":"2026-11-13T10:00:01Z"}
+{"schemaVersion":1,"event":"snapshot","listeners":[
+  {"family":"tcp4","address":"0.0.0.0","bind":"wildcard","port":36871,"uid":1000,"ownedBySessionUser":true,"pid":4029144,"comm":"aws","startedAt":"2026-11-13T10:00:01Z","ageSeconds":2}
 ]}
 ```
 
@@ -1040,8 +1040,7 @@ One JSON object per line, `"schemaVersion": 1`; the app ignores fields it does n
 | `port` | 1 to 65535. `--port` may be repeated to report only those ports. |
 | `uid`, `ownedBySessionUser` | The socket's user id (Unix) and whether it is the user running the command. Windows reports no user id; `ownedBySessionUser` there means the owning process runs in the same logon session. |
 | `pid`, `comm` | The owning process id and its kernel name (`comm`, at most 15 bytes on Linux). Absent when the owner cannot be read, which is the case for another user's process (the NetBird daemon, for example); `ownedBySessionUser` is then false. |
-| `observedAt` (snapshot) | The host's own UTC time at the read. `startedAt` is on the same clock, so `observedAt - startedAt` is a listener's process age whatever the clocks of the host and the device say. |
-| `startedAt` | UTC start time of the owning process, not of the socket: a long-lived process that opens a new port looks old. Linux only; macOS and Windows omit it, and the app then relies on seeing the listener appear. |
+| `startedAt`, `ageSeconds` | UTC start time of the owning process, not of the socket (a long-lived process that opens a new port looks old), and how long that process had run at the read. `ageSeconds` is measured on the host's own clock, so it does not depend on the clocks of the host and the device agreeing. Linux and macOS (through `ps`); Windows omits them, and the app then relies on seeing the listener appear. |
 
 At most 256 entries are printed, sorted by port; when more exist the snapshot carries `"truncated": true`. Linux reads `/proc/net/tcp`, `/proc/net/tcp6` and `/proc/PID/fd`; macOS and other Unix systems parse `lsof -F`; Windows parses `Get-NetTCPConnection` through PowerShell. A host where that tool is missing or too slow fails with exit status 1 and a fixed `ListenersUnavailable` message.
 

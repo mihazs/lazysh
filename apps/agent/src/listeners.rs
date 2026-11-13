@@ -53,6 +53,19 @@ pub struct Listener {
     /// UTC start time of the owning process; absent where the platform tool does not report it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
+    /// How long that process had run when the list was read, on the host's own clock, so it does
+    /// not depend on the host's and the device's clocks agreeing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<u64>,
+}
+
+impl Listener {
+    /// The owning process started at `started` (seconds since the epoch) and it is `now`.
+    fn set_start(&mut self, started: i64, now: i64) {
+        self.started_at = chrono::DateTime::from_timestamp(started, 0)
+            .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        self.age_seconds = u64::try_from(now - started).ok();
+    }
 }
 
 /// Loopback and wildcard only: a listener on a specific interface address is not reachable as
@@ -89,15 +102,12 @@ fn listener(ip: IpAddr, port: u16) -> Option<Listener> {
         pid: None,
         comm: None,
         started_at: None,
+        age_seconds: None,
     })
 }
 
 /// Sorted by port so the cap keeps a stable subset, filtered before the cap.
-fn finish(
-    mut listeners: Vec<Listener>,
-    ports: &[u16],
-    observed_at: chrono::DateTime<chrono::Utc>,
-) -> Value {
+fn finish(mut listeners: Vec<Listener>, ports: &[u16]) -> Value {
     listeners.retain(|entry| ports.is_empty() || ports.contains(&entry.port));
     listeners.sort_by(|a, b| {
         (a.port, a.family, &a.address, a.pid).cmp(&(b.port, b.family, &b.address, b.pid))
@@ -105,10 +115,7 @@ fn finish(
     listeners.dedup();
     let truncated = listeners.len() > MAX_LISTENERS;
     listeners.truncate(MAX_LISTENERS);
-    // The host's own clock at the read: `startedAt` is on the same clock, so the age of a listener is
-    // `observedAt - startedAt` whatever the clocks of the host and the device say.
-    let observed_at = observed_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut out = json!({"schemaVersion": 1, "event": "snapshot", "observedAt": observed_at, "listeners": listeners});
+    let mut out = json!({"schemaVersion": 1, "event": "snapshot", "listeners": listeners});
     if truncated {
         out["truncated"] = Value::Bool(true);
     }
@@ -120,11 +127,7 @@ pub fn run(options: &Options) -> Result<Option<Value>> {
         watch(options)?;
         return Ok(None);
     }
-    Ok(Some(finish(
-        platform::read()?,
-        &options.ports,
-        chrono::Utc::now(),
-    )))
+    Ok(Some(finish(platform::read()?, &options.ports)))
 }
 
 /// A listener is the same one while its address, port and owner stay the same.
@@ -170,18 +173,14 @@ fn watch(options: &Options) -> Result<()> {
         writeln!(stdout)?;
         Ok(stdout.flush()?)
     };
-    let first = finish(platform::read()?, &options.ports, chrono::Utc::now());
+    let first = finish(platform::read()?, &options.ports);
     let mut known = keys(&first);
     emit(first)?;
     let (mut polled, mut spoke) = (Instant::now(), Instant::now());
     while !closed.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(50));
         if polled.elapsed() >= Duration::from_millis(options.interval_ms) {
-            let now = keys(&finish(
-                platform::read()?,
-                &options.ports,
-                chrono::Utc::now(),
-            ));
+            let now = keys(&finish(platform::read()?, &options.ports));
             let appeared = now
                 .iter()
                 .filter(|(key, _)| !known.iter().any(|(old, _)| old == key));
@@ -222,6 +221,7 @@ mod platform {
                 .ok()
                 .filter(|ticks| *ticks > 0)
                 .unwrap_or(100),
+            chrono::Utc::now().timestamp(),
         )?)
     }
 }
@@ -256,18 +256,12 @@ mod platform {
             ]);
             if let Ok(text) = tool_output(ps) {
                 let elapsed = super::lsof::elapsed(&text);
-                let now = chrono::Utc::now();
+                let now = chrono::Utc::now().timestamp();
                 for entry in &mut listeners {
-                    entry.started_at =
-                        entry
-                            .pid
-                            .and_then(|pid| elapsed.get(&pid))
-                            .and_then(|secs| {
-                                let secs = chrono::Duration::seconds(i64::try_from(*secs).ok()?);
-                                Some(
-                                    (now - secs).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                                )
-                            });
+                    let ran = entry.pid.and_then(|pid| elapsed.get(&pid));
+                    if let Some(ran) = ran.and_then(|secs| i64::try_from(*secs).ok()) {
+                        entry.set_start(now - ran, now);
+                    }
                 }
             }
         }

@@ -151,13 +151,6 @@ fn reports_loopback_and_wildcard_listeners_of_another_process_and_nothing_else()
         (1.into(), "snapshot".into())
     );
 
-    let observed: chrono::DateTime<chrono::Utc> =
-        value["observedAt"].as_str().unwrap().parse().unwrap();
-    assert!(
-        (chrono::Utc::now() - observed).num_seconds().abs() <= 5,
-        "{observed}"
-    );
-
     let own_uid = unsafe { libc::geteuid() };
     let exe = std::env::current_exe()
         .unwrap()
@@ -208,6 +201,10 @@ fn reports_loopback_and_wildcard_listeners_of_another_process_and_nothing_else()
             .unwrap()
             .parse::<chrono::DateTime<chrono::Utc>>()
             .unwrap();
+        let age = entries(&value, holder.loopback)[0]["ageSeconds"]
+            .as_u64()
+            .unwrap();
+        assert!(age <= 120, "the holder had run {age} s");
         let age = chrono::DateTime::<chrono::Utc>::from(started)
             .signed_duration_since(started_at)
             .num_seconds();

@@ -103,16 +103,15 @@ fn owners(root: &Path, wanted: &[u64]) -> HashMap<u64, u32> {
 
 /// Seconds since the epoch at which `pid` started: boot time plus the `starttime` tick count, the
 /// 22nd field of `stat`, counted after the closing parenthesis of the process name.
-fn started(root: &Path, pid: u32, boot: Option<u64>, ticks: u64) -> Option<String> {
+fn started(root: &Path, pid: u32, boot: Option<u64>, ticks: u64) -> Option<i64> {
     let stat = fs::read_to_string(root.join(pid.to_string()).join("stat")).ok()?;
     let after_name = stat.rsplit_once(')')?.1;
     let start: u64 = after_name.split_whitespace().nth(19)?.parse().ok()?;
-    let seconds = i64::try_from(boot? + start / ticks).ok()?;
-    chrono::DateTime::from_timestamp(seconds, 0)
-        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    i64::try_from(boot? + start / ticks).ok()
 }
 
-pub fn read(root: &Path, own_uid: u32, ticks: u64) -> io::Result<Vec<Listener>> {
+/// `now` is the host's clock in seconds since the epoch, the one `/proc/stat` boot time is on.
+pub fn read(root: &Path, own_uid: u32, ticks: u64, now: i64) -> io::Result<Vec<Listener>> {
     let mut all = Vec::new();
     for table in ["tcp", "tcp6"] {
         match fs::read_to_string(root.join("net").join(table)) {
@@ -132,7 +131,7 @@ pub fn read(root: &Path, own_uid: u32, ticks: u64) -> io::Result<Vec<Listener>> 
         text.lines()
             .find_map(|line| line.strip_prefix("btime ")?.trim().parse::<u64>().ok())
     });
-    let mut by_pid: HashMap<u32, (Option<String>, Option<String>)> = HashMap::new();
+    let mut by_pid: HashMap<u32, (Option<String>, Option<i64>)> = HashMap::new();
     Ok(all
         .into_iter()
         .filter_map(|socket| {
@@ -148,7 +147,9 @@ pub fn read(root: &Path, own_uid: u32, ticks: u64) -> io::Result<Vec<Listener>> 
                 });
                 entry.pid = Some(pid);
                 entry.comm = comm.clone();
-                entry.started_at = since.clone();
+                if let Some(since) = *since {
+                    entry.set_start(since, now);
+                }
             }
             Some(entry)
         })
