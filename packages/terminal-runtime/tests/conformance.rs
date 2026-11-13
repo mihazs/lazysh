@@ -249,7 +249,6 @@ fn mouse_reports_match_the_xterm_encodings_for_buttons_wheel_motion_and_modifier
     );
 }
 
-
 /// Regression for #1314: a pointer resting in one cell must not send a motion report per event.
 #[test]
 fn repeated_motion_in_one_cell_is_reported_once() {

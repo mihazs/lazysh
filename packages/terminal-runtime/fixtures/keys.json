@@ -442,7 +442,7 @@
   },
   {
     "id": "enter-shift",
-    "about": "lazysh handles Shift+Enter itself (#805); this is the terminal's own encoding",
+    "about": "lazysh handles Shift+Enter itself (#805); xterm.js sends CR, the core CSI 13;2u",
     "setup": "",
     "key": "Enter",
     "code": "Enter",
@@ -453,9 +453,9 @@
     "expect": "\r",
     "core": {
       "divergence": [
-        "modified-enter-tab-encoding"
+        "shift-enter-csi-u"
       ],
-      "expect": "\u001b[27;2;13~"
+      "expect": "\u001b[13;2u"
     }
   },
   {
@@ -480,13 +480,7 @@
     "mods": [
       "ctrl"
     ],
-    "expect": "\r",
-    "core": {
-      "divergence": [
-        "modified-enter-tab-encoding"
-      ],
-      "expect": "\u001b[27;5;13~"
-    }
+    "expect": "\r"
   },
   {
     "id": "tab",
@@ -520,13 +514,7 @@
     "mods": [
       "ctrl"
     ],
-    "expect": "\t",
-    "core": {
-      "divergence": [
-        "modified-enter-tab-encoding"
-      ],
-      "expect": "\u001b[27;5;9~"
-    }
+    "expect": "\t"
   },
   {
     "id": "backspace",
@@ -740,13 +728,7 @@
     "mods": [
       "ctrl"
     ],
-    "expect": "\u001b",
-    "core": {
-      "divergence": [
-        "ctrl-left-bracket-csi-u"
-      ],
-      "expect": "\u001b[91;5u"
-    }
+    "expect": "\u001b"
   },
   {
     "id": "ctrl-backslash",
