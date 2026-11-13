@@ -1,9 +1,9 @@
 import { expect, test, type CDPSession, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { git, read, require, root } from './fixtures/benchEnvironment';
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { medianOf, rng } from '../bench/workloads';
 
@@ -22,10 +22,6 @@ const scale = full
 test.describe.configure({ mode: 'serial' });
 test.skip(({ isMobile }) => !full && isMobile, 'The smoke run needs one viewport.');
 
-const root = path.resolve(import.meta.dirname, '../../..');
-const require = createRequire(import.meta.url);
-const git = (...args: string[]) => { try { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); } catch { return null; } };
-const read = (file: string) => { try { return readFileSync(file, 'utf8').trim(); } catch { return null; } };
 
 type Snapshot = { metrics: Record<string, number>; cpu: Record<string, number>; rssKiB: number | null };
 async function snapshot(cdp: CDPSession, browser: CDPSession): Promise<Snapshot> {
