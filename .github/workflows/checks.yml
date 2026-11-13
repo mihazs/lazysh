@@ -598,6 +598,14 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Run a scripted agent session from the guarded Agent view inputs on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          test -x "$LAZYSH_TEST_AGENT_BIN"
+          case_name=ssh::tmux_jump_fixture::agent_session::real_tmux_agent_session_runs_from_the_guarded_agent_view_inputs_only
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Reject unsupported apt tmux loops without binding authority and report it degraded
         shell: bash
         env:

@@ -385,6 +385,19 @@ Tests assert behaviour, not source text.
   layout, timeline, dock, composer and fallbacks against a mocked companion.
 - **Native Linux** (`native-e2e`, real OpenSSH, tmux and guarded Herdr): a fixture
   agent that draws a TUI in a real pane and writes a real transcript.
+  `ssh::tmux_jump_fixture::agent_session` (CI step "Run a scripted agent session",
+  tmux 3.4) is the first part: a bash stand-in TUI
+  (`apps/client/src-tauri/src/tmux_agent_session_agent.sh`) runs in a real tmux pane
+  behind an owned OpenSSH server and writes Claude Code format records. The test
+  sends only the guarded inputs the Agent view sends (`send`, `select`, `cycle_mode`,
+  `send_long`, `request_stop`) and asserts that the pane's process received each
+  exactly once and in order (a replayed operation reaches the pane nowhere), that the
+  mode read-back names the mode the pane drew, and that the real `lazysh-agent
+  transcript` reads the same records back as messages, a question card and a
+  background command that goes from `running` to `done`. Still to add: permission
+  decisions through the approval hook, a sub-agent child conversation and a workflow
+  journal, guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
+  `tauri-driver`) and the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:

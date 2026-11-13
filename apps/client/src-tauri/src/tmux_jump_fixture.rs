@@ -10,6 +10,8 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_agent_session_fixture.rs"]
+mod agent_session;
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
 #[path = "tmux_retirement_fixture.rs"]
