@@ -5,7 +5,7 @@ import AgentStatusPanel from './AgentStatusPanel';
 import AgentTaskStop from './AgentTaskStop';
 import {fromWork} from './agentBackgroundWork';
 import {publishComposerControl, publishTaskGuard, useTaskStopper} from './agentDialogAnswer';
-import {stopMessage, stoppable} from './agentTaskStop';
+import {stopMessage, stoppable} from './agentStopRequest';
 import type {WorkItem} from './agentWork';
 import type {TerminalControl} from './ChatTerminalInput';
 

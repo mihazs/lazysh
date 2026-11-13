@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import type {StatusItem} from './agentBackgroundWork';
-import {STOP_CONFIRM_MS, stopMessage, stoppable} from './agentTaskStop';
+import {STOP_CONFIRM_MS, stopMessage, stoppable} from './agentStopRequest';
 import {t} from './i18n/core';
 import {useNow} from './relativeTime';
 
