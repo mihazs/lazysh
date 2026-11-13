@@ -194,6 +194,25 @@ Automatic publication currently excludes macOS, iOS and watchOS packages. The
 explicit private iOS build remains available for later signing verification; it
 does not enter the release set. Official F-Droid inclusion remains separate.
 
+## Companion assets are an updater contract
+
+Every release publishes 14 assets (v1.50.0): five companion executables
+`lazysh-<version>-linux-agent-x64.bin`, `-linux-agent-arm64.bin`,
+`-macos-agent-x64.bin`, `-macos-agent-arm64.bin` and `-windows-agent-x64.exe`;
+the desktop and Android packages `-linux-x64.deb`, `-linux-x64.AppImage`,
+`-windows-x64.exe` and two `-android-*-arm64.apk`; and `release.json`,
+`SHA256SUMS`, `release-notes.md` and `INSTALL-AND-UPDATE.md`. GitHub reports a
+`sha256:` digest for each asset. `release.json` (schema 1) names the tag's commit,
+the version and, per target, `files[{name, bytes, sha256}]`.
+
+The app's installer verifies this chain today, and `lazysh-agent update` and the
+host bootstrap will verify it on the host ([ADR 0003](architecture/adr-0003-host-side-companion-update.md#trust-model)).
+Changing the file-name pattern, the `release.json` schema, the target names or
+the 64 MiB companion cap, or publishing a release whose asset digests differ from
+`release.json`, therefore breaks every installed companion that updates itself.
+Such a change needs a new `schemaVersion` and a release that older updaters can
+still read. Releases publish no detached signature or build attestation.
+
 ## Official references
 
 * [Tauri GitHub distribution](https://v2.tauri.app/distribute/pipelines/github/)

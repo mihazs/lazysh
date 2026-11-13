@@ -24,4 +24,19 @@ lazysh-agent settings update --expected-revision 0 \
 
 Replace `0` with the revision actually returned by `show`; review all three values before writing. A stale revision returns `SettingsConflict`. On `SettingsBusy`, reread after the other writer finishes. Confirm the returned values with `lazysh-agent settings show`. Do not delete malformed settings to bypass a refusal.
 
+## Companion updates (planned)
+
+**Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| Policy | `off`, `notify`, `install` | `notify` |
+| Channel | `stable`, `prerelease` | `stable` |
+| Check interval | 1 to 720 hours | 24 |
+| Update window | `HH:MM-HH:MM` in the host's local time, or none | none |
+
+`notify` is the planned default and **changes what a companion does on its own**: when the app reads its snapshot, or an optional timer fires, it makes one conditional HTTPS request to GitHub per interval and records whether a newer release exists; the Agent view and this panel then show the companion version and an update-available badge. It sends no host identifier and replaces nothing. Choose `off` for no request at all (`lazysh-agent auto-update set --expected-revision R --policy off`). `install` replaces the managed companion only when the target is newer, inside the window, no session reported a working state in the last 10 minutes, and that version has not already failed on this host. Hooks never start a check. A metered connection is not detected: use `notify` or `off` on one.
+
+`lazysh-agent auto-update enable` installs a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` removes it; `status` shows whether it is present or has drifted. If the host has no user service manager, `enable` reports that and changes nothing.
+
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.

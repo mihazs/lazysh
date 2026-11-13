@@ -44,6 +44,12 @@ installation keeps legacy PATH behavior. Installation never starts automatically
 or changes host permissions or hooks. See [companion setup](https://github.com/mihazs/lazysh/blob/main/docs/companion.md) for the
 explicit action and uncertain-result semantics.
 
+Planned ([#1441](https://github.com/mihazs/lazysh/issues/1441)): the update will run on the host
+instead of downloading on the phone, and the companion will gain `lazysh-agent update`.
+A Windows companion (`lazysh-<version>-windows-agent-x64.exe`) is already published but
+cannot be installed from the app yet. See [ADR 0003](architecture/adr-0003-host-side-companion-update.md)
+and [the release asset contract](release-artifacts.md#companion-assets-are-an-updater-contract).
+
 Mac companion signatures are ad hoc, not Developer ID signatures or notarization.
 Do not disable host security policies to run one. Source SHA/version, content
 hashes, native executable identity and an owned CLI/database roundtrip are checked
