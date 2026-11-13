@@ -11,16 +11,7 @@ fn main() {
         .expect("usage: dump_workloads <dir>");
     std::fs::create_dir_all(&dir).expect("create the output directory");
     for (name, data) in support::workloads() {
-        let slug: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
+        let slug = support::slug(name);
         std::fs::write(format!("{dir}/{slug}.bin"), data).expect("write the fixture");
     }
 }
