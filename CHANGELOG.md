@@ -328,6 +328,7 @@
 
 - Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
 - Restore the mobile Agents drawer scroll offset once when returning from a tool to the same session and mode. Discard stale offsets after source, mode, server, access or layout changes; focus, navigation history, provider readers and connection defaults are unchanged.
+- Check a sign-in hint against the host's listeners (#1510, part of #1504). A new native command `check_auth_listener` reads which process listens on the port a sign-in command printed, with the host companion's `lazysh-agent listeners` (its start time is compared with the hint on the host's own clock) or, for a companion that predates it, answers exit status 2, fails or is missing, with the `ss` or `lsof` read Previews already uses. It reports `confirmed` (the process started up to 2 minutes before or 30 seconds after the hint), `stale` (older, such as a dev server), `unproven` (age unknown) or `absent`, and says when the listener is another user's. `confirmHint` counts a listener that appeared after the port was empty as confirmed. Nothing is tunnelled, opened or shown yet. No defaults change.
 
 - Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 

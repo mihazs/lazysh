@@ -557,6 +557,13 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      - name: Exercise the sign-in listener check over owned SSH
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
+        run: |
+          case_name=ssh::tests::openssh_auth_listener_check_uses_the_companion_then_falls_back_to_ss
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Check combined native voice startup and clean shutdown without models

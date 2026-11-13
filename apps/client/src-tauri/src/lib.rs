@@ -5,6 +5,7 @@ mod apple_speech;
 mod apple_status;
 mod approvals;
 mod attachment_upload;
+mod auth_listeners;
 mod clipboard;
 mod companion;
 mod companion_settings;
@@ -282,6 +283,7 @@ pub fn run() {
                 previews::stop_preview,
                 previews::list_previews,
                 previews::discover_preview_ports,
+                auth_listeners::check_auth_listener,
                 ssh::list_hosts,
                 ssh::save_host,
                 ssh::delete_host,

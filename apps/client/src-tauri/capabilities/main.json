@@ -114,6 +114,7 @@
     "allow-stop-preview",
     "allow-list-previews",
     "allow-discover-preview-ports",
+    "allow-check-auth-listener",
     "core:default",
     "allow-list-hosts",
     "allow-save-host",
