@@ -131,6 +131,7 @@ test('on Android gesture navigation the tour draws the handle and says to start 
   await expect(dialog.locator('.gt-handle')).toHaveCount(1);
   await expect(dialog.locator('.gt-zone')).toHaveCount(0);
   await expect(dialog.locator('.gt-copy')).toContainText('start each swipe from its small handle');
+  await expect(dialog.locator('.gt-copy')).toContainText('Each swipe starts in a strip 40 dp deep');
   await page.screenshot({path:testInfo.outputPath('handles.png')});
   await dialog.getByRole('button',{name:'Next',exact:true}).tap();
   await expect(dialog.locator('.gt-handle')).toHaveCount(1);
@@ -144,6 +145,7 @@ test('with the Edge swipes style on gesture navigation the tour keeps the rows r
   await expect(tour(page)).toBeVisible();
   await reportGestureInsets(page,oneUi);
   await expect(tour(page).locator('.gt-copy')).toContainText('start the side swipes low on the edge');
+  await expect(tour(page).locator('.gt-copy')).toContainText('Each swipe starts in a strip 40 dp deep');
   await expect(tour(page).locator('.gt-zone')).toHaveCount(1);
   await expect(tour(page).locator('.gt-handle')).toHaveCount(0);
 });

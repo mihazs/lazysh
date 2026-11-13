@@ -2,15 +2,18 @@ import {useEffect, useId, useRef, useState, type CSSProperties} from "react";
 import {t, useUi} from "./i18n/core";
 import {tourSteps, type TourNotes, type TourScene} from "./gestureTourModel";
 import {useGestureInsets, useGestureMode} from "./gestureInsets";
+import {edgeGestureSettings, usePreferences} from "./preferences";
 import "./GestureTour.css";
 
-/** Why a swipe does nothing on this device, and where each one starts on Android: from a handle, or from the rows the system gives up. */
+/** Why a swipe does nothing on this device, and where each one starts: from a handle, from the rows the system gives up, in a strip of the chosen depth. */
 function Notes({scene, notes}: {scene: TourScene; notes: TourNotes}) {
   const off = scene === "typing" ? null : notes[scene];
   const mode = useGestureMode(), gestureNavigation = useGestureInsets().navigation === "gesture";
   const where = mode === "handles" ? "gestureTourHandles" : mode === "edges" && gestureNavigation ? "gestureTourAndroidEdge" : null;
+  const width = edgeGestureSettings(usePreferences()).zoneWidth;
   return <>
     {where && scene !== "typing" && <p>{t(where)}</p>}
+    {scene !== "typing" && !off && <p>{t("gestureTourBand", {width})}</p>}
     {off && <p className="gt-off">{t(off)}</p>}
   </>;
 }
