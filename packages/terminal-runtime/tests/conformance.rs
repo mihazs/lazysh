@@ -266,6 +266,48 @@ fn keys_depend_on_terminal_modes() {
 }
 
 #[test]
+fn application_keypad_mode_does_not_change_what_a_shell_receives_from_the_numpad() {
+    // DECKPAM (ESC =): xterm.js keeps sending CR and the digit, fixtures/keys.json numpad-*-application.
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b=");
+    let numpad_enter = key(ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER, 0, None);
+    assert_eq!(rt.encode_key(&numpad_enter).unwrap(), b"\r");
+    let numpad_5 = key(ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_5, 0, Some("5"));
+    assert_eq!(rt.encode_key(&numpad_5).unwrap(), b"5");
+}
+
+/// #1043: the toolbar's Enter (a named key) and the soft keyboard's Enter (committed text) must reach the
+/// agent as the same single CR in every mode a TUI menu might have switched on, or a menu never confirms.
+#[test]
+fn toolbar_enter_and_soft_keyboard_enter_send_one_cr_in_every_mode() {
+    let toolbar = key(ffi::GhosttyKey_GHOSTTY_KEY_ENTER, 0, None);
+    let soft_keyboard = key(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED, 0, Some("\r"));
+    for (name, setup) in [
+        ("plain", &b""[..]),
+        ("application cursor", b"\x1b[?1h"),
+        ("focus reporting", b"\x1b[?1004h"),
+        ("bracketed paste", b"\x1b[?2004h"),
+        ("mouse tracking", b"\x1b[?1000h\x1b[?1006h"),
+        ("alternate screen", b"\x1b[?1049h"),
+        ("kitty disambiguate", b"\x1b[>1u"),
+        ("modifyOtherKeys", b"\x1b[>4;2m"),
+    ] {
+        let mut rt = runtime(20, 3);
+        feed(&mut rt, setup);
+        assert_eq!(
+            rt.encode_key(&toolbar).unwrap(),
+            b"\r",
+            "toolbar Enter, {name}"
+        );
+        assert_eq!(
+            rt.encode_key(&soft_keyboard).unwrap(),
+            b"\r",
+            "soft keyboard Enter, {name}"
+        );
+    }
+}
+
+#[test]
 fn modified_enter_tab_and_ctrl_bracket_stay_legacy_until_the_program_asks_for_a_protocol() {
     use lazysh_terminal_runtime::KeyInput as K;
     let (shift, ctrl) = (1, 1 << 1);

@@ -48,6 +48,16 @@ impl Encoders {
     }
 
     pub(crate) fn key(&mut self, terminal: &Terminal, input: &KeyInput) -> Result<Vec<u8>, Error> {
+        if input.key == ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED {
+            // Committed text (IME, soft keyboard) names no key, so no protocol can describe it: the
+            // encoder turned a keyboard "\r" into CSI 13u under Kitty flags, which a menu expecting
+            // Enter's CR (#1043) did not take. A pre-edit or a release sends nothing.
+            let text = input
+                .text
+                .as_deref()
+                .filter(|_| !input.composing && !input.release);
+            return Ok(text.map_or_else(Vec::new, |text| text.as_bytes().to_vec()));
+        }
         if let Some(bytes) = legacy_bytes(terminal, input)? {
             return Ok(bytes.to_vec());
         }
