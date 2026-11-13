@@ -19,6 +19,10 @@ required-features = ["update-test-endpoint"]
 name = "update_install"
 required-features = ["update-test-endpoint"]
 
+[[test]]
+name = "update_stub"
+required-features = ["update-test-endpoint"]
+
 [dependencies]
 lazysh-account-usage = { path = "../../packages/account-usage", features = ["collector"] }
 lazysh-companion-release = { path = "../../packages/companion-release" }
@@ -42,11 +46,11 @@ tempfile = "3"
 libc = "0.2"
 
 [dev-dependencies]
+lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
 lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }
 
 [target.'cfg(unix)'.dev-dependencies]
-lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
 lazysh-notifications = { path = "../notification-service", features = ["test-support"] }
 axum = "0.8.9"
