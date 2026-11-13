@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.54.0
+
+### Minor Changes
+
+- e74bd92: List the earlier Claude Code and Codex sessions of a folder in the Agent view and open one read-only, with a **Resume in the terminal** action that stages the agent's own resume command for review, through a new `lazysh-agent history` companion command and `agent_history` app command.
+- 95224be: Open a Claude Code sub-agent's own conversation from the Agent view, read from its files under the session directory.
+- 95224be: Show Claude Code dynamic workflows in the Agent view as a live progress tree: the companion reads each run's summary and journal files, the view draws its phases with each agent's state, tokens and tool calls, and opens any agent's own conversation.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.54.0
+  - @lazysh/common@1.54.0
+  - @lazysh/display-idle@1.54.0
+  - @lazysh/et-transport@1.54.0
+  - @lazysh/mosh-transport@1.54.0
+
 ## 1.53.0
 
 ### Minor Changes
