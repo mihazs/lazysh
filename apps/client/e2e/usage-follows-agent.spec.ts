@@ -15,6 +15,8 @@ async function open(page:Page,attached:{kind:'herdr'|'tmux';name:string}|null,pr
   await installNativeBridge(page);
   await page.addInitScript(({attached,accounts,primary,tmuxSnapshot})=>{
     if(attached)localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture',attached}]));
+    // These tests count `herdr_tree` reads to prove when the usage item reads the pane; the tab strip reads the same tree, so it is off here.
+    if(!sessionStorage.getItem('strip-off')){sessionStorage.setItem('strip-off','1');localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,tabStrip:'off'}));}
     const fixture:Fixture=window.usageFixture={focus:'p1',accountReads:0,treeReads:0,paneReads:0,pane:'%3',state:'ready',old:false,reports:[]};
     const pane=(id:string)=>({workspace_id:'w1',tab_id:'w1:t1',pane_id:id,terminal_id:`term-${id}`,cwd:'/work',focused:id===fixture.focus,agent_status:'idle'});
     const agent=(id:string,name:string)=>({terminal_id:`term-${id}`,workspace_id:'w1',tab_id:'w1:t1',pane_id:id,agent_status:'idle',agent:name,name:null});
