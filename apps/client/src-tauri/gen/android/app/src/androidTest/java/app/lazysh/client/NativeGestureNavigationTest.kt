@@ -52,15 +52,7 @@ class NativeGestureNavigationTest {
 
     private fun navigationMode() = Settings.Secure.getInt(instrumentation.targetContext.contentResolver, "navigation_mode", -1)
 
-    private inline fun <T> poll(what: String, seconds: Long = 30, read: () -> T?): T {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-        while (true) {
-            val value = try { read() } catch (_: Throwable) { null }
-            if (value != null) return value
-            assertTrue("Timed out waiting for $what", System.nanoTime() < deadline)
-            Thread.sleep(200)
-        }
-    }
+    private fun <T> poll(what: String, seconds: Long = 30, read: () -> T?): T = PageDriver.poll(what, seconds, read)
 
     private fun onActivityView(block: (View) -> Unit) {
         scenario.onActivity { block(requireNotNull(EdgeGestureExclusion.webView(it.window.decorView)) { "the Tauri WebView" }) }
