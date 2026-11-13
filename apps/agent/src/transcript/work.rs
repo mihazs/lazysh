@@ -17,6 +17,7 @@ const MAX_TASKS: usize = 100;
 const MAX_EVENTS: usize = 50;
 const MAX_TEXT: usize = 2000;
 
+#[derive(Default)]
 struct Task {
     id: String,
     kind: &'static str,
@@ -436,5 +437,70 @@ pub(super) fn attach_children(page: &mut TranscriptPage, transcript: &Path) {
         if meta["finished"] == true && item["state"] == "running" {
             item["state"] = json!("done");
         }
+    }
+}
+
+/// Codex sub-agents from the `SubAgentActivity` items of a rollout: `started` launches one and `completed` ends it, both
+/// named by the sub-agent's thread. The sub-agent's `FINAL_ANSWER` message to its parent, named by its path, ends it too,
+/// which is how most end. Other kinds (`interacted`) and agents never seen starting change nothing, so an agent whose end
+/// was not recorded stays `running`, as for Claude Code.
+#[derive(Default)]
+pub(super) struct CodexAgents {
+    tasks: Vec<Task>,
+    index: HashMap<String, usize>,
+    by_path: HashMap<String, usize>,
+}
+
+impl CodexAgents {
+    /// A `response_item` of type `agent_message`: the answer a sub-agent sends its parent when it is done.
+    pub(super) fn message(&mut self, payload: &Value, at: Option<&str>) {
+        let Some(&position) = payload["author"]
+            .as_str()
+            .and_then(|path| self.by_path.get(path))
+        else {
+            return;
+        };
+        let text = payload["content"][0]["text"].as_str().unwrap_or_default();
+        if !text.contains("Message Type: FINAL_ANSWER") {
+            return;
+        }
+        let task = &mut self.tasks[position];
+        finish(task, "done", at);
+        task.last = text.split("Payload:").nth(1).and_then(first_line);
+    }
+
+    pub(super) fn observe(&mut self, item: &Value, at: Option<&str>) {
+        let (Some(thread), Some(path)) = (
+            item["agent_thread_id"].as_str(),
+            item["agent_path"].as_str(),
+        ) else {
+            return;
+        };
+        match item["kind"].as_str() {
+            Some("started") if !self.index.contains_key(thread) => {
+                self.index.insert(thread.to_owned(), self.tasks.len());
+                self.by_path.insert(path.to_owned(), self.tasks.len());
+                self.tasks.push(Task {
+                    id: thread.to_owned(),
+                    kind: "agent",
+                    title: clip(path.rsplit('/').next().unwrap_or(path), 120),
+                    state: "running",
+                    started_at: at.map(str::to_owned),
+                    ..Task::default()
+                });
+            }
+            Some("completed") => {
+                if let Some(&position) = self.index.get(thread) {
+                    finish(&mut self.tasks[position], "done", at);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn into_work(self) -> Option<Vec<Value>> {
+        let skip = self.tasks.len().saturating_sub(MAX_TASKS);
+        let work: Vec<Value> = self.tasks.into_iter().skip(skip).map(render).collect();
+        (!work.is_empty()).then_some(work)
     }
 }
