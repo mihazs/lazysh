@@ -81,6 +81,11 @@ test.each(Object.entries(legacy))('legacy task %s resolves to %s with the old ca
 
 test('release builds, ordering and inline environment survive the port', async () => {
   expect(commandLine(await moonTask('agent:build'))).toBe('cargo build --release --locked');
+  // The update tests need the local release-server seam; a command that repeats the inherited arguments would
+  // silently select only the tests whose name contains "test".
+  expect(commandLine(await moonTask('agent:check-rust'))).toBe('cargo check --locked --features update-test-endpoint');
+  expect(commandLine(await moonTask('agent:test-rust'))).toBe('cargo test --locked --features update-test-endpoint');
+  expect(commandLine(await moonTask('agent:lint'))).toBe('cargo clippy --locked --all-targets --features update-test-endpoint -- -D warnings');
   expect(commandLine(await moonTask('common:lint'))).toBe('cargo clippy --locked --all-features --all-targets -- -D warnings');
   expect(commandLine(await moonTask('account-usage:check-rust'))).toBe('cargo check --locked --all-features');
   expect(commandLine(await moonTask('client-native:lint'))).toBe('cargo clippy --locked --all-targets -- -D warnings');

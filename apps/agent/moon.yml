@@ -4,12 +4,9 @@ stack: backend
 tags: [cargo, cargo-binary, companion]
 tasks:
   # The update tests drive the real binary built with the local release-server seam; `build` never has it.
-  check-rust:
-    command: cargo check --locked --features update-test-endpoint
-  test-rust:
-    command: cargo test --locked --features update-test-endpoint
-  lint:
-    command: cargo clippy --locked --all-targets --features update-test-endpoint -- -D warnings
+  check-rust: {args: [--features, update-test-endpoint]}
+  test-rust: {args: [--features, update-test-endpoint]}
+  lint: {args: [clippy, --locked, --all-targets, --features, update-test-endpoint, --, -D, warnings], options: {mergeArgs: replace}}
   test-storage:
     type: test
     command: 'cargo test --locked --lib --test storage_wal'
