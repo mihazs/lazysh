@@ -91,20 +91,22 @@ cd apps/client
 bun run bench:terminal                      # both viewports, release build, about 9 minutes
 bun run bench:terminal -- --project desktop  # one viewport, about 4.5 minutes
 LAZYSH_BENCH_OUT=/tmp/run.json bun run bench:terminal -- --project desktop
+LAZYSH_BENCH_WRITE=adapter bun run bench:terminal -- --project desktop   # every byte through XtermTerminalAdapter.write
+LAZYSH_BENCH_PAIRED=1 bun run bench:terminal -- --project desktop -g paired   # both write paths, stream by stream, about 2 minutes
 ```
 
-`bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<viewport>.json` (git-ignored). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
+`bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<write path>-<viewport>.json` (git-ignored; a renderer candidate other than `dom` adds `-<candidate>` before the write path). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
 
 To measure another renderer on the same terminal, fixtures and counters, set `LAZYSH_BENCH_RENDERER=canvas` or `webgl` (default `dom`) and, to choose the GL backend, `LAZYSH_BENCH_CHROMIUM_ARGS`. `bench/compare.ts` prints several result files side by side: `bun bench/compare.ts dom=a.json webgl=b.json`.
 
-The same spec also runs in **smoke mode** inside the normal Playwright suite (`e2e/terminal-bench.spec.ts`, desktop project only, against the dev server). Smoke mode uses tiny fixtures and asserts only that every workload completes, ends on the expected screen, and reports finite numbers. It has **no timing thresholds**, so it cannot flake on a slow runner. The deterministic fixture generators and the statistics helpers have unit tests (`bench/workloads.test.ts`).
+The same spec also runs in **smoke mode** inside the normal Playwright suite (`e2e/terminal-bench.spec.ts`, desktop project only, against the dev server). Smoke mode uses tiny fixtures and asserts only that every workload completes, ends on the expected screen, and reports finite numbers. It runs both write paths and one round of the paired comparison below. It has **no timing thresholds**, so it cannot flake on a slow runner. The deterministic fixture generators and the statistics helpers have unit tests (`bench/workloads.test.ts`).
 
 ### What is simulated and what is real
 
 | Stage | Real in the harness | Simulated or missing |
 | --- | --- | --- |
 | Bridge | `JSON.parse` of a `number[]` chunk and `new Uint8Array(...)`, the same decoding `SshEvent::Data` goes through, timed separately | The native IPC hop (Tauri channel, WebView message), which only a device or the real app can measure |
-| Flow control | 16 KiB chunks and the 256 KiB credit window of the Rust session workers; the credit is returned in the xterm `write` callback, as `App.tsx` does | The per-chunk `ack_output` IPC round trip is not issued |
+| Flow control | 16 KiB chunks and the 256 KiB credit window of the Rust session workers; the credit is returned in the xterm `write` callback, as the baseline did; with `?write=adapter` the bytes go through `XtermTerminalAdapter.write(bytes, onApplied)` and the credit is returned in `onApplied`, which is what `App.tsx` calls | The per-chunk `ack_output` IPC round trip is not issued |
 | VT parse and state | xterm.js itself, in the page | None |
 | Rendering | The app's `TerminalPane`, CSS, fit and DOM renderer in Chromium | Compositor and display present are not observed; GPU work is software on this host |
 | Input | Real key events through Chromium's input pipeline (Playwright), the app's `observeTerminalInput`, the IME layer and the `write_stdin` command | The remote echo is instant (zero round trip) and shares the xterm write queue with any concurrent output |
@@ -232,6 +234,55 @@ Each statement is about this host and these runs.
 - **IME commits were not duplicated or lost** in the Chromium composition protocol (every commit produced exactly one remote write); this says nothing about Gboard or SwiftKey.
 
 Not shown by this baseline: anything about Android, WebView, a real GPU, energy, thermal behaviour, a real network, real remote echo, the app's full React tree, or the other workloads listed above.
+
+### Write path: xterm `write` directly versus `XtermTerminalAdapter.write` ([#1306](https://github.com/mihazs/lazysh/issues/1306))
+
+`App.tsx` feeds every chunk through `XtermTerminalAdapter.write(bytes, onApplied)`, which wraps xterm's `write(bytes, callback)` in a Promise and a pending-set entry so a dispose can reject it. The baseline above calls xterm's `write` directly, so it cannot see that wrapper. `?write=adapter` (`LAZYSH_BENCH_WRITE=adapter`) sends every byte of every workload through the adapter instead; the run fails if a run that claims the adapter path made no adapter write, or the other way round. Nothing else differs between the two modes: same terminal, `TerminalPane`, fixtures, credit window and counters.
+
+Two comparisons were taken on the same host as the baseline (AMD Ryzen 9 5900X, headless Chromium 156.0.8078.4, Playwright 1.64.1, Bun 1.3.14, Linux 7.3.3-1-cachyos, `powersave` governor, xterm.js 5.5.0 DOM renderer, desktop 1280 by 850, release build). **The host was shared and busy: the 1-minute load average was between 3 and 25 during these runs, against 1.1 to 1.7 for the committed baseline**, so none of these figures is comparable with the baseline tables above (direct W2 here is about 33 MiB/s against about 40 there); only the direct and adapter columns of this section are comparable with each other.
+
+**Alternating full runs.** Ten full desktop runs in the order direct, adapter, adapter, direct, direct, adapter (runs 1 to 6) and adapter, direct, direct, adapter (runs 7 to 10), each a complete [workload set](#workloads-implemented) at the baseline's scale (five runs per workload, three for idle; the table gives the median over the files of each file's five-run median, then the minimum and maximum of those file medians). The ten files are `benchmarks/terminal-write-path-run01-direct-desktop.json` to `run10`; their load averages are recorded in each. Runs 1 to 4 were taken at a 1-minute load of 12 to 25, so pooling all ten says more about the host than about the adapter: W2 33.0 against 27.5 MiB/s and W3 1.40 against 0.87, driven by adapter file medians of 6.7 MiB/s (run 2, load 14 to 25) and 0.54 MiB/s for W3 (run 3, load 22 to 24). The table below therefore uses the six runs 5 to 10, the ones whose 1-minute load average stayed at or below 12 at both start and end (a rule chosen after seeing the results, not before; the pooled rows are in the raw files): three direct and three adapter.
+
+| Measured (median of the three file medians; min-max) | xterm `write` directly | `XtermTerminalAdapter.write` | Adapter / direct |
+| --- | --- | --- | --- |
+| W2 plain text throughput, MiB/s | 33.4 (33.0-36.7) | 35.1 (27.5-35.6) | 1.05 |
+| W2 write-to-ack p99, ms | 2.6 (2.5-2.6) | 2.6 (2.5-3.5) | 1.00 |
+| W2 main-thread task time, ms | 136 (124-138) | 129 (129-167) | 0.95 |
+| W3 ANSI colour throughput, MiB/s | 1.50 (1.40-1.85) | 1.17 (0.87-1.46) | 0.78 |
+| W3 main-thread task time, ms | 1445 (1188-1534) | 1800 (1444-2409) | 1.24 |
+| W4 redraw throughput, MiB/s | 44.4 (43.3-46.5) | 44.2 (37.9-46.7) | 1.00 |
+| W4 main-thread task time, ms | 223 (213-230) | 226 (215-263) | 1.02 |
+| W1 write to render p50, ms | 12.6 (12.6-12.6) | 12.6 (12.6-12.6) | 1.00 |
+| W12 key to render p50, one key at a time, ms | 1.65 (1.65-1.70) | 1.55 (1.50-1.90) | 0.94 |
+| W12 key to render p95, one key at a time, ms | 15.4 (15.4-15.6) | 15.4 (15.1-15.4) | 1.00 |
+| W12 key to render p95 during sustained output, ms | 29.6 (29.5-30.6) | 29.8 (29.6-29.9) | 1.01 |
+| W12 IME commit to render p95, ms | 16.0 (15.8-16.2) | 16.2 (15.8-16.4) | 1.01 |
+| W9 10 sessions, key to render p95, ms | 21.9 (20.4-22.2) | 22.1 (21.7-23.0) | 1.01 |
+| W9 resident memory per background session, MiB | 7.6 (7.3-7.7) | 7.3 (7.3-7.5) | 0.96 |
+| W10 fill 20000 lines at scrollback 20000, ms | 367 (364-370) | 372 (367-373) | 1.01 |
+| W10 JS heap at scrollback 20000, MiB | 34.8 (34.6-35.1) | 35.0 (34.8-35.0) | 1.00 |
+| W10 renderer resident memory at scrollback 20000, MiB | 196 (186-238) | 194 (193-239) | 0.99 |
+| W0 idle, cursor blink on, main-thread task per 10 s, ms | 111 (72-129) | 92 (80-133) | 0.83 |
+
+**Paired streams.** Because drift between two full runs is larger than the effect being looked for, `e2e/terminal-bench.spec.ts` also has a paired test (`LAZYSH_BENCH_PAIRED=1`, `-g paired`): it loads the page once per stream and alternates the write paths direct, adapter, adapter, direct, direct, ... for 12 streams of each, over W2 (4 MiB plain), W3 (2 MiB ANSI) and W4 (1500 redraw frames), so neighbouring streams share the load. Two runs, one after the other, files `benchmarks/terminal-write-paired-run1-desktop.json` (load average 16.6 at start and 10.2 at end; taken before the paired test was committed, so `source.commit` is its parent and `dirty` is true) and `...-run2-desktop.json` (8.8 and 8.8, clean tree, commit recorded). Median of 12 streams, MiB/s and ack p99 in ms:
+
+| Stream | Run | Direct MiB/s | Adapter MiB/s | Adapter / direct | Direct ack p99 | Adapter ack p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| W2 plain | 1 | 29.0 | 28.4 | 0.98 | 3.60 | 3.66 |
+| W2 plain | 2 | 31.2 | 32.3 | 1.03 | 3.12 | 3.04 |
+| W3 ANSI | 1 | 1.32 | 1.40 | 1.06 | 29.2 | 27.3 |
+| W3 ANSI | 2 | 1.58 | 1.39 | 0.88 | 29.1 | 27.3 |
+| W4 redraw | 1 | 43.2 | 44.1 | 1.02 | 2.35 | 2.21 |
+| W4 redraw | 2 | 44.2 | 42.4 | 0.96 | 2.16 | 2.21 |
+
+What this shows and what it does not:
+
+- **No difference that exceeds the noise was measured.** The paired ratios for the same stream land on both sides of 1.00 between two consecutive runs (W3: 1.06 then 0.88), the min-max ranges of the two paths overlap in every row of the table above, and a throwaway script of the same design (not committed, taken before the two runs above at a load of 3.5 to 10) gave 1.00, 1.24 and 1.01 for W2, W3 and W4. The resolution of this method on this host is therefore about 20 percent for W3, whose stream-to-stream range is 1.0 to 2.3 MiB/s even in one session, and about 5 percent for W2 and W4.
+- **W3 is the one workload where the quieter alternating runs lean the other way** (adapter 0.78 of direct on throughput, 1.24 times the main-thread time), and the paired runs do not reproduce that. This method cannot rule out a W3 cost of up to about 20 percent; it can only say that none was seen consistently. The adapter adds per chunk one Promise and one pending-set insertion and removal. W2 pushes its 256 chunks in about 130 ms and its paired ratios stay within 0.98 to 1.03, so a per-chunk cost above roughly 0.03 ms would have shown there; W3 sends 128 chunks over a stream about ten times longer, where that cost is about 0.3 percent, so it cannot explain a gap of 20 percent. This is an inference from the W2 bound, not a W3 measurement.
+- **Memory is unchanged**: per-session heap 1.06 MiB in every run of both paths, resident memory per background session and at scrollback 20000 within the range of the direct runs.
+- **Input latency is unchanged**: key to render, IME commit and key during sustained output differ by at most 0.2 ms between the medians of the quieter runs.
+- **Not measured:** Android WebView, a real device, the native IPC hop, the app's React tree on top of the terminal (this harness mounts `TerminalPane` but not `App`), the other renderers with the adapter, any workload outside W0 to W4, W9, W10 and W12. A slower CPU makes a fixed per-chunk cost a larger share of a chunk; only a device run settles that.
+- **Provenance of the ten alternating files:** they were taken with the harness at the commit before it was rebased on [#1479](https://github.com/mihazs/lazysh/pull/1479) (`source.commit` `3dcfc640`, which is not in `main`'s history; `dirty: true` because an untracked Playwright config for a local smoke run sat in the working tree). The write-path code is the same; the only harness difference since is the renderer-candidate option, whose default is `dom`.
 
 ### Renderer shootout: xterm.js renderers ([#1323](https://github.com/mihazs/lazysh/issues/1323))
 
