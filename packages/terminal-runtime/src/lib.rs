@@ -32,7 +32,9 @@ pub use render::{
     Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
-pub use runtime::{Config, Error, Events, Geometry, Modes, TerminalRuntime};
+pub use runtime::{
+    Config, Error, Events, Geometry, Modes, TerminalRuntime, Viewport, MAX_READ_ROWS,
+};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.

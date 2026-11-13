@@ -3,8 +3,9 @@ use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
 use crate::size::{Size, SizeAuthority, SizeOutcome};
-use ghostty_vt::{ActiveScreen, Terminal};
+use ghostty_vt::{ActiveScreen, CellWide, Terminal};
 use std::fmt;
+use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Terminal-generated replies (DSR, DA, ...) waiting for the transport. A peer can spam queries,
@@ -16,6 +17,14 @@ const MAX_PENDING_EVENTS: usize = 8;
 /// DEC private modes 6 (origin) and 7 (wraparound); libghostty-vt reflows only while 7 is set.
 const MODE_ORIGIN: u16 = 6;
 const MODE_WRAPAROUND: u16 = 7;
+/// What JavaScript's `String.prototype.trimEnd` strips (the xterm backend's `readRows` uses it):
+/// Rust's `White_Space` plus U+FEFF, minus U+0085.
+fn js_space(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+}
+
+/// Most rows one [`TerminalRuntime::read_rows`] call returns, so a text query over the bridge stays bounded.
+pub const MAX_READ_ROWS: usize = 4096;
 const DEFAULT_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 /// Matches the current transport credit window (OUTPUT_WINDOW/WINDOW in the Rust workers).
 const DEFAULT_INGRESS_BYTES: usize = 256 * 1024;
@@ -98,6 +107,18 @@ pub struct Events {
 pub struct Geometry {
     pub size: Size,
     pub authority: SizeAuthority,
+}
+
+/// Where the visible rows sit in the buffer, in absolute rows (the adapter's `TerminalViewport`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Viewport {
+    /// The first visible absolute row.
+    pub top: usize,
+    pub rows: usize,
+    /// Rows held: scrollback plus the screen.
+    pub length: usize,
+    /// The view shows live output (it is not scrolled into history).
+    pub following: bool,
 }
 
 #[derive(Default)]
@@ -478,6 +499,57 @@ impl TerminalRuntime {
         Ok(self
             .terminal
             .read_text_screen((0, 0), (self.size.cols - 1, last), false)?)
+    }
+
+    /// Text of absolute rows (scrollback first, as `screen_text`), trimmed on the right, optionally
+    /// of a column span `[start, end)`: the adapter's `readRows`, text only, never cells. A blank
+    /// cell reads as a space, a wide character's spacer as nothing, a grapheme cluster whole. Rows
+    /// past the end read as empty; at most [`MAX_READ_ROWS`] are returned. Same results as the xterm
+    /// backend (`translateToString(true, start, end)` then `trimEnd`), pinned by
+    /// `fixtures/read-rows.json`.
+    pub fn read_rows(
+        &self,
+        first: usize,
+        count: usize,
+        columns: Option<Range<u16>>,
+    ) -> Result<Vec<String>, Error> {
+        let span = columns.unwrap_or(0..u16::MAX);
+        (first..first.saturating_add(count.min(MAX_READ_ROWS)))
+            .map(|row| {
+                let mut text = String::new();
+                if let Ok(row) = u32::try_from(row) {
+                    let mut column = 0u16;
+                    self.terminal
+                        .for_each_screen_row_cell(row, |wide, graphemes| {
+                            if span.contains(&column) {
+                                // A span that opens on a wide character's second cell reads it as a
+                                // blank, as xterm does; anywhere else the spacer adds nothing.
+                                let spacer = wide == CellWide::SpacerTail && column != span.start
+                                    || wide == CellWide::SpacerHead;
+                                if graphemes.is_empty() && !spacer {
+                                    text.push(' ');
+                                }
+                                text.extend(
+                                    graphemes.iter().filter_map(|&code| char::from_u32(code)),
+                                );
+                            }
+                            column += 1;
+                        })?;
+                }
+                text.truncate(text.trim_end_matches(js_space).len());
+                Ok(text)
+            })
+            .collect()
+    }
+
+    pub fn viewport(&self) -> Result<Viewport, Error> {
+        let bar = self.terminal.scrollbar()?;
+        Ok(Viewport {
+            top: bar.offset,
+            rows: bar.len,
+            length: bar.total,
+            following: bar.offset + bar.len >= bar.total,
+        })
     }
 
     pub fn scrollback_rows(&self) -> Result<usize, Error> {
