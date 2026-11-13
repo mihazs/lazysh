@@ -6,31 +6,12 @@
 
 mod support;
 
-use lazysh_terminal_runtime::{Config, Size, TerminalRuntime, MAX_READ_ROWS};
-use serde_json::Value;
+use lazysh_terminal_runtime::{TerminalRuntime, MAX_READ_ROWS};
 use support::*;
-
-fn load() -> Vec<Value> {
-    let path = format!("{}/fixtures/read-rows.json", env!("CARGO_MANIFEST_DIR"));
-    let json: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    json["cases"].as_array().unwrap().clone()
-}
-
-fn replay(case: &Value) -> TerminalRuntime {
-    let number = |key: &str| case[key].as_u64().unwrap();
-    let mut rt = TerminalRuntime::new(Config {
-        size: Size::new(number("cols") as u16, number("rows") as u16),
-        scrollback_bytes: 1 << 20,
-        ..Config::default()
-    })
-    .unwrap();
-    feed(&mut rt, case["write"].as_str().unwrap().as_bytes());
-    rt
-}
 
 #[test]
 fn rows_read_the_same_text_as_the_xterm_backend() {
-    for case in load() {
+    for case in fixture_cases("read-rows") {
         let rt = replay(&case);
         let id = case["id"].as_str().unwrap();
         for query in case["queries"].as_array().unwrap() {

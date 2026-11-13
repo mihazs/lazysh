@@ -6,7 +6,7 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size (including Mosh's OSC 7777 frames as a top-anchored resize without reflow, `Config::canonical_frames`), terminal
-replies, key/mouse/paste encoding, and text inspection (`read_rows`, `viewport`). A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, and text inspection (`read_rows`, `viewport`), selection, copy, word, find and the OSC 52 consent policy in absolute cell coordinates. A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
 [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
@@ -52,6 +52,7 @@ cargo +1.96.1 run --release --example parse_bench   # host throughput, see docs/
 cargo +1.96.1 run --release --example session_bench # pooled data path, input latency, memory
 cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: canonical resize plus repaint
 cargo +1.96.1 run --release --example inspect_bench # text queries: Herdr's tap check, a screen read
+cargo +1.96.1 run --release --example selection_bench # selection and search on a large scrollback
 ```
 
 ## Target status

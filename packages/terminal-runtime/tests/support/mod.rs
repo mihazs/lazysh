@@ -3,6 +3,7 @@ use lazysh_terminal_runtime::{
     ffi, CellWide, Config, Frame, Hooks, Hub, KeyInput, Offer, Origin, PtyWriter, Refused, Session,
     Size, TerminalRuntime,
 };
+use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -326,4 +327,25 @@ pub fn load_average() -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+/// The cases of `fixtures/<name>.json`, replayed through xterm.js by a client test and through the
+/// core here.
+pub fn fixture_cases(name: &str) -> Vec<Value> {
+    let path = format!("{}/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    json["cases"].as_array().unwrap().clone()
+}
+
+/// A runtime of the case's size with the case's `write` bytes fed in.
+pub fn replay(case: &Value) -> TerminalRuntime {
+    let number = |key: &str| case[key].as_u64().unwrap();
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size::new(number("cols") as u16, number("rows") as u16),
+        scrollback_bytes: 1 << 20,
+        ..Config::default()
+    })
+    .unwrap();
+    feed(&mut rt, case["write"].as_str().unwrap().as_bytes());
+    rt
 }

@@ -9,6 +9,7 @@
 //! Rendering is behind [`TerminalRenderer`] (#1322): [`Frame`]s in, pixels on an opaque surface out,
 //! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
+mod clipboard;
 mod frame;
 mod hub;
 mod ingress;
@@ -19,8 +20,10 @@ mod mosh;
 mod reference;
 mod render;
 mod runtime;
+mod selection;
 mod size;
 
+pub use clipboard::{clipboard_consent_text, MAX_CLIPBOARD_TEXT_BYTES};
 pub use frame::{Cell, Frame, Row};
 pub use hub::{
     Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
@@ -37,6 +40,7 @@ pub use render::{
 pub use runtime::{
     Config, Error, Events, Geometry, Modes, TerminalRuntime, Viewport, MAX_READ_ROWS,
 };
+pub use selection::{CellPos, CellRange, Direction, SearchHit, MAX_QUERY_BYTES};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.

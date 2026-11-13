@@ -28,8 +28,18 @@ const MODE_ORIGIN: u16 = 6;
 const MODE_WRAPAROUND: u16 = 7;
 /// What JavaScript's `String.prototype.trimEnd` strips (the xterm backend's `readRows` uses it):
 /// Rust's `White_Space` plus U+FEFF, minus U+0085.
-fn js_space(c: char) -> bool {
+pub(crate) fn js_space(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+}
+
+/// How the right edge of a row's text is trimmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Trim {
+    /// Every trailing Unicode space, as JavaScript's `trimEnd` (the adapter's `readRows`).
+    Spaces,
+    /// Only cells nothing was written to; written spaces stay (xterm's `translateToString(true)`,
+    /// which selection and search read).
+    EmptyCells,
 }
 
 /// Most rows one [`TerminalRuntime::read_rows`] call returns, so a text query over the bridge stays bounded.
@@ -516,6 +526,43 @@ impl TerminalRuntime {
             .read_text_screen((0, 0), (self.size.cols - 1, last), false)?)
     }
 
+    /// The text of one absolute row over the columns of `span`, as xterm's `translateToString`
+    /// builds it: a blank cell reads as a space, a wide character's spacer as nothing (a span that
+    /// opens on a wide character's second cell reads it as a blank, and a wrapped wide character's
+    /// head as a blank), a grapheme cluster whole. A row past the end or past `u32` is empty.
+    pub(crate) fn row_text(
+        &self,
+        row: usize,
+        span: &Range<u16>,
+        trim: Trim,
+    ) -> Result<String, Error> {
+        let mut text = String::new();
+        let Ok(row) = u32::try_from(row) else {
+            return Ok(text);
+        };
+        let (mut column, mut content) = (0u16, 0);
+        self.terminal
+            .for_each_screen_row_cell(row, |wide, graphemes| {
+                if span.contains(&column) {
+                    let spacer = wide == CellWide::SpacerTail && column != span.start
+                        || wide == CellWide::SpacerHead;
+                    if graphemes.is_empty() && !spacer {
+                        text.push(' ');
+                    }
+                    text.extend(graphemes.iter().filter_map(|&code| char::from_u32(code)));
+                    if !graphemes.is_empty() {
+                        content = text.len();
+                    }
+                }
+                column += 1;
+            })?;
+        match trim {
+            Trim::Spaces => text.truncate(text.trim_end_matches(js_space).len()),
+            Trim::EmptyCells => text.truncate(content),
+        }
+        Ok(text)
+    }
+
     /// Text of absolute rows (scrollback first, as `screen_text`), trimmed on the right, optionally
     /// of a column span `[start, end)`: the adapter's `readRows`, text only, never cells. A blank
     /// cell reads as a space, a wide character's spacer as nothing, a grapheme cluster whole. Rows
@@ -530,30 +577,7 @@ impl TerminalRuntime {
     ) -> Result<Vec<String>, Error> {
         let span = columns.unwrap_or(0..u16::MAX);
         (first..first.saturating_add(count.min(MAX_READ_ROWS)))
-            .map(|row| {
-                let mut text = String::new();
-                if let Ok(row) = u32::try_from(row) {
-                    let mut column = 0u16;
-                    self.terminal
-                        .for_each_screen_row_cell(row, |wide, graphemes| {
-                            if span.contains(&column) {
-                                // A span that opens on a wide character's second cell reads it as a
-                                // blank, as xterm does; anywhere else the spacer adds nothing.
-                                let spacer = wide == CellWide::SpacerTail && column != span.start
-                                    || wide == CellWide::SpacerHead;
-                                if graphemes.is_empty() && !spacer {
-                                    text.push(' ');
-                                }
-                                text.extend(
-                                    graphemes.iter().filter_map(|&code| char::from_u32(code)),
-                                );
-                            }
-                            column += 1;
-                        })?;
-                }
-                text.truncate(text.trim_end_matches(js_space).len());
-                Ok(text)
-            })
+            .map(|row| self.row_text(row, &span, Trim::Spaces))
             .collect()
     }
 
@@ -565,6 +589,11 @@ impl TerminalRuntime {
             length: bar.total,
             following: bar.offset + bar.len >= bar.total,
         })
+    }
+
+    /// The VT state, for the text queries of sibling modules.
+    pub(crate) fn vt(&self) -> &Terminal {
+        &self.terminal
     }
 
     pub fn scrollback_rows(&self) -> Result<usize, Error> {
