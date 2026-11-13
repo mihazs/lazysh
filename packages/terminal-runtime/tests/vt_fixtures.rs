@@ -7,8 +7,8 @@ mod support;
 
 use base64::Engine;
 use lazysh_terminal_runtime::{
-    default_palette, ffi, CellColor, CellWide, Config, KeyInput, MouseInput, RgbColor, Size,
-    TerminalRuntime,
+    default_palette, dom_mods, ffi, CellColor, CellWide, Config, DomKey, KeyInput, MouseInput,
+    RgbColor, Size, TerminalRuntime,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -385,144 +385,6 @@ fn key_fixtures() -> Vec<KeyFixture> {
     serde_json::from_slice(&std::fs::read(path).expect("keys.json")).expect("parse")
 }
 
-/// W3C `code` to the binding's key, for the supported set (see fixtures/keys.json).
-fn ghostty_key(code: &str) -> ffi::GhosttyKey {
-    macro_rules! keys {
-        ($($code:literal => $key:ident),* $(,)?) => {
-            match code {
-                $($code => paste_key!($key),)*
-                other => panic!("no key mapping for {other}"),
-            }
-        };
-    }
-    macro_rules! paste_key {
-        (A) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_A
-        };
-        (C) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_C
-        };
-        (D) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_D
-        };
-        (Z) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_Z
-        };
-        (ARROW_UP) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP
-        };
-        (ARROW_DOWN) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ARROW_DOWN
-        };
-        (ARROW_LEFT) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ARROW_LEFT
-        };
-        (ARROW_RIGHT) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ARROW_RIGHT
-        };
-        (HOME) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_HOME
-        };
-        (END) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_END
-        };
-        (PAGE_UP) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_PAGE_UP
-        };
-        (PAGE_DOWN) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_PAGE_DOWN
-        };
-        (INSERT) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_INSERT
-        };
-        (DELETE) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_DELETE
-        };
-        (ENTER) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ENTER
-        };
-        (TAB) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_TAB
-        };
-        (BACKSPACE) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_BACKSPACE
-        };
-        (ESCAPE) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE
-        };
-        (SPACE) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_SPACE
-        };
-        (BRACKET_LEFT) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT
-        };
-        (BACKSLASH) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_BACKSLASH
-        };
-        (SLASH) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_SLASH
-        };
-        (DIGIT_1) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_DIGIT_1
-        };
-        (DIGIT_2) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_DIGIT_2
-        };
-        (NUMPAD_ENTER) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER
-        };
-        (NUMPAD_5) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_5
-        };
-        (F1) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F1
-        };
-        (F2) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F2
-        };
-        (F3) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F3
-        };
-        (F4) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F4
-        };
-        (F5) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F5
-        };
-        (F6) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F6
-        };
-        (F7) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F7
-        };
-        (F8) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F8
-        };
-        (F9) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F9
-        };
-        (F10) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F10
-        };
-        (F11) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F11
-        };
-        (F12) => {
-            ffi::GhosttyKey_GHOSTTY_KEY_F12
-        };
-    }
-    keys! {
-        "KeyA" => A, "KeyC" => C, "KeyD" => D, "KeyZ" => Z,
-        "ArrowUp" => ARROW_UP, "ArrowDown" => ARROW_DOWN, "ArrowLeft" => ARROW_LEFT, "ArrowRight" => ARROW_RIGHT,
-        "Home" => HOME, "End" => END, "PageUp" => PAGE_UP, "PageDown" => PAGE_DOWN,
-        "Insert" => INSERT, "Delete" => DELETE, "Enter" => ENTER, "Tab" => TAB, "Backspace" => BACKSPACE,
-        "Escape" => ESCAPE, "Space" => SPACE, "BracketLeft" => BRACKET_LEFT, "Backslash" => BACKSLASH,
-        "Slash" => SLASH, "Digit1" => DIGIT_1, "Digit2" => DIGIT_2, "NumpadEnter" => NUMPAD_ENTER,
-        "Numpad5" => NUMPAD_5, "F1" => F1, "F2" => F2, "F3" => F3, "F4" => F4, "F5" => F5, "F6" => F6,
-        "F7" => F7, "F8" => F8, "F9" => F9, "F10" => F10, "F11" => F11, "F12" => F12,
-    }
-}
-
 #[test]
 fn the_core_encodes_every_key_like_xterm_or_records_why_not() {
     let registry = divergences();
@@ -531,23 +393,14 @@ fn the_core_encodes_every_key_like_xterm_or_records_why_not() {
     for fixture in &all {
         let mut runtime = TerminalRuntime::new(Config::default()).expect("runtime");
         support::feed(&mut runtime, fixture.setup.as_bytes());
-        let mods = fixture.mods.iter().fold(0, |bits, name| {
-            bits | match name.as_str() {
-                "shift" => 1,
-                "ctrl" => 1 << 1,
-                "alt" => 1 << 2,
-                "meta" => 1 << 3,
-                other => panic!("unknown modifier {other}"),
-            }
-        });
+        let has = |name: &str| fixture.mods.iter().any(|held| held == name);
         let sent = runtime
-            .encode_key(&KeyInput {
-                key: ghostty_key(&fixture.code),
-                mods,
-                text: (fixture.key.chars().count() == 1).then(|| fixture.key.clone()),
-                composing: false,
-                release: false,
-            })
+            .encode_key(&KeyInput::from_dom(DomKey {
+                code: &fixture.code,
+                key: &fixture.key,
+                mods: dom_mods(has("shift"), has("ctrl"), has("alt"), has("meta")),
+                ..DomKey::default()
+            }))
             .expect("encode");
         let expected = core_expectation(&fixture.id, &fixture.expect, &fixture.core, &registry);
         if sent != expected.as_bytes() {
