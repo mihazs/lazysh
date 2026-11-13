@@ -442,22 +442,37 @@ pub(crate) mod fake {
     }
 
     impl ChecksumCore {
-        /// Waits for `expected.len()` parsed bytes, then checks the stream's checksum, that at most one
-        /// transport window was ever queued unreturned, and that nothing crossed the Channel (`ipc`).
-        pub(crate) async fn assert_received(&self, expected: &[u8], ipc: &AtomicUsize) {
-            tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                while self.seen.lock().unwrap().len() < expected.len() {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        /// Waits for `expected.len()` parsed bytes, then checks the stream's checksum and that at most
+        /// one transport window was ever queued unreturned.
+        pub(crate) async fn assert_stream(&self, expected: &[u8]) {
+            // A stall (no byte parsed for 10 s) fails; a slow stand-in on a big workload does not.
+            let (mut len, mut progressed) = (0, std::time::Instant::now());
+            loop {
+                let now = self.seen.lock().unwrap().len();
+                if now >= expected.len() {
+                    break;
                 }
-            })
-            .await
-            .expect("the core parsed the whole stream");
+                if now != len {
+                    (len, progressed) = (now, std::time::Instant::now());
+                }
+                assert!(
+                    progressed.elapsed() < std::time::Duration::from_secs(10),
+                    "the core parsed {now} of {} bytes, then stalled",
+                    expected.len()
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
             assert_eq!(sha256(&self.seen.lock().unwrap()), sha256(expected));
             let (peak, window) = (self.peak_queued.load(SeqCst), crate::ssh::OUTPUT_WINDOW);
             assert!(
                 peak <= window as usize,
                 "{peak} bytes queued over the {window} window"
             );
+        }
+
+        /// [`Self::assert_stream`], and nothing crossed the Channel (`ipc`).
+        pub(crate) async fn assert_received(&self, expected: &[u8], ipc: &AtomicUsize) {
+            self.assert_stream(expected).await;
             assert_eq!(ipc.load(SeqCst), 0, "no per-chunk IPC on the core path");
         }
     }

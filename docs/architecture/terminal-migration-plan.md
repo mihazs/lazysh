@@ -1,6 +1,6 @@
 # Terminal migration plan
 
-Status: **proposed**. The xterm.js backend remains the working default throughout. No stage below has started; the first deliverable is the documentation and issue map. Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [runtime](terminal-runtime.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed**. The xterm.js backend remains the working default throughout. Merged so far: the contract and the xterm adapter (step 2), and in step 3 the core crate, the Tauri data path that feeds SSH, Mosh, ET and local PTY output to a core with credit returned after VT processing (behind the `native-terminal` build feature, off in every shipped build), and the core lifecycle. No stage S0 to S5 has been reached and no release exposes the native engine: there is no engine setting yet, so every release since the first slice is xterm.js behaviour. Each slice that ships behaviour is released on its own through the next version PR with its own Changeset; the first user-visible one is the opt-in engine setting once core, renderer and input work end to end on one platform. Tracking: [epic #1302](https://github.com/mihazs/lazysh/issues/1302). Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [runtime](terminal-runtime.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## Rules that apply to every slice
 
