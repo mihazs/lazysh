@@ -285,6 +285,19 @@ pub fn unicode(total: usize) -> Vec<u8> {
         .collect()
 }
 
+/// A workload name as a file name: lowercase ASCII, anything else a dash.
+pub fn slug(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 pub fn workloads() -> [(&'static str, Vec<u8>); 4] {
     [
         ("plain text", plain(TOTAL)),
