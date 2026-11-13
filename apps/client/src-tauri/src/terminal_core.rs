@@ -12,6 +12,7 @@
 //! routed back to the transport yet (#1316): the real core's writer refuses them.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::SshEvent;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
@@ -252,22 +253,32 @@ pub(crate) fn close_all() {
     live.values().for_each(|core| core.close());
 }
 
+type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
+
+/// Like the terminal commands, the two that create or read a screen belong to the current renderer:
+/// a replaced renderer's lease is refused.
 #[tauri::command]
-pub fn terminal_core_open(
+pub async fn terminal_core_open(
+    lease: AccessLease,
     events: Channel<SshEvent>,
     cols: u32,
     rows: u32,
     scrollback_bytes: Option<u32>,
-) -> Result<(), String> {
-    crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
-    let factory = native::factory(cols, rows, scrollback_bytes)?;
-    offer(&events, factory);
-    Ok(())
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
+            offer(&events, native::factory(cols, rows, scrollback_bytes)?);
+            Ok(())
+        })
+        .await
 }
 
 #[tauri::command]
-pub fn terminal_core_text(session_id: String) -> Result<String, String> {
-    live(&session_id)?.viewport_text()
+pub async fn terminal_core_text(lease: AccessLease, session_id: String) -> AccessResult<String> {
+    lease
+        .run(async { live(&session_id)?.viewport_text() })
+        .await
 }
 
 #[tauri::command]
@@ -583,12 +594,45 @@ mod tests {
     }
 
     #[cfg(not(feature = "native-terminal"))]
-    #[test]
-    fn without_the_feature_the_commands_say_the_core_is_not_built() {
-        let error = terminal_core_open(channel(), 80, 24, None).unwrap_err();
+    fn lease() -> AccessLease {
+        crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap()
+    }
+
+    #[cfg(not(feature = "native-terminal"))]
+    #[tokio::test]
+    async fn without_the_feature_the_commands_say_the_core_is_not_built() {
+        let error = terminal_core_open(lease(), channel(), 80, 24, None)
+            .await
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap();
         assert!(error.contains("not built"), "{error}");
-        assert!(terminal_core_open(channel(), 0, 24, None).is_err());
-        assert!(terminal_core_text("none".into()).is_err());
+        assert!(terminal_core_open(lease(), channel(), 0, 24, None)
+            .await
+            .is_err());
+        assert!(terminal_core_text(lease(), "none".into()).await.is_err());
         terminal_core_close("none".into()).unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn a_replaced_renderer_cannot_read_a_core() {
+        let _kept = tests_keeping_cores().read();
+        let access = crate::app_lock::AccessState::disabled();
+        let renderer = access.lease(None).unwrap();
+        let (_core, prepared) = ChecksumCore::prepared();
+        prepared.attach("lease-gated", &CoreSlot::default(), Arc::new(|_| {}));
+        let text = terminal_core_text(renderer.clone(), "lease-gated".into())
+            .await
+            .unwrap();
+        assert!(text.into_inner().is_ok());
+        access.replace_renderer().unwrap();
+        assert!(terminal_core_text(renderer, "lease-gated".into())
+            .await
+            .is_err());
+        close("lease-gated");
     }
 }

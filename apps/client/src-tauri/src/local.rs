@@ -1811,12 +1811,20 @@ mod tests {
                 .unwrap();
         (core, connected)
     }
+    /// The real core's screen text, read as the current renderer.
+    #[cfg(all(unix, feature = "native-terminal"))]
+    async fn real_core_text(id: &str) -> Result<String, String> {
+        match crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await {
+            Ok(text) => Ok(text.into_inner().unwrap()),
+            Err(error) => Err(error.into_inner().unwrap()),
+        }
+    }
     /// The real core's screen text once it contains `marker`.
     #[cfg(all(unix, feature = "native-terminal"))]
     async fn real_core_text_with(id: &str, marker: &str) -> String {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let text = crate::terminal_core::terminal_core_text(id.to_owned()).unwrap();
+                let text = real_core_text(id).await.unwrap();
                 if text.contains(marker) {
                     return text;
                 }
@@ -1850,7 +1858,9 @@ mod tests {
         use portable_pty::CommandBuilder;
         let state = LocalState::default();
         let (event, mut rx) = events();
-        terminal_core::terminal_core_open(event.clone(), 40, 6, None).unwrap();
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, None)
+            .await
+            .unwrap();
         let mut command = CommandBuilder::new("sh");
         command.args(["-c", "stty -echo; read x; printf '\\033[31mred\\033[0m hello \\346\\227\\245\\r\\n'; seq 1 3000 | tail -n 2; echo done"]);
         let connected = desktop::start(&state, command, 40, 6, event).await.unwrap();
@@ -1866,12 +1876,12 @@ mod tests {
         );
         closed(&mut rx).await;
         assert_eq!(
-            terminal_core::terminal_core_text(id.clone()).unwrap(),
+            real_core_text(&id).await.unwrap(),
             text,
             "the screen outlives the session"
         );
         terminal_core::terminal_core_close(id.clone()).unwrap();
-        assert!(terminal_core::terminal_core_text(id).is_err());
+        assert!(real_core_text(&id).await.is_err());
     }
     /// Needs the `native-terminal` feature (Zig).
     #[cfg(all(unix, feature = "native-terminal"))]
@@ -1882,7 +1892,9 @@ mod tests {
         let _kept = terminal_core::tests_keeping_cores().read();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(event.clone(), 40, 10, None).unwrap();
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 10, None)
+            .await
+            .unwrap();
         // Column 40 is clamped to the last column of the grid, so where the Y lands shows the width.
         let program = r"stty -echo; read x; printf '\033[2J\033[1;40HY\r\n'; echo done";
         let connected =
@@ -1922,7 +1934,9 @@ mod tests {
                 baseline = resident_kib(); // after warm-up: allocator pools and thread stacks exist
             }
             let (event, mut rx) = events();
-            terminal_core::terminal_core_open(event.clone(), 80, 24, Some(1 << 20)).unwrap();
+            terminal_core::terminal_core_open(access_lease(), event.clone(), 80, 24, Some(1 << 20))
+                .await
+                .unwrap();
             let connected = desktop::start_with_access(
                 &state,
                 access_lease(),
@@ -1935,7 +1949,7 @@ mod tests {
             .unwrap();
             let id = connected.session_id;
             closed(&mut rx).await;
-            let text = terminal_core::terminal_core_text(id.clone()).unwrap();
+            let text = real_core_text(&id).await.unwrap();
             assert!(text.contains("30000"), "round {round}: {text:?}");
             terminal_core::terminal_core_close(id).unwrap();
         }
