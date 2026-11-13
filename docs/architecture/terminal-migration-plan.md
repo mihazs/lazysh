@@ -61,7 +61,15 @@ Switching the preference to xterm.js (or the kill switch) returns to the unchang
 
 ## Release policy
 
-Docs-only changes have no Changeset. A slice that changes user-visible behaviour needs a `CHANGELOG.md` entry and a Changeset and follows the milestone release policy in `CONTRIBUTING.md`; pure refactors (steps 2 and 3 until a flag is exposed) are internal.
+The terminal engine is released incrementally: every merged slice is a releasable checkpoint that ships in the next version PR, so each carries a real patch or minor Changeset for `@lazysh/client` or `@lazysh/agent` (never an empty fragment) and a `CHANGELOG.md` entry that says what users can now do or what changed, including "no setting or default changes" when that is the whole effect. The xterm.js backend stays the default and the native engine stays behind the explicit opt-in (Settings > Terminal > Terminal engine, the developer override and the kill switch of [#1342](https://github.com/mihazs/lazysh/issues/1342)), so shipping a slice cannot change behaviour for a user who did not opt in. The first end-to-end native path on one platform ships its opt-in setting in that release instead of waiting for the other platforms. The rollout gates of #1342 and [#1343](https://github.com/mihazs/lazysh/issues/1343) decide default changes and the removal of xterm.js, not the release cadence. Each slice follows the milestone release policy in `CONTRIBUTING.md`.
+
+### Release log
+
+Newest first. "Stage" is the rollout stage reached by what shipped, not by the code that merged.
+
+| Slice | What changed for users | Stage reached |
+| --- | --- | --- |
+| WebGL addon at the phone grid, under context loss and in an Android System WebView ([#1323](https://github.com/mihazs/lazysh/issues/1323)) | Nothing visible: measurement harness, raw results and ADR 0001 amendment 3. xterm.js DOM renderer stays the default; no setting exists yet. | None: the native engine is not user-selectable. |
 
 ## Rejected alternatives
 
