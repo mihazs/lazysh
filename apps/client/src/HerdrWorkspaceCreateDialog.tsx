@@ -85,10 +85,10 @@ function Modal({title,close,step,children}:{title:string;close:()=>void;step:str
     document.addEventListener('keydown',key);window.addEventListener('lazysh-workspace-back',back);
     return()=>{document.removeEventListener('keydown',key);window.removeEventListener('lazysh-workspace-back',back);previous?.focus();};
   },[]);
-  return createPortal(<div className="dialog-backdrop herdr-create" data-mobile-presentation="sheet">
+  return createPortal(<div className="dialog-backdrop herdr-create" data-mobile-presentation="page">
     <div ref={ref} className="dialog" role="dialog" aria-modal="true" aria-label={title}>
       <div className="dialog-heading"><h2 ref={heading} tabIndex={-1}>{title}</h2><button className="icon-button" aria-label={t('appCloseValue1',{value1:title})} onClick={close}><X size={19}/></button></div>
-      {children}
+      <div className="dialog-content">{children}</div>
     </div>
   </div>,document.body);
 }
