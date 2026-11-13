@@ -154,6 +154,11 @@ it('shows nothing for an idle screen, and nothing for a dialog an approval or qu
   expect(screen.queryByRole('region')).toBeNull();
 });
 
+it('says a Codex approval it cannot read waits in the terminal, because only a Claude Code approval has a card of its own', async () => {
+  mount(fixture('codex-resume'), {agent: 'Codex', waiting: 'approval'});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+});
+
 it('says the agent waits in the terminal when the hook reports a menu but none is on screen', async () => {
   mount(fixture('idle'), {waiting: 'menu'});
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));

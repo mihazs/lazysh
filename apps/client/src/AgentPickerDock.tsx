@@ -46,7 +46,7 @@ const phaseNote = (phase: Exclude<Phase, 'idle' | 'sending'>) => ({stale: t('age
 export default function AgentPickerDock({sessionId, agent, shown, terminal, answerable, guard, waiting, onShowTerminal}: {
   sessionId: string; /** The agent whose dialogs are read: each agent draws its own. */ agent?: string; shown: boolean; terminal?: ScreenSource; answerable: boolean;
   /** Re-checks that the bound pane is still the one the agent's report names. */ guard: () => Promise<boolean>;
-  /** Approvals and questions have their own surface and need no banner here. */
+  /** A Claude Code approval and any question have their own card and need no banner here; Codex's approval has none. */
   waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown'; onShowTerminal: () => void;
 }) {
   const lifter = agent === 'Codex' ? liftCodexDialog : liftDialog;
@@ -127,7 +127,7 @@ export default function AgentPickerDock({sessionId, agent, shown, terminal, answ
     </div>
   </section>;
   // A dialog that cannot be read exactly, or a menu the agent reported that is not on screen: the terminal has it.
-  if (shown && waiting !== 'approval' && waiting !== 'question' && (lift.kind === 'unliftable' || waiting === 'menu')) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
+  if (shown && !(waiting === 'approval' && agent !== 'Codex') && waiting !== 'question' && (lift.kind === 'unliftable' || waiting === 'menu')) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
     <p role="status">{t('agentWaitingInTerminal')}</p>
     <div className="button-row"><button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button></div>
   </section>;
