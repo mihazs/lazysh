@@ -1,0 +1,19 @@
+[package]
+name = "lazysh-terminal-runtime"
+version = "0.0.0"
+edition = "2021"
+description = "Shared, UI-independent terminal runtime for lazysh on the vendored libghostty-vt binding"
+license = "GPL-3.0-or-later"
+publish = false
+rust-version = "1.96"
+
+# Nested workspace, like ../herdr-upstream: building it compiles libghostty-vt with Zig 0.16.0,
+# so the root workspace and default lazysh builds never depend on Zig. See README.md.
+[workspace]
+
+# The single Ghostty dependency in the repository: Herdr's vendored binding, unmodified.
+[dependencies]
+ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
+
+[profile.release]
+debug = false

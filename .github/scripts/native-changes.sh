@@ -24,6 +24,7 @@ package() {
   name=${1#packages/}; rest=${name#*/}; name=${name%%/*}; top=${rest%%/*}
   case "$name/$top" in
     herdr-upstream/* | herdr-guard/*) add herdr ;;
+    terminal-runtime/*) add terminal_runtime ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt.
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
@@ -88,7 +89,7 @@ linux_runtimes=$(flag any client herdr relay)
 android_runtime=$(flag any client android agent herdr)
 android_herdr=$(flag any herdr android agent)
 # herdr-native produces the same-run binaries these consumers verify, so it runs for any of them.
-herdr=$(flag has herdr)
+herdr=$(flag any herdr terminal_runtime)
 case "$linux$linux_runtimes$android_runtime$android_herdr" in *true*) herdr=true ;; esac
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
