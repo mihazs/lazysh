@@ -156,7 +156,7 @@ export class SshFixture {
     if(this.toolNamespace || !this.environment?.TMUX_TMPDIR)throw new Error('Owned system tmux fixture required');
     return new OwnedProcess('tmux',['-L','default',...args],this.directory,this.environment).finish('owned tmux observation',5000);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean;tmuxBinary?:string;tmux?:boolean;password?:string;log?:boolean;shellSeconds?:number}={}) {
     if((options.password!==undefined || options.log) && (tools || options.privateTtyGroup || options.companion || options.moshBinary || options.tmux || options.tmuxBinary || options.ownedReceiverRoot || options.sharedNavigation))throw new Error('Owned password and log fixture must be the plain loopback sshd');
     if(options.password!==undefined && !/^[A-Za-z0-9]{12,64}$/.test(options.password))throw new Error('Owned fixture password must be 12-64 ASCII letters or digits');
     if(options.tmux && options.tmuxBinary)throw new Error('Owned tmux fixture uses either the system or a pinned tmux');
@@ -208,7 +208,7 @@ export class SshFixture {
       if(options.moshBinary)environment!.PATH=await installOwnedBinary(directory,'mosh-server',options.moshBinary)+':/usr/bin:/bin';
       const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       // Long-lived UI owners share the existing bounded 600s host fixture budget.
-      const commandSeconds=options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary?companionFixtureBudget/1000:90;
+      const commandSeconds=options.shellSeconds ?? (options.companion || options.sharedNavigation || options.ownedReceiverRoot || options.tmuxBinary?companionFixtureBudget/1000:90);
       // nss_wrapper gives the unprivileged sshd a private account with a password hash,
       // so password login never reads or needs the runner's real account database.
       const accounts=options.password===undefined?undefined:await passwordAccount(directory,username,options.password);

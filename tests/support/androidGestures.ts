@@ -1,4 +1,3 @@
-import {writeFile} from 'node:fs/promises';
 import {homedir,tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -87,11 +86,10 @@ export class Device {
     }
     throw new Error('The soft keyboard did not close');
   }
-  /** A PNG of the screen, for the failure message of a case that timed out. */
+  /** A PNG of the screen, for the failure message of a case that timed out (the guest's GPU library prints to stdout, so the file is pulled). */
   async screenshot(directory=tmpdir()) {
     const path=join(directory,`lazysh-gesture-failure-${Date.now()}.png`);
-    const child=Bun.spawn([adbPath(),'-s',this.serial,'exec-out','screencap','-p'],{stdout:'pipe',stderr:'ignore'});
-    await writeFile(path,Buffer.from(await new Response(child.stdout).arrayBuffer())).catch(()=>{});
+    await this.shell('screencap -p /sdcard/lazysh-gesture-failure.png').then(()=>this.adb(['pull','/sdcard/lazysh-gesture-failure.png',path])).catch(()=>{});
     return path;
   }
   async foreground() {return /topResumedActivity=ActivityRecord\{\S+ \S+ ([^\s}]+)/.exec(await this.shell('dumpsys activity activities'))?.[1]??'';}

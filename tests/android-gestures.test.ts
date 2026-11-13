@@ -102,7 +102,8 @@ describe.skipIf(!enabled)('edge gestures against the real Android navigation (#1
     await device.adb(['install','-r','-t','-d',apk],180_000);
     await device.shell(`pm grant ${appId} android.permission.POST_NOTIFICATIONS`).catch(()=>{});
     await device.phone();
-    fixture=await SshFixture.start();
+    // The default shell lives 90 s; a case with many swipes needs its connection for the whole run (30 minutes at most).
+    fixture=await SshFixture.start(undefined,{shellSeconds:1800});
     await device.adb(['reverse',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
     device.reverses.add(fixture.port);
   },deviceWaitMs+600_000);
