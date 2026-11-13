@@ -174,6 +174,37 @@ pub async fn install_companion_from_device(
 ) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
     install_from(state, session_id, progress, access, install::Route::Device).await
 }
+/// Restores the previous companion the host kept, through the host's own `update --rollback`.
+#[tauri::command]
+pub async fn rollback_companion(
+    progress: Channel<Progress>,
+    access: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
+    install_from(
+        state,
+        session_id,
+        progress,
+        access,
+        install::Route::Rollback,
+    )
+    .await
+}
+/// Compares the installed companion with the latest verified release. Reads only; the phone fetches metadata.
+#[tauri::command]
+pub async fn check_companion_update(
+    state: State<'_, AppState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<install::Checked>, GuardedError<SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            install::check(session, &access, &release::Publisher::new()?).await
+        })
+        .await
+}
 async fn install_from(
     state: State<'_, AppState>,
     session_id: String,
@@ -226,6 +257,17 @@ impl Owned {
             route,
         )
         .await
+    }
+}
+#[cfg(all(test, unix))]
+impl Owned {
+    /// **Check for updates** against this fixture's release.
+    pub(crate) async fn check(
+        &self,
+        session: Arc<Session>,
+        lease: &AccessLease,
+    ) -> Result<install::Checked> {
+        install::check(session, lease, &self.0).await
     }
 }
 #[cfg(all(test, unix))]

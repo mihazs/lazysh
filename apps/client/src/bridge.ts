@@ -82,7 +82,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   return createSession(command,args,onEvent);
 }
-function installCompanionVia(command:'install_companion'|'install_companion_from_device',sessionId:string,onProgress:(value:unknown)=>void) {
+function installCompanionVia(command:'install_companion'|'install_companion_from_device'|'rollback_companion',sessionId:string,onProgress:(value:unknown)=>void) {
   if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
   const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
   return remoteInvoke<unknown>(command,{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
@@ -93,6 +93,10 @@ export const api = {
   companionHooks: (sessionId:string,request:{agent:'claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';action:'status'|'install'|'remove';profileRoot:string;expectedPlan?:string}) => remoteInvoke<unknown>('companion_hooks',{sessionId,request}),
   /** The host downloads and installs the companion; this device sends only a pin. */
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion',sessionId,onProgress),
+  /** Restores the previous companion the host kept, through the host's own `update --rollback`. */
+  rollbackCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('rollback_companion',sessionId,onProgress),
+  /** Compares the installed companion with the latest verified release; changes nothing. */
+  checkCompanionUpdate: (sessionId:string) => remoteInvoke<unknown>('check_companion_update',{sessionId}),
   /** The labelled offline fallback: this device downloads the companion and uploads it to a host that cannot reach GitHub. */
   installCompanionFromDevice: (sessionId:string,onProgress:(value:unknown)=>void) => installCompanionVia('install_companion_from_device',sessionId,onProgress),
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),

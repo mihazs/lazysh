@@ -27,6 +27,16 @@ it('sends the offline fallback through its own protected command so the default 
   expect(Object.keys(invoke.mock.calls[0][1]).sort()).toEqual(['progress','sessionId']);
   invoke.mockClear();await expect(api.installCompanionFromDevice('local:owned',progress)).rejects.toThrow('SSH connection');expect(invoke).not.toHaveBeenCalled();
 });
+it('sends rollback and the read-only check through their own protected commands',async()=>{
+  await api.rollbackCompanion('ssh-installer',vi.fn());
+  expect(invoke).toHaveBeenLastCalledWith('rollback_companion',{sessionId:'ssh-installer',progress:expect.any(Object)},expect.anything());
+  await api.checkCompanionUpdate('ssh-installer');
+  expect(invoke).toHaveBeenLastCalledWith('check_companion_update',{sessionId:'ssh-installer'},expect.anything());
+  invoke.mockClear();
+  await expect(api.rollbackCompanion('local:owned',vi.fn())).rejects.toThrow('SSH connection');
+  await expect(api.checkCompanionUpdate('local:owned')).rejects.toThrow('SSH connection');
+  expect(invoke).not.toHaveBeenCalled();
+});
 it('submits a complete sequence through one protected native request for either transport',async()=>{
   for (const [id,command] of [['local:sequence','local_write'],['ssh-sequence','write_stdin']]) {
     await api.writeSequence(id,['\x02','T']);

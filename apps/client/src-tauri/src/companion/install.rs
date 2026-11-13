@@ -1,11 +1,13 @@
 use super::*;
 use tokio::sync::{watch, OwnedSemaphorePermit};
 mod host;
+pub(crate) use host::Checked;
 /// Who downloads the companion: the host (the default) or, as the labelled offline fallback, this device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     Host,
     Device,
+    Rollback,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +51,46 @@ struct Operation {
     flight: Arc<Flight>,
     stop: watch::Sender<bool>,
     deadline: tokio::time::Instant,
+}
+impl Route {
+    fn seconds(self) -> u64 {
+        match self {
+            Route::Host | Route::Rollback => host::OPERATION_SECONDS,
+            Route::Device => 240,
+        }
+    }
+}
+impl Operation {
+    /// One operation per session at a time: a second one is refused while the first, or its late
+    /// peer confirmation, still owns the session's permit.
+    fn start(
+        route: Route,
+        session: Arc<Session>,
+        lease: &AccessLease,
+        progress: Channel<Progress>,
+        seconds: u64,
+    ) -> Result<Self> {
+        let permit = session
+            .companion_install
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                error(
+                    "companion_install_busy",
+                    "Companion installation is already running for this session",
+                )
+            })?;
+        let (stop, _) = watch::channel(false);
+        Ok(Self {
+            route,
+            session,
+            lease: lease.clone(),
+            progress,
+            flight: Arc::new(Flight { _permit: permit }),
+            stop,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(seconds),
+        })
+    }
 }
 impl Drop for Operation {
     fn drop(&mut self) {
@@ -123,6 +165,7 @@ impl Operation {
         match self.route {
             Route::Host => self.perform_host(work, publisher).await,
             Route::Device => self.perform_device(work, publisher).await,
+            Route::Rollback => self.perform_rollback(work).await,
         }
     }
     async fn perform_device(
@@ -289,30 +332,7 @@ pub(super) async fn run_with(
     publisher: &release::Publisher,
     route: Route,
 ) -> std::result::Result<Installed, InstallFailure> {
-    let permit = session
-        .companion_install
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| {
-            error(
-                "companion_install_busy",
-                "Companion installation is already running for this session",
-            )
-        })?;
-    let (stop, _) = watch::channel(false);
-    let op = Operation {
-        route,
-        session,
-        lease: lease.clone(),
-        progress,
-        flight: Arc::new(Flight { _permit: permit }),
-        stop,
-        deadline: tokio::time::Instant::now()
-            + Duration::from_secs(match route {
-                Route::Host => host::OPERATION_SECONDS,
-                Route::Device => 240,
-            }),
-    };
+    let op = Operation::start(route, session, lease, progress, route.seconds())?;
     let mut work = Work::default();
     let outcome = op
         .active(op.perform(&mut work, publisher))
@@ -377,6 +397,16 @@ pub(super) async fn run_with(
         },
     }
 }
+/// Reads, without changing anything, what is installed on the host and how it compares with the latest release.
+pub(super) async fn check(
+    session: Arc<Session>,
+    lease: &AccessLease,
+    publisher: &release::Publisher,
+) -> Result<host::Checked> {
+    let op = Operation::start(Route::Host, session, lease, Channel::new(|_| Ok(())), 60)?;
+    op.active(op.check(publisher)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
