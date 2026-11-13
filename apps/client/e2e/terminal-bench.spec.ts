@@ -1,10 +1,9 @@
-import { expect, test, type CDPSession, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { git, read, require, root } from './fixtures/benchEnvironment';
-import { installNativeBridge } from './fixtures/nativeBridge';
+import { cost, git, installBenchBridge, read, require, root, snapshot } from './fixtures/benchEnvironment';
 import { medianOf, rng } from '../bench/workloads';
 
 // Baseline benchmark of the current xterm.js pipeline (docs/architecture/terminal-benchmarks.md).
@@ -23,38 +22,11 @@ test.describe.configure({ mode: 'serial' });
 test.skip(({ isMobile }) => !full && isMobile, 'The smoke run needs one viewport.');
 
 
-type Snapshot = { metrics: Record<string, number>; cpu: Record<string, number>; rssKiB: number | null };
-async function snapshot(cdp: CDPSession, browser: CDPSession): Promise<Snapshot> {
-  await cdp.send('HeapProfiler.collectGarbage');
-  const metrics = Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
-  const cpu: Record<string, number> = {};
-  let rssKiB: number | null = null;
-  for (const proc of (await browser.send('SystemInfo.getProcessInfo')).processInfo) {
-    cpu[proc.type] = (cpu[proc.type] ?? 0) + proc.cpuTime;
-    // A spare renderer may exist beside the page's; the page's is the largest.
-    if (proc.type === 'renderer') rssKiB = Math.max(rssKiB ?? 0, Number(/VmRSS:\s+(\d+)/.exec(read(`/proc/${proc.id}/status`) ?? '')?.[1]) || 0) || null;
-  }
-  return { metrics, cpu, rssKiB };
-}
-const ms = (after: number, before: number) => (after - before) * 1000;
-function cost(before: Snapshot, after: Snapshot) {
-  const d = (name: string) => ms(after.metrics[name], before.metrics[name]);
-  return {
-    mainThreadMs: { task: d('TaskDuration'), script: d('ScriptDuration'), layout: d('LayoutDuration'), styleRecalc: d('RecalcStyleDuration') },
-    layouts: after.metrics.LayoutCount - before.metrics.LayoutCount,
-    styleRecalcs: after.metrics.RecalcStyleCount - before.metrics.RecalcStyleCount,
-    processCpuMs: Object.fromEntries(Object.keys(after.cpu).map(type => [type, ms(after.cpu[type], before.cpu[type] ?? 0)])),
-    heapUsedMiB: after.metrics.JSHeapUsedSize / 1048576, heapDeltaMiB: (after.metrics.JSHeapUsedSize - before.metrics.JSHeapUsedSize) / 1048576,
-    domNodes: after.metrics.Nodes, rendererRssMiB: after.rssKiB === null ? null : after.rssKiB / 1024,
-  };
-}
-
 type Result = { workload: string; title: string; variant: string | null; runs: unknown[]; median: unknown; correct: boolean; notes?: string };
 const results: Result[] = [];
 
 test.beforeEach(async ({ page }) => {
-  await installNativeBridge(page, { reason: 'Synthetic benchmark fixture.', generation: '1' });
-  await page.addInitScript(() => { window.nativeFixtureInvoke = async command => (command.startsWith('plugin:event|') ? 1 : undefined); });
+  await installBenchBridge(page);
 });
 
 let geometry: Awaited<ReturnType<Page['evaluate']>> & Record<string, unknown> = {};

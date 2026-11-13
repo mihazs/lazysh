@@ -2,8 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { git, require, root } from './fixtures/benchEnvironment';
-import { installNativeBridge } from './fixtures/nativeBridge';
+import { git, installBenchBridge, require, root } from './fixtures/benchEnvironment';
 
 // WebGL context-loss run of the renderer shootout (#1323, docs/architecture/terminal-benchmarks.md): the xterm.js WebGL addon
 // on the benchmark page, its context taken away with WEBGL_lose_context, and what the user would see afterwards. Correctness is
@@ -57,8 +56,7 @@ const pageErrors: string[] = [];
 test.beforeEach(async ({ page }) => {
   pageErrors.length = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
-  await installNativeBridge(page, { reason: 'Synthetic benchmark fixture.', generation: '1' });
-  await page.addInitScript(() => { window.nativeFixtureInvoke = async command => (command.startsWith('plugin:event|') ? 1 : undefined); });
+  await installBenchBridge(page);
   await page.goto('about:blank');
   test.skip(!(await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'))), 'The browser has no WebGL2.');
 });

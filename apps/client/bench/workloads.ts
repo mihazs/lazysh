@@ -65,6 +65,39 @@ export function ansiColor({ bytes, cols, rows, seed }: Text): Workload {
   return { data: encoder.encode(text), screen: screenOf(text, rows), description: 'seeded words, each with a random SGR style' };
 }
 
+/** How a style index becomes SGR parameters, and how many distinct valid styles the family has (`styles` must not exceed it). */
+export const STYLE_FAMILIES = {
+  truecolor: { limit: 65536, params: (i: number) => `38;2;${i & 255};${(i >> 8) & 255};${(i * 7) & 255}` },
+  indexed: { limit: 256, params: (i: number) => `38;5;${i}` },
+  /** Foreground and background, both from the 256-color palette. */
+  background: { limit: 65536, params: (i: number) => `38;5;${i & 255};48;5;${i >> 8}` },
+  /** The style families of W3, one at a time. */
+  palette16: { limit: 8, params: (i: number) => `3${i}` },
+  brightOnBackground: { limit: 64, params: (i: number) => `9${i & 7};4${i >> 3}` },
+  truecolorOnBackground: { limit: 256, params: (i: number) => `38;2;${i};${(i * 7) & 255};${(i * 13) & 255};48;5;${(i * 3) & 255}` },
+  boldUnderline: { limit: 8, params: (i: number) => `1;4;3${i}` },
+  /** Bold, italic and underline in every combination, over indexed foregrounds. */
+  attributes: { limit: 2048, params: (i: number) => `${['0', '1', '3', '1;3', '4', '1;4', '3;4', '1;3;4'][i & 7]};38;5;${i >> 3}` },
+} as const;
+export type StyleFamily = keyof typeof STYLE_FAMILIES;
+
+/** Words in a chosen number of distinct styles (one SGR per word), for the cost of the first appearance of a glyph in a style. `distinctGlyphs` counts the (style, character) pairs a renderer with a glyph cache has to draw once. */
+export function styledText({ bytes, cols, rows, seed, styles, family = 'truecolor' }: Text & { styles: number; family?: StyleFamily }): Workload & { distinctGlyphs: number } {
+  const next = rng(seed), lines: string[] = [], glyphs = new Set<number>(), { limit, params } = STYLE_FAMILIES[family];
+  if (styles > limit) throw new Error(`The ${family} family has only ${limit} styles, ${styles} requested`);
+  let size = 0;
+  while (size < bytes) {
+    const row = line(next, cols - 1).split(' ').map(word => {
+      const style = Math.floor(next() * styles);
+      for (const char of word) glyphs.add(style * 256 + char.charCodeAt(0));
+      return `\x1b[${params(style)}m${word}`;
+    }).join(' ') + '\x1b[0m\r\n';
+    lines.push(row); size += row.length;
+  }
+  const text = lines.join('');
+  return { data: encoder.encode(text), screen: screenOf(text, rows), description: `seeded words in ${styles} distinct ${family} styles`, distinctGlyphs: glyphs.size };
+}
+
 /** W4: full-screen redraws by absolute positioning, like a TUI repainting every frame. */
 export function fullScreenRedraw({ frames, cols, rows, seed }: Geometry & { frames: number; seed: number }): Workload {
   const next = rng(seed);
