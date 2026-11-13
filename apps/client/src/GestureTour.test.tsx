@@ -16,6 +16,23 @@ const all: TourNotes = {side: null, bottom: null, view: null};
 beforeEach(() => {localStorage.clear(); guard.active = false; savePreferences({...defaults});});
 afterEach(() => {cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); setGestureInsets(unknownInsets);});
 
+it('says how deep the strip a swipe starts in is, follows the width preference and leaves out the typing step and a switched-off swipe', async () => {
+  const user = userEvent.setup();
+  const width = (zoneWidth: number) => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: false, viewSwitch: true, zoneWidth}});
+  width(40);
+  render(<GestureTour notes={{...all, bottom: 'gestureTourOff'}} finish={vi.fn()} />);
+  expect(screen.getByText(t('gestureTourBand', {width: 40}))).toBeTruthy();
+  act(() => width(64));
+  expect(screen.getByText(t('gestureTourBand', {width: 64}))).toBeTruthy();
+  await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
+  expect(screen.getByText(t('gestureTourOff'))).toBeTruthy();
+  expect(screen.queryByText(t('gestureTourBand', {width: 64}))).toBeNull();
+  await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
+  expect(screen.getByText(t('gestureTourBand', {width: 64}))).toBeTruthy();
+  await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
+  expect(screen.queryByText(t('gestureTourBand', {width: 64}))).toBeNull();
+});
+
 it('walks the four steps with Next, switches the last one to Done and offers Skip before it', async () => {
   const user = userEvent.setup(), finish = vi.fn();
   render(<GestureTour notes={all} finish={finish} />);
