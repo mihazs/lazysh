@@ -56,6 +56,7 @@
     "allow-notification-test",
     "allow-edge-gesture-exclusion",
     "allow-edge-gesture-insets",
+    "allow-native-terminal-surface-place", "allow-native-terminal-surface-remove", "allow-native-terminal-surface-state",
     "allow-open-notification-settings",
     "allow-request-notification-permission",
     "notification:allow-is-permission-granted",

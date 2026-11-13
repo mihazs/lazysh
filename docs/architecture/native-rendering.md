@@ -1,6 +1,6 @@
 # Native rendering
 
-Status: **proposed; the Renderer API and a CPU reference renderer exist ([below](#terminal-renderer-api)), no real renderer is implemented and nothing is measured**. The repository contains no `MTKView`, `wgpu` or Skia code and, apart from the debug-only [Android composition PoC](android-surface-composition-poc.md), no `SurfaceView` or `TextureView` code (searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed; the Renderer API and a CPU reference renderer exist ([below](#terminal-renderer-api)), no real renderer is implemented and nothing is measured**. The repository contains no `MTKView`, `wgpu` or Skia code and, apart from the debug-only [Android composition PoC](android-surface-composition-poc.md), no `SurfaceView` or `TextureView` code except that PoC and the developer-only [Android native surface host](android-native-surface-host.md) (host and lifecycle, no renderer; searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## What must be decided by evidence
 
