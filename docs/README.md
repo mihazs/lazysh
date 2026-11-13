@@ -63,7 +63,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned terminal adapter contract, platform matrix, benchmark design and the measured desktop xterm.js baseline (no device or native-candidate measurements yet) | [TerminalAdapter](architecture/terminal-adapter.md) · [Platform integration](architecture/platform-integration.md) · [Terminal benchmarks](architecture/terminal-benchmarks.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |
-| Theme QR evidence and pending native acceptance | [Theme QR acceptance](theme-qr-acceptance.md) |
+| Theme QR evidence and platform acceptance status | [Theme QR acceptance](theme-qr-acceptance.md) |
 | Planned sign-in tunnel and device browser: settings, schemas, limits | [Sign-in tunnel contracts](reference/auth-tunnel.md) |
 | What `aws`, `gcloud`, `az`, `gh`, `claude`, `codex` and other login commands do: callback or device code, launchers, listeners | [Observed sign-in flows](reference/sso-login-flows.md) |
 | Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |

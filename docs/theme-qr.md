@@ -1,6 +1,6 @@
 # Offline theme QR import
 
-Choose **Scan theme QR** in Settings → Import and share theme to start the
+Choose **Scan QR with camera** in Settings → Import and share theme to start the
 camera explicitly. Camera acquisition requests video only, with a preference
 for the rear camera; no audio is requested. Scanning stops after one decoded
 result, Cancel, the 30-second attempt deadline, background/pagehide, access
@@ -13,7 +13,7 @@ and terminal** explicitly; scanning never changes preferences automatically.
 Editing the manual source/name/mode or taking another import action invalidates
 an older scan. Changing the interface language alone does not restart it.
 
-If a camera is unavailable or permission is denied, **Read QR from image** is
+If a camera is unavailable or permission is denied, **Choose PNG or JPEG QR image** is
 an explicit alternative. It accepts PNG/JPEG files up to **192 KiB**. It does
 not open a file chooser or switch to a camera automatically. Larger photos need
 to be resized outside lazysh or scanned with the camera. SVG, GIF, WebP, HEIC,
