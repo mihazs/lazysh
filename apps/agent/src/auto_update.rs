@@ -14,6 +14,7 @@ use std::{path::Path, str::FromStr};
 
 mod app;
 mod check;
+mod timer;
 pub use app::{trigger, State, Update, ENV as APP_VERSION_ENV};
 pub use check::opportunistic;
 
@@ -245,6 +246,11 @@ pub enum Command {
         #[arg(long)]
         window: Option<WindowChoice>,
     },
+    /// Install the operating system timer that wakes the companion hourly (a systemd user timer, a
+    /// launchd agent or a Scheduled Task of this user; never `sudo`). Refuses while the policy is `off`.
+    Enable,
+    /// Remove that timer. Only what carries the lazysh marker is removed.
+    Disable,
     /// One scheduled check, as the timer and the companion itself run it: records what it found
     /// and, under policy `install`, installs a newer release. Offline is not an error.
     Run {
@@ -255,6 +261,7 @@ pub enum Command {
 }
 pub fn execute(command: Command) -> Result<Value> {
     let directory = crate::state_directory()?;
+    let status = matches!(command, Command::Status);
     let settings = match command {
         Command::Run { app_version } => {
             return match app_version {
@@ -262,6 +269,8 @@ pub fn execute(command: Command) -> Result<Value> {
                 None => check::run(),
             }
         }
+        Command::Enable => return timer::enable(&read(&directory)?),
+        Command::Disable => return timer::disable(),
         Command::Status => read(&directory)?,
         Command::Set {
             expected_revision,
@@ -286,6 +295,9 @@ pub fn execute(command: Command) -> Result<Value> {
         .last_check
         .unwrap_or(Value::Null);
     output["nextCheckAt"] = check::next(&directory, &settings, Utc::now()).into();
+    if status {
+        output["timer"] = timer::status();
+    }
     Ok(output)
 }
 

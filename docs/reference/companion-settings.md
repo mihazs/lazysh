@@ -66,4 +66,24 @@ The schema is strict like `settings.json`: another schema version, an unknown fi
 
 Under `install` a newer release is then installed through the same guarded install a newer app starts (`update --yes --version <latest> --channel <channel>`): the release must be strictly newer than a version the installed companion can name (a development build is never replaced), the host's clock must be inside the window (otherwise `skipped`, `outsideWindow`; a newer app that connects is held by the same window), the release must not be one the user rolled back from, and not one that failed verification, self-test or restore (`blocked`, until a newer release exists) or is waiting out its backoff, and no session may have reported `working` in the last ten minutes (`skipped`, `activeTurn`). While a newer release waits like this it is looked at again every 30 minutes instead of every interval. The reply is `{"schemaVersion":1,"state":"checked|updated|skipped|failed","reason":"...","latest":"..."}`, always exit 0 unless the settings or state cannot be read or written.
 
+### The operating system timer
+
+Where nothing reads a snapshot for days (a host nobody opens the app on) the companion cannot start its own check, so an operating system timer can wake it. It is optional and off until you ask, and it is the user's own, never a system service: nothing here uses `sudo` or needs elevation.
+
+| Command | What it does |
+| --- | --- |
+| `lazysh-agent auto-update enable` | Writes the timer files and turns the timer on. Exit 40 while the policy is `off`, 41 when this account cannot have one, 42 when the system refused (the files are put back as they were), 27 when there is no managed companion to run. |
+| `lazysh-agent auto-update disable` | Turns it off and removes the files that carry the lazysh marker. Does nothing when nothing is installed. |
+| `lazysh-agent auto-update status` | Adds `timer`: `{"kind","supported","installed","enabled","drift"}`, read from the system each time. `drift` is true when what is there is not what `enable` would write now (the companion moved, a file was edited, the timer was disabled behind our back, or only part is there). |
+
+| Platform | Timer | Needs |
+| --- | --- | --- |
+| Linux | a systemd user timer and service, `~/.config/systemd/user/lazysh-agent-update.{timer,service}`, enabled with `systemctl --user enable --now` | A running user manager (a login session, or lingering). A bare SSH login without one is exit 41 and nothing is written. |
+| macOS | a launchd agent, `~/Library/LaunchAgents/app.lazysh.agent-update.plist`, loaded with `launchctl bootstrap gui/<uid>` | A login session of the user (the `gui/<uid>` domain). Without one, exit 41. |
+| Windows | a Scheduled Task `lazysh-agent-update` of the current user, at logon and every hour, created with `schtasks /Create /XML` | Task Scheduler, without elevation. |
+
+The timer wakes `lazysh-agent auto-update run` of the **managed** companion (by its absolute path) every hour, with a few minutes of spread on Linux, and `run` decides from the settings whether a check is due, so changing the interval, channel, window or policy never touches the timer. A path that systemd cannot carry (a quote or a backslash in it) is refused (27) rather than escaped. A file or task of that name that does not carry the lazysh marker is somebody else's: `enable` refuses (42) and `disable` leaves it.
+
+Verification: on Linux the written units are checked with `systemd-analyze verify` in the tests, against a stand-in `systemctl` (a test never touches a real user manager). The launchd property list and the Windows task definition are rendered and checked as well-formed documents and read back with an XML parser (and with `plutil -lint` where that exists), but nothing here ran `launchctl` or `schtasks` on a macOS or Windows host: those two drivers are compiled and type-checked everywhere, and their commands follow the tools' documented syntax. A Windows task starts a console program, so a console window may appear briefly each hour.
+
 Related: [change host settings](../companion-settings.md) · [companion event storage](companion-events.md) · [documentation](../README.md).

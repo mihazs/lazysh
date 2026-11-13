@@ -38,6 +38,6 @@ lazysh-agent auto-update set --expected-revision 0 --policy off
 lazysh-agent auto-update set --expected-revision 1 --policy install --interval-hours 12 --channel stable --window 22:00-06:00
 ```
 
-A setting you leave out keeps its value, and `--window none` removes the window. `lazysh-agent auto-update status` shows the settings, `lastCheck` (what the last check found) and `nextCheckAt`. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
+A setting you leave out keeps its value, and `--window none` removes the window. On a host nobody opens the app on, `lazysh-agent auto-update enable` adds a timer of your own account (never `sudo`) that wakes the check every hour, and `auto-update disable` removes it; see [the timer](reference/companion-settings.md#the-operating-system-timer). `lazysh-agent auto-update status` shows the settings, `lastCheck` (what the last check found) and `nextCheckAt`. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
 
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.

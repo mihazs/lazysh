@@ -29,6 +29,7 @@ fn describe(phase: Phase, error: &Error) -> Failure {
         | Error::Settings(_)
         | Error::Device(_)
         | Error::Herdr(_)
+        | Error::AutoUpdate(_)
         | Error::Installation(_) => ResultClass::OtherError,
     };
     let sqlite_code = match error {

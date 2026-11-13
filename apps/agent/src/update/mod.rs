@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::{io::IsTerminal, process::ExitCode, time::Duration};
 
 mod current;
-pub use current::running_managed;
+pub use current::{managed_executable, running_managed};
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod install;
 mod process;

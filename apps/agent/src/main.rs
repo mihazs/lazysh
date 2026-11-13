@@ -719,7 +719,7 @@ fn main() -> std::process::ExitCode {
             } else {
                 eprintln!("lazysh-agent: {}: operation failed", error.class());
             }
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(error.exit_code())
         }
     }
 }
