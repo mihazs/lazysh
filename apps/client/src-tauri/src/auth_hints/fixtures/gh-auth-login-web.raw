@@ -1,0 +1,9 @@
+! Did you know that expiring tokens can be requested with --expiring? Read more at https://gh.io/gh-expiring-tokens
+[0G[2K? Authenticate Git with your GitHub credentials? (Y/n) [?25l7[999;999f[6n8[?25h[6n
+[1B[0G[1A[0G[0G[2K? Authenticate Git with your GitHub credentials? Yes
+
+! Failed to copy one-time code to clipboard
+  No clipboard utilities available. Please install xsel, xclip, wl-clipboard or Termux:API add-on for termux-clipboard-get/set.
+! First copy your one-time code: USERCODE
+Press Enter to open https://github.com/login/device in your browser... 
+

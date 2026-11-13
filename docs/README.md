@@ -60,6 +60,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
 | Planned host browser: requirements, opt-in and launch model, threat model, input mapping and milestones | [Host browser](host-browser.md) |
+| Sign-in callbacks on the host's `localhost` that the terminal scanner reports: evidence, limits and event shape | [Sign-in hints](reference/auth-hints.md) |
 | Planned terminal adapter contract, platform matrix, benchmark design and the measured desktop xterm.js baseline (no device or native-candidate measurements yet) | [TerminalAdapter](architecture/terminal-adapter.md) · [Platform integration](architecture/platform-integration.md) · [Terminal benchmarks](architecture/terminal-benchmarks.md) |
 | Local terminal process and flow control | [Local terminal](reference/local-terminal.md) |
 | Repository review limits | [Repository review](reference/repository-review.md) |

@@ -5,6 +5,7 @@ mod apple_speech;
 mod apple_status;
 mod approvals;
 mod attachment_upload;
+mod auth_hints;
 mod clipboard;
 mod companion;
 mod companion_settings;

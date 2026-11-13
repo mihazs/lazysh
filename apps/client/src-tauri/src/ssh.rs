@@ -786,6 +786,8 @@ pub(crate) struct Session {
     output_inflight: StdMutex<u32>,
     /// Set when the native terminal core consumes this session's output instead of the WebView.
     core: crate::terminal_core::CoreSlot,
+    /// Reads what the host prints for a sign-in callback on `localhost`.
+    auth_hints: crate::auth_hints::SessionHints,
     renderer_gone: watch::Sender<bool>,
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
@@ -818,6 +820,7 @@ impl Session {
         creation: AccessLease,
         validate_size: fn(u32, u32) -> Result<()>,
     ) -> Self {
+        let ssh_port = handle.origin.as_ref().map(|host| host.port);
         Self {
             handle,
             clipboard: crate::host_clipboard::UploadSlot::default(),
@@ -832,6 +835,7 @@ impl Session {
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
             core: Default::default(),
+            auth_hints: crate::auth_hints::SessionHints::new(ssh_port),
             renderer_gone: watch::channel(false).0,
             finished: watch::channel(false).0,
             access: creation.state(),
@@ -1020,6 +1024,11 @@ pub enum SshEvent {
         message: String,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         lost: bool,
+    },
+    /// The host printed a sign-in address whose callback is `localhost` (#1510). A sighting only.
+    #[serde(rename = "authHint")]
+    AuthHint {
+        hint: crate::auth_hints::Hint,
     },
 }
 #[derive(Serialize)]
@@ -1955,6 +1964,8 @@ pub(crate) async fn close_output(
 }
 
 async fn send_output(session: &Session, events: &Channel<SshEvent>, data: &[u8]) -> Result<()> {
+    // Read before delivery: the scanner follows the host's output even while the renderer is slow.
+    let hints = session.auth_hints.scan(data, std::time::SystemTime::now());
     let mut cancellation = session.cancel.subscribe();
     for chunk in data.chunks(16384) {
         deliver_output(
@@ -1969,7 +1980,22 @@ async fn send_output(session: &Session, events: &Channel<SshEvent>, data: &[u8])
         .await
         .map_err(|error| SshError::new("terminal_output", error))?;
     }
+    for hint in hints {
+        deliver_hint(session, events, hint);
+    }
     Ok(())
+}
+
+/// A hint takes the gate terminal output takes. While the app is locked or the renderer is gone it
+/// is dropped, not queued: it is a sighting the user can no longer act on.
+fn deliver_hint(session: &Session, events: &Channel<SshEvent>, hint: crate::auth_hints::Hint) {
+    let _ = session
+        .creation
+        .with_transport_output(&session.adopted, || {
+            if !*session.renderer_gone.borrow() {
+                let _ = events.send(SshEvent::AuthHint { hint });
+            }
+        });
 }
 
 async fn spawn_terminal(
@@ -5195,6 +5221,73 @@ mod tests {
         server_task.abort();
     }
 
+    #[tokio::test]
+    async fn a_sign_in_callback_in_the_output_reaches_the_renderer_as_a_hint_beside_the_unchanged_bytes(
+    ) {
+        let (host, _, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (input, _) = mpsc::channel(32);
+        let (cancel, _) = watch::channel(false);
+        let session = adopted_fixture_session(handle, input, cancel);
+        let received = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+        let sink = received.clone();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                sink.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&json).unwrap());
+            }
+            Ok(())
+        });
+        let callback = "http%3A%2F%2Flocalhost%3A4321%2Fcb";
+        let own_port = host.port;
+        let text = format!(
+            "Open: https://idp.example/a?redirect_uri={callback}&code_challenge=c&state=PRIVATE\r\n\
+             Open: https://idp.example/a?redirect_uri=http%3A%2F%2Flocalhost%3A{own_port}%2Fcb\r\n"
+        );
+        // The transport hands output over in small, arbitrary pieces.
+        for piece in text.as_bytes().chunks(5) {
+            send_output(&session, &events, piece).await.unwrap();
+        }
+        let events = received.lock().unwrap().clone();
+        let bytes: Vec<u8> = events
+            .iter()
+            .filter(|event| event["type"] == "data")
+            .flat_map(|event| {
+                event["data"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| b.as_u64().unwrap() as u8)
+            })
+            .collect();
+        assert_eq!(
+            bytes,
+            text.as_bytes(),
+            "the renderer still receives every byte"
+        );
+        let hints: Vec<_> = events
+            .iter()
+            .filter(|event| event["type"] == "authHint")
+            .collect();
+        assert_eq!(
+            hints.len(),
+            1,
+            "the SSH port of the host itself is never a callback: {hints:?}"
+        );
+        let hint = &hints[0]["hint"];
+        assert_eq!(
+            (
+                hint["port"].clone(),
+                hint["path"].clone(),
+                hint["idpHost"].clone()
+            ),
+            (4321.into(), "/cb".into(), "idp.example".into())
+        );
+        assert!(!hints[0].to_string().contains("PRIVATE"));
+        server_task.abort();
+    }
     #[tokio::test]
     async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
         use crate::terminal_core::{

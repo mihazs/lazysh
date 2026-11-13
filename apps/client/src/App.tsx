@@ -1,6 +1,7 @@
 import './WorkspaceHierarchy.css';
 import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel, type WorkspaceToolPage} from './WorkspaceToolsCarousel';
 import {cycleFocus, focusableWithin} from './focus';
+import {announceAuthHint, type AuthHint} from './authHints';
 import {SideMenuChoices} from './SideMenuChoices';
 import {useSideMenuGestures} from './useSideMenuGestures';
 import {useSideMenuMode} from './sideMenuMode';
@@ -179,9 +180,14 @@ async function prepareSession(
         );
       });
   };
+  // A hint can arrive before the session has its id; it is announced with the id once there is one.
+  const earlyHints: AuthHint[] = [];
   const onEvent = (event: SshEvent) => {
     if (session.disposed) return;
-    if (event.type === "data")
+    if (event.type === "authHint") {
+      if (session.id) announceAuthHint({sessionId: session.id, hint: event.hint});
+      else if (earlyHints.length < 8) earlyHints.push(event.hint);
+    } else if (event.type === "data")
       session.adapter.write!(new Uint8Array(event.data), () => {
         acknowledge(event.data.length);
         if (session.moshResize?.failure) failDisplay();
@@ -200,6 +206,7 @@ async function prepareSession(
   };
   const establish = (id: string) => {
     session.id = id;
+    for (const hint of earlyHints.splice(0)) announceAuthHint({sessionId: id, hint});
     if (pendingBytes) {
       acknowledge(pendingBytes);
       pendingBytes = 0;
