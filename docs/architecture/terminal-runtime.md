@@ -1,6 +1,6 @@
 # Terminal runtime: current and proposed
 
-Status: **proposed**. Facts about the current system were read from the checked-out source. The proposed runtime is a design to be validated by the [benchmarks](terminal-benchmarks.md) and the [composition gate](native-rendering.md#composition-gate); only the first slice, the core crate, exists (see [Implementation status](#implementation-status)); nothing in the app uses it. Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed**. Facts about the current system were read from the checked-out source. The proposed runtime is a design to be validated by the [benchmarks](terminal-benchmarks.md) and the [composition gate](native-rendering.md#composition-gate); only the core crate and its transport-independent session service exist (see [Implementation status](#implementation-status)); nothing in the app uses them yet. Related: [PRD](terminal-performance-prd.md) · [adapter](terminal-adapter.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## Current architecture
 
@@ -71,7 +71,7 @@ The existing mechanism is kept in spirit and moved inside Rust for the native ba
 
 - Transport I/O stays on the existing async runtime tasks. No new thread per session.
 - `ghostty_vt::Terminal` is `Send` but not `Sync` (`unsafe impl Send for Terminal`). A core can therefore move between workers but must be driven by one worker at a time.
-- Proposed: a small VT worker pool, each worker owning many cores; pool size and inactive-session policy are set from benchmark data ([#1339](https://github.com/mihazs/lazysh/issues/1339)). A thread per session is rejected unless profiling justifies it.
+- Implemented in the crate (`Hub`): a fixed VT worker pool; each session is assigned to the least-loaded worker, a worker serves one 16 KiB slice per turn and requeues a session that still has bytes, so one flooded session cannot starve the rest and a key press waits for at most one slice. Pool size and inactive-session policy are set from benchmark data ([#1339](https://github.com/mihazs/lazysh/issues/1339)); the default of two workers is a placeholder. A thread per session is rejected unless profiling justifies it; a test pins that 100 sessions add no threads beyond the pool.
 - Rendering is scheduled by the renderer per surface, event-driven (see [native rendering](native-rendering.md#frame-scheduling)).
 
 ## Lifecycle
@@ -144,17 +144,26 @@ Today each session's scrollback lives in WebView memory (default 5000 lines, max
 
 | Proposed element | In the crate | Not yet |
 | --- | --- | --- |
-| Binary-safe, ordered, bounded byte-in with credits after VT processing ([#1315](https://github.com/mihazs/lazysh/issues/1315)) | `Ingress`, `offer`, `pump` (rejected chunks returned intact; credit = bytes processed) | Wiring to SSH, local PTY, Mosh, ET; no thread or async runtime owned by the crate |
+| Binary-safe, ordered, bounded byte-in with credits after VT processing ([#1315](https://github.com/mihazs/lazysh/issues/1315)) | `Ingress`, `offer`, `pump` (rejected chunks returned intact; credit = bytes processed); `Hub`/`Session::feed` on a fixed worker pool, credit returned through `Hooks::credit` after each slice, queued bytes' credit returned on close | Wiring to SSH, local PTY, Mosh, ET in the Tauri bridge |
 | Screen and cursor state, incremental dirty rows, snapshot for a recreated surface | `take_frame` (only changed rows, `None` when idle), `snapshot` (all rows) | Renderer API and golden images ([#1322](https://github.com/mihazs/lazysh/issues/1322)); frames carry per-cell `String`s |
 | UI resize intent versus transport-authoritative size | `request_size`, `apply_transport_size`, `release_transport_authority`, `size_intent` | Mosh frame parsing and a non-reflowing resize ([#1317](https://github.com/mihazs/lazysh/issues/1317)); libghostty-vt reflows today and a test pins that |
-| Terminal-generated replies | `take_replies`, capped at 64 KiB with a dropped-byte count | Routing replies to the right transport |
-| Input encoding | keys, mouse, bracketed paste (end marker stripped), IME commit versus composition ([#1316](https://github.com/mihazs/lazysh/issues/1316)) | Android soft keyboard/IME integration ([#1328](https://github.com/mihazs/lazysh/issues/1328)) |
+| Terminal-generated replies | `take_replies`, capped at 64 KiB with a dropped-byte count; the pool hands each slice's replies to the session's `PtyWriter` tagged `Origin::Reply`, and a refusal (input gated) drops and counts them, never delays them | The bridge's `PtyWriter` that applies the access lease |
+| Input encoding | keys, mouse, bracketed paste (end marker stripped), focus in/out (mode 1004), IME commit versus composition ([#1316](https://github.com/mihazs/lazysh/issues/1316)); `Session::send_*` encodes from the live modes and writes through the `PtyWriter` as `Origin::User`, which may refuse | Golden comparison with xterm.js output; Android soft keyboard/IME integration ([#1328](https://github.com/mihazs/lazysh/issues/1328)) |
 | Screen inspection as text | `viewport_text`, `screen_text` | Herdr navigation use ([#1318](https://github.com/mihazs/lazysh/issues/1318)) |
 | Selection, search, links, OSC 52 policy | OSC 52 payloads, bells and directory changes surfaced via `take_events`; at most 8 of each kind pending, overflow counted | Everything else ([#1320](https://github.com/mihazs/lazysh/issues/1320)) |
 
+### Session service (`Hub`, `Session`)
+
+`Hub` owns the worker pool and a registry keyed by session id; it is the one API every transport feeds, so SSH, Mosh, ET and the local PTY differ only in where their bytes come from. The contract, each point pinned by a test in `tests/session.rs` or `tests/process.rs`:
+
+- **Credits after VT processing.** The transport takes credit for a chunk (its existing window, 256 KiB), calls `Session::feed`, and gets the bytes back through `Hooks::credit` only after a worker has run them through the VT. `feed` never parses and never blocks on a worker; a chunk over the queue budget is handed back intact (`Offer::Full`), so nothing is dropped or reordered. A checksum workload from six concurrent producers matches a single-threaded reference byte for byte, and the queue never exceeded the window.
+- **Replies and input share one writer.** Terminal replies (DA, DSR) and encoded user input leave through `PtyWriter::write(Origin, bytes)`. The host's writer owns the access policy: while input is gated it refuses, a refused reply is dropped and counted (a stale answer typed into a shell after unlock would be worse than none), and a refused key reaches nobody.
+- **Lifecycle.** `create` reserves scrollback from a global budget (clamped to what is left, refused below 64 KiB); `close` is idempotent, frees the VT state immediately, returns the budget and the credit of anything still queued so a blocked producer wakes; `attach` returns a full snapshot and `detach` stops `Hooks::changed` wake-ups without touching the transport or the screen, so a backgrounded session wakes nothing. A panic in the binding or a host hook closes only that session when the build unwinds; the app's release profile sets `panic = "abort"`, where a panic ends the process, so that containment is a test-and-debug property, not a shipped one.
+- **Not decided here.** Whether renderer replacement may keep a session alive is still the open security question above; the registry makes it technically possible and decides nothing.
+
 Conformance coverage lives in `tests/conformance.rs` (29 cases: wrapping, ANSI and truecolor, CJK, combining marks and ZWJ emoji, alternate screen, cursor modes, bracketed paste, mouse reports, key encoding, split-sequence equivalence, binary noise, backpressure, resize authority, scrollback bounds, session isolation, bounded pending events, moving a live session to another thread). The corpus does not yet include Claude/Codex/OpenCode transcripts, tmux/Zellij/Herdr captures or the Mosh frame fixture ([#1314](https://github.com/mihazs/lazysh/issues/1314)).
 
-A `TerminalRuntime` is `Send` (not `Sync`), which the VT worker pool of [#1319](https://github.com/mihazs/lazysh/issues/1319) needs. The binding marks `Terminal` and `KeyEncoder` `Send` but not `MouseEncoder`, which first made every runtime `!Send`; the crate wraps that one handle in a documented `unsafe impl Send` (no thread-local state in the built libghostty-vt archive, same shape as `KeyEncoder`) instead of editing the vendored binding.
+A `TerminalRuntime` is `Send` (not `Sync`), which the VT worker pool needs. The binding marks `Terminal` and `KeyEncoder` `Send` but not `MouseEncoder`, which first made every runtime `!Send`; the crate wraps that one handle in a documented `unsafe impl Send` (no thread-local state in the built libghostty-vt archive, same shape as `KeyEncoder`) instead of editing the vendored binding.
 
 Scrollback is budgeted in bytes by libghostty-vt, while lazysh's setting is lines; the crate exposes the byte budget as is. The budget is coarse (256 KiB and 1 MiB kept the same rows) and the rows kept depend on column count and content, so a line setting needs a mapping that is part of [#1338](https://github.com/mihazs/lazysh/issues/1338); the measured table is in the [benchmarks](terminal-benchmarks.md#core-parse-throughput-host-microbenchmark-not-a-device-baseline).
 

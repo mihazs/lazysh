@@ -2,63 +2,17 @@
 //! transport, no renderer, no JS bridge. Run in release: `cargo run --release --example parse_bench`.
 //! Prints one markdown table; the caller records host, toolchain and commit next to it.
 
+#[path = "../tests/support/mod.rs"]
+mod support;
+
 use lazysh_terminal_runtime::{Config, Offer, Size, TerminalRuntime};
 use std::time::Instant;
+use support::*;
 
-const CHUNK: usize = 16 * 1024; // the transport's chunk size
-const TOTAL: usize = 64 * 1024 * 1024;
 const RUNS: usize = 5;
 
-fn plain(total: usize) -> Vec<u8> {
-    (0..)
-        .flat_map(|n| {
-            format!(
-                "line {n:08} the quick brown fox jumps over the lazy dog 0123456789 abcdefghij\r\n"
-            )
-            .into_bytes()
-        })
-        .take(total)
-        .collect()
-}
-
-fn ansi_color() -> Vec<u8> {
-    (0..).flat_map(|n| format!("\x1b[{}m word{n}\x1b[0m \x1b[1;38;2;{};{};200mtruecolor\x1b[0m \x1b[48;5;{}m  \x1b[0m\r\n", 31 + n % 7, n % 256, (n * 7) % 256, n % 256).into_bytes()).take(TOTAL).collect()
-}
-
-/// Full-screen redraw: home, then 24 rows of positioned colored text, like a TUI repaint.
-fn redraw() -> Vec<u8> {
-    let frame: String = std::iter::once("\x1b[H".to_string())
-        .chain((1..=24).map(|row| {
-            format!(
-                "\x1b[{row};1H\x1b[{}m{:<80}\x1b[0m",
-                30 + row % 8,
-                format!("row {row} status ▕██████▏ 42%")
-            )
-        }))
-        .collect();
-    frame.into_bytes().into_iter().cycle().take(TOTAL).collect()
-}
-
-fn unicode(total: usize) -> Vec<u8> {
-    "日本語のテキスト 😀 e\u{301}\u{302} 👨\u{200d}👩\u{200d}👧 한국어 ‑ العربية\r\n"
-        .as_bytes()
-        .iter()
-        .copied()
-        .cycle()
-        .take(total)
-        .collect()
-}
-
-fn runtime() -> TerminalRuntime {
-    TerminalRuntime::new(Config {
-        size: Size::new(80, 24),
-        ..Config::default()
-    })
-    .expect("runtime")
-}
-
 fn run(data: &[u8], collect_frames: bool) -> f64 {
-    let mut rt = runtime();
+    let mut rt = runtime(80, 24);
     let start = Instant::now();
     for chunk in data.chunks(CHUNK) {
         assert_eq!(rt.offer(chunk.to_vec()), Offer::Accepted);
@@ -68,23 +22,6 @@ fn run(data: &[u8], collect_frames: bool) -> f64 {
         }
     }
     data.len() as f64 / (1024.0 * 1024.0) / start.elapsed().as_secs_f64()
-}
-
-fn median(mut v: Vec<f64>) -> (f64, f64, f64) {
-    v.sort_by(f64::total_cmp);
-    (v[v.len() / 2], v[0], v[v.len() - 1])
-}
-
-fn rss_kib() -> Option<u64> {
-    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
-    Some(statm.split_whitespace().nth(1)?.parse::<u64>().ok()? * 4)
-}
-
-fn feed(rt: &mut TerminalRuntime, data: &[u8]) {
-    for chunk in data.chunks(CHUNK) {
-        assert_eq!(rt.offer(chunk.to_vec()), Offer::Accepted);
-        rt.pump(usize::MAX);
-    }
 }
 
 fn with_scrollback(cols: u16, bytes: usize) -> TerminalRuntime {
@@ -125,7 +62,7 @@ fn memory() {
         println!("| {name} | {} | {} | {} |", rows[0], rows[1], rows[2]);
     }
     let Some(before) = rss_kib() else { return };
-    let mut sessions: Vec<TerminalRuntime> = (0..10).map(|_| runtime()).collect();
+    let mut sessions: Vec<TerminalRuntime> = (0..10).map(|_| runtime(80, 24)).collect();
     for session in &mut sessions {
         feed(session, &workloads[1].2);
     }
@@ -137,23 +74,11 @@ fn memory() {
 }
 
 fn main() {
-    // Recorded with every result: the host load changes these numbers by tens of percent.
-    println!(
-        "host load average at start: {}",
-        std::fs::read_to_string("/proc/loadavg")
-            .unwrap_or_default()
-            .trim()
-    );
+    println!("host load average at start: {}", load_average());
     memory();
     println!("| workload | frames collected per chunk | MiB/s median | min | max |");
     println!("|---|---|---|---|---|");
-    let workloads: [(&str, Vec<u8>); 4] = [
-        ("plain text", plain(TOTAL)),
-        ("ANSI + truecolor", ansi_color()),
-        ("full-screen redraw", redraw()),
-        ("CJK/emoji/combining", unicode(TOTAL)),
-    ];
-    for (name, data) in &workloads {
+    for (name, data) in &workloads() {
         for frames in [false, true] {
             let (mid, lo, hi) = median((0..RUNS).map(|_| run(data, frames)).collect());
             println!(

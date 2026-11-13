@@ -284,6 +284,41 @@ What this says, and does not say:
 - Copying every dirty cell into owned `String`-carrying structs costs far more than parsing; the current frame type is a correctness vehicle, not a renderer format, and [#1322](https://github.com/mihazs/lazysh/issues/1322) and [#1337](https://github.com/mihazs/lazysh/issues/1337) must replace it before any rendering number is meaningful.
 - The byte budget does not map to lines. A 256 KiB and a 1 MiB budget kept the same number of rows, so the budget appears to be enforced in coarse steps below a few MiB, and for a fixed budget the rows kept fall with the column count (10,267, 5,280 and 2,610 at 40, 80 and 160 columns) and with content. The default 4 MiB budget keeps about lazysh's default 5000 lines at 80 columns and fewer than 3000 at 160, so the line setting of 100 to 20000 cannot be honoured by a fixed byte budget; the mapping is part of [#1338](https://github.com/mihazs/lazysh/issues/1338).
 
+### Session service: pooled data path, flow control, input and memory (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example session_bench` in `packages/terminal-runtime` ([#1315](https://github.com/mihazs/lazysh/issues/1315), [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319)). It drives the `Hub` (a fixed VT worker pool) the way a transport does: one producer thread per session takes credit from a 256 KiB window, feeds 16 KiB chunks, and the worker returns credit after VT processing. Same host and toolchain as the parse benchmark above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release); the 1-minute load average at the start was 1.25 (pump slice 16 KiB, the default) and 0.64 (64 KiB), a much quieter host than the parse table. No transport, no JS bridge, no renderer, no xterm.js comparison, no device: it says nothing about Android and no ratio against the xterm.js baseline is valid.
+
+Throughput and credit latency, plain text, 16 MiB per session, 80x24, 4 MiB scrollback, median of five runs (min to max); latency is the time from `feed` of a chunk to the credit that returns it, taken from the median run:
+
+| Workers | Sessions | Aggregate MiB/s | Credit latency ms p50 / p95 / p99 |
+| --- | --- | --- | --- |
+| 1 | 1 | 656.9 (639.6 to 663.5) | 0.342 / 0.387 / 1.552 |
+| 1 | 5 | 630.1 (617.9 to 633.2) | 1.796 / 2.114 / 7.731 |
+| 2 | 5 | 990.7 (945.3 to 1017.1) | 0.896 / 1.771 / 6.308 |
+| 1 | 10 | 556.2 (540.6 to 567.0) | 4.128 / 4.636 / 16.435 |
+| 2 | 10 | 1016.8 (985.3 to 1078.6) | 2.141 / 2.545 / 11.963 |
+| 4 | 10 | 1684.2 (1521.9 to 1720.2) | 1.064 / 2.026 / 8.217 |
+
+Input to write: microseconds from the call of `send_key` to the writer holding the bytes (lock wait for a worker's slice on that very session, key encode, in-memory write), 5000 keys at 200 microsecond spacing, with the probe session and nine more flooding the same two workers:
+
+| Case | Pump slice | p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| Idle | 16 KiB | 0.3 | 0.5 | 1.6 | 18.6 |
+| Flood of plain text | 16 KiB | 0.2 | 1.6 | 23.3 | 136.8 |
+| Flood of CJK, emoji, combining | 16 KiB | 0.5 | 235.4 | 321.6 | 500.8 |
+| Flood of plain text | 64 KiB | 0.3 | 0.7 | 35.1 | 613.1 |
+| Flood of CJK, emoji, combining | 64 KiB | 0.4 | 772.5 | 1067.4 | 1259.9 |
+
+The slice is the longest a key press can wait for the session lock, so the default is one transport chunk (16 KiB); the 64 KiB run is kept as the evidence for that choice (aggregate throughput of the 64 KiB run, taken at a different load, ranged from 1.5 percent lower to 7 percent higher across the six rows above, so 16 KiB costs little). These are encode-and-queue times on the host: the remote echo, the transport write and the display are not included, so they are not input-to-pixels latency.
+
+Memory (resident set of the benchmark process, KiB): an empty session cost 8 KiB; each session that received 8 MiB of 80-column lines at the 4 MiB scrollback budget cost 3,923 KiB at 5 sessions and 3,921 KiB at 10, and the 100-session churn (create, 1 MiB of output each, close) held at 42,916 KiB across four rounds against 42,900 KiB before the first, so repeated create and close did not grow the process. `Session::close` frees the VT state at that moment, not at a later drop. These figures are for this host's allocator and libghostty-vt build; Android, iOS and Windows numbers do not exist yet.
+
+What this says, and does not say:
+
+- Adding workers scales aggregate throughput (10 sessions: 556, 1017 and 1684 MiB/s at 1, 2 and 4 workers) while the per-session credit latency falls, so the pool size is a real lever and is set from per-device data, not from this host ([#1339](https://github.com/mihazs/lazysh/issues/1339)). One worker parses plain text at about 650 MiB/s here; the style-heavy and wide-character workloads were roughly 5 to 10 times slower in the parse table above (taken on a busier host) and are the ones to measure on devices.
+- IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at most 64 calls per MiB by construction; the actual count depends on how the transports chunk, and was not measured.
+- With several sessions the p99 credit latency is 3 to 4 times the p95 (up to 16 ms with 10 sessions on one worker). The cause was not investigated; shared-host scheduling of the producer and worker threads is a candidate, queueing behind other sessions' windows is another.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.
