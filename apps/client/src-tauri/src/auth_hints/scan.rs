@@ -11,7 +11,8 @@ use std::time::{Duration, SystemTime};
 const MIN_WRAP_WIDTH: usize = 40;
 const MAX_CONTINUATIONS: usize = 16;
 const MAX_CANDIDATES: usize = 8;
-const MAX_RECENT: usize = 32;
+/// Callbacks reported per session per `REPEAT_WINDOW`: a host cannot flood the app with sign-ins.
+const MAX_RECENT: usize = 12;
 /// Ports of databases, caches, remote access and admin APIs: never a sign-in callback worth a tunnel
 /// without the user naming it. (Ports below 1024 are not reported at all.)
 const SENSITIVE_PORTS: [u16; 15] = [
@@ -323,7 +324,7 @@ impl Scanner {
             return;
         }
         if self.recent.len() >= MAX_RECENT {
-            self.recent.remove(0);
+            return;
         }
         self.recent.push(Seen {
             port: target.port,

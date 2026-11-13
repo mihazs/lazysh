@@ -481,6 +481,25 @@ fn the_same_callback_is_one_hint_until_ten_minutes_pass() {
 }
 
 #[test]
+fn a_host_cannot_report_more_than_twelve_callbacks_in_ten_minutes() {
+    let hints = SessionHints::new(None);
+    let reported = |port: u16, minutes: u64| {
+        hints
+            .scan(
+                url(&format!("http%3A%2F%2Flocalhost%3A{port}%2Fcb")).as_bytes(),
+                at(minutes),
+            )
+            .len()
+    };
+    assert_eq!(
+        (2000..2020).map(|port| reported(port, 0)).sum::<usize>(),
+        12
+    );
+    assert_eq!(reported(3000, 9), 0);
+    assert_eq!(reported(3000, 11), 1);
+}
+
+#[test]
 fn the_scanner_keeps_a_bounded_amount_of_output_whatever_it_is_fed() {
     let mut scanner = Scanner::new(None);
     let mut noise = Vec::new();
