@@ -93,4 +93,56 @@ class EdgeGestureBandsTest {
             GestureInsets(24, 24, 20, 32, "gesture").toJson(),
         )
     }
+
+    /** What each `cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.<name>` reports (#1380): the Back zone in dp, 0 for three buttons. */
+    private val overlays = mapOf("threebutton" to 0, "gestural" to 24, "gestural_wide_back" to 32, "gestural_extra_wide_back" to 40)
+
+    @Test fun everyOverlayAtEveryZoneWidthAndDensityKeepsTheClaimedBandsInsideTheWindowTheCapAndAboveTheHomeZone() {
+        for ((overlay, backDp) in overlays) for (density in listOf(2f, 2.625f, 3.5f)) for (zoneDp in listOf(16, 40, 96)) {
+            val widthPx = (411 * density).toInt(); val heightPx = (891 * density).toInt()
+            val navigation = if (backDp == 0) "buttons" else "gesture"
+            val homePx = EdgeGestureBands.homeZone(0, navigation, (EdgeGestureBands.HOME_SWIPE_DP * density).toInt())
+            val label = "$overlay density $density zone $zoneDp"
+            val claimed = EdgeGestureBands.bands(widthPx, heightPx, density, zoneDp, true, true, 0, 891, homePx)
+            assertEquals(label, 2, claimed.size)
+            for (band in claimed) {
+                assertTrue(label, band.left >= 0 && band.right <= widthPx && band.top >= 0 && band.bottom <= heightPx)
+                assertTrue("$label: the band is only as wide as the zone", band.right - band.left <= (zoneDp * density).toInt() + 1)
+                assertTrue("$label: Android caps the excluded height at 200dp", band.bottom - band.top <= (EdgeGestureBands.MAX_HEIGHT_DP * density).toInt())
+                assertTrue("$label: the Home zone cannot be excluded, so no band reaches it", band.bottom <= heightPx - homePx)
+            }
+            assertTrue("$label: the two bands never overlap", claimed[0].right <= claimed[1].left)
+        }
+    }
+
+    @Test fun theHomeZoneIsNeverThinnerThanTheLaunchersStripUnderGestureNavigationAndZeroWithoutIt() {
+        for (density in listOf(2f, 2.625f, 3.5f)) {
+            val strip = (EdgeGestureBands.HOME_SWIPE_DP * density).toInt()
+            for (reported in listOf(0, strip / 2, strip - 1, strip, strip + 40)) {
+                assertTrue("gesture navigation, reported $reported", EdgeGestureBands.homeZone(reported, "gesture", strip) >= strip)
+                assertEquals("three buttons keep what the system reports", reported, EdgeGestureBands.homeZone(reported, "buttons", strip))
+                assertEquals("an unknown navigation keeps what the system reports", reported, EdgeGestureBands.homeZone(reported, "unknown", strip))
+            }
+        }
+    }
+
+    @Test fun theNavigationModeIsKnownForEverySettingAndTheInsetsOnlyDecideWhereTheSettingIsHidden() {
+        for (zone in listOf(0, 24, 32, 40)) {
+            assertEquals("gesture", EdgeGestureBands.navigation(2, zone, zone))
+            assertEquals("buttons", EdgeGestureBands.navigation(0, zone, zone))
+            assertEquals("buttons", EdgeGestureBands.navigation(1, zone, zone))
+            assertEquals(if (zone > 0) "gesture" else "unknown", EdgeGestureBands.navigation(-1, zone, 0))
+            assertEquals(if (zone > 0) "gesture" else "unknown", EdgeGestureBands.navigation(-1, 0, zone))
+        }
+    }
+
+    @Test fun aSystemZoneReachesIntoTheViewportOnlyPastThePaddingForEveryOverlay() {
+        val density = 2.625f
+        for ((overlay, backDp) in overlays) for (paddingPx in listOf(0, 20, 100)) {
+            val zonePx = (backDp * density).toInt()
+            val reach = EdgeGestureBands.reach(zonePx, paddingPx, density)
+            assertTrue("$overlay padding $paddingPx", reach >= 0 && reach <= backDp)
+            assertEquals("$overlay padding $paddingPx", if (zonePx <= paddingPx) 0 else Math.ceil((zonePx - paddingPx) / density.toDouble()).toInt(), reach)
+        }
+    }
 }

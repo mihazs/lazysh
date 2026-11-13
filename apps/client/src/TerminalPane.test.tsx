@@ -9,6 +9,7 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
+import {setGestureInsets,unknownInsets} from './gestureInsets';
 const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
@@ -105,6 +106,28 @@ describe('bottom menu',()=>{
     act(()=>{expect(back()).toBe(true);});
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(onBackChange).toHaveBeenLastCalledWith('ssh',null);
+  });
+  /** #1380, #1435: a bottom menu opened by its handle (gesture navigation, no button) is closed by Back, which never leaves the app. */
+  it('is closed by Android Back from the moment it opens, every time, and the scrim a system Back lands on does not close it',()=>{
+    stubWindow(true);
+    act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));
+    const onBackChange=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
+    const state=()=>document.querySelector('.bottom-menu')?.getAttribute('data-open');
+    const handler=()=>onBackChange.mock.lastCall?.[1] as (()=>boolean)|null;
+    for(let cycle=0;cycle<100;cycle++){
+      expect(handler(),`cycle ${cycle}: nothing to close, so Back is left to the system`).toBeNull();
+      fireEvent.click(document.querySelector('[data-gesture-handle="bottom"]')!);
+      // The handler exists in the same commit that opens the menu: no moment where Back would leave the app.
+      expect(state()).toBe('true');
+      expect(handler(),`cycle ${cycle}`).toBeTypeOf('function');
+      const scrim=document.querySelector('.bottom-menu-scrim')!;
+      fireEvent.pointerDown(scrim);fireEvent.pointerCancel(scrim);
+      expect(state()).toBe('true');
+      act(()=>{expect(handler()!()).toBe(true);});
+      expect(state()).toBe('false');
+    }
+    act(()=>setGestureInsets(unknownInsets));
   });
   describe('as a two-finger swipe from anywhere on the terminal',()=>{
     const swipeTwoUp=(canvas:HTMLElement)=>{
