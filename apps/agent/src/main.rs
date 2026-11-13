@@ -91,6 +91,8 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         offset: u64,
     },
+    /// List TCP listeners on loopback or a wildcard address, to confirm a sign-in callback.
+    Listeners(lazysh_agent::listeners::Options),
     /// Inspect and explicitly control host Android devices or iOS Simulators.
     Devices {
         #[command(subcommand)]
@@ -398,6 +400,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             })?;
             None
         }
+        Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
         Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
         Command::ApprovalRequest {
             agent,
