@@ -5266,6 +5266,67 @@ mod tests {
         terminal_core::close(&connected.session_id);
         server_task.abort();
     }
+    /// Rust-side cost of the data path, host microbenchmark: 64 MiB of 80-column text through
+    /// `send_output` to (a) the Channel with an instant renderer that acknowledges every chunk, and
+    /// (b) the real core. Wall time and the process's CPU time (user + system, all threads).
+    #[cfg(feature = "native-terminal")]
+    #[tokio::test]
+    #[ignore = "benchmark: cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture"]
+    async fn bridge_throughput_channel_versus_core() {
+        fn cpu_seconds() -> f64 {
+            let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+            seconds(usage.ru_utime) + seconds(usage.ru_stime)
+        }
+        const MIB: usize = 64;
+        let payload: Vec<u8> = (0..)
+            .flat_map(|n: u32| format!("line {n:08} {}\r\n", "x".repeat(60)).into_bytes())
+            .take(MIB * 1024 * 1024)
+            .collect();
+        for run in 0..3 {
+            let (session, _dir, server_task) = output_session().await;
+            let acknowledged = session.clone();
+            let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = ipc.clone();
+            let events = Channel::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                // The renderer is instant: it returns the credit of a full 16 KiB chunk.
+                let _ = acknowledge(&acknowledged, 16384);
+                Ok(())
+            });
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            eprintln!(
+                "run {run} channel: {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, {:.0} Channel messages per MiB",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+                ipc.load(Ordering::SeqCst) as f64 / MIB as f64,
+            );
+            let (session, _dir, core_server) = output_session().await;
+            let events = Channel::new(|_| Ok(()));
+            crate::terminal_core::terminal_core_open(events.clone(), 80, 24, None).unwrap();
+            let prepared = crate::terminal_core::prepare(&events).unwrap().unwrap();
+            prepared.attach(
+                "bench-core",
+                &session.core,
+                crate::terminal_core::credit_to(&session, acknowledge),
+            );
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            while *session.output_inflight.lock().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            eprintln!(
+                "run {run} core:    {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, 0 Channel messages (every credit returned after VT processing)",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+            );
+            crate::terminal_core::close("bench-core");
+            server_task.abort();
+            core_server.abort();
+        }
+    }
     #[tokio::test(start_paused = true)]
     async fn core_output_respects_the_lock_and_background_gates_like_the_channel() {
         use crate::terminal_core::fake::ChecksumCore;
