@@ -124,13 +124,14 @@ uncached, then the command itself. Execs per native command, counted from the co
 | Native command | Execs (sequential) |
 | --- | ---: |
 | `agent_snapshot`, `agent_reported_history`, `agent_transcript` | 2 each (probe + command) |
+| `multiplexer_sessions` (Herdr), `herdr_tree` | 1 each (the Herdr navigation read runs them one after the other, every 3 s) |
 | `agent_herdr_conversation` | 4 (Herdr tree, probe, conversation, Herdr tree again) |
 | `agent_watch_start` | 2 (probe, then the long-lived `transcript-watch`; Herdr adds a tree read) |
 | `tmux_chat` snapshot | a tmux control round trip, no exec |
 
 Opening a conversation bound by hook reports (tmux, Zellij) therefore runs, one after another: the bind (`agent_snapshot`,
 `tmux_chat`, `agent_reported_history`), the pre-read validation (the same three), `agent_transcript`, and the post-read validation
-(the same three again): **11 native calls, 16 execs, before the first message is shown.** The stream starts only after that.
+(the same three again): **11 native calls and 14 execs one after another (plus 3 tmux control round trips) before the first message is shown.** The stream starts only after that.
 
 ### Client
 
@@ -163,14 +164,14 @@ Tap to first content, median of 5 runs (`bun run bench:agent-view`), desktop Chr
 | tmux, mobile, 4x CPU | 2,970 ms | 11 | 171 ms |
 | tmux, LAN, 4x CPU, heavy page | 1,360 ms | 11 | 340 ms |
 | tmux, LAN, host without the stream (polling) | 1,391 ms | 11 | 196 ms |
-| Herdr, local link | 184 ms | 3 | 70 ms |
-| Herdr, LAN | 494 ms | 3 | 0 ms |
-| Herdr, mobile | 1,012 ms | 3 | 0 ms |
-| Herdr, mobile, 4x CPU | 1,171 ms | 3 | 179 ms |
+| Herdr, local link | 192 ms | 3 | 0 ms |
+| Herdr, LAN | 568 ms | 3 | 0 ms |
+| Herdr, mobile | 1,190 ms | 3 | 56 ms |
+| Herdr, mobile, 4x CPU | 1,349 ms | 3 | 179 ms |
 
 ### Where the time goes (ranked by measured impact)
 
-1. **The sequential native calls (16 execs for tmux, 5 for Herdr).** On LAN 1,236 ms of the 1,236 ms are waiting; the client's own
+1. **The sequential native calls (14 execs in a row for tmux, 6 for Herdr: server list, tree, then the 4 of the conversation read).** On LAN 1,236 ms of the 1,236 ms are waiting; the client's own
    work is 55 ms. A single repeated probe exec is 44 % of the tmux execs. This is the biggest cost and it grows with the link.
 2. **Client main thread at phone speed.** 205 ms of script and a 184 ms task at 4x CPU, of which markdown parsing and rows folded
    inside closed `<details>` are the largest parts. It breaks the 50 ms task budget as soon as the CPU is slow.
@@ -178,7 +179,39 @@ Tap to first content, median of 5 runs (`bun run bench:agent-view`), desktop Chr
    hard failure above 16 MiB or with one line over 256 KiB.
 4. Payload: 185-522 KB per page. Not a first-order cost on these links; it matters on a slow radio only.
 
-Each fix lands as its own change; this table is updated with the new numbers by the change that makes them.
+Each fix lands as its own change; the section below is extended by the change that makes the new numbers.
+
+## After each fix
+
+Same bench, same hardware, 5 runs, medians. "Before" is the baseline above.
+
+### Fewer SSH round trips
+
+Changes: the host probe runs once per connection (it ran before every companion command), the host's reports and the tmux pane are read
+together, the three reads that check a bound report run together and the first read of a conversation does not repeat the check the bind
+made a moment earlier, and the Herdr pane check overlaps the conversation read. For a hook-bound tmux conversation the first message
+needs **4 execs in a row (5 with the cold probe), was 14**; a Herdr conversation read needs 2 in a row, was 4. The unit tests count the
+calls (`AgentView.test.tsx`, "round trips before the first message") and the owned-OpenSSH companion test asserts one exec for a later
+companion command.
+
+| Scenario | Before | After |
+| --- | ---: | ---: |
+| tmux, local link | 273 ms | 197 ms |
+| tmux, LAN (30 ms RTT) | 1,236 ms | **503 ms** |
+| tmux, mobile (80 ms RTT) | 2,809 ms | **1,009 ms** |
+| tmux, LAN, 4x CPU | 1,373 ms | 772 ms (min 637) |
+| tmux, mobile, 4x CPU | 2,970 ms | 1,165 ms |
+| tmux, LAN, 4x CPU, heavy page | 1,360 ms | 634 ms |
+| tmux, LAN, host without the stream (polling) | 1,391 ms | 493 ms |
+| Herdr, local link | 192 ms | 180 ms |
+| Herdr, LAN | 568 ms | 496 ms |
+| Herdr, mobile | 1,190 ms | 1,009 ms |
+| Herdr, mobile, 4x CPU | 1,349 ms | 1,194 ms |
+
+Herdr gains least: its read still waits for the server list, then the tree, then the conversation and the tree again. Overlapping the
+server list with the tree would save a step, but `useHerdrNavigation` never reads a tree for a server the list did not name, and its tests
+pin that, so it was left alone. The benchmark model counts the cold probe for the first companion command of a connection and does not
+count the probe the baseline Herdr navigation also made once (`herdr_path::admit`), so the Herdr "before" is slightly low.
 
 ### Not measured
 

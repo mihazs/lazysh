@@ -106,12 +106,14 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       if (flight || document.visibilityState === 'hidden' || !access.current()) return;
       flight = true;
       try {
-        const reports = parseSnapshot(await invoke('agent_snapshot', {sessionId}));
+        // The host's reports and the pane this terminal shows are independent reads: together they cost one round trip.
+        const [snapshot, terminal] = await Promise.all([invoke('agent_snapshot', {sessionId}), tmux ? invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}}) : undefined]);
+        const reports = parseSnapshot(snapshot);
         if (!alive || !access.current()) return;
         setSessions(reports.filter(row=>!!conversationAgents[row.agent] && reports.filter(other=>other.sessionId===row.sessionId).length===1));
         // Pane identity is the evidence: TMUX_PANE ties a hook report to this tmux terminal; in a Zellij session, the one report that names a pane of it.
         const own = zellijSession ? reports.filter(row => zellijPane(row.paneId)?.session === zellijSession) : [];
-        const pane = tmux ? parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId : own.length === 1 ? own[0].paneId ?? undefined : undefined;
+        const pane = tmux ? parseTerminalSnapshot(terminal).destination.paneId : own.length === 1 ? own[0].paneId ?? undefined : undefined;
         const matching = pane === undefined ? [] : reports.filter(row => row.paneId === pane);
         const row = matching.length===1 ? matching[0] : undefined;
         const agent = row && conversationAgents[row.agent];

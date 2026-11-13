@@ -489,20 +489,22 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   /** The hook report must still tie this conversation to this pane and this file; a change retires the view. */
   async function checkReport(still: () => boolean) {
     if (!bound?.report) return;
+    const report = bound.report;
     try {
-      // A Zellij pane has no tmux destination to compare; the agent report below is its only evidence.
-      if(bound.report.paneId && !zellijPane(bound.report.paneId)) {
-        const snapshot=parseTerminalSnapshot(await invoke('tmux_chat',{sessionId,action:{kind:'snapshot'}}));
-        if (!still()) return;
-        if(snapshot.destination.paneId!==bound.report.paneId) throw new LocalUiError('chatChanged');
-      }
-      const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
+      // The three reads do not depend on each other: they run together, so the check costs one round trip, not three.
+      const [snapshot, reports, history] = await Promise.all([
+        // A Zellij pane has no tmux destination to compare; the agent report below is its only evidence.
+        report.paneId && !zellijPane(report.paneId) ? invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}}) : undefined,
+        invoke('agent_snapshot', {sessionId}),
+        invoke('agent_reported_history', {sessionId, agentSessionId: report.sessionId}),
+      ]);
       if (!still()) return;
-      const matches=reports.filter(row=>row.sessionId===bound.report!.sessionId);
-      if(matches.length!==1 || matches[0].agent!==bound.report.agent || (bound.report.paneId && (matches[0].paneId!==bound.report.paneId || reports.filter(row=>row.paneId===bound.report!.paneId).length!==1))) throw new LocalUiError('chatChanged');
-      const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:bound.report.sessionId}),bound.report.sessionId);
-      if(history.status!=='available' || history.path!==bound.path || (bound.report.paneId && history.paneId!==bound.report.paneId)) throw new LocalUiError('chatChanged');
-    } catch(error) {if(still())onBoundInvalid?.();throw error;}
+      if (snapshot !== undefined && parseTerminalSnapshot(snapshot).destination.paneId !== report.paneId) throw new LocalUiError('chatChanged');
+      const rows = parseSnapshot(reports), matches = rows.filter(row => row.sessionId === report.sessionId);
+      if (matches.length !== 1 || matches[0].agent !== report.agent || (report.paneId && (matches[0].paneId !== report.paneId || rows.filter(row => row.paneId === report.paneId).length !== 1))) throw new LocalUiError('chatChanged');
+      const available = parseReportedHistory(history, report.sessionId);
+      if (available.status !== 'available' || available.path !== bound.path || (report.paneId && available.paneId !== report.paneId)) throw new LocalUiError('chatChanged');
+    } catch (error) {if (still()) onBoundInvalid?.(); throw error;}
   }
   async function read(reset: boolean, automatic = false, prepare = false, slice?: WindowRequest) {
     if (watchLive.current && !reset && !slice) return;
@@ -532,7 +534,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       const replace = reset || source.view === "conversation";
       const cursor = replace ? 0 : offset;
       const validateReport = () => checkReport(() => currentRequest(current));
-      if (bound?.report) {
+      // The first read of a conversation follows the Agent view's own check of the same report, made a moment ago; the check after the read stays.
+      if (bound?.report && opened) {
         await validateReport();
         if (!currentRequest(current)) return;
       }

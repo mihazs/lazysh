@@ -30,12 +30,32 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
     let binary = owned_agent_binary();
     let session = app.state::<AppState>().session(id).await.unwrap();
     let lease = access_lease();
+    let execs = || {
+        session
+            .handle
+            .execs
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let started = execs();
     assert_eq!(
         crate::companion::exec(&session, "lazysh-agent --version".into(), &lease)
             .await
             .unwrap()
             .trim(),
         "owned-legacy-unchanged"
+    );
+    assert_eq!(
+        execs() - started,
+        2,
+        "the first command probes the host, then runs"
+    );
+    crate::companion::exec(&session, "lazysh-agent --version".into(), &lease)
+        .await
+        .unwrap();
+    assert_eq!(
+        execs() - started,
+        3,
+        "a later command reuses the probe: one exec"
     );
     let legacy = fs::read(directory.join("bin/lazysh-agent")).unwrap();
     let state = directory.join("state");
