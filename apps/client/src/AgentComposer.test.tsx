@@ -123,7 +123,7 @@ it('retains the draft and offers a reconnect, without resending, when delivery f
   expect(inputs()).toHaveLength(1);
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
   // Retry binds again and sends the draft once, without another click on Send.
-  fireEvent.click(within(await screen.findByRole('alert')).getByRole('button',{name:t('agentReceiptRetry')}));
+  await clickNoticeRetry();
   await waitFor(()=>expect(box().value).toBe(''));expect(inputs()).toHaveLength(2);expect(screen.queryByRole('alert')).toBeNull();
 });
 
@@ -157,6 +157,13 @@ const agentInputs=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==
 const mountStock=(props:Partial<Parameters<typeof AgentComposer>[0]>={})=>mount({conversation:stockConversation,labels:stockLabels,proof:stockProof,...props});
 async function sendTyped(text:string) {
   type(text);await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
+}
+/** The notice shows Retry a render before the control behind it reports idle; a click on it while disabled is lost, so wait for it to be enabled. */
+async function clickNoticeRetry() {
+  const retry=()=>within(screen.getByRole('alert')).getByRole('button',{name:t('agentReceiptRetry')}) as HTMLButtonElement;
+  await screen.findByRole('alert');
+  await waitFor(()=>expect(retry().disabled).toBe(false));
+  fireEvent.click(retry());
 }
 
 it('sends on a stock Herdr host through its own agent input, with no guard and no error shown',async()=>{
@@ -212,8 +219,8 @@ it.each([
 it('retries a refused stock send once on request, then clears the notice and the draft',async()=>{
   let fail=true;stockHerdr(()=>{if(fail)throw {kind:'disconnected',message:'Session closed'};return null;});
   mountStock();await sendTyped('second chance');
-  const alert=await screen.findByRole('alert');fail=false;
-  fireEvent.click(within(alert).getByRole('button',{name:t('agentReceiptRetry')}));
+  await screen.findByRole('alert');fail=false;
+  await clickNoticeRetry();
   await waitFor(()=>expect(agentInputs()).toHaveLength(2));
   await waitFor(()=>expect(box().value).toBe(''));expect(screen.queryByRole('alert')).toBeNull();
   expect((agentInputs()[1] as {input:{text:string}}).input.text).toBe('second chance');
@@ -328,10 +335,7 @@ it('shows Not sent with Retry when nothing was written, and Retry sends once; an
   // One notice speaks for the failed send; the receipt line stays out of its way until the notice is dismissed.
   expect(screen.queryByText(t('agentReceiptNotSent'))).toBeNull();
   vi.mocked(invoke).mockImplementation(tmuxChatReply);
-  // The button shows a render before the control behind it reports idle; a click on it while disabled is lost.
-  const retry=()=>screen.getByRole('button',{name:t('agentReceiptRetry')}) as HTMLButtonElement;
-  await waitFor(()=>expect(retry().disabled).toBe(false));
-  fireEvent.click(retry());
+  await clickNoticeRetry();
   await waitFor(()=>expect(inputs()).toHaveLength(2));
   expect((inputs()[1].input as {text:string}).text).toBe('Important');
   await waitFor(()=>expect(box().value).toBe(''));
