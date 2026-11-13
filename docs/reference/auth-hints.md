@@ -51,7 +51,7 @@ window.addEventListener('lazysh-auth-hint', event => {
 
 `path` carries no query. `idpHost` is the host of the URL that held the redirect and is absent for an announcement. `pkce` is true when the URL carries a `code_challenge`. There is no field for the query, `code`, `state`, `nonce` or `login_hint`: the scanner reads their shape and never copies them, so they cannot reach an event, a log line or an error. The scanner holds at most 24 KiB of the host's output between chunks and reads 1-byte chunks the same as whole ones.
 
-The same callback (same port and path) is reported once per 10 minutes unless stronger evidence arrives (an announcement followed by the authorize URL, or a URL that turns out to carry a code challenge). At most 32 distinct callbacks are reported per session per 10 minutes.
+The same callback (same port and path) is reported once per 10 minutes unless stronger evidence arrives (an announcement followed by the authorize URL, or a URL that turns out to carry a code challenge). At most 12 callbacks are reported per session per 10 minutes; a host that prints more is not a sign-in.
 
 ## Limits
 
