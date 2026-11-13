@@ -10,7 +10,12 @@ import {runNonce} from '../../../support/hosts';
 async function showAgentView() { await SideMenu.openByEdgeSwipe(); await SideMenu.chooseAgentView(); }
 
 describe('#1374 the Agent view composer on a stock Herdr host', () => {
-  before(async () => { await connectOwnedHost({kind: 'herdr-agents', label: 'agents'}); });
+  before(async () => {
+    await connectOwnedHost({kind: 'herdr-agents', label: 'agents'});
+    // The session is a plain SSH shell until a Herdr agent is chosen from the side menu, which attaches the app to the Herdr server.
+    await SideMenu.openByEdgeSwipe();
+    await SideMenu.openHerdrAgentIn(agentsFixture.codexTab);
+  });
   after(resetApp);
 
   it('shows the conversation of the agent in the focused pane, and a sent prompt reaches that agent once, as typed', async () => {

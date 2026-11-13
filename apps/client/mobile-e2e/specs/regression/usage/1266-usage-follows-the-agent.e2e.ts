@@ -10,7 +10,12 @@ import {agentsFixture} from '../../../support/agents';
 const shows = (text: string) => UsageItem.in(() => expect(UsageItem.root).toHaveText(text, {wait: 30_000}));
 
 describe('#1266 the usage item follows the agent in the focused pane', () => {
-  before(async () => { await connectOwnedHost({kind: 'herdr-agents', label: 'usage'}); });
+  before(async () => {
+    await connectOwnedHost({kind: 'herdr-agents', label: 'usage'});
+    // The session is a plain SSH shell until a Herdr agent is chosen from the side menu, which attaches the app to the Herdr server.
+    await SideMenu.openByEdgeSwipe();
+    await SideMenu.openHerdrAgentIn(agentsFixture.codexTab);
+  });
   after(resetApp);
 
   it('shows the account of the agent in the focused pane, follows the focus, and falls back to the default for a pane with no agent', async () => {
