@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.53.0
+
+### Minor Changes
+
+- 9d0da93: Answer the list dialogs Claude Code opens (`/model`, `/resume`, `/rewind`, the folder trust prompt, the plan decision) from the Agent view on a tmux session: the dialog is read from the pane's terminal screen, shown as a card, and a choice is sent as arrow keys, a read-back and Enter through a new bounded `pick` input of the confirmed terminal input.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.53.0
+  - @lazysh/common@1.53.0
+  - @lazysh/display-idle@1.53.0
+  - @lazysh/et-transport@1.53.0
+  - @lazysh/mosh-transport@1.53.0
+
 ## 1.52.0
 
 ### Minor Changes
