@@ -16,6 +16,7 @@ mod ingress;
 mod input;
 mod keymap;
 pub mod layout;
+mod links;
 mod mosh;
 mod reference;
 mod render;
@@ -31,6 +32,7 @@ pub use hub::{
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
 pub use keymap::{dom_mods, DomKey};
+pub use links::{PathLink, UrlLink};
 pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{

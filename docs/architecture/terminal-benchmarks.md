@@ -651,12 +651,12 @@ The tap check costs a few microseconds here and scales with the row width (each 
 
 Measured with `cargo run --release --example selection_bench` in `packages/terminal-runtime` ([#1320](https://github.com/mihazs/lazysh/issues/1320)): 80-column lines of 66 characters, the scrollback budget raised so every line is kept (the default is 4 MiB). Core only: no bridge, no JavaScript, no xterm.js comparison, no device, so no ratio is valid. Same host and toolchain as the tables above (AMD Ryzen 9 5900X, Linux 7.3, rustc 1.96.1 release), taken while the host was heavily shared (1-minute load average 18.8 at the start, on 24 threads). One invocation; the figures are milliseconds.
 
-| Rows held | Text of everything (p50, max) | Search that misses (p50, max) | Word under a finger (p50) |
-| --- | --- | --- | --- |
-| 5,001 (0.3 MiB of text) | 24.1, 24.5 | 8.1, 8.3 | 0.001 |
-| 20,001 (1.3 MiB of text) | 100.7, 104.3 | 37.4, 39.4 | 0.001 |
+| Rows held | Text of everything (p50, max) | Search that misses (p50, max) | URL and path detection on one row (p50, max) | Word under a finger (p50) |
+| --- | --- | --- | --- | --- |
+| 5,001 (0.3 MiB of text) | 24.1, 24.5 | 8.1, 8.3 | 0.43, 0.92 | 0.001 |
+| 20,001 (1.3 MiB of text) | 100.7, 104.3 | 37.4, 39.4 | 0.43, 0.74 | 0.001 |
 
-Extraction and a missing search are linear in the rows read (about 5 microseconds a row for the text, 1.7 to 1.9 for the search); a word under a finger reads one row. An earlier invocation taken at load 22.8 gave 25.1 and 100.8 ms for the text and 8.2 and 33.1 ms for the search. It does not say what a phone costs, and a single invocation under load is not a regression threshold.
+Extraction and a missing search are linear in the rows read (about 5 microseconds a row for the text, 1.7 to 1.9 for the search); a word under a finger reads one row, and link detection reads the 33 rows around the tapped one (more only while a soft-wrapped line continues). The link row was measured in a later invocation (1-minute load average 6.7) than the other columns, which were taken at 18.8. An earlier invocation taken at load 22.8 gave 25.1 and 100.8 ms for the text and 8.2 and 33.1 ms for the search. It does not say what a phone costs, and a single invocation under load is not a regression threshold.
 
 ## Acceptance of a candidate
 

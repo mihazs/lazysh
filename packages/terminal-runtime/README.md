@@ -6,7 +6,7 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size (including Mosh's OSC 7777 frames as a top-anchored resize without reflow, `Config::canonical_frames`), terminal
-replies, key/mouse/paste encoding, and text inspection (`read_rows`, `viewport`), selection, copy, word, find and the OSC 52 consent policy in absolute cell coordinates. A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, and text inspection (`read_rows`, `viewport`), selection, copy, word, find, URL and path detection and the OSC 52 consent policy in absolute cell coordinates. A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
 [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
@@ -33,7 +33,8 @@ PNGs as images (the test writes `<name>.actual.png` into the target directory wh
 `ghostty-vt` is a path dependency on `../herdr-upstream/crates/ghostty-vt`. Nothing is copied,
 patched or forked, and Herdr's integrity manifest is untouched. This crate is a nested workspace
 (like `herdr-upstream`) because the dependency's build script runs Zig 0.16.0; the root Cargo
-workspace and default builds never need Zig.
+workspace and default builds never need Zig. The only other production dependency is `regex`
+(no default features) for the link patterns of `links.rs`.
 
 ## Build and test
 

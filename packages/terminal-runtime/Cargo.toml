@@ -14,6 +14,8 @@ rust-version = "1.96"
 # The single Ghostty dependency in the repository: Herdr's vendored binding, unmodified.
 [dependencies]
 ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
+# URL and host-path detection (links.rs): the patterns of terminalLinks.ts, kept as regular expressions.
+regex = { version = "1", default-features = false, features = ["std", "perf"] }
 
 [dev-dependencies]
 # Goldens only: already in the lock through ghostty-vt.

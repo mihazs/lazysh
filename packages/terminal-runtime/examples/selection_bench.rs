@@ -1,5 +1,5 @@
 //! Host cost of the selection and search queries on a large scrollback ([#1320]): the text of
-//! everything, a search that misses (the worst case: every row is read), a word under a finger.
+//! everything, a search that misses (the worst case: every row is read), a word under a finger, and the link detection a tap runs.
 //! Core only: no bridge, no JavaScript, no device.
 //! `cargo run --release --example selection_bench`; the caller records host, toolchain and commit
 //! next to the output.
@@ -63,6 +63,13 @@ fn main() {
             "search that misses (every row read)",
             &millis(7, || {
                 rt.search("no such text", Direction::Forward, None).unwrap()
+            }),
+        );
+        report(
+            "find_urls and find_paths on one row (a tap)",
+            &millis(2000, || {
+                let row = lines / 2;
+                (rt.find_urls(row).unwrap(), rt.find_paths(row).unwrap())
             }),
         );
         report(
