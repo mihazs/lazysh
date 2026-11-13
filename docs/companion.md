@@ -114,7 +114,7 @@ every 2 seconds as before and says "Live updates are unavailable" (never opened)
 "Connection lost. Showing the last update" (was live), and tries again after 1, 2, 5, 10 and
 then 30 seconds. A host companion that predates `transcript-watch` makes the view say that
 live updates need a newer companion and offer **Host companion installation**; it is asked
-again after a minute. A row at the end of the thread shows **Agent is working** or **Agent is
+again after a minute, or at once when that host's companion has just updated itself to this app's version. A row at the end of the thread shows **Agent is working** or **Agent is
 waiting for your answer** from the recorded turn state.
 
 The view keeps its chrome to one row: the agent kind and folder, its state, an

@@ -191,6 +191,16 @@ describe('when the stream cannot be had',()=>{
     poll=polled(...first,text('a2','assistant','Polled'));await advance(2000);expect(screen.getByText('Polled')).toBeTruthy();
     await advance(30_000);expect(starts).toHaveLength(1);
   });
+  it('asks a host that could not stream again at once when its companion has just been updated, and only that host',async()=>{
+    render_('host');await advance(0);
+    await act(async()=>{channel.onmessage({type:'unavailable',reason:'companion_required'});});
+    expect(starts).toHaveLength(1);
+    const updated=(sessionId:string)=>act(async()=>{window.dispatchEvent(new CustomEvent('lazysh-companion-updated',{detail:{sessionId}}));});
+    await updated('another-host');await advance(0);expect(starts).toHaveLength(1);
+    await updated('host');await advance(0);expect(starts).toHaveLength(2);
+    // Streaming now: a later update of the same host does not reopen it.
+    await goLive();await updated('host');await advance(0);expect(starts).toHaveLength(2);
+  });
   it('keeps the background-work panel current from the stream: a snapshot carries the work, a delta that changes it replaces it and one that does not leaves it',async()=>{
     render_();await advance(0);await send(hello);
     const task=(state:string)=>({id:'b1',kind:'shell',title:'Wait for CI',state,events:[],startedAt:new Date().toISOString()});
