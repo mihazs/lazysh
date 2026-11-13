@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.52.0
+
+### Minor Changes
+
+- fc4e7e8: Show each tool call of the Agent view as one card with its result and each file edit as a diff card.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.52.0
+  - @lazysh/common@1.52.0
+  - @lazysh/display-idle@1.52.0
+  - @lazysh/et-transport@1.52.0
+  - @lazysh/mosh-transport@1.52.0
+
 ## 1.51.0
 
 ### Minor Changes
