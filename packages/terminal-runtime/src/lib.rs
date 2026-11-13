@@ -10,6 +10,7 @@
 //! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
 mod blink;
+mod clipboard;
 mod colors;
 mod doorbell;
 mod frame;
@@ -22,10 +23,12 @@ mod mosh;
 mod reference;
 mod render;
 mod runtime;
+mod selection;
 mod size;
 mod titles;
 
 pub use blink::{BlinkClock, FramePacer, BLINK_HALF_PERIOD};
+pub use clipboard::{clipboard_consent_text, MAX_CLIPBOARD_TEXT_BYTES};
 pub use doorbell::Doorbell;
 pub use frame::{Cell, Frame, Row};
 pub use hub::{
@@ -46,6 +49,7 @@ pub use runtime::{
     ScrollAction, TerminalRuntime, Viewport, CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX,
     MAX_READ_ROWS,
 };
+pub use selection::{CellPos, CellRange, Direction, SearchHit, MAX_QUERY_BYTES};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
 // Re-exported so consumers never depend on the binding crate (or a second VT engine) directly.

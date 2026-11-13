@@ -6,7 +6,7 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size (including Mosh's OSC 7777 frames as a top-anchored resize without reflow, `Config::canonical_frames`), terminal
-replies, key/mouse/paste encoding, text inspection (`read_rows`, `viewport`) and the control plane of [#1321](https://github.com/mihazs/lazysh/issues/1321) (`control_snapshot`, `control_scroll`, `control_resize`, `take_control_events` and the `Doorbell`: the state and the text of a bounded window of rows, never cells, and what the program reported, as the JSON the app's `terminal_core_*` commands and the stdio harness share). A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, text inspection (`read_rows`, `viewport`), selection, copy, word, find and the OSC 52 consent policy in absolute cell coordinates, and the control plane of [#1321](https://github.com/mihazs/lazysh/issues/1321) (`control_snapshot`, `control_scroll`, `control_resize`, `take_control_events` and the `Doorbell`: the state and the text of a bounded window of rows, never cells, and what the program reported, as the JSON the app's `terminal_core_*` commands and the stdio harness share). A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
 [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
@@ -54,6 +54,7 @@ cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: c
 cargo +1.96.1 run --release --example inspect_bench # text queries: Herdr's tap check, a screen read
 cargo +1.96.1 run --release --example scrollback_budget # rows kept per byte budget by width and content (History lines mapping)
 cargo +1.96.1 run --release --example perf_gate     # the CI regression gate (`terminal-perf` job); --inject slow|allocs|nocompaction must fail it
+cargo +1.96.1 run --release --example selection_bench # selection and search on a large scrollback
 ```
 
 ## Target status

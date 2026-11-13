@@ -1,0 +1,1792 @@
+{
+ "cases": [
+  {
+   "id": "plain",
+   "about": "Words, blanks, tabs and trailing text across hard lines, with scrollback above the screen",
+   "cols": 24,
+   "rows": 4,
+   "scrollback": 50,
+   "write": "history one\r\nhistory two\r\nalpha beta  gamma\r\n  indented line\r\ntab\tseparated\tcols\r\n\r\nlast line here\r\nfinal",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      10,
+      0
+     ],
+     "text": "history one"
+    },
+    {
+     "start": [
+      6,
+      0
+     ],
+     "end": [
+      3,
+      1
+     ],
+     "text": "y one\nhist"
+    },
+    {
+     "start": [
+      2,
+      2
+     ],
+     "end": [
+      8,
+      3
+     ],
+     "text": "pha beta  gamma\n  indente"
+    },
+    {
+     "start": [
+      0,
+      3
+     ],
+     "end": [
+      23,
+      4
+     ],
+     "text": "  indented line\ntab     separated      c"
+    },
+    {
+     "start": [
+      5,
+      1
+     ],
+     "end": [
+      5,
+      1
+     ],
+     "text": "r"
+    },
+    {
+     "start": [
+      0,
+      5
+     ],
+     "end": [
+      23,
+      6
+     ],
+     "text": "ols\n"
+    },
+    {
+     "start": [
+      10,
+      2
+     ],
+     "end": [
+      2,
+      7
+     ],
+     "text": "  gamma\n  indented line\ntab     separated      cols\n\nlas"
+    },
+    {
+     "start": [
+      0,
+      7
+     ],
+     "end": [
+      23,
+      7
+     ],
+     "text": "last line here"
+    },
+    {
+     "start": [
+      20,
+      9
+     ],
+     "end": [
+      23,
+      9
+     ],
+     "text": ""
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      0,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       4,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       4,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      5,
+      2
+     ],
+     "range": [
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      10,
+      2
+     ],
+     "range": [
+      [
+       10,
+       2
+      ],
+      [
+       10,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      23,
+      2
+     ],
+     "range": [
+      [
+       23,
+       2
+      ],
+      [
+       23,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      3
+     ],
+     "range": [
+      [
+       0,
+       3
+      ],
+      [
+       0,
+       3
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      3
+     ],
+     "range": [
+      [
+       2,
+       3
+      ],
+      [
+       9,
+       3
+      ]
+     ]
+    },
+    {
+     "at": [
+      4,
+      4
+     ],
+     "range": [
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       4
+      ]
+     ]
+    },
+    {
+     "at": [
+      7,
+      4
+     ],
+     "range": [
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       4
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      5
+     ],
+     "range": [
+      [
+       0,
+       5
+      ],
+      [
+       2,
+       5
+      ]
+     ]
+    },
+    {
+     "at": [
+      1,
+      6
+     ],
+     "range": [
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       6
+      ]
+     ]
+    },
+    {
+     "at": [
+      23,
+      7
+     ],
+     "range": [
+      [
+       23,
+       7
+      ],
+      [
+       23,
+       7
+      ]
+     ]
+    },
+    {
+     "at": [
+      30,
+      2
+     ],
+     "range": [
+      [
+       30,
+       2
+      ],
+      [
+       30,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      99
+     ],
+     "range": [
+      [
+       3,
+       99
+      ],
+      [
+       3,
+       99
+      ]
+     ]
+    }
+   ],
+   "all": "history one\nhistory two\nalpha beta  gamma\n  indented line\ntab     separated      cols\n\nlast line here\nfinal",
+   "screen": "ols\n\nlast line here\nfinal",
+   "searches": [
+    {
+     "query": "alpha",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 2,
+      "column": 0,
+      "length": 17
+     }
+    },
+    {
+     "query": "ALPHA",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 2,
+      "column": 0,
+      "length": 17
+     }
+    },
+    {
+     "query": "history",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 0,
+      "length": 11
+     }
+    },
+    {
+     "query": "history",
+     "direction": 1,
+     "from": 0,
+     "hit": {
+      "row": 1,
+      "column": 0,
+      "length": 11
+     }
+    },
+    {
+     "query": "history",
+     "direction": 1,
+     "from": 1,
+     "hit": {
+      "row": 0,
+      "column": 0,
+      "length": 11
+     }
+    },
+    {
+     "query": "history",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 0,
+      "length": 11
+     }
+    },
+    {
+     "query": "history",
+     "direction": -1,
+     "from": 0,
+     "hit": {
+      "row": 1,
+      "column": 0,
+      "length": 11
+     }
+    },
+    {
+     "query": "final",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 8,
+      "column": 0,
+      "length": 5
+     }
+    },
+    {
+     "query": "final",
+     "direction": 1,
+     "from": 7,
+     "hit": {
+      "row": 8,
+      "column": 0,
+      "length": 5
+     }
+    },
+    {
+     "query": "tab\tsep",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "indented",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 3,
+      "column": 2,
+      "length": 15
+     }
+    },
+    {
+     "query": "nothing here",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "e",
+     "direction": 1,
+     "from": 3,
+     "hit": {
+      "row": 4,
+      "column": 9,
+      "length": 24
+     }
+    },
+    {
+     "query": "e",
+     "direction": -1,
+     "from": 3,
+     "hit": {
+      "row": 2,
+      "column": 7,
+      "length": 17
+     }
+    }
+   ]
+  },
+  {
+   "id": "wrapped",
+   "about": "A soft-wrapped line is one line of text; a hard line break is a newline; blanks the program never wrote are trimmed, written ones are not",
+   "cols": 10,
+   "rows": 4,
+   "scrollback": 20,
+   "write": "0123456789ABCDEFGHIJklm\r\nshort\r\npad   \r\nend",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      9,
+      0
+     ],
+     "text": "0123456789"
+    },
+    {
+     "start": [
+      5,
+      0
+     ],
+     "end": [
+      2,
+      1
+     ],
+     "text": "56789ABC"
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      2,
+      2
+     ],
+     "text": "0123456789ABCDEFGHIJklm"
+    },
+    {
+     "start": [
+      8,
+      0
+     ],
+     "end": [
+      3,
+      2
+     ],
+     "text": "89ABCDEFGHIJklm"
+    },
+    {
+     "start": [
+      0,
+      1
+     ],
+     "end": [
+      9,
+      2
+     ],
+     "text": "ABCDEFGHIJklm"
+    },
+    {
+     "start": [
+      0,
+      2
+     ],
+     "end": [
+      9,
+      3
+     ],
+     "text": "klm\nshort"
+    },
+    {
+     "start": [
+      4,
+      4
+     ],
+     "end": [
+      9,
+      5
+     ],
+     "text": "  \nend"
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      9,
+      6
+     ],
+     "text": "0123456789ABCDEFGHIJklm\nshort\npad   \nend\n"
+    },
+    {
+     "start": [
+      3,
+      3
+     ],
+     "end": [
+      3,
+      3
+     ],
+     "text": "r"
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      4,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       9,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      9,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       9,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       9,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       2,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      8,
+      2
+     ],
+     "range": [
+      [
+       8,
+       2
+      ],
+      [
+       8,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      4,
+      3
+     ],
+     "range": [
+      [
+       0,
+       3
+      ],
+      [
+       4,
+       3
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      5
+     ],
+     "range": [
+      [
+       0,
+       5
+      ],
+      [
+       2,
+       5
+      ]
+     ]
+    },
+    {
+     "at": [
+      7,
+      5
+     ],
+     "range": [
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       5
+      ]
+     ]
+    }
+   ],
+   "all": "0123456789ABCDEFGHIJklm\nshort\npad   \nend",
+   "screen": "klm\nshort\npad   \nend",
+   "searches": [
+    {
+     "query": "789abc",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "jklm",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "pad",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 4,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "pad ",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 4,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "5 ",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    }
+   ]
+  },
+  {
+   "id": "wide-and-combining",
+   "about": "CJK in two cells, combining marks, selections that start or end inside a wide character",
+   "cols": 16,
+   "rows": 3,
+   "scrollback": 10,
+   "write": "漢字 テスト ok\r\néà café\r\n日本語のテキスト",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      3,
+      0
+     ],
+     "text": "漢字"
+    },
+    {
+     "start": [
+      1,
+      0
+     ],
+     "end": [
+      2,
+      0
+     ],
+     "text": " 字"
+    },
+    {
+     "start": [
+      1,
+      0
+     ],
+     "end": [
+      4,
+      0
+     ],
+     "text": " 字 "
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      15,
+      0
+     ],
+     "text": "漢字 テスト ok"
+    },
+    {
+     "start": [
+      0,
+      1
+     ],
+     "end": [
+      7,
+      1
+     ],
+     "text": "éà café"
+    },
+    {
+     "start": [
+      2,
+      1
+     ],
+     "end": [
+      5,
+      1
+     ],
+     "text": " caf"
+    },
+    {
+     "start": [
+      0,
+      2
+     ],
+     "end": [
+      15,
+      2
+     ],
+     "text": "日本語のテキスト"
+    },
+    {
+     "start": [
+      3,
+      2
+     ],
+     "end": [
+      10,
+      2
+     ],
+     "text": " 語のテキ"
+    },
+    {
+     "start": [
+      2,
+      0
+     ],
+     "end": [
+      5,
+      1
+     ],
+     "text": "字 テスト ok\néà caf"
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      0,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      1,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      4,
+      0
+     ],
+     "range": [
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      5,
+      0
+     ],
+     "range": [
+      [
+       5,
+       0
+      ],
+      [
+       10,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      8,
+      0
+     ],
+     "range": [
+      [
+       5,
+       0
+      ],
+      [
+       10,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      1,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      7,
+      1
+     ],
+     "range": [
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      4,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       15,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      5,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       15,
+       2
+      ]
+     ]
+    }
+   ],
+   "all": "漢字 テスト ok\néà café\n日本語のテキスト",
+   "screen": "漢字 テスト ok\néà café\n日本語のテキスト",
+   "searches": [
+    {
+     "query": "字",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 1,
+      "length": 9
+     }
+    },
+    {
+     "query": "テス",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 3,
+      "length": 9
+     }
+    },
+    {
+     "query": "CAFÉ",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 5,
+      "length": 9
+     }
+    },
+    {
+     "query": "é",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 8,
+      "length": 9
+     }
+    },
+    {
+     "query": "café",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 5,
+      "length": 9
+     }
+    },
+    {
+     "query": "語の",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 2,
+      "column": 2,
+      "length": 8
+     }
+    },
+    {
+     "query": "ok",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 7,
+      "length": 9
+     }
+    }
+   ]
+  },
+  {
+   "id": "nbsp-and-written-spaces",
+   "about": "A non-breaking space copies as a space; spaces the program wrote stay at a row's end, cells it never wrote do not",
+   "cols": 16,
+   "rows": 3,
+   "scrollback": 10,
+   "write": "a b   \r\n  c  \r\nx              y",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      15,
+      0
+     ],
+     "text": "a b   "
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      15,
+      1
+     ],
+     "text": "a b   \n  c  "
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      15,
+      2
+     ],
+     "text": "a b   \n  c  \nx              y"
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      5,
+      0
+     ],
+     "text": "a b   "
+    },
+    {
+     "start": [
+      0,
+      1
+     ],
+     "end": [
+      15,
+      2
+     ],
+     "text": "  c  \nx              y"
+    },
+    {
+     "start": [
+      1,
+      0
+     ],
+     "end": [
+      1,
+      0
+     ],
+     "text": " "
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      0,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      1,
+      0
+     ],
+     "range": [
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      0
+     ],
+     "range": [
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      0
+     ],
+     "range": [
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      1
+     ],
+     "range": [
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      2
+     ],
+     "range": [
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      15,
+      2
+     ],
+     "range": [
+      [
+       15,
+       2
+      ],
+      [
+       15,
+       2
+      ]
+     ]
+    },
+    {
+     "at": [
+      8,
+      2
+     ],
+     "range": [
+      [
+       8,
+       2
+      ],
+      [
+       8,
+       2
+      ]
+     ]
+    }
+   ],
+   "all": "a b   \n  c  \nx              y",
+   "screen": "a b   \n  c  \nx              y",
+   "searches": [
+    {
+     "query": "a b",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "a b",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "b   ",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 2,
+      "length": 6
+     }
+    },
+    {
+     "query": "x y",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    }
+   ]
+  },
+  {
+   "id": "scrolled-screen",
+   "about": "Copy screen reads the visible rows; here the live screen after output scrolled; select all reads everything",
+   "cols": 12,
+   "rows": 3,
+   "scrollback": 100,
+   "write": "row 00\r\nrow 01\r\nrow 02\r\nrow 03\r\nrow 04\r\nrow 05\r\nrow 06\r\nrow 07\r\nrow 08\r\nrow 09\r\nrow 10\r\nrow 11",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      11,
+      2
+     ],
+     "text": "row 00\nrow 01\nrow 02"
+    },
+    {
+     "start": [
+      0,
+      9
+     ],
+     "end": [
+      11,
+      11
+     ],
+     "text": "row 09\nrow 10\nrow 11"
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      4,
+      10
+     ],
+     "range": [
+      [
+       4,
+       10
+      ],
+      [
+       5,
+       10
+      ]
+     ]
+    },
+    {
+     "at": [
+      6,
+      11
+     ],
+     "range": [
+      [
+       6,
+       11
+      ],
+      [
+       6,
+       11
+      ]
+     ]
+    }
+   ],
+   "all": "row 00\nrow 01\nrow 02\nrow 03\nrow 04\nrow 05\nrow 06\nrow 07\nrow 08\nrow 09\nrow 10\nrow 11",
+   "screen": "row 09\nrow 10\nrow 11",
+   "searches": [
+    {
+     "query": "row 03",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 3,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 03",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 3,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 10,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": 1,
+     "from": 9,
+     "hit": {
+      "row": 10,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": 1,
+     "from": 10,
+     "hit": {
+      "row": 11,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": 1,
+     "from": 11,
+     "hit": {
+      "row": 10,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 11,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": -1,
+     "from": 9,
+     "hit": {
+      "row": 11,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 1",
+     "direction": -1,
+     "from": 11,
+     "hit": {
+      "row": 10,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "ROW 00",
+     "direction": -1,
+     "from": null,
+     "hit": {
+      "row": 0,
+      "column": 0,
+      "length": 6
+     }
+    },
+    {
+     "query": "row 11",
+     "direction": 1,
+     "from": 11,
+     "hit": {
+      "row": 11,
+      "column": 0,
+      "length": 6
+     }
+    }
+   ]
+  },
+  {
+   "id": "wide-wrap",
+   "about": "A wide character that does not fit at the end of a row moves to the next, leaving a blank cell behind; the rows still read as one line",
+   "cols": 7,
+   "rows": 4,
+   "scrollback": 10,
+   "write": "abcdef漢字ghij\r\n1234567",
+   "selections": [
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      6,
+      0
+     ],
+     "text": "abcdef"
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      6,
+      1
+     ],
+     "text": "abcdef漢字ghi"
+    },
+    {
+     "start": [
+      5,
+      0
+     ],
+     "end": [
+      1,
+      1
+     ],
+     "text": "f漢"
+    },
+    {
+     "start": [
+      6,
+      0
+     ],
+     "end": [
+      0,
+      1
+     ],
+     "text": "漢"
+    },
+    {
+     "start": [
+      0,
+      1
+     ],
+     "end": [
+      6,
+      1
+     ],
+     "text": "漢字ghi"
+    },
+    {
+     "start": [
+      0,
+      0
+     ],
+     "end": [
+      6,
+      2
+     ],
+     "text": "abcdef漢字ghij"
+    },
+    {
+     "start": [
+      3,
+      1
+     ],
+     "end": [
+      6,
+      2
+     ],
+     "text": " ghij"
+    }
+   ],
+   "words": [
+    {
+     "at": [
+      5,
+      0
+     ],
+     "range": [
+      [
+       0,
+       0
+      ],
+      [
+       5,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      6,
+      0
+     ],
+     "range": [
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       0
+      ]
+     ]
+    },
+    {
+     "at": [
+      0,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       6,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      2,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       6,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      6,
+      1
+     ],
+     "range": [
+      [
+       0,
+       1
+      ],
+      [
+       6,
+       1
+      ]
+     ]
+    },
+    {
+     "at": [
+      3,
+      2
+     ],
+     "range": [
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       2
+      ]
+     ]
+    }
+   ],
+   "all": "abcdef漢字ghij\n1234567",
+   "screen": "abcdef漢字ghij\n1234567",
+   "searches": [
+    {
+     "query": "漢",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 0,
+      "length": 5
+     }
+    },
+    {
+     "query": "f漢",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "字g",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 1,
+      "column": 1,
+      "length": 5
+     }
+    },
+    {
+     "query": "ghij",
+     "direction": 1,
+     "from": null,
+     "hit": null
+    },
+    {
+     "query": "34",
+     "direction": 1,
+     "from": null,
+     "hit": {
+      "row": 3,
+      "column": 2,
+      "length": 7
+     }
+    }
+   ]
+  }
+ ]
+}
