@@ -5,7 +5,7 @@
 #[path = "../tests/support/mod.rs"]
 mod support;
 
-use lazysh_terminal_runtime::{Config, Offer, Size, TerminalRuntime};
+use lazysh_terminal_runtime::{Config, Size, TerminalRuntime};
 use std::time::Instant;
 use support::*;
 
@@ -15,8 +15,7 @@ fn run(data: &[u8], collect_frames: bool) -> f64 {
     let mut rt = runtime(80, 24);
     let start = Instant::now();
     for chunk in data.chunks(CHUNK) {
-        assert_eq!(rt.offer(chunk.to_vec()), Offer::Accepted);
-        rt.pump(usize::MAX);
+        feed_chunk(&mut rt, chunk);
         if collect_frames {
             std::hint::black_box(rt.take_frame().expect("frame"));
         }

@@ -26,12 +26,17 @@ pub fn runtime(cols: u16, rows: u16) -> TerminalRuntime {
 /// Offer in transport-sized chunks and process everything, like the transport loop will.
 pub fn feed(rt: &mut TerminalRuntime, bytes: &[u8]) {
     for chunk in bytes.chunks(16 * 1024) {
-        match rt.offer(chunk.to_vec()) {
-            Offer::Accepted => {}
-            other => panic!("unexpected {other:?}"),
-        }
-        rt.pump(usize::MAX);
+        feed_chunk(rt, chunk);
     }
+}
+
+/// Offer one transport chunk and process it.
+pub fn feed_chunk(rt: &mut TerminalRuntime, chunk: &[u8]) {
+    match rt.offer(chunk.to_vec()) {
+        Offer::Accepted => {}
+        other => panic!("unexpected {other:?}"),
+    }
+    rt.pump(usize::MAX);
 }
 
 /// Visible text per row, blanks as spaces, trailing blanks trimmed, wide-cell spacers skipped.
