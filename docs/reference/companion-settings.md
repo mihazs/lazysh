@@ -35,4 +35,14 @@ Updates hold a private `settings.lock`, check the expected revision under that l
 
 Native Cargo fixtures cover absent-file reads, persistent typed updates, concurrent/stale revision handling, CLI gates before unavailable transcript/SDK paths, permissions, links, FIFO rejection and bounds. Vitest covers versioned parsing, actual update payloads, unavailable companions, conflicts and late responses from an old SSH session. No developer's real settings or SDK/device is used by these tests.
 
+## Auto-update policy
+
+`lazysh-agent auto-update status` prints the policy and the last app-driven update; `auto-update set --expected-revision R --policy off|notify|install` changes it (a stale revision returns `SettingsConflict`, a concurrent writer `SettingsBusy`). A host with no file behaves as `install` and reading it creates nothing. The file `auto-update.json` in the [state directory](companion-events.md#state-directory-and-retention) is separate from `settings.json`, so companions that predate it keep reading `settings.json`:
+
+```json
+{ "schemaVersion": 1, "revision": 1, "policy": "install" }
+```
+
+The schema is strict like `settings.json`: another schema version, an unknown field or policy, and a file above 4 KiB are refused, and a policy that cannot be read blocks app-driven updates (`reason: "policyUnreadable"`); it is never replaced by the default. `status` also prints `appUpdate`, the record in `app-update.json` (`state`, `from`, `to`, `reason`, `failures`, `notBefore`, `blocked`), which the runner owns.
+
 Related: [change host settings](../companion-settings.md) · [companion event storage](companion-events.md) · [documentation](../README.md).

@@ -19,6 +19,10 @@ lazysh-agent snapshot --limit 50
 
 For this source/PATH installation, make `lazysh-agent` available on the noninteractive SSH PATH. The shell commands below assume that PATH installation; with a managed-only installation, use the app controls or invoke its verified absolute executable path explicitly. A new store can return an empty session list; that confirms a snapshot read, not a running agent.
 
+## Keep the companion current
+
+A companion older than the app that talks to it updates itself to the app's version (policy `install`, the default). Nothing needs doing, and nothing is downloaded on the phone: the host fetches the release itself. To stop it, run `lazysh-agent auto-update status` on the host, then `lazysh-agent auto-update set --expected-revision <revision> --policy off` (or `notify` to keep it from changing the executable). To undo an update, use `lazysh-agent update --rollback`; the rolled-back version is not installed again behind your back. See [Companion updates](../companion-settings.md#companion-updates).
+
 ## Enable reporting deliberately
 
 1. Follow [agent hook setup](../agent-hooks.md) for your installed provider and selected existing profile. Inspect changes before applying them; preserve unrelated hooks. Managed hook setup binds the resolved absolute executable and needs no PATH change. Select alternate profiles explicitly: discovery respects provider overrides/XDG paths but does not prove which profile a running agent loaded. Configuration printers only print fragments and do not install them or change provider trust.

@@ -42,6 +42,11 @@ enum Command {
     Licenses,
     /// Check whether a newer verified companion release exists, or show the installed one.
     Update(lazysh_agent::update::Args),
+    /// Whether this companion updates itself when a newer lazysh app connects.
+    AutoUpdate {
+        #[command(subcommand)]
+        command: lazysh_agent::auto_update::Command,
+    },
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
@@ -294,6 +299,14 @@ enum SettingsCommand {
     },
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
+    // A lazysh app newer than this companion sends its version. Hooks run inside agent turns and
+    // never start anything; `auto-update` and `update` are the update itself.
+    let update = (!matches!(
+        cli.command,
+        Command::Ingest { .. } | Command::ApprovalRequest { .. } | Command::AutoUpdate { .. }
+    ))
+    .then(lazysh_agent::auto_update::trigger)
+    .flatten();
     let operation = match &cli.command {
         Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
             Some(lazysh_agent::settings::Operation::TranscriptDiscovery)
@@ -318,6 +331,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             ],
         })),
         Command::Update(_) => return Err(Error::InvalidArgument),
+        Command::AutoUpdate { command } => Some(lazysh_agent::auto_update::execute(command)?),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
@@ -656,13 +670,12 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             None
         }
-        Command::Snapshot { limit } => Some(
-            serde_json::to_value(
-                Store::open(&lazysh_agent::state_directory()?)?
-                    .snapshot(limit, chrono::Utc::now())?,
-            )
-            .map_err(|_| Error::InvalidEvent)?,
-        ),
+        Command::Snapshot { limit } => {
+            let mut snapshot = Store::open(&lazysh_agent::state_directory()?)?
+                .snapshot(limit, chrono::Utc::now())?;
+            snapshot.update = update;
+            Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
+        }
     };
     if let Some(output) = output {
         let mut stdout = io::stdout().lock();

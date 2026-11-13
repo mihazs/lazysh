@@ -24,4 +24,14 @@ lazysh-agent settings update --expected-revision 0 \
 
 Replace `0` with the revision actually returned by `show`; review all three values before writing. A stale revision returns `SettingsConflict`. On `SettingsBusy`, reread after the other writer finishes. Confirm the returned values with `lazysh-agent settings show`. Do not delete malformed settings to bypass a refusal.
 
+## Companion updates
+
+A companion that is older than the lazysh app talking to it updates itself to the app's version, in the background, unless you turn that off. This is on by default (`install`) and the only network traffic it causes is one HTTPS download of the release from GitHub when an update happens. Show the policy and the last update with `lazysh-agent auto-update status`, and change it with the revision it returned:
+
+```sh
+lazysh-agent auto-update set --expected-revision 0 --policy off
+```
+
+`off` never updates and uses no network, `notify` never changes the executable, `install` updates when a newer app connects, never during an agent turn and never to a version older than the installed one. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
+
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.
