@@ -47,7 +47,7 @@ Usage errors (a missing or conflicting flag, a version that is not `X.Y.Z`, no `
 }
 ```
 
-`action` is `check`, `update`, `dryRun`, `rollback` or `status`; `outcome` is `available`, `upToDate`, `updated`, `dryRunOk`, `rolledBack`, `status`, `failed` or `uncertain`. `--status` adds `lastCheck` (null until auto-update records one) and `lastOperation`. `current` describes the managed copy (`<user data>/lazysh/companion/lazysh-agent`) when there is one, else the running executable with `"managed": false`; after an install it is the installed file. `current.version` is null when that copy cannot print `lazysh-agent X.Y.Z`. A failure keeps what was learned before it (`current`, `latest`). Readers must ignore unknown fields: a writer only adds fields within `schemaVersion` 1.
+`action` is `check`, `update`, `dryRun`, `rollback` or `status`; `outcome` is `available`, `upToDate`, `updated`, `dryRunOk`, `rolledBack`, `status`, `failed` or `uncertain`. `--status` adds `lastCheck` (null until a scheduled check records one), `lastOperation` and `autoUpdate`, the settings of [auto-update](companion-settings.md#auto-update-policy) (`null` when they cannot be read). `current` describes the managed copy (`<user data>/lazysh/companion/lazysh-agent`) when there is one, else the running executable with `"managed": false`; after an install it is the installed file. `current.version` is null when that copy cannot print `lazysh-agent X.Y.Z`. A failure keeps what was learned before it (`current`, `latest`). Readers must ignore unknown fields: a writer only adds fields within `schemaVersion` 1.
 
 A failure sets `"outcome": "failed"` and `"error": {"kind", "detail", "message", "retryAfterSeconds"}`. `message` is a fixed sentence, never remote text. Output never contains a URL, an environment value or proxy credentials.
 
@@ -101,8 +101,8 @@ The app is the trust anchor of an app-driven update. An app sets `LAZYSH_APP_VER
 
 `snapshot` carries the outcome as `update: {"state","from","to","reason"?}`, only when an app newer than the companion asked (or one finished within ten minutes): `state` is `started` (this request started it), `running`, `done`, `failed` or `skipped`. `reason` is a fixed word: `policyOff`, `policyNotify`, `policyUnreadable`, `invalidAppVersion`, `rolledBack`, `activeTurn`, `busy`, `interrupted`, `internal` or an `error.kind` above.
 
-`lazysh-agent auto-update status|set` read and write the policy (`auto-update.json`: `schemaVersion`, `revision`, `policy`); `auto-update run` is internal and not meant to be run by hand.
+`lazysh-agent auto-update status|set` read and write the settings (`auto-update.json`: policy, channel, interval, window) and `auto-update run` is the scheduled check, both described in [the auto-update reference](companion-settings.md#auto-update-policy). `auto-update run --app-version` is what a newer app starts and is not meant to be run by hand.
 
 ## Not yet available
 
-The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and the scheduled auto-update checks (channel, interval, window, OS timers) of [#1446](https://github.com/mihazs/lazysh/issues/1446).
+The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and the operating system timers of [#1446](https://github.com/mihazs/lazysh/issues/1446) (`auto-update enable|disable`); the checks themselves ship, see [the auto-update reference](companion-settings.md#auto-update-policy).

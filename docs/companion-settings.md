@@ -32,6 +32,12 @@ A companion that is older than the lazysh app talking to it updates itself to th
 lazysh-agent auto-update set --expected-revision 0 --policy off
 ```
 
-`off` never updates and uses no network, `notify` never changes the executable, `install` updates when a newer app connects, never during an agent turn and never to a version older than the installed one. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
+`off` never updates and uses no network, `notify` never changes the executable and only records what it found, `install` updates when a newer app connects and when its own check finds a newer release, never during an agent turn and never to a version older than the installed one. Three more settings shape the checks the companion makes by itself: how often it may ask GitHub (24 hours by default, 1 to 720), which releases it looks at (`stable`, or `prerelease`) and when an install may start (a window in the host's local time):
+
+```sh
+lazysh-agent auto-update set --expected-revision 1 --policy install --interval-hours 12 --channel stable --window 22:00-06:00
+```
+
+A setting you leave out keeps its value, and `--window none` removes the window. `lazysh-agent auto-update status` shows the settings, `lastCheck` (what the last check found) and `nextCheckAt`. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
 
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.

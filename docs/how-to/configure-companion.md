@@ -21,7 +21,7 @@ For this source/PATH installation, make `lazysh-agent` available on the noninter
 
 ## Keep the companion current
 
-A companion older than the app that talks to it updates itself to the app's version (policy `install`, the default). Nothing needs doing, and nothing is downloaded on the phone: the host fetches the release itself. To stop it, run `lazysh-agent auto-update status` on the host, then `lazysh-agent auto-update set --expected-revision <revision> --policy off` (or `notify` to keep it from changing the executable). To undo an update, use `lazysh-agent update --rollback`; the rolled-back version is not installed again behind your back. See [Companion updates](../companion-settings.md#companion-updates).
+A companion older than the app that talks to it updates itself to the app's version (policy `install`, the default). Nothing needs doing, and nothing is downloaded on the phone: the host fetches the release itself. It also looks for a newer release by itself, at most once a day, and installs it when the host is idle (never during an agent turn; you can restrict it to a time window). To stop it, run `lazysh-agent auto-update status` on the host, then `lazysh-agent auto-update set --expected-revision <revision> --policy off` (or `notify` to keep it from changing the executable). To undo an update, use `lazysh-agent update --rollback`; the rolled-back version is not installed again behind your back. See [Companion updates](../companion-settings.md#companion-updates).
 
 ## Enable reporting deliberately
 

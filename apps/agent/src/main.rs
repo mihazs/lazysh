@@ -673,6 +673,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::Snapshot { limit } => {
             let mut snapshot = Store::open(&lazysh_agent::state_directory()?)?
                 .snapshot(limit, chrono::Utc::now())?;
+            // A check that is due starts after the reply is built, detached, so it never delays it;
+            // an update a newer app just started already holds the host.
+            if !update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.state,
+                    lazysh_agent::auto_update::State::Started
+                        | lazysh_agent::auto_update::State::Running
+                )
+            }) {
+                lazysh_agent::auto_update::opportunistic();
+            }
             snapshot.update = update;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
         }

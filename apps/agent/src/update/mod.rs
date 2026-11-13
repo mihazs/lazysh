@@ -7,17 +7,19 @@
 use clap::{Args as ClapArgs, ValueEnum};
 use lazysh_companion_release::{version, Config, Publisher, Selection, Which, MAX_BINARY};
 use report::{Failure, Fault, Latest, Output, Report};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{io::IsTerminal, process::ExitCode, time::Duration};
 
 mod current;
+pub use current::running_managed;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod install;
 mod process;
 mod report;
 mod selftest;
 mod staging;
-mod state;
+pub(crate) mod state;
 // Descriptor-relative operations on Linux and macOS; plain paths on Windows. Under test the path
 // version also runs on Unix, where its logic can be exercised without a Windows host.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -29,12 +31,22 @@ mod store_path;
 #[cfg(windows)]
 use store_path as store;
 
-#[derive(Clone, Copy, ValueEnum)]
-enum Channel {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
     /// The release GitHub marks latest.
+    #[default]
     Stable,
     /// The highest version that is not a draft.
     Prerelease,
+}
+impl Channel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Prerelease => "prerelease",
+        }
+    }
 }
 #[derive(ClapArgs)]
 #[command(group(clap::ArgGroup::new("mode").multiple(false).args(["check", "dry_run", "rollback", "status"])))]
@@ -238,7 +250,8 @@ async fn check(args: &Args, output: &Output, report: &mut Report) -> Result<bool
 
 fn status(report: &mut Report) -> Result<(), Fault> {
     let installed = current::detect()?;
-    let state = state::State::read(&crate::state_directory()?);
+    let directory = crate::state_directory()?;
+    let state = state::State::read(&directory);
     // A previous version is only real while its file is still there.
     let previous = state.previous.filter(|_| {
         std::fs::symlink_metadata(
@@ -255,6 +268,7 @@ fn status(report: &mut Report) -> Result<(), Fault> {
         state.last_check.unwrap_or(Value::Null),
         state.last_operation.unwrap_or(Value::Null),
     ));
+    report.auto_update = Some(crate::auto_update::summary(&directory));
     Ok(())
 }
 
