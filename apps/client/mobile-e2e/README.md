@@ -26,10 +26,15 @@ bun run --cwd apps/client mobile-e2e -- --suite smoke
 ```
 
 Before the first spec the launcher starts owned hosts from `tests/support` and forwards their ports to the guest with
-`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` (default), `herdr` and `tmux`
+`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` (default; `ssh,herdr` when the three Herdr variables below are set, which the Agent view smoke journey needs), `herdr` and `tmux`
 (these need `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN` and `LAZYSH_TEST_RECEIVER_BIN`, or `LAZYSH_TEST_TMUX`), or empty for
 none. The endpoint, fingerprint and private key are in a mode-0600 file in a per-run mode-0700 directory
 (`LAZYSH_E2E_ENDPOINTS`); they are never logged, and the Appium log filters redact clipboard content and key blocks.
+
+The phone layout (side menu, no top bar) needs a portrait window narrower than 600 dp, so a tablet-shaped guest such as the
+Waydroid one gets a 1080x2400 window at 420 dpi before each session; the baseline is restored with the rest of the device state.
+A phone-shaped emulator is left as it is. The smoke specs (`specs/smoke/`, one reason to fail each) are: launch, add host and
+connect, app lifecycle, terminal input and output, toolbar pages, side menu, disconnect and reconnect, and the Agent view.
 
 The run clears the app's data at the start of every spec file (`appium:noReset: false`). It takes an advisory lock for the
 serial, records window size, density, navigation mode, IME, animation scale, rotation and the app's runtime permissions, and
