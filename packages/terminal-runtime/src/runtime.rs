@@ -13,6 +13,15 @@ const MAX_REPLY_BYTES: usize = 64 * 1024;
 /// Pending OSC 52 writes and directory changes the host has not taken yet. The binding bounds one
 /// payload (192 KiB) but not how many queue up, so an ignored session cannot grow without limit.
 const MAX_PENDING_EVENTS: usize = 8;
+/// How a new grid size is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Resize {
+    /// libghostty-vt's own: reflowing and bottom-anchored.
+    Plain,
+    /// Mosh's: top-anchored, no reflow, nothing pushed into scrollback. Only at a sequence boundary.
+    Canonical,
+}
+
 /// DEC private modes 6 (origin) and 7 (wraparound); libghostty-vt reflows only while 7 is set.
 const MODE_ORIGIN: u16 = 6;
 const MODE_WRAPAROUND: u16 = 7;
@@ -215,7 +224,10 @@ impl TerminalRuntime {
                 };
                 // Out of memory is the only way this fails; a display that cannot follow the
                 // transport is as good as a corrupt one.
-                if self.apply_transport_size(size).is_err() {
+                if self
+                    .apply(size, SizeAuthority::Transport, Resize::Canonical)
+                    .is_err()
+                {
                     self.fail_display(DisplayFailure::InvalidFrame);
                 }
             }
@@ -270,19 +282,20 @@ impl TerminalRuntime {
         self.intent = Some(size);
         match self.authority {
             SizeAuthority::Local => self
-                .apply(size, SizeAuthority::Local, true)
+                .apply(size, SizeAuthority::Local, Resize::Plain)
                 .map(|()| SizeOutcome::Applied),
             SizeAuthority::Transport => Ok(SizeOutcome::Deferred(size)),
         }
     }
 
-    /// The transport states the real grid size (Mosh framebuffer). Always applied, top-anchored and
-    /// without reflowing: the rows that fit stay where they are, nothing is pushed into scrollback,
-    /// and history keeps its rows (a narrower grid cuts their right edge, see the design document).
-    /// From now on UI requests are deferred until [`Self::release_transport_authority`].
+    /// The transport states the real grid size. Always applied, as a plain libghostty-vt resize
+    /// (reflowing, bottom-anchored); from now on UI requests are deferred until
+    /// [`Self::release_transport_authority`]. Mosh frames do not come through here: the envelope
+    /// path resizes top-anchored and without reflow ([`Config::canonical_frames`]), which needs to
+    /// run at a sequence boundary that only the byte stream knows.
     pub fn apply_transport_size(&mut self, size: Size) -> Result<(), Error> {
         let size = size.validate()?;
-        self.apply(size, SizeAuthority::Transport, false)?;
+        self.apply(size, SizeAuthority::Transport, Resize::Plain)?;
         self.authority = SizeAuthority::Transport;
         Ok(())
     }
@@ -292,7 +305,9 @@ impl TerminalRuntime {
     pub fn release_transport_authority(&mut self) -> Result<(), Error> {
         self.authority = SizeAuthority::Local;
         match self.intent {
-            Some(size) if size != self.size => self.apply(size, SizeAuthority::Local, true),
+            Some(size) if size != self.size => {
+                self.apply(size, SizeAuthority::Local, Resize::Plain)
+            }
             _ => Ok(()),
         }
     }
@@ -315,11 +330,11 @@ impl TerminalRuntime {
         self.display.as_ref().and_then(Display::failure)
     }
 
-    fn apply(&mut self, size: Size, authority: SizeAuthority, reflow: bool) -> Result<(), Error> {
+    fn apply(&mut self, size: Size, authority: SizeAuthority, how: Resize) -> Result<(), Error> {
         let old = self.size;
         // Every Mosh update repeats the grid size; an unchanged grid is a plain call that only
         // refreshes the pixel size, and moves nothing.
-        if reflow || (size.cols, size.rows) == (old.cols, old.rows) {
+        if how == Resize::Plain || (size.cols, size.rows) == (old.cols, old.rows) {
             self.terminal.resize(
                 size.cols,
                 size.rows,

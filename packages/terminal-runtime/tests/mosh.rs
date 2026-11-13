@@ -564,3 +564,41 @@ fn origin_mode_and_margins_do_not_misplace_the_resize_moves() {
         "Q is row 2 of the region, beside the earlier text"
     );
 }
+
+#[test]
+fn a_host_size_from_apply_transport_size_is_a_plain_resize_even_mid_sequence() {
+    // Only the envelope path may write into the VT; a host call can land between two chunks of
+    // one escape sequence and must not disturb it.
+    let mut rt = runtime(10, 3);
+    feed(&mut rt, b"\x1b[3");
+    rt.apply_transport_size(size(12, 4)).unwrap();
+    feed(&mut rt, b"1mred");
+    let cell = &rt.snapshot().unwrap().dirty[0].cells[0];
+    assert_eq!(
+        (cell.text.as_str(), cell.style.fg_color.is_some()),
+        ("r", true)
+    );
+}
+
+#[test]
+fn an_envelope_cut_short_by_another_sequence_is_read_again_from_that_sequence() {
+    let mut rt = mosh(40, 12);
+    // "other" OSC 7777 text broken off by the start of a real envelope: the real one still counts.
+    feed(&mut rt, b"\x1b]7777;laz");
+    feed(&mut rt, &frame(1, 30, 5, "ok"));
+    assert_eq!((dims(&rt), rt.display_failure()), ((30, 5), None));
+}
+
+#[test]
+fn a_background_colour_does_not_make_dropped_rows_scrollback() {
+    let mut rt = mosh(40, 12);
+    feed(
+        &mut rt,
+        &frame(1, 40, 12, "\x1b[44m\x1b[HTOP\x1b[12;1HBOTTOM"),
+    );
+    feed(&mut rt, &frame(2, 40, 6, ""));
+    assert_eq!(
+        (rt.scrollback_rows().unwrap(), screen(&mut rt)[0].as_str()),
+        (0, "TOP")
+    );
+}

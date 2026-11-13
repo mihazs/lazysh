@@ -126,10 +126,11 @@ impl Scanner {
                             return Some((i, signal));
                         }
                     } else {
-                        // The ESC started another sequence, so the envelope was never terminated:
-                        // fail closed, and read this byte again as the start of that sequence.
+                        // The ESC started another sequence, so the text was never terminated:
+                        // fail closed if it was ours, and read this byte again as what follows
+                        // that ESC.
                         let ours = self.data.len() >= TAG.len();
-                        self.state = State::Ground;
+                        self.state = State::Open(1);
                         if ours {
                             return Some((i - 1, Signal::Malformed));
                         }
