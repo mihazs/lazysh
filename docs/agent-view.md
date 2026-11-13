@@ -336,10 +336,18 @@ transcript, so it works for dialogs no hook or transcript record describes.
   that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
 - **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
   (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**). A dialog an approval or question card
-  already answers shows no second card.
-- **Profile and corpus.** The Claude Code 2.1.x footers and layout are data in `agentDialogLift.ts`, verified against screens captured from
-  Claude Code 2.1.318 in a real tmux pane (`apps/client/src/test/agentDialogs`). Other agents' dialogs (Codex, OpenCode, Grok, Gemini)
-  have no captured corpus yet and fall back to the banner.
+  already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
+  approval prompt is answered by this card.
+- **Profile and corpus.** Each agent reads its own screen, and no agent's dialog is guessed from another's layout. The Claude Code 2.1.x
+  footers and layout are data in `agentDialogLift.ts`, verified against screens captured from Claude Code 2.1.318 in a real tmux pane
+  (`apps/client/src/test/agentDialogs`). The Codex profile (`agentDialogLiftCodex.ts`) reads the dialogs Codex 0.167.0 draws inline: a
+  title, numbered options with `›` before the highlighted one, and one of the three footers captured (`enter select · esc back`,
+  `enter default · s session · esc back`, `Press enter to confirm or esc to cancel`). That covers `/model` and its reasoning page,
+  `/permissions`, `/review`, the rate-limit prompt and **the approval prompt** (Yes, proceed; Yes and don't ask again; No and tell Codex),
+  checked live with Down, Up and Enter on a real Codex in tmux. Codex's `/resume` table, a question with notes and any other footer fall
+  back to the banner. OpenCode, Grok and Gemini have no captured corpus yet and fall back to the banner. An option that keeps a permission
+  rule (Codex's **Yes, and don't ask again for commands that start with …**) is never one tap: the card first shows the option's exact text
+  and what it keeps, and **Back** sends nothing.
 - **Not covered.** `/rewind`'s confirmation page has no footer line, so it is not provable as a list dialog: after the choice that opens it
   the card says **The agent is waiting for you in the terminal**. Dialogs that read text (login codes, the "Tell Claude what to change" field) stay in the terminal.
 

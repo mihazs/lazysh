@@ -389,6 +389,38 @@ test('answers a list dialog open on the terminal with the keys a person presses,
   expect((await fixture(page)).stdin).toEqual([]);
 });
 
+/** Codex (the base fixture's agent) has an approval prompt open, drawn as its TUI draws it at a phone's width. */
+test('answers a Codex approval prompt open on the terminal with the keys a person presses, after reading the highlight back',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  await page.evaluate(()=>{
+    const draw=(rows:string[])=>window.agentView.channels['display-work'].onmessage({type:'data',data:[...new TextEncoder().encode(`\x1b[2J\x1b[H${rows.join('\r\n')}`)]});
+    const options=['Yes, proceed (y)',"Yes, don't ask again (p)",'No, tell Codex what to do (esc)'];
+    const prompt=(at:number)=>['• Running touch note.txt','','','  Would you like to run the following','  command?','','  $ touch note.txt','','',...options.map((name,index)=>`${index===at?'›':' '} ${index+1}. ${name}`),'','  Press enter to confirm or esc to cancel'];
+    let at=0;
+    window.agentView.onKeys=input=>{if(input.kind!=='pick')return;if(input.enter)draw(['• Ran touch note.txt','  └ (no output)','','› ']);else{at+=input.rows as number;draw(prompt(at));}};
+    draw(prompt(at));
+  });
+  const dialog=agent.getByRole('region',{name:'Dialog in the terminal',exact:true});
+  await expect(dialog.getByRole('heading',{name:'Would you like to run the following'})).toBeVisible({timeout:8000});
+  await expect(dialog).toContainText('$ touch note.txt');
+  await expect(dialog.getByRole('button',{name:/^Yes, proceed/})).toHaveAttribute('aria-current','true');
+  const decline=dialog.getByRole('button',{name:/^No, tell Codex/});
+  await expect(decline).toBeEnabled();
+  const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  // A choice that keeps a permission rule shows what it keeps first; going back sends nothing.
+  await dialog.getByRole('button',{name:/^Yes, don't ask again/}).click();
+  const keep=dialog.getByRole('region',{name:'Confirm a choice that is kept',exact:true});
+  await expect(keep).toContainText("Yes, don't ask again (p)");
+  await keep.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(keep).toHaveCount(0);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
+  await decline.click();
+  await expect(dialog).toHaveCount(0,{timeout:8000});
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+});
+
 test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='phone','Hardware digits are covered on desktop.');
   await open(page);await asClaude(page);

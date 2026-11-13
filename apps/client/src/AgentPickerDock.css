@@ -12,3 +12,5 @@
 .agent-picker .button-row { flex-wrap: wrap; }
 .agent-picker .button-row button { min-height: 44px; }
 .agent-picker-hint { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.agent-picker-confirm { display: grid; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--theme-warning, #ead397) 45%, var(--border)); border-radius: 8px; }
+.agent-picker-confirm p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }

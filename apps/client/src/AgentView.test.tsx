@@ -7,7 +7,7 @@ import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
-import {dialogScreen,fakeTerminal,modelScreen} from './test/agentDialogScreens';
+import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -980,11 +980,18 @@ describe('a list dialog open on the terminal',()=>{
     // Every key was preceded by a fresh look at which pane the agent runs in.
     expect(calls('tmux_chat').filter(args=>(args as {action:{kind:string}}).action.kind==='snapshot').length).toBeGreaterThan(2);
   });
-  it('shows the dialog read-only for an agent whose keys are not verified against captured dialogs',async()=>{
+  it('offers only the dialogs of the agent in the pane: a Claude Code screen under another agent is not read, and no key is sent',async()=>{
     await open(modelScreen(5),'working','codex','Codex');
-    expect(within(dialog()).getByRole('heading',{name:'Select model'})).toBeTruthy();
+    await advance(250);
+    // Not read as Codex's: the card says the agent waits in the terminal and offers no option.
+    expect(within(dialog()).getByRole('status').textContent).toBe('The agent is waiting for you in the terminal.');
     expect(within(dialog()).queryByRole('button',{name:/^Sonnet/})).toBeNull();
-    expect(within(dialog()).getByText('Answer this one in the terminal.')).toBeTruthy();
+    expect(keys()).toEqual([]);
+  });
+  it('answers a Codex approval prompt through the same card as Claude Code\'s dialogs',async()=>{
+    await open(onTmux(dialogScreen('codex-approval')),'needs_attention','codex','Codex');
+    expect(within(dialog()).getByRole('heading',{name:'Would you like to run the following command?'})).toBeTruthy();
+    expect(within(dialog()).getByRole('button',{name:/^No, and tell Codex/})).toBeTruthy();
     expect(keys()).toEqual([]);
   });
   it('shows the agent is waiting in the terminal for a dialog it cannot read, and sends nothing',async()=>{
