@@ -263,6 +263,7 @@ pub fn run() {
                 tmux_jump::chat::tmux_chat,
                 herdr_guard::herdr_chat,
                 herdr_stock_input::herdr_agent_input,
+                herdr_stock_input::herdr_agent_screen,
                 zellij_input::zellij_agent_input,
                 herdr::herdr_tree,
                 herdr::agent_herdr_conversation,

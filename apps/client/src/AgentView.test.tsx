@@ -501,6 +501,7 @@ function server(state:{focus:string;agents?:string[]}) {
     if(command==='multiplexer_sessions')return [{name:'owned'}];
     if(command==='herdr_tree')return {...herdrNavigationTree,panes:[place('w2E:p1','/work/one'),place('w2E:p2','/work/two'),place('w2E:p3','/work/shell')].filter(pane=>pane.pane_id!=='w2E:p3' || true),agents};
     if(command==='agent_herdr_conversation'){const target=(args as {target:{agent:'claude'|'codex';agentSessionId:string}}).target;return page(target.agent,turn('Prompt',`Answer of ${target.agentSessionId}`));}
+    if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
     throw new Error(`Unexpected ${command}`);
   });
 }

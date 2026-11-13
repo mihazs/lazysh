@@ -180,6 +180,11 @@ pub enum Input {
         rows: i8,
         enter: bool,
     },
+    /// One line typed into the free-text row a dialog has open, then Enter. Only Herdr's own agent input has this kind (its `prompt`
+    /// refuses an agent that waits for an answer); tmux sends the same line as `Send`.
+    Type {
+        text: String,
+    },
 }
 /// What `Send` takes in one tmux command.
 const SEND_MAX: usize = 4096;
@@ -189,6 +194,8 @@ pub(crate) const LONG_MAX: usize = 64 * 1024;
 const CHUNK: usize = 4096;
 /// Rows one `pick` may move: far more than any dialog list shows at once.
 const PICK_ROWS: i8 = 30;
+/// The longest line a `Type` takes: what the Agent view's answer field allows.
+const TYPE_MAX: usize = 1000;
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::Send { text } | Self::SendLong { text } = self {
@@ -202,6 +209,15 @@ impl Input {
                     (c.is_control() && !matches!(c, '\n' | '\t'))
                         || matches!(c, '\u{2028}' | '\u{2029}')
                 })
+            {
+                return Err(invalid());
+            }
+        }
+        if let Self::Type { text } = self {
+            if !(1..=TYPE_MAX).contains(&text.len())
+                || text
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
             {
                 return Err(invalid());
             }
@@ -259,21 +275,30 @@ impl Input {
             }
             Self::RequestStop => format!("send-keys -t {pane} Escape"),
             Self::Select { option, .. } => format!("send-keys -t {pane} -H {:02x}", b'0' + option),
-            Self::Submit { of } => format!(
-                "send-keys -t {pane} {}Enter",
-                "Down ".repeat(usize::from(*of) + 1)
-            ),
-            Self::SendLong { .. } => return Err(invalid()),
+            Self::SendLong { .. } | Self::Type { .. } => return Err(invalid()),
             Self::CycleMode {} => format!("send-keys -t {pane} -H 1b 5b 5a"),
-            Self::Pick { rows, enter } => format!(
-                "send-keys -t {pane} {}{}",
-                if *rows < 0 { "Up " } else { "Down " }.repeat(usize::from(rows.unsigned_abs())),
-                if *enter { "Enter" } else { "" }
-            )
-            .trim_end()
-            .to_owned(),
+            Self::Submit { .. } | Self::Pick { .. } => {
+                format!("send-keys -t {pane} {}", self.dialog_keys().join(" "))
+            }
         };
         Ok(command)
+    }
+    /// The keys of a dialog answer by name, as a person presses them: an option's digit, `Up`, `Down` and `Enter`. Empty for any other input.
+    pub(crate) fn dialog_keys(&self) -> Vec<String> {
+        let rows = |key: &str, count: usize| std::iter::repeat_n(key.to_owned(), count);
+        match self {
+            Self::Select { option, .. } => vec![option.to_string()],
+            Self::Submit { of } => rows("Down", usize::from(*of) + 1)
+                .chain(["Enter".to_owned()])
+                .collect(),
+            Self::Pick { rows: moved, enter } => rows(
+                if *moved < 0 { "Up" } else { "Down" },
+                usize::from(moved.unsigned_abs()),
+            )
+            .chain(enter.then(|| "Enter".to_owned()))
+            .collect(),
+            _ => Vec::new(),
+        }
     }
 }
 

@@ -133,6 +133,7 @@ fn main() {
         "tmux_chat",
         "herdr_chat",
         "herdr_agent_input",
+        "herdr_agent_screen",
         "zellij_agent_input",
         "herdr_tree",
         "agent_herdr_conversation",
