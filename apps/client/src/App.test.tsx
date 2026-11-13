@@ -107,6 +107,7 @@ vi.mock('./VoicePanel',()=>({default:(props:{sessionId:string;onDirectDictation:
 import App, { ConnectDialog, validateHost } from "./App";
 import {topBarKey} from './sideMenuMode';
 import {applyAccessStatus, captureAccess} from './access';
+import {setGestureInsets,unknownInsets} from './gestureInsets';
 
 const host: Host = {
   id: "home",
@@ -2467,4 +2468,44 @@ it('restores a Herdr session when discovery confirms restore support', async () 
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
   await waitFor(()=>expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('temporary-shell','herdr','work',expect.any(Function)));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+});
+
+/** #1380 and #1435: on a phone in gesture navigation the left handle opens the navigation page, and Android Back always closes it first. */
+describe('the navigation page and Android Back on a phone',()=>{
+  const phone=()=>vi.stubGlobal('matchMedia',vi.fn((query:string)=>({matches:query.includes('max-width')||query.includes('coarse'),media:query,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
+  const page=()=>screen.getByRole('complementary',{name:'Hosts and connections'});
+  const handle=()=>document.querySelector<HTMLElement>('[data-gesture-handle="left"]');
+  beforeEach(()=>{phone();act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));});
+  afterEach(()=>{act(()=>setGestureInsets(unknownInsets));});
+
+  it('shows the left handle while the page is closed and hides it while the page is open, and Back closes the page',async()=>{
+    const user=await connectForNavigation('handle-owner');
+    await waitFor(()=>expect(handle()).not.toBeNull());
+    expect(page().classList.contains('sidebar-open')).toBe(false);
+    await user.click(handle()!);
+    expect(page().classList.contains('sidebar-open')).toBe(true);
+    expect(handle()).toBeNull();
+    expect(mocks.backButton).toBeTypeOf('function');
+    act(()=>mocks.backButton?.({canGoBack:false}));
+    expect(page().classList.contains('sidebar-open')).toBe(false);
+    await waitFor(()=>expect(handle()).not.toBeNull());
+    expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('has a Back handler registered whenever the page is open, closes it every time, and never leaves the app',async()=>{
+    const user=await connectForNavigation('cycle-owner');
+    await waitFor(()=>expect(handle()).not.toBeNull());
+    for(let cycle=0;cycle<100;cycle++){
+      await user.click(handle()!);
+      expect(page().classList.contains('sidebar-open'),`cycle ${cycle}: open`).toBe(true);
+      // Android leaves the app on a Back that has no handler, so the handler must exist the moment the page can be seen.
+      expect(mocks.backButton,`cycle ${cycle}: handler`).toBeTypeOf('function');
+      act(()=>mocks.backButton?.({canGoBack:false}));
+      expect(page().classList.contains('sidebar-open'),`cycle ${cycle}: closed`).toBe(false);
+      await waitFor(()=>expect(mocks.backButton).toBeUndefined());
+      await waitFor(()=>expect(handle()).not.toBeNull());
+    }
+    expect(mocks.api.disconnect).not.toHaveBeenCalled();
+    expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+  });
 });

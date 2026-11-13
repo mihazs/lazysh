@@ -8,6 +8,7 @@ import {createSwipe, recognizer, useEdgeGestureMode, useEdgeGestures, useSwipeTo
 import {setGestureInsets, unknownInsets, type GestureInsets} from './gestureInsets';
 import {defaults, savePreferences} from './preferences';
 import {typingWindowMs} from './textInteraction';
+import {bandOf, gestureStyles, overlays, startDistances, zoneWidths, type GestureStyle} from './test/gestureOverlays';
 import {registerTextInteraction} from './textInteraction';
 
 const right: Swipe = {axis: 'x', sign: 1, travel: 200};
@@ -78,8 +79,8 @@ function Harness({log, edges = ['left', 'right', 'bottom'], enabled = true, clos
 
 const finger = (identifier: number, x: number, y: number) => ({identifier, clientX: x, clientY: y, target: document.body, pageX: x, pageY: y, screenX: x, screenY: y, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 1});
 /** Dispatches one synthetic touch event; `touches` are the fingers still down. */
-function touch(target: Element, type: 'touchstart' | 'touchmove' | 'touchend', fingers: [number, number][], changed = fingers) {
-  const event = new Event(type, {bubbles: true, cancelable: true});
+function touch(target: Element, type: 'touchstart' | 'touchmove' | 'touchend', fingers: [number, number][], changed = fingers, cancelable = true) {
+  const event = new Event(type, {bubbles: true, cancelable});
   const list = (items: [number, number][]) => items.map(([x, y], index) => finger(index, x, y));
   Object.assign(event, {touches: type === 'touchend' ? list(fingers.slice(changed.length)) : list(fingers), changedTouches: list(changed)});
   act(() => {target.dispatchEvent(event);});
@@ -453,6 +454,91 @@ describe('gesture modes on Android gesture navigation', () => {
     // The left handle opens to the right, the same direction this panel closes: the open swipe owns it.
     swipe(handleOn('left'), [40, 600], [[70, 600], [150, 600]]);
     expect(log.filter(line => line.startsWith('close'))).toEqual([]);
+    expect(log.at(-1)).toBe('commit:left');
+  });
+});
+
+/**
+ * The regression matrix of #1380 and #1435: every combination of navigation overlay, system Back zone, zone width and gesture style, with a
+ * swipe started at 0 dp, just inside the system zone, at the band start, in the band, at the band end and just beyond it, on each edge.
+ * The oracle is the documented geometry (docs/android-testing.md, "Gesture navigation and Samsung One UI"), not the engine's own helpers:
+ * under gesture navigation the system owns [0, inset] and the app band is [inset + 4, inset + 4 + width] dp (handles), or [0, width] at the
+ * sides and [home, home + width] at the bottom (edge swipes); with three buttons the system keeps nothing and the band is [0, width].
+ */
+describe('the edge gesture matrix across navigation overlays (#1380)', () => {
+  /** Where the swipe starts and how it travels: sides at a row inside the handle rows (472 to 672 of 800 dp), the bottom at mid width. */
+  const geometry = (edge: Edge, distance: number) => {
+    const from: [number, number] = edge === 'left' ? [distance, 600] : edge === 'right' ? [390 - distance, 600] : [195, 800 - distance];
+    const step = (n: number): [number, number] => edge === 'left' ? [from[0] + n, 600] : edge === 'right' ? [from[0] - n, 600] : [196, from[1] - n];
+    return {from, through: [step(30), step(70), step(120)]};
+  };
+  const configure = (insets: GestureInsets, width: number, style: GestureStyle) => {
+    act(() => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: width, mode: style}}));
+    withInsets(insets);
+  };
+
+  it.each(overlays.flatMap(overlay => zoneWidths.flatMap(width => gestureStyles.map(style => [overlay.name, width, style, overlay.insets] as const))))(
+    '%s, zone %i dp, %s: opens from the band and from nowhere else', (_name, width, style, insets) => {
+      configure(insets, width, style);
+      const log: Log = [];
+      render390({log});
+      for (const edge of ['left', 'right', 'bottom'] as const) {
+        const [from, to] = bandOf(insets, edge, width, style);
+        for (const distance of startDistances([from, to])) {
+          log.length = 0;
+          const {from: origin, through} = geometry(edge, distance);
+          swipe(surface(), origin, through);
+          const expected = distance >= from && distance <= to;
+          expect(log.at(-1) ?? null, `${edge} swipe from ${distance} dp (band ${from} to ${to})`).toBe(expected ? `commit:${edge}` : null);
+        }
+      }
+    });
+
+  it.each(overlays.map(overlay => [overlay.name, overlay.insets] as const))('%s: typing and a selection still stop a swipe that starts in the band, which returns afterwards', (_name, insets) => {
+    configure(insets, 40, 'handles');
+    const log: Log = [];
+    render390({log});
+    const [from] = bandOf(insets, 'left', 40, 'handles'), {from: origin, through} = geometry('left', from);
+    act(() => {document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', bubbles: true}));});
+    swipe(surface(), origin, through);
+    expect(log).toEqual([]);
+    vi.advanceTimersByTime(typingWindowMs + 50);
+    const release = registerTextInteraction('selection', () => true);
+    swipe(surface(), origin, through);
+    expect(log).toEqual([]);
+    release();
+    swipe(surface(), origin, through);
+    expect(log.at(-1)).toBe('commit:left');
+  });
+
+  it('follows the overlay the user switches to while the app runs, in both directions', () => {
+    configure(overlays[2].insets, 40, 'handles');
+    const log: Log = [];
+    render390({log});
+    const startsAt = (distance: number) => {log.length = 0; const {from, through} = geometry('left', distance); swipe(surface(), from, through); return log.at(-1) === 'commit:left';};
+    expect([startsAt(2), startsAt(40)]).toEqual([false, true]);
+    withInsets(overlays[0].insets);
+    expect([startsAt(2), startsAt(40), startsAt(41)]).toEqual([true, true, false]);
+    withInsets(overlays[3].insets);
+    expect([startsAt(2), startsAt(40), startsAt(44), startsAt(84)]).toEqual([false, false, true, true]);
+  });
+
+  /**
+   * Chrome sends the first touchmove once the finger has left its 8 dp slop; that move is the last the page may cancel. If the page does not
+   * claim it the browser scrolls and every later move is uncancelable (the 4 of 10 misses on three buttons; the recogniser's slop was 10 px).
+   */
+  it.each([8, 9, 12])('claims a left swipe whose first cancelable move has travelled only %i px', travelled => {
+    configure(overlays[0].insets, 40, 'handles');
+    const log: Log = [];
+    render390({log});
+    touch(surface(), 'touchstart', [[3, 600]]);
+    vi.advanceTimersByTime(8);
+    const first = touch(surface(), 'touchmove', [[3 + travelled, 600]]);
+    const rest = first.defaultPrevented;
+    for (const x of [60, 110, 160]) {vi.advanceTimersByTime(8); touch(surface(), 'touchmove', [[x, 600]], [[x, 600]], rest);}
+    vi.advanceTimersByTime(8);
+    touch(surface(), 'touchend', [[160, 600]], [[160, 600]], rest);
+    expect(log.at(0)).toBe('start:left');
     expect(log.at(-1)).toBe('commit:left');
   });
 });

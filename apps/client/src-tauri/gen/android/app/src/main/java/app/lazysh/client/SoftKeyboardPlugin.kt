@@ -23,7 +23,9 @@ internal object SoftKeyboard {
 
 /** Soft-keyboard commands for the Rust soft_keyboard module; renderer calls to this plugin are refused in Rust. */
 @TauriPlugin
-class SoftKeyboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
+class SoftKeyboardPlugin(private val initialOwner: Activity) : MobilePlugin(initialOwner) {
+    /** The activity in front: Tauri builds this plugin once, with the first activity, which a recreation destroys (#1462). */
+    private val owner: Activity get() = currentActivity(initialOwner)
     // The reply is the keyboard as Android reports it right after the request; its animation settles later.
     private fun request(invoke: Invoke, visible: Boolean?) = owner.runOnUiThread {
         // A backgrounded or closing Activity has no window the keyboard could attach to.
