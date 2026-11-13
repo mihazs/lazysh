@@ -18,7 +18,7 @@ it.each(['pt-BR', 'es'])('%s translates every step and the controls, and a langu
   expect(screen.getByText(t('gestureTourBottomBody'))).toBeTruthy();
   expect(screen.getByText(t('gestureTourOff'))).toBeTruthy();
   expect(screen.getByText(t('gestureTourProgress', {current: 2, total: tourSteps.length}))).toBeTruthy();
-  const keys = [...tourSteps.flatMap(step => [step.title, step.body]), 'gestureTourSkip', 'gestureTourNext', 'gestureTourDone', 'gestureTourReplay', 'gestureTourOff', 'gestureTourTopBar', 'gestureTourScreenReader', 'gestureTourAndroidEdge', 'gestureTourPlay', 'gestureHelpTitle', 'gestureTourTitle'] as const;
+  const keys = [...tourSteps.flatMap(step => [step.title, step.body]), 'gestureTourSkip', 'gestureTourNext', 'gestureTourDone', 'gestureTourReplay', 'gestureTourOff', 'gestureTourTopBar', 'gestureTourScreenReader', 'gestureTourAndroidEdge', 'gestureTourHandles', 'gestureTourPlay', 'gestureHelpTitle', 'gestureTourTitle'] as const;
   // Same word in two languages is fine for "Gestos"; every sentence must be translated.
   for (const key of keys.filter(key => key !== 'gestureHelpTitle')) expect(t(key), `${locale}.${key}`).not.toBe(english[key]);
 });

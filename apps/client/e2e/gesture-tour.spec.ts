@@ -1,5 +1,6 @@
 import {expect,test,type Page,type TestInfo} from '@playwright/test';
 import {connectAttachmentTerminal,openAttachmentTerminal} from './fixtures/attachmentTerminal';
+import {oneUi,reportGestureInsets} from './fixtures/gestureInsets';
 import {installLocalTerminal} from './fixtures/localTerminal';
 import {swipe} from './fixtures/touchSwipe';
 import {closePreferences,workspaceControl} from './fixtures/workspaceControl';
@@ -18,6 +19,11 @@ const seed=(page:Page,entries:Record<string,string>)=>page.addInitScript(entries
 },entries);
 /** A connected SSH session; the connection list (the drawer on a phone) comes first. */
 const connect=(page:Page)=>connectAttachmentTerminal(page,{nonce:'e'.repeat(64),ready:'gesture-tour-ready'});
+/** Connects the device's first phone session and waits for the tour that opens over it. */
+async function connectToTour(page:Page) {
+  const dialog=await connectToTour(page);
+  return dialog;
+}
 const finger=(page:Page)=>tour(page).locator('.gt-finger');
 const animation=(page:Page)=>finger(page).evaluate(node=>getComputedStyle(node).animationName);
 const titles=['Swipe in from the left edge','Swipe up from the bottom edge','Swipe in from the right edge','No swipes while you type'];
@@ -33,9 +39,7 @@ test('does not open on the connection list',async({page},testInfo)=>{
 
 test('opens once over the first connected phone session and Done keeps it away after a reload',async({page},testInfo)=>{
   test.skip(!phone(testInfo),'phones only');
-  await connect(page);
-  const dialog=tour(page);
-  await expect(dialog).toBeVisible();
+  const dialog=await connectToTour(page);
   await expect(dialog.getByRole('button',{name:'Next',exact:true})).toBeFocused();
   const steps=[
     [titles[0],'open the side menu','Step 1 of 4'],
@@ -70,9 +74,7 @@ test('never opens on desktop, where there are no edge gestures',async({page},tes
 
 test('Skip ends it for good, and the keyboard reaches every control',async({page},testInfo)=>{
   test.skip(!phone(testInfo),'phones only');
-  await connect(page);
-  const dialog=tour(page);
-  await expect(dialog).toBeVisible();
+  const dialog=await connectToTour(page);
   const next=dialog.getByRole('button',{name:'Next',exact:true}),skip=dialog.getByRole('button',{name:'Skip',exact:true}),close=dialog.getByRole('button',{name:'Close Gesture tour',exact:true});
   await expect(next).toBeFocused();
   await page.keyboard.press('Enter');
@@ -117,6 +119,31 @@ test('a switched-off gesture and the kept top bar say where to turn them on',asy
   await expect(notes).toContainText('Turn it on in Preferences, under Keyboard and gestures, then Terminal touch gestures.');
   await dialog.getByRole('button',{name:'Next',exact:true}).tap();
   await expect(notes).toHaveCount(0);
+});
+
+test('on Android gesture navigation the tour draws the handle and says to start from it; Edge swipes keep the rows rule',async({page},testInfo)=>{
+  test.skip(!phone(testInfo),'phones only');
+  const dialog=await connectToTour(page);
+  await expect(dialog.locator('.gt-handle')).toHaveCount(0);
+  await reportGestureInsets(page,oneUi);
+  await expect(dialog.locator('.gt-handle')).toHaveCount(1);
+  await expect(dialog.locator('.gt-zone')).toHaveCount(0);
+  await expect(dialog.locator('.gt-copy')).toContainText('start each swipe from its small handle');
+  await page.screenshot({path:testInfo.outputPath('handles.png')});
+  await dialog.getByRole('button',{name:'Next',exact:true}).tap();
+  await expect(dialog.locator('.gt-handle')).toHaveCount(1);
+  await dialog.getByRole('button',{name:'Skip',exact:true}).tap();
+});
+
+test('with the Edge swipes style on gesture navigation the tour keeps the rows rule and draws the zone',async({page},testInfo)=>{
+  test.skip(!phone(testInfo),'phones only');
+  await seed(page,{'lazysh.preferences.v1':JSON.stringify({version:1,edgeGestures:{mode:'edges'}})});
+  await connect(page);
+  await expect(tour(page)).toBeVisible();
+  await reportGestureInsets(page,oneUi);
+  await expect(tour(page).locator('.gt-copy')).toContainText('start the side swipes low on the edge');
+  await expect(tour(page).locator('.gt-zone')).toHaveCount(1);
+  await expect(tour(page).locator('.gt-handle')).toHaveCount(0);
 });
 
 test('with every gesture switched off it does not open by itself',async({page},testInfo)=>{

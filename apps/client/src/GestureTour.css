@@ -29,6 +29,7 @@
 .gt-phone[data-scene="typing"] .gt-arrow { stroke: var(--theme-muted); }
 .gt-phone[data-scene="typing"] .gt-pill { fill: var(--theme-text); opacity: 0.5; }
 .gt-zone { fill: var(--theme-muted); }
+.gt-handle { fill: var(--theme-accent); }
 .gt-phone[data-off] { opacity: 0.55; }
 
 /* Every panel opens under the finger and closes under it again (side menu left, bottom menu down, Agent view right). */

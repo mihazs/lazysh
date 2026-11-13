@@ -1,24 +1,30 @@
 import {useEffect, useId, useRef, useState, type CSSProperties} from "react";
 import {t, useUi} from "./i18n/core";
 import {tourSteps, type TourNotes, type TourScene} from "./gestureTour";
-import {isAndroidApp} from "./isAndroidApp";
+import {useGestureInsets, useGestureMode} from "./gestureInsets";
 import "./GestureTour.css";
 
-/** Why a swipe does nothing on this device, and the Android rule for where each one starts. */
+/** Why a swipe does nothing on this device, and where each one starts on Android: from a handle, or from the rows the system gives up. */
 function Notes({scene, notes}: {scene: TourScene; notes: TourNotes}) {
   const off = scene === "typing" ? null : notes[scene];
+  const mode = useGestureMode(), gestureNavigation = useGestureInsets().navigation === "gesture";
+  const where = mode === "handles" ? "gestureTourHandles" : mode === "edges" && gestureNavigation ? "gestureTourAndroidEdge" : null;
   return <>
-    {isAndroidApp() && scene !== "typing" && <p>{t("gestureTourAndroidEdge")}</p>}
+    {where && scene !== "typing" && <p>{t(where)}</p>}
     {off && <p className="gt-off">{t(off)}</p>}
   </>;
 }
 
 type Point = readonly [number, number];
-/** Where the finger starts and ends, the edge zone it starts in and where the panel it moves rests while hidden. */
-const scenes: Record<TourScene, {from: Point; to: Point; zone: Record<"x" | "y" | "width" | "height", number>; hidden: Point}> = {
-  side: {from: [6, 204], to: [66, 204], zone: {x: 0, y: 0, width: 10, height: 272}, hidden: [-96, 0]},
-  bottom: {from: [68, 266], to: [68, 196], zone: {x: 0, y: 262, width: 136, height: 10}, hidden: [0, 100]},
-  view: {from: [130, 204], to: [70, 204], zone: {x: 126, y: 0, width: 10, height: 272}, hidden: [136, 0]},
+type Box = Record<"x" | "y" | "width" | "height", number>;
+/**
+ * Where the finger starts and ends, the edge zone it starts in, where the panel it moves rests while hidden and, for the
+ * handle style (Android gesture navigation), the handle the finger takes instead: beside the system's Back zone and above its Home zone.
+ */
+const scenes: Record<TourScene, {from: Point; to: Point; zone: Box; hidden: Point; handle?: Box}> = {
+  side: {from: [6, 204], to: [66, 204], zone: {x: 0, y: 0, width: 10, height: 272}, hidden: [-96, 0], handle: {x: 14, y: 184, width: 5, height: 40}},
+  bottom: {from: [68, 266], to: [68, 196], zone: {x: 0, y: 262, width: 136, height: 10}, hidden: [0, 100], handle: {x: 48, y: 246, width: 40, height: 5}},
+  view: {from: [130, 204], to: [70, 204], zone: {x: 126, y: 0, width: 10, height: 272}, hidden: [136, 0], handle: {x: 117, y: 184, width: 5, height: 40}},
   // Typing: the swipe starts and goes nowhere, and a stop sign shows why.
   typing: {from: [6, 112], to: [40, 112], zone: {x: 0, y: 0, width: 10, height: 272}, hidden: [0, 0]},
 };
@@ -30,7 +36,9 @@ function arrow([x1, y1]: Point, [x2, y2]: Point) {
 const lines = [26, 40, 54, 68, 82, 96];
 /** A stylised phone. Every animation is CSS (see GestureTour.css); reduced motion shows the final frame and an arrow. */
 function Phone({scene, off}: {scene: TourScene; off: boolean}) {
-  const {from, to, zone, hidden} = scenes[scene];
+  const {to, zone, hidden, handle} = scenes[scene];
+  const grip = useGestureMode() === "handles" ? handle : undefined;
+  const from: Point = grip ? [grip.x + grip.width / 2, grip.y + grip.height / 2] : scenes[scene].from;
   const clip = useId().replace(/\W/g, "");
   const vars = {"--ax": `${from[0]}px`, "--ay": `${from[1]}px`, "--bx": `${to[0]}px`, "--by": `${to[1]}px`, "--hx": `${hidden[0]}px`, "--hy": `${hidden[1]}px`} as CSSProperties;
   return <svg className="gt-phone" data-scene={scene} data-off={off || undefined} style={vars} viewBox="0 0 160 300" aria-hidden="true" focusable="false">
@@ -51,7 +59,7 @@ function Phone({scene, off}: {scene: TourScene; off: boolean}) {
         <g className="gt-blocked"><circle cx="66" cy="112" r="15" /><path d="M55 123 77 101" /></g>
       </g>}
       {scene === "bottom" && <rect className="gt-pill" x="48" y="262" width="40" height="3" rx="1.5" />}
-      <rect className="gt-zone" {...zone} />
+      {grip ? <rect className="gt-handle" rx="2.5" {...grip} /> : <rect className="gt-zone" {...zone} />}
       <path className="gt-arrow" d={arrow(from, to)} />
       <g className="gt-finger"><circle className="gt-ring" r="15" /><circle className="gt-dot" r="7" /></g>
       </g>
