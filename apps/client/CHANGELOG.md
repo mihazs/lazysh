@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.60.0
+
+### Minor Changes
+
+- 39bf577: Follow an OpenCode session in the Agent view on tmux and send to it: the pane's session is bound through OpenCode's database via the host companion and read like a Claude Code or Codex conversation, every prompt is written as one paste and Enter (OpenCode drops a short prompt written as a burst of keys), and Stop presses Escape twice with a short pause. The header shows the model, context in use and folder of the OpenCode session, read by the updated host companion.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.60.0
+  - @lazysh/common@1.60.0
+  - @lazysh/display-idle@1.60.0
+  - @lazysh/et-transport@1.60.0
+  - @lazysh/mosh-transport@1.60.0
+
 ## 1.59.0
 
 ### Minor Changes
