@@ -41,8 +41,9 @@ emulator. The original task builds the current FOSS native app and native Rust t
 fixture through moon/Cargo. CI retains that route and adds an independent Google
 variant of the same three native cases. The Google matrix job first builds the
 current Google emulator APK with `bun run build:android:emulator`, then invokes
-`LAZYSH_NTFY_ANDROID_VARIANT=google bun run test:android-ntfy`.
-It deliberately avoids the root task's FOSS build dependency. Only `google` and
+`bun run test:android-ntfy:google`, which fixes `LAZYSH_NTFY_ANDROID_VARIANT=google`.
+It deliberately avoids the FOSS build dependency of `test:android-ntfy`: both builds
+write `app-universal-debug.apk`, so that dependency would replace the Google APK under test. Only `google` and
 `fdroid` are accepted; absent input preserves the FOSS route. The fixture-only CA
 requires the matching explicit distribution/provider project and only the original
 debug acceptance tasks. Ordinary debug/release artifacts must still exclude it.
