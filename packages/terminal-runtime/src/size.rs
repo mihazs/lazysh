@@ -46,4 +46,6 @@ pub enum SizeOutcome {
     /// Recorded as intent only; the caller forwards it to the transport, whose answer arrives via
     /// `apply_transport_size`.
     Deferred(Size),
+    /// The Mosh display failed: nothing is forwarded any more.
+    Dropped,
 }
