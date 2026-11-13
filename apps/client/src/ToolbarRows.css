@@ -12,7 +12,8 @@
   flex-direction: column;
   gap: 3px;
   margin-top: 0;
-  padding: 3px 6px calc(3px + env(safe-area-inset-bottom));
+  /* The 6px of vertical padding are the same as ever; 5px of them below the keys are the page indicator's own strip. */
+  padding: 1px 6px calc(5px + env(safe-area-inset-bottom));
   overflow-x: visible;
 }
 .terminal-keys-row {
@@ -91,39 +92,46 @@
   min-width: 56px;
   padding: 0 14px;
 }
-/* The page indicator sits in the toolbar's bottom padding, so it adds no height. */
+/* The page indicator is a row of dots in the strip reserved at the bottom of the toolbar's padding: below the keys
+   and above the status bar, so it covers neither and adds no height. The dots are invisible until the page changes,
+   then fade in for a moment. Hidden, they are still there for keyboard and screen readers, but take no touches.
+   The buttons themselves stay at full opacity so the contrast audit keeps measuring them. */
 .terminal-keys .terminal-keys-pager {
   position: absolute;
   left: 50%;
   bottom: env(safe-area-inset-bottom);
   z-index: 1;
   display: flex;
-  height: 3px;
+  height: 5px;
   transform: translateX(-50%);
+  pointer-events: none;
 }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) { pointer-events: auto; }
 .terminal-keys .terminal-keys-pager button,
 .terminal-keys .terminal-keys-pager button:hover {
   display: grid;
   place-items: center;
-  min-width: 28px;
-  min-height: 3px;
-  width: 28px;
-  height: 3px;
-  padding: 0;
+  min-width: 0;
+  min-height: 5px;
+  height: 5px;
+  /* The dots are 8px apart: 4px of hit area on each side. */
+  padding: 0 4px;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .terminal-keys .terminal-keys-pager span {
-  width: 8px;
-  height: 3px;
-  border-radius: 2px;
-  background: currentColor;
-  opacity: .4;
-  transition: width .2s ease, opacity .2s ease;
+  width: 5px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--theme-text);
+  opacity: 0;
+  transition: width .22s ease, opacity .22s ease;
 }
-.terminal-keys .terminal-keys-pager button[aria-current] span { width: 18px; opacity: .95; }
+.terminal-keys .terminal-keys-pager button[aria-current] span { width: 12px; }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) span { opacity: .6; }
+.terminal-keys .terminal-keys-pager:is([data-visible="true"], :focus-within) button[aria-current] span { opacity: .9; }
 @media (prefers-reduced-motion: reduce) {
   .terminal-keys .terminal-keys-pager span { transition: none; }
 }

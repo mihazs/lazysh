@@ -1,5 +1,6 @@
 import {expect,test,type Locator,type Page,type TestInfo} from '@playwright/test';
 import {openToolbarTerminal} from './fixtures/localTerminal';
+import {shrinkVisualViewport} from './fixtures/visualViewport';
 
 type Point={x:number;y:number};
 const wideRow=['esc','tab','ctrl','meta','shift','enter','backspace','Home','End','PageUp','PageDown','Insert','Delete','F1','F2','F3','F4','F5','F6','F7','F8'];
@@ -14,6 +15,27 @@ const press=(testInfo:TestInfo,key:Locator)=>testInfo.project.name==='phone'?key
 
 const indicators=(keys:Locator)=>keys.getByRole('group',{name:'Toolbar pages',exact:true}).getByRole('button');
 const indicator=(keys:Locator,name:string)=>keys.getByRole('group',{name:'Toolbar pages',exact:true}).getByRole('button',{name:`${name} page`,exact:true});
+const pager=(keys:Locator)=>keys.getByRole('group',{name:'Toolbar pages',exact:true});
+/** Activates a page button without a pointer: the dots take no touches while hidden, and a real tap on one has its own spec. */
+const choose=(keys:Locator,name:'Keys'|'Tools'|'Snippets')=>indicator(keys,name).evaluate(node=>(node as HTMLElement).click());
+/** How visible the dots are: the opacity of the most visible one (the page in view), 0 while hidden. */
+const opacity=async(dots:Locator)=>{await expect(dots.locator('span')).not.toHaveCount(0);return dots.locator('span').evaluateAll(nodes=>Math.max(...nodes.map(node=>Number(getComputedStyle(node).opacity))));};
+const shown=.9;
+/** How long to wait for the indicator to fade out: longer than its delay and its fade. */
+const hideTimeout=6000;
+type Box={x:number;y:number;width:number;height:number};
+const overlap=(a:Box,b:Box)=>a.x<b.x+b.width&&b.x<a.x+a.width&&a.y<b.y+b.height&&b.y<a.y+a.height;
+/** The dots lie inside the toolbar's own box, over none of its keys, and above the status bar and the bottom of the visual viewport (the soft keyboard). */
+async function expectClear(page:Page,keys:Locator) {
+  const dots=(await pager(keys).boundingBox())!,toolbar=(await keys.boundingBox())!;
+  expect(dots.y).toBeGreaterThanOrEqual(toolbar.y);
+  expect(dots.y+dots.height).toBeLessThanOrEqual(toolbar.y+toolbar.height);
+  for(const key of await keys.getByRole('group',{name:/ page$/}).getByRole('button').all())if(await key.isVisible())expect(overlap(dots,(await key.boundingBox())!)).toBe(false);
+  const footer=page.locator('.workspace-footer');
+  if(await footer.isVisible())expect(dots.y+dots.height).toBeLessThanOrEqual((await footer.boundingBox())!.y+.5);
+  const view=await page.evaluate(()=>window.visualViewport!.offsetTop+window.visualViewport!.height);
+  expect(dots.y+dots.height).toBeLessThanOrEqual(view+.5);
+}
 /** The named page is selected and actually scrolled into the toolbar, not just marked current. */
 async function expectPage(keys:Locator,name:'Keys'|'Tools'|'Snippets') {
   await expect(indicator(keys,name)).toHaveAttribute('aria-current','true');
@@ -44,28 +66,28 @@ test('the toolbar has a keys page, a tools page and a snippets page, each with i
   expect(compact.height).toBe(74);
   await page.screenshot({path:testInfo.outputPath('toolbar-keys-page.png')});
 
-  await tabs.nth(1).click();
+  await choose(keys,'Tools');
   await expectPage(keys,'Tools');
   await expect(keys.getByRole('group',{name:'Tools page',exact:true}).getByRole('button')).toHaveText(['Find','Copy']);
   expect((await keys.boundingBox())!.height).toBe(compact.height);
   await page.screenshot({path:testInfo.outputPath('toolbar-tools-page.png')});
-  await tabs.nth(2).click();
+  await choose(keys,'Snippets');
   await expectPage(keys,'Snippets');
   await expect(keys.getByRole('group',{name:'Snippets page',exact:true}).getByRole('button')).toHaveText(['Greet','Mark']);
   expect((await keys.boundingBox())!.height).toBe(compact.height);
   // The keys on every page are as tall as the keys of the grid.
   for(const button of await keys.getByRole('group',{name:'Snippets page',exact:true}).getByRole('button').all())expect((await button.boundingBox())!.height).toBe(32);
   await page.screenshot({path:testInfo.outputPath('toolbar-snippets-page.png')});
-  await tabs.nth(0).click();
+  await choose(keys,'Keys');
   await expectPage(keys,'Keys');
 });
 
-test('the page indicator switches pages without a gesture, by pointer and by keyboard, and the pages send their input',async({page},testInfo)=>{
+test('the page buttons switch pages without a gesture, with or without the keyboard, and the pages send their input',async({page},testInfo)=>{
   const keys=await openToolbar(page,testInfo);
   const tab=(name:'Keys'|'Tools'|'Snippets')=>indicator(keys,name);
   await expect(tab('Keys')).toHaveAttribute('aria-current','true');
   await expect(tab('Tools')).not.toHaveAttribute('aria-current');
-  await tab('Snippets').click();
+  await choose(keys,'Snippets');
   await expectPage(keys,'Snippets');
   // The press leaves focus, and so the on-screen keyboard, in the terminal.
   expect(await terminalFocused(page)).toBe(true);
@@ -80,13 +102,13 @@ test('the page indicator switches pages without a gesture, by pointer and by key
   await page.keyboard.press('Space');
   await expectPage(keys,'Keys');
 
-  await tab('Snippets').click();
+  await choose(keys,'Snippets');
   await press(testInfo,keys.getByRole('button',{name:'Greet',exact:true}));
   await expect(page.locator('.terminal-compose textarea')).toHaveValue('echo snippet');
   await page.getByRole('button',{name:'Close composer',exact:true}).click();
   // The toolbar comes back from behind the composer on the page that was in use.
   await expectPage(keys,'Snippets');
-  await tab('Tools').click();
+  await choose(keys,'Tools');
   await expectPage(keys,'Tools');
   await press(testInfo,keys.getByRole('button',{name:'Find',exact:true}));
   await expect(page.locator('.terminal-search input')).toBeVisible();
@@ -177,7 +199,7 @@ test('the pages follow the key height setting and the saved layout, and a one-ro
   const height=(await keys.boundingBox())!.height;
   // Two 48px rows and the same padding as at 32px: 74 + 2 * 16.
   expect(height).toBe(106);
-  await indicator(keys,'Snippets').click();
+  await choose(keys,'Snippets');
   await expectPage(keys,'Snippets');
   expect((await keys.boundingBox())!.height).toBe(height);
   for(const button of await keys.getByRole('group',{name:'Snippets page',exact:true}).getByRole('button').all())expect((await button.boundingBox())!.height).toBe(48);
@@ -185,7 +207,7 @@ test('the pages follow the key height setting and the saved layout, and a one-ro
   await expect(keys.locator('.terminal-keys-row')).toHaveCount(1);
   // One row of keys: the pages are one row tall as well.
   expect((await keys.boundingBox())!.height).toBe(106-48-3);
-  await indicator(keys,'Snippets').click();
+  await choose(keys,'Snippets');
   await expectPage(keys,'Snippets');
   await expect(keys.getByRole('button',{name:'Mark',exact:true})).toBeInViewport({ratio:1});
 });
@@ -194,4 +216,137 @@ test('a toolbar without saved snippets or chords has the keys and tools pages on
   const keys=await openToolbar(page,testInfo,{snippets:[],chords:[]});
   await expect(indicators(keys)).toHaveCount(2);
   expect(await indicators(keys).evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')))).toEqual(['Keys page','Tools page']);
+});
+
+test('the page indicator is hidden on load, takes no touches, and covers neither keys nor the status bar',async({page},testInfo)=>{
+  const keys=await openToolbar(page,testInfo);
+  const dots=pager(keys);
+  await expect(dots.getByRole('button')).toHaveCount(3);
+  expect(await opacity(dots)).toBe(0);
+  expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('none');
+  // Hidden is not removed: the buttons keep their size and their names, so a screen reader and the Tab key still reach them.
+  for(const name of ['Keys','Tools','Snippets'])expect((await indicator(keys,name).boundingBox())!.height).toBeGreaterThan(0);
+  // A touch on the dots goes to what is under them, never to a hidden button.
+  const point=await center(indicator(keys,'Tools'));
+  expect(await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.closest('.terminal-keys-pager')??null,point)).toBeNull();
+  expect((await keys.boundingBox())!.height).toBe(74);
+  await expectClear(page,keys);
+  await page.screenshot({path:testInfo.outputPath('pager-hidden.png')});
+  // Nothing changes the page, so it stays hidden.
+  await page.waitForTimeout(500);
+  expect(await opacity(dots)).toBe(0);
+});
+
+test('a swipe to another page fades the dots in as reduced-opacity dots, and they fade out again',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Touch swipe contract.');
+  const keys=await openToolbar(page,testInfo);
+  const dots=pager(keys),y=(await center(keys.locator('.terminal-keys-row').first())).y;
+  expect(await opacity(dots)).toBe(0);
+  await swipe(page,{x:330,y},{x:60,y});
+  await expectPage(keys,'Tools');
+  await expect.poll(()=>opacity(dots)).toBe(shown);
+  expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
+  // Dots, not lines: round marks of one size, the page in view a little longer, none fully opaque.
+  const marks=await dots.locator('span').evaluateAll(nodes=>nodes.map(node=>{const style=getComputedStyle(node),box=node.getBoundingClientRect();return {width:box.width,height:box.height,opacity:Number(style.opacity),radius:parseFloat(style.borderTopLeftRadius)};}));
+  expect(marks.map(mark=>mark.height)).toEqual([marks[0].height,marks[0].height,marks[0].height]);
+  expect(marks[0].height).toBeGreaterThanOrEqual(4);
+  expect(marks[0].height).toBeLessThanOrEqual(6);
+  for(const mark of marks)expect(mark.radius).toBeGreaterThanOrEqual(mark.height/2);
+  expect(marks[0].width).toBe(marks[0].height);
+  expect(marks[2].width).toBe(marks[0].width);
+  await expect.poll(async()=>(await dots.locator('span').nth(1).evaluate(node=>node.getBoundingClientRect().width))).toBeGreaterThan(marks[0].width);
+  for(const mark of marks)expect(mark.opacity).toBeLessThan(1);
+  expect(Math.max(...marks.map(mark=>mark.opacity))).toBe(shown);
+  expect(marks[0].opacity).toBeGreaterThanOrEqual(.55);
+  expect(marks[0].opacity).toBeLessThanOrEqual(.7);
+  expect(marks[1].opacity).toBeGreaterThan(marks[0].opacity);
+  expect(marks[1].opacity).toBeLessThanOrEqual(1);
+  expect(marks[2].opacity).toBe(marks[0].opacity);
+  await expectClear(page,keys);
+  expect((await keys.boundingBox())!.height).toBe(74);
+  await page.screenshot({path:testInfo.outputPath('pager-visible.png')});
+  // Then it goes, fading rather than snapping.
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBeLessThan(shown);
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
+  expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('none');
+  expect(await dots.locator('span').first().evaluate(node=>getComputedStyle(node).transitionProperty+' '+getComputedStyle(node).transitionDuration)).toBe('width, opacity 0.22s, 0.22s');
+  await expectPage(keys,'Tools');
+});
+
+test('a shown indicator takes the pointer: pressing a dot switches page and keeps the dots for another delay',async({page},testInfo)=>{
+  const keys=await openToolbar(page,testInfo);
+  const dots=pager(keys);
+  await choose(keys,'Tools');
+  await expectPage(keys,'Tools');
+  await expect.poll(()=>opacity(dots)).toBe(shown);
+  await page.waitForTimeout(1200);
+  await press(testInfo,indicator(keys,'Snippets'));
+  await expectPage(keys,'Snippets');
+  // Pressing a dot leaves the focus, and so the soft keyboard, in the terminal.
+  expect(await terminalFocused(page)).toBe(true);
+  // 1.2 s after the first change the first delay would be nearly over; the press started a new one.
+  await page.waitForTimeout(1200);
+  expect(await opacity(dots)).toBe(shown);
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
+});
+
+test('keyboard focus on a page button shows the indicator at once and keeps it while focused',async({page},testInfo)=>{
+  const keys=await openToolbar(page,testInfo);
+  const dots=pager(keys);
+  expect(await opacity(dots)).toBe(0);
+  await indicator(keys,'Tools').focus();
+  await expect.poll(()=>opacity(dots)).toBe(shown);
+  expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
+  await page.keyboard.press('Enter');
+  await expectPage(keys,'Tools');
+  // Well past the delay of a page change: the focused dots stay.
+  await page.waitForTimeout(3000);
+  expect(await opacity(dots)).toBe(shown);
+  await expectClear(page,keys);
+  await page.evaluate(()=>(document.activeElement as HTMLElement).blur());
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
+});
+
+test('with reduced motion the dots appear and go without a fade, after the same delay',async({page},testInfo)=>{
+  await page.emulateMedia({reducedMotion:'reduce'});
+  const keys=await openToolbar(page,testInfo);
+  const dots=pager(keys);
+  expect(await opacity(dots)).toBe(0);
+  await choose(keys,'Tools');
+  await expect.poll(()=>opacity(dots)).toBe(shown);
+  expect(await dots.locator('span').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).transitionDuration))).toEqual(['0s','0s','0s']);
+  await page.waitForTimeout(800);
+  expect(await opacity(dots)).toBe(shown);
+  await expect.poll(()=>opacity(dots),{timeout:hideTimeout}).toBe(0);
+});
+
+test('screen-reader mode keeps the indicator shown',async({page},testInfo)=>{
+  const keys=await openToolbar(page,testInfo,{screenReader:true});
+  const dots=pager(keys);
+  await expect.poll(()=>opacity(dots)).toBe(shown);
+  expect(await dots.evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('auto');
+  await choose(keys,'Tools');
+  await expectPage(keys,'Tools');
+  await page.waitForTimeout(3000);
+  expect(await opacity(dots)).toBe(shown);
+  await expectClear(page,keys);
+  await page.screenshot({path:testInfo.outputPath('pager-screen-reader.png')});
+});
+
+for(const [kind,keyboard] of [
+  ['a window the keyboard shrinks',async(page:Page)=>{const size=page.viewportSize()!;await page.setViewportSize({width:size.width,height:size.height-320});}],
+  ['a visual viewport only the keyboard shrinks',(page:Page)=>shrinkVisualViewport(page,320)],
+] as const)test(`the page indicator stays inside the toolbar, above the soft keyboard, with the keyboard open in ${kind}`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','The soft keyboard.');
+  const keys=await openToolbar(page,testInfo);
+  await keyboard(page);
+  await page.waitForTimeout(400);
+  expect(await opacity(pager(keys))).toBe(0);
+  await choose(keys,'Tools');
+  await expectPage(keys,'Tools');
+  await expect.poll(()=>opacity(pager(keys))).toBe(shown);
+  await expectClear(page,keys);
+  expect((await keys.boundingBox())!.height).toBe(74);
+  await page.screenshot({path:testInfo.outputPath(`pager-keyboard-${kind.replace(/\W+/g,'-')}.png`)});
+  await expect.poll(()=>opacity(pager(keys)),{timeout:hideTimeout}).toBe(0);
 });
