@@ -3,7 +3,7 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {act, cleanup, render, renderHook, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import GestureTour, {GestureTourHelp} from './GestureTour';
-import {gestureTourNotes, gestureTourUseful, gestureTourVersion, tourSteps, useGestureTour, type TourNotes} from './gestureTour';
+import {gestureTourNotes, gestureTourUseful, gestureTourVersion, tourSteps, useGestureTour, type TourNotes} from './gestureTourModel';
 import {defaults, savePreferences} from './preferences';
 import {setGestureInsets, unknownInsets} from './gestureInsets';
 import {t} from './i18n/core';

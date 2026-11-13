@@ -93,7 +93,7 @@ import type {HerdrTree} from "./useHerdrNavigation";
 import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
-import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTour";
+import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";

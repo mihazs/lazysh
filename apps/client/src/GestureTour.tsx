@@ -1,6 +1,6 @@
 import {useEffect, useId, useRef, useState, type CSSProperties} from "react";
 import {t, useUi} from "./i18n/core";
-import {tourSteps, type TourNotes, type TourScene} from "./gestureTour";
+import {tourSteps, type TourNotes, type TourScene} from "./gestureTourModel";
 import {useGestureInsets, useGestureMode} from "./gestureInsets";
 import "./GestureTour.css";
 

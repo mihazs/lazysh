@@ -3,7 +3,7 @@ import {afterEach, expect, it} from 'vitest';
 import {act, cleanup, render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import GestureTour from '../GestureTour';
-import {tourSteps} from '../gestureTour';
+import {tourSteps} from '../gestureTourModel';
 import {english} from './en';
 import {t, uiI18n} from './core';
 
