@@ -35,13 +35,31 @@ pub(crate) fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-/// `$XDG_RUNTIME_DIR/lazysh` (a tmpfs the system owns), else `/tmp/lazysh-UID`.
-/// Never a path under the home directory: a network home would carry the socket to other hosts.
-pub(crate) fn directory() -> PathBuf {
-    match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
-        Some(runtime) if runtime.is_absolute() => runtime.join("lazysh"),
-        _ => PathBuf::from(format!("/tmp/lazysh-{}", euid())),
+/// Where a watcher may listen, best first: `$XDG_RUNTIME_DIR/lazysh` when it is set, else the
+/// session directory `/run/user/UID/lazysh` when the system made one, else `/tmp/lazysh-UID`.
+/// Without XDG_RUNTIME_DIR the session directory is what pam_systemd would have set, so a tmux
+/// pane that lost the variable still agrees with the SSH channel that kept it. Never under the
+/// home directory: a network home would carry the socket to other hosts.
+fn candidates(runtime: Option<PathBuf>, uid: u32, session_directory: bool) -> Vec<PathBuf> {
+    if let Some(runtime) = runtime.filter(|path| path.is_absolute()) {
+        return vec![runtime.join("lazysh")];
     }
+    let mut found = Vec::new();
+    if session_directory {
+        found.push(PathBuf::from(format!("/run/user/{uid}/lazysh")));
+    }
+    found.push(PathBuf::from(format!("/tmp/lazysh-{uid}")));
+    found
+}
+fn directories() -> Vec<PathBuf> {
+    let uid = euid();
+    let session =
+        fs::metadata(format!("/run/user/{uid}")).is_ok_and(|m| m.is_dir() && m.uid() == uid);
+    candidates(
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        uid,
+        session,
+    )
 }
 
 /// A real directory (never a link) owned by this user with no group or other access.
@@ -55,7 +73,7 @@ fn check(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn create() -> Result<PathBuf> {
-    let path = directory();
+    let path = directories().remove(0);
     match DirBuilder::new().mode(0o700).create(&path) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -98,16 +116,24 @@ pub(crate) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
 }
 
 fn exchange(line: &str) -> io::Result<Reply> {
-    let directory = directory();
-    check(&directory)?;
-    let mut stream = UnixStream::connect(directory.join(NAME))?;
-    if peer_uid(&stream)? != euid() {
-        return Err(io::ErrorKind::PermissionDenied.into());
+    let mut last = io::Error::from(io::ErrorKind::NotFound);
+    for directory in directories() {
+        let attempt = check(&directory).and_then(|()| {
+            let mut stream = UnixStream::connect(directory.join(NAME))?;
+            if peer_uid(&stream)? != euid() {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            stream.write_all(line.as_bytes())?;
+            let mut reply = String::new();
+            BufReader::new((&stream).take(1024)).read_line(&mut reply)?;
+            serde_json::from_str(&reply).map_err(io::Error::other)
+        });
+        match attempt {
+            Ok(reply) => return Ok(reply),
+            Err(error) => last = error,
+        }
     }
-    stream.write_all(line.as_bytes())?;
-    let mut reply = String::new();
-    BufReader::new((&stream).take(1024)).read_line(&mut reply)?;
-    serde_json::from_str(&reply).map_err(io::Error::other)
+    Err(last)
 }
 
 /// One request to the attached watcher, `None` when nobody answers within 100 ms.
@@ -126,6 +152,25 @@ pub(crate) fn request(message: &Value) -> Option<Reply> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_directory_does_not_depend_on_which_process_kept_xdg_runtime_dir() {
+        let path = |text: &str| PathBuf::from(text);
+        assert_eq!(
+            candidates(Some(path("/run/custom")), 1000, true),
+            [path("/run/custom/lazysh")]
+        );
+        // Not absolute: ignored, like an unset variable.
+        assert_eq!(
+            candidates(Some(path("relative")), 1000, true),
+            [path("/run/user/1000/lazysh"), path("/tmp/lazysh-1000")]
+        );
+        assert_eq!(
+            candidates(None, 1000, true)[0],
+            path("/run/user/1000/lazysh")
+        );
+        assert_eq!(candidates(None, 501, false), [path("/tmp/lazysh-501")]);
+    }
 
     #[test]
     fn peer_uid_comes_from_the_kernel_not_the_peer() {

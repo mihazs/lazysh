@@ -276,7 +276,7 @@ pub(super) fn run(heartbeat: Duration) -> Result<()> {
     });
     let stopped = events.clone();
     ctrlc::set_handler(move || {
-        let _ = stopped.try_send(Event::Terminated);
+        let _ = stopped.send(Event::Terminated);
     })
     .map_err(|_| Error::Browser("BrowserSignalHandler"))?;
     let closed = events;

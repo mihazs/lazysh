@@ -1093,7 +1093,7 @@ The wrapper takes the last `http` or `https` argument (launchers receive more, s
 
 Limits: 6 opens per minute, an identical URL is delivered once per 10 seconds, a queue of 8, entries older than 2 minutes are dropped, requests are read up to 8 KiB, and 128 launcher connections are served at a time. The URL is never logged; it appears only on this channel and, in the last row above, on your own terminal.
 
-The launcher reaches the watcher over a Unix socket in `$XDG_RUNTIME_DIR/lazysh/` (else `/tmp/lazysh-UID/`): a directory owned by you with mode 0700, never a link; the socket is mode 0600 and both sides refuse a peer whose uid is not yours. Nothing is written to disk and no network port is opened on the host.
+The launcher reaches the watcher over a Unix socket in `$XDG_RUNTIME_DIR/lazysh/` when that variable is set, else `/run/user/UID/lazysh/` (the session directory the system makes, so a tmux pane that lost the variable still finds the watcher), else `/tmp/lazysh-UID/`: a directory owned by you with mode 0700, never a link; the socket is mode 0600 and both sides refuse a peer whose uid is not yours. Nothing is written to disk and no network port is opened on the host.
 
 ### Multiplexers and Mosh
 
@@ -1104,6 +1104,7 @@ The request does not travel through the terminal. tmux 3.8 (with the default `al
 - No Windows hosts, and no `gio` or `wslview` wrapper (`gio` has many unrelated subcommands). A program that runs with a cleaned `PATH` or `BROWSER`, or a shell that skips the startup files (a non-interactive `ssh host command`), reaches the real opener.
 - `gcloud auth login` launches a browser only when it sees `DISPLAY`, `WAYLAND_DISPLAY` or `MIR_SOCKET`; the shim does not fake one.
 - The last device to attach receives every request; there is no per-device routing.
+- A connection that drops without closing leaves the watcher running until the SSH server notices (`ServerAliveInterval`); links asked for in that time are accepted and expire after 2 minutes without reaching a device.
 - A request nobody answers within the deadline is also given to the real opener, so on a host with a desktop a very slow device can mean the link opens in both places.
 
 ## Live Herdr discovery
