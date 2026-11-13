@@ -2228,6 +2228,8 @@ export const english = {
   agentToolShowAll: "Show all",
   agentToolFewer: "Show less",
   agentToolCopy: "Copy output",
+  agentPastedTitle: "Pasted text",
+  agentPastedCopy: "Copy pasted text",
   agentToolCopied: "Copied",
   agentDiffCounts: "{{added}} lines added, {{removed}} removed",
   agentDiffWrap: "Wrap lines",

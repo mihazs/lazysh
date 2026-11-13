@@ -31,6 +31,7 @@ import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
 import type {StatusItem} from './agentBackgroundWork';
 import AgentThinking from './AgentThinking';
+import AgentPasted from './AgentPasted';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
@@ -45,6 +46,8 @@ type Block = {
   isError?: boolean;
   imagePreview?: RecordedImage;
   card?: Card;
+  /** Set by the client on text the person pasted (a harness `pasted_content` wrapper): shown as a compact block. */
+  pasted?: boolean;
 };
 type Message = {
   id: string;
@@ -680,7 +683,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
         return block.type === "text" ? (
-          <Fragment key={index}>{card ?? <ChatRich text={block.text || ""} copy={timeline} />}</Fragment>
+          <Fragment key={index}>{card ?? (block.pasted ? <AgentPasted text={block.text || ""} /> : <ChatRich text={block.text || ""} copy={timeline} />)}</Fragment>
         ) : (
           <Fragment key={index}>{card}<details>
             <summary>

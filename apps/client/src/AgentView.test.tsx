@@ -1236,7 +1236,7 @@ describe('working row',()=>{
     ],new Date(Date.now()-3_600_000).toISOString());
     // The hour-old hook report is ignored; the recorded turn state decides.
     expect(working()).toEqual(['Working · 1:12 · 1.2K tokens · Bash']);
-    // The prompt of the running turn stays pinned while its reply is written.
+    // The running turn is marked; its prompt is not pinned, so it never covers the reply scrolling beneath it.
     expect(screen.getAllByRole('region',{name:'Turn'}).map(turn=>turn.hasAttribute('data-running'))).toEqual([true]);
   });
 
