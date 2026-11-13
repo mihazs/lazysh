@@ -365,12 +365,59 @@ The same harness and the same flags as the hardware-GL runs above, on the `phone
 
 What this adds, for this host and viewport:
 
-- **The desktop frame-pacing regression is not the steady state at the phone size; the cold first ANSI-heavy burst is the problem.** In both WebGL invocations the first of the five W3 runs took 6.7 to 7.7 s of wall time and used 12.7 to 15.1 s of CPU (renderer process 8.1 to 9.6 s, GPU process 4.6 to 5.4 s, 57 to 79 long tasks, 285 to 343 dropped frames) for the same 2 MiB, against 66 to 82 ms and 0.35 to 0.52 s in runs 2 to 5 of the same page, which paced like the DOM renderer. The five runs replay the same bytes, so the difference is state, not input. Its cause was not isolated; a cold glyph atlas filling with the style combinations of the workload is consistent with it but was not tested. The harness reports the median of five runs, which hides it: the figures above come from the first entry of `runs` in the raw files. The desktop runs show the same shape at another size (per-run W3 throughput 2.5, 11.7, 5.6, 28 and 6.1 MiB/s in the first desktop invocation, with the same pattern in the two repeats), so the desktop "regression" was also state-dependent across runs, not a constant cost. The DOM renderer's W3 runs ranged from 11.1 to 18.5 MiB/s over its ten runs, none of them near the 0.26 to 0.30 MiB/s of the WebGL first runs.
+- **The desktop frame-pacing regression is not the steady state at the phone size; the cold first ANSI-heavy burst is the problem.** In both WebGL invocations the first of the five W3 runs took 6.7 to 7.7 s of wall time and used 12.7 to 15.1 s of CPU (renderer process 8.1 to 9.6 s, GPU process 4.6 to 5.4 s, 57 to 79 long tasks, 285 to 343 dropped frames) for the same 2 MiB, against 66 to 82 ms and 0.35 to 0.52 s in runs 2 to 5 of the same page, which paced like the DOM renderer. The five runs replay the same bytes, so the difference is state, not input. The next section isolates what it follows. The harness reports the median of five runs, which hides it: the figures above come from the first entry of `runs` in the raw files. The desktop runs show the same shape at another size (per-run W3 throughput 2.5, 11.7, 5.6, 28 and 6.1 MiB/s in the first desktop invocation, with the same pattern in the two repeats), so the desktop "regression" was also state-dependent across runs, not a constant cost. The DOM renderer's W3 runs ranged from 11.1 to 18.5 MiB/s over its ten runs, none of them near the 0.26 to 0.30 MiB/s of the WebGL first runs.
 - **At the phone size WebGL's steady-state CPU on streaming output is higher, not lower.** Total process CPU for the median W3 run was 400 to 500 ms against 260 to 270 and for W4 270 to 310 ms against 130 to 150 (1.5 to 2.1 times, a difference of 0.14 to 0.23 s per workload). On the 152-column desktop grid WebGL was cheaper on W3 (0.8 to 1.0 s against 2.1 to 2.9 s). Which side of the crossover a device is on depends on the grid and the host, so this is not an Android prediction.
 - **WebGL is still cheaper at idle with a blinking cursor** (27 to 29 ms of main-thread time and no style recalculations per 10 s against 134 to 165 ms and 612 to 626), the one place its advantage held on both viewports. With the cursor not blinking the two are equal.
 - **Echo latency with several sessions mounted and streaming is lower with WebGL** (p50 8.4 to 8.7 ms against 12.0 to 12.3 with five sessions and 7.35 to 7.40 against 11.1 with ten; p99 15.7 to 16.2 against 19.4 to 19.8 with ten). As in the desktop runs it holds for every non-DOM renderer and the harness does not explain it. Idle keystrokes, sustained-output echo and IME commits are equal within one frame (the p99 of sustained-output echo is 2 % higher with WebGL again).
 - **The fixed memory cost is the JS heap** (about 22 MiB more at W10, in both invocations); the resident-set figures overlap between the renderers (171 to 213 against 182 to 191), and per-session resident memory does not separate them (6.6 to 8.4 against 6.9 to 7.5).
 - **The bold-color seam is refused by WebGL here too**, as on desktop.
+
+#### The first-burst stall follows the number of new glyph-style pairs ([#1323](https://github.com/mihazs/lazysh/issues/1323))
+
+`e2e/terminal-first-burst.spec.ts` (`bun run bench:terminal terminal-first-burst`; its smoke mode runs in the normal Playwright suite and asserts completion and correctness only) streams seeded words on a **fresh page** three times, for the DOM renderer and the WebGL addon (hardware GL, same flags as above), with a chosen number of distinct styles from one family: 24-bit foregrounds, 256-color foregrounds, 256-color foreground and background, bold/italic/underline combinations over indexed foregrounds, and each of the four style families W3 mixes. `styledText` counts the (style, character) pairs the stream draws, which is what a glyph cache has to draw once (a count of the stream, not of what the addon cached). W3 itself runs at 0.5, 1, 2 and 4 MiB. The *unpaced* rows use the harness's streaming (the page parses ahead, so a pass renders 1 to 60 times, and the cold pass renders more often than the warm ones because it is slower); the *paced* rows wait one frame after each 16 KiB chunk, so every pass renders the same 66 or 130 times and cold and warm are comparable. Two invocations on 2026-11-13 per viewport from a clean committed tree (`dirty` false; load average 6.5 to 7.7 at the end): `benchmarks/terminal-first-burst-xterm-phone.json`, `-repeat-phone.json`, `-desktop.json` and `-repeat-desktop.json`. Every pass of every row ended on the expected screen and no WebGL context was lost. Cells are the two invocations. CPU is the total of all browser processes for the pass.
+
+**WebGL addon, phone viewport (46 by 37 cells at devicePixelRatio 3), unpaced**
+
+| Stream | Distinct pairs | Cold pass: CPU ms / wall ms / dropped frames | Warm passes: CPU ms / wall ms |
+|---|---|---|---|
+| 1 style (24-bit) | 26 | 150-160 / 47 / 0 | 70-85 / 30 |
+| 8 colors (palette16) | 208 | 230-240 / 80-87 / 0 | 90-95 / 34 |
+| 8 bold/underline | 208 | 270-280 / 103 / 0 | 135-150 / 41 |
+| 8 attribute combinations | 208 | 300-330 / 109-119 / 1 | 150 / 42-46 |
+| 64 bright foreground on background | 1,664 | 470-480 / 222-229 / 5-6 | 115 / 35-38 |
+| 32 24-bit | 832 | 340-390 / 140 / 3 | 90-95 / 33-36 |
+| 256 24-bit | 6,654 | 1,320-1,370 / 679-693 / 22 | 120-135 / 36-44 |
+| 256 indexed | 6,656 | 1,410-1,460 / 725-746 / 24-25 | 110-115 / 35-39 |
+| 256 foreground and background | 6,653 | 1,340-1,360 / 710-714 / 23-24 | 125 / 35-43 |
+| 256 24-bit on background | 6,645 | 1,330 / 697-698 / 23-24 | 115-140 / 39-41 |
+| 256 attribute combinations | 6,656 | 1,310-1,360 / 647-678 / 18 | 155-180 / 45-57 |
+| 2,048 24-bit | 46,076 | 5,770-5,920 / 3,140-3,247 / 140-144 | 130-145 / 32-33 |
+| 2,048 foreground and background | 45,478 | 6,110-6,130 / 3,421-3,452 / 155-159 | 145 / 33-34 |
+| **W3, 0.5 MiB** | 15,305 at 2 MiB | **2,940-3,050** / 1,642-1,694 / 78-80 | 180-195 / 56-57 |
+| **W3, 1 MiB** | | **6,980** / 3,691-3,723 / 167-169 | 170-175 / 38 |
+| **W3, 2 MiB** | | **13,070-13,120** / 6,690-6,792 / 284-287 | 365-385 / 68-69 |
+| **W3, 4 MiB** | | **23,190-23,200** / 11,606-11,674 / 450-455 | 575-620 / 126-131 |
+
+**Paced (one frame per 16 KiB chunk, 66 renders per pass; 130 for W3 2 MiB), phone viewport, cold pass against the median of the two warm ones**
+
+| Stream | WebGL: CPU ms (cold / warm), wall ms (cold), dropped frames (cold) | DOM: CPU ms (cold / warm), dropped frames |
+|---|---|---|
+| 1 style | 370-380 / 180-195, 1,083, 0 | 390-400 / 310-340, 0 |
+| 256 24-bit | 1,660-1,680 / 215-235, 1,466, 23 | 680-730 / 560-590, 0 |
+| 2,048 24-bit | 6,710-7,010 / 280-285, 3,632-3,721, 152-158 | 690-730 / 595-635, 0 |
+| W3, 1 MiB | 7,920-8,090 / 325-345, 4,237-4,276, 188-191 | 950 / 795-975, 0 |
+| W3, 2 MiB | 13,910-14,370 / 695-745, 7,234-7,398, 305-314 | 1,640-1,650 / 1,455-1,480, 0 |
+
+Reading it, for this host and renderers:
+
+- **The WebGL addon's first-appearance cost is real, large, and tied to the number of distinct glyph-style pairs, not to bytes.** With one style family at a time the cold pass costs 1.3 to 1.5 s of CPU for about 6,650 pairs and 5.8 to 6.1 s for about 46,000, while the warm passes over the same bytes cost 0.11 to 0.18 s and 0.13 to 0.15 s. That is 0.12 to 0.22 ms of CPU per pair in excess of the warm pass at the phone grid for streams of 1,600 pairs or more (0.29 to 0.36 ms at 832, more per pair for the 208-pair streams, where a per-frame fixed part dominates). The five families give the same cost at the same pair count (6,645 to 6,656 pairs: 1.31 to 1.46 s), so no family is the expensive one. The DOM renderer has no such effect: in the paced rows its cold pass is within 30 % of its warm one (3 % below to 29 % above) and drops no frame at the phone grid.
+- **A first appearance is one frame of work per new pair, so it shows as dropped frames when output arrives fast.** In the paced rows, 6,654 pairs cost 23 dropped frames and 46,076 cost 152 to 158 (at the nominal 16.7 ms). Streams with 208 to 1,664 distinct pairs cost 0 to 6 dropped frames and 80 to 230 ms of wall time in the cold pass.
+- **W3 is the worst stream measured and its cost is not explained by its pair count.** A static count of the whole 2 MiB stream gives 593 styles and 15,305 pairs; at the 0.12 to 0.22 ms per pair of the single-family streams that is about 1.8 to 3.4 s of CPU, and the cold W3 2 MiB pass took 13.1 s. W3 also keeps growing with its size (3.0 s at 0.5 MiB, 7.0 at 1, 13.1 at 2, 23.2 at 4) although its pair count is nearly saturated at 2 MiB (593 styles times the 26 letters is 15,418), and the warm pass over the same bytes costs 0.18 to 0.62 s. Why W3 costs four to seven times what its pair count predicts was not isolated; mixing the families in one stream is the difference from the rows above and the candidate, and it was not tested. The paced W3 pass shows it is not the render count: the same 66 renders cost 7.9 to 8.1 s of CPU cold and 0.33 s warm.
+- **The stall is a cost of the first time, per page, not of the workload.** A terminal that rarely shows more than a few hundred distinct styled glyphs would pay tens to a few hundred milliseconds once. The harness's median of five runs hid it, and it is consistent with the run-to-run spread of the desktop W3 figures in the shootout (2.5 to 28 MiB/s across the five runs of a page). Whether other events that empty the glyph cache (a theme or font-size change) bring it back was not measured; the context restore of the next section redrew a 38-row screen of styled text within the 100 ms resolution of that run.
+
+**Desktop viewport (152 by 38 cells at devicePixelRatio 1)** the same experiment gives lower per-pair costs for the single-family streams (46,268 24-bit pairs: 1.99 to 2.00 s cold against 0.48 to 0.52 s warm, 48 to 51 dropped frames; 6,655 pairs: 0.72 to 0.75 s against 0.19 to 0.21 s) but the same shape, and a worse W3: paced, 1 MiB cost 15.9 to 16.7 s of CPU and 9.8 to 10.0 s of wall time with 529 to 540 dropped frames in the cold pass against 0.87 to 1.03 s warm, and 2 MiB 29.2 to 30.7 s and 18.0 to 18.4 s with 957 to 980 dropped frames. The DOM renderer paced W3 cost 2.8 to 2.9 s (1 MiB) cold and 2.1 to 2.2 s warm with 9 to 13 dropped frames. Unpaced desktop rows are confounded by the render count (the DOM renderer rendered once in many warm passes) and are in the raw files only.
+
+What the experiment does not show: why the addon's cost per pair is what it is (its texture atlas, glyph drawing and page merging were not profiled), whether another `devicePixelRatio`, font size or the atlas options of the addon change it, whether a mitigation (drawing the common glyphs ahead of the first output, limiting style variety, a bigger or preallocated atlas) removes it, an Android WebView, and any real terminal session (the streams are synthetic and uniformly random in style; real output reuses a small set of styles and the pair counts here are an upper range for it).
 
 #### WebGL context loss and recovery ([#1323](https://github.com/mihazs/lazysh/issues/1323))
 
