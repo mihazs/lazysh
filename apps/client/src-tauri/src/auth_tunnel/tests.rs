@@ -488,40 +488,66 @@ async fn a_hundred_flows_leave_no_listener_and_no_connection() {
     assert_eq!(host.accepted.load(Ordering::SeqCst), 100);
 }
 
+/// One whole sign-in, with the secrets in the callback, that checks what the engine reports. It
+/// runs in its own process (below), so that everything the engine prints can be read too.
 #[tokio::test]
-async fn the_authorization_code_and_state_never_appear_in_what_the_flow_reports() {
+#[ignore = "run by the test below in a child process"]
+async fn sign_in_with_secrets_for_the_child_process() {
     let host = CallbackServer::start(Behaviour::Answer(1)).await;
     let tunnel = Tunnel::to(&host, Limits::quick()).await;
-    let mut seen = Vec::new();
+    let mut reported = Vec::new();
     // A refused request that carries the secrets is not echoed back.
-    seen.push(
-        tunnel
-            .send(&tunnel.get(&format!("/other?code={CODE}&state={STATE}"), ""))
-            .await,
-    );
-    seen.push(
-        tunnel
-            .send(&tunnel.get(
-                &format!("{CALLBACK}?code={CODE}&state={STATE}"),
-                "Sec-Fetch-Mode: cors\r\n",
-            ))
-            .await,
-    );
+    for (target, extra) in [
+        (format!("/other?code={CODE}&state={STATE}"), ""),
+        (
+            format!("{CALLBACK}?code={CODE}&state={STATE}"),
+            "Sec-Fetch-Mode: cors\r\n",
+        ),
+    ] {
+        let answer = tunnel.send(&tunnel.get(&target, extra)).await;
+        reported.push(String::from_utf8_lossy(&answer).into_owned());
+    }
     let events = tunnel.events.clone();
     let delivered = tunnel
         .send(&tunnel.get(&format!("{CALLBACK}?code={CODE}&state={STATE}"), ""))
         .await;
     assert_eq!(status(&delivered), "HTTP/1.1 200 OK");
     let reason = tunnel.ended().await;
-    let mut reported = seen
-        .iter()
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-        .collect::<Vec<_>>();
     reported.push(serde_json::to_string(&*events.lock().unwrap()).unwrap());
     reported.push(serde_json::to_string(&TunnelEvent::Ended { reason }).unwrap());
     for text in reported {
-        assert!(!text.contains(CODE) && !text.contains(STATE), "{text}");
+        assert!(
+            !text.contains(CODE) && !text.contains(STATE),
+            "leaked a secret"
+        );
     }
+}
+
+#[test]
+fn the_authorization_code_and_state_never_appear_in_what_the_flow_reports_or_prints() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "auth_tunnel::tests::sign_in_with_secrets_for_the_child_process",
+            "--ignored",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert!(child.status.success(), "{printed}");
+    assert!(
+        printed.contains("1 passed"),
+        "the child ran nothing: {printed}"
+    );
+    assert!(
+        !printed.contains(CODE) && !printed.contains(STATE),
+        "the engine printed a secret"
+    );
 }
 
 #[tokio::test]
