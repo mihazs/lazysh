@@ -4,14 +4,19 @@ import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
 
-type Settings = { schemaVersion:1; revision:number; transcriptDiscoveryEnabled:boolean; recordedUsageEnabled:boolean; deviceToolsEnabled:boolean };
+const policies=['install','notify','off'] as const;
+type Policy=typeof policies[number];
+type Settings = { schemaVersion:1; revision:number; transcriptDiscoveryEnabled:boolean; recordedUsageEnabled:boolean; deviceToolsEnabled:boolean; autoUpdate?:{revision:number;policy:Policy} };
 export function parseCompanionSettings(value:unknown):Settings {
   if (!value || typeof value!=="object") throw new LocalUiError('companionUnsupported');
   const settings=value as Settings;
-  const fields=["schemaVersion","revision","transcriptDiscoveryEnabled","recordedUsageEnabled","deviceToolsEnabled"];
-  if (Object.keys(settings).some(key=>!fields.includes(key)) || settings.schemaVersion!==1 || !Number.isSafeInteger(settings.revision) || settings.revision<0 || [settings.transcriptDiscoveryEnabled,settings.recordedUsageEnabled,settings.deviceToolsEnabled].some(value=>typeof value!=="boolean")) throw new LocalUiError('companionUnsupported');
+  const fields=["schemaVersion","revision","transcriptDiscoveryEnabled","recordedUsageEnabled","deviceToolsEnabled","autoUpdate"];
+  const auto=settings.autoUpdate;
+  if (Object.keys(settings).some(key=>!fields.includes(key)) || settings.schemaVersion!==1 || !Number.isSafeInteger(settings.revision) || settings.revision<0 || [settings.transcriptDiscoveryEnabled,settings.recordedUsageEnabled,settings.deviceToolsEnabled].some(value=>typeof value!=="boolean") || (auto!==undefined && (!auto || typeof auto!=="object" || Object.keys(auto).some(key=>key!=="revision"&&key!=="policy") || !Number.isSafeInteger(auto.revision) || auto.revision<0 || !policies.includes(auto.policy)))) throw new LocalUiError('companionUnsupported');
   return settings;
 }
+const policyLabels={install:'companionAutoUpdateInstall',notify:'companionAutoUpdateNotify',off:'companionAutoUpdateOff'} as const;
+const policyHints={install:'companionAutoUpdateInstallHint',notify:'companionAutoUpdateNotifyHint',off:'companionAutoUpdateOffHint'} as const;
 export default function CompanionSettingsPanel({sessionId,visible=true}:{sessionId:string;visible?:boolean}) {
   useUi();
   const invoke = useProtectedInvoke();
@@ -41,7 +46,7 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
     if(!settings || !draft || busy || !scope.current.visible || scope.current.sessionId!==sessionId || loadedSource.current!==sessionId)return;
     const current=++request.current;setBusy(true);setError("");setSaved(false);
     try {
-      const value=parseCompanionSettings(await invoke("update_companion_settings",{sessionId,settings:{expectedRevision:settings.revision,transcriptDiscoveryEnabled:draft.transcriptDiscoveryEnabled,recordedUsageEnabled:draft.recordedUsageEnabled,deviceToolsEnabled:draft.deviceToolsEnabled}}));
+      const value=parseCompanionSettings(await invoke("update_companion_settings",{sessionId,settings:{expectedRevision:settings.revision,transcriptDiscoveryEnabled:draft.transcriptDiscoveryEnabled,recordedUsageEnabled:draft.recordedUsageEnabled,deviceToolsEnabled:draft.deviceToolsEnabled,...(settings.autoUpdate&&draft.autoUpdate&&draft.autoUpdate.policy!==settings.autoUpdate.policy?{autoUpdate:{expectedRevision:settings.autoUpdate.revision,policy:draft.autoUpdate.policy}}:{})}}));
       if(owns(current)){setSettings(value);setDraft(value);setSaved(true);}
     } catch(error){if(owns(current))setError({refresh:captureUiError(error)});}
     finally {if(owns(current))setBusy(false);}
@@ -60,6 +65,12 @@ export default function CompanionSettingsPanel({sessionId,visible=true}:{session
       <p>{t('companionUsageHint')}</p>
       <label><input type="checkbox" checked={draft.deviceToolsEnabled} onChange={event=>{setSaved(false);setDraft({...draft,deviceToolsEnabled:event.target.checked});}}/>{t('companionDevices')}</label>
       <p>{t('companionDevicesHint')}</p>
+      {draft.autoUpdate&&<fieldset className="companion-auto-update" disabled={busy || !visible}>
+        <legend>{t('companionAutoUpdate')}</legend>
+        <p>{t('companionAutoUpdateHint')}</p>
+        {policies.map(policy=><label key={policy}><input type="radio" name="companion-auto-update" value={policy} checked={draft.autoUpdate?.policy===policy} onChange={()=>{setSaved(false);setDraft({...draft,autoUpdate:{revision:draft.autoUpdate!.revision,policy}});}}/>{t(policyLabels[policy])}</label>)}
+        <p>{t(policyHints[draft.autoUpdate.policy])}</p>
+      </fieldset>}
       <button type="submit">{t('companionSave')}</button>
     </fieldset></form>}
     {saved&&<p role="status">{t('companionSaved')}</p>}

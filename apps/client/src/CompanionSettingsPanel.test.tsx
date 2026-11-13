@@ -19,6 +19,21 @@ it("saves actual host settings with the fetched revision and explicit booleans",
   expect(screen.getByText(/Existing previews and streams continue until stopped/)).toBeTruthy();
   expect(screen.getByText(/Port discovery is a separate SSH feature/)).toBeTruthy();
 });
+it("shows the update policy only for a companion that has one, and saves a change with the fetched revision",async()=>{
+  expect(parseCompanionSettings({...settings,autoUpdate:{revision:2,policy:"install"}}).autoUpdate).toEqual({revision:2,policy:"install"});
+  for(const autoUpdate of [null,{revision:-1,policy:"off"},{revision:1,policy:"always"},{revision:1,policy:"off",channel:"stable"},"off"])expect(()=>parseCompanionSettings({...settings,autoUpdate})).toThrow();
+  vi.mocked(invoke).mockResolvedValueOnce({...settings,autoUpdate:{revision:2,policy:"install"}}).mockResolvedValueOnce({...settings,revision:1,autoUpdate:{revision:3,policy:"off"}});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  expect(((await screen.findByLabelText("Update automatically")) as HTMLInputElement).checked).toBe(true);
+  expect(screen.getByText(/updates itself to this app's version/)).toBeTruthy();
+  fireEvent.click(screen.getByLabelText("Never"));fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",{sessionId:"host-a",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true,autoUpdate:{expectedRevision:2,policy:"off"}}}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(((screen.getByLabelText("Never")) as HTMLInputElement).checked).toBe(true);
+  cleanup();
+  vi.mocked(invoke).mockResolvedValueOnce(settings);render(<CompanionSettingsPanel sessionId="old-companion"/>);
+  await screen.findByLabelText("Device tools");expect(screen.queryByLabelText("Never")).toBeNull();
+});
 it("does not show actionable switches for an unsupported host companion",async()=>{
   vi.mocked(invoke).mockRejectedValue({message:"unknown subcommand settings"});render(<CompanionSettingsPanel sessionId="old"/>);
   await screen.findByRole("alert");expect(screen.queryByRole("checkbox")).toBeNull();expect(screen.queryByRole("button",{name:"Save host settings"})).toBeNull();

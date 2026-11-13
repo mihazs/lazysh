@@ -11,6 +11,8 @@ import HerdrAgentsPanel from './HerdrAgentsPanel';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
+import CompanionUpdateRow from './CompanionUpdateRow';
+import {companionUpdatedEvent,parseCompanionUpdate,type CompanionUpdate} from './companionUpdate';
 import CompanionInstallPanel from './CompanionInstallPanel';
 import CompanionHooksPanel from './CompanionHooksPanel';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
@@ -137,6 +139,8 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const now=useNow(30000,panelVisible && activityVisible && visible.length>0);
   const request = useRef(0);
   const snapshotFlight=useRef<number|null>(null);
+  const [companionUpdate,setCompanionUpdate]=useState<CompanionUpdate|undefined>();
+  const lastUpdate=useRef<CompanionUpdate|undefined>(undefined);
   const historyRequest=useRef(0);
   const historyOwner=useRef<{source:string;key:string}|null>(null);
   const historyFlight=useRef<number|null>(null);
@@ -171,6 +175,11 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
     }
   },[sessions,sessionId,error,loadedSessionId]);
 
+  /** The host says it is updating its companion to this app's version; once it has, views that waited for it ask again. */
+  function noteCompanionUpdate(next:CompanionUpdate|undefined,source:string) {
+    const was=lastUpdate.current;lastUpdate.current=next;setCompanionUpdate(next);
+    if(next?.state==='done' && was?.state!=='done')window.dispatchEvent(new CustomEvent(companionUpdatedEvent,{detail:{sessionId:source}}));
+  }
   async function refresh() {
     if(!visibility.current || !access.current() || snapshotFlight.current!==null)return;
     const source=sessionId;
@@ -181,7 +190,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
       const value = await invoke<unknown>('agent_snapshot', { sessionId });
       const rows = parseSnapshot(value);
       if(new Set(rows.map(reportKey)).size!==rows.length)throw new LocalUiError('agentsInvalidSession');
-      if (visibility.current && selectedSource.current===source && current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
+      if (visibility.current && selectedSource.current===source && current === request.current) { noteCompanionUpdate(parseCompanionUpdate(value),source);setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
     } catch (e) {
       if (visibility.current && selectedSource.current===source && current === request.current) setError(captureUiError(e));
     } finally {
@@ -189,7 +198,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
       if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false);
     }
   }
-  useEffect(()=>{setSessions([]);setLoaded(false);setError('');},[sessionId]);
+  useEffect(()=>{setSessions([]);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
   useEffect(()=>{
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
@@ -238,6 +247,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,herdrSession,onUseRepor
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
     {!renderNavigation&&approvals}
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><label className="agent-search"><Search size={16} aria-hidden="true"/><span className="sr-only">{t('agentsSearch')}</span><input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
+    {ready && !error && companionUpdate && <CompanionUpdateRow update={companionUpdate}/>}
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
       <h3>{t('agentsSetupAction')}</h3>
