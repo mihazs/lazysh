@@ -87,12 +87,15 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const proofCheck=useMemo(()=>automatic?proves(proof!):undefined,[automatic,proofKey]);
   // A host without the guard takes input through Herdr's own commands, addressed to the pane Herdr links to this conversation.
   const stock=useMemo<StockTarget|undefined>(()=>{
-    const host=conversation.herdr;
-    return proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal
-      ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent:conversation.agent,agentSessionId:conversation.path}) : undefined;
+    const host=conversation.herdr, agent=conversation.agent;
+    return agent!=='gemini' && proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal
+      ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent,agentSessionId:conversation.path}) : undefined;
   },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,conversation.agent,conversation.path]);
   // A Zellij host takes input to the pane the agent's report names, and only while that pane still runs this agent.
-  const zellij=useMemo<ZellijTarget|undefined>(()=>proof?.kind==='zellij' ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent:conversation.agent}) : undefined,[proofKey,conversation.agent]);
+  const zellij=useMemo<ZellijTarget|undefined>(()=>{
+    const agent=conversation.agent;
+    return agent!=='gemini' && proof?.kind==='zellij' ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent}) : undefined;
+  },[proofKey,conversation.agent]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.

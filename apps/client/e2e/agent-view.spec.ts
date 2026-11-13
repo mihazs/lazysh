@@ -245,14 +245,16 @@ test('answers a Claude permission request from the Agent view through the approv
 });
 
 /** The same pane now runs Claude Code: the base fixture with the agent renamed, optionally already waiting, and its conversation replaced. */
-async function claudeHere(page:Page,patch:{state?:string;transcript?:object}={}) {
-  await page.evaluate(({state,transcript})=>{
+async function claudeHere(page:Page,patch:{state?:string;transcript?:object;as?:{name:string;agent:string;session:string}}={}) {
+  await page.evaluate(({state,transcript,as})=>{
+    // Claude Code unless `as` names another agent: the name its hooks report, its reader id and its session id.
+    const who=as??{name:'Claude Code',agent:'claude',session:'claude-thread'};
     const base=window.nativeFixtureInvoke!;
     window.nativeFixtureInvoke=async(command,args)=>{
       const result=await base(command,command==='agent_transcript'?{...args,agent:'codex'}:args);
-      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:'Claude Code',sessionId:'claude-thread',...(state?{state}:{})}))};
-      if(command==='agent_reported_history')return {...(result as object),sessionId:'claude-thread'};
-      if(command==='agent_transcript')return {...(result as object),agent:'claude',...transcript};
+      if(command==='agent_snapshot')return {...(result as {sessions:object[]}),sessions:(result as {sessions:object[]}).sessions.map(session=>({...session,agent:who.name,sessionId:who.session,...(state?{state}:{})}))};
+      if(command==='agent_reported_history')return {...(result as object),sessionId:who.session};
+      if(command==='agent_transcript')return {...(result as object),agent:who.agent,...transcript};
       return result;
     };
   },patch);
@@ -275,6 +277,21 @@ test('answers the open Claude question with the digit of the chosen option and t
   const fixture=await page.evaluate(()=>window.agentView.inputs);
   expect(fixture.filter(action=>action.kind==='input')).toEqual([expect.objectContaining({input:{kind:'select',option:2,of:2}})]);
   const box=await card.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
+test('a Gemini CLI pane binds its conversation and sends a prompt through the confirmed tmux input',async({page})=>{
+  await open(page);
+  await claudeHere(page,{as:{name:'Gemini CLI',agent:'gemini',session:'gemini-thread'}});
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible({timeout:8000});
+  await expect(agent.getByText('Gemini CLI',{exact:false}).first()).toBeVisible();
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('Summarise the plan');
+  // On a phone Enter adds a line; the Send button sends.
+  if(page.viewportSize()!.width<600)await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  else await draft.press('Enter');
+  await expect.poll(async()=>(await fixture(page)).inputs.filter(input=>(input as {input?:{kind:string}}).input?.kind==='send')).toEqual([expect.objectContaining({input:{kind:'send',text:'Summarise the plan'},source:expect.objectContaining({agent:'gemini',view:'conversation'})})]);
 });
 
 test('the mode button sends one Shift+Tab per tap to a Claude pane and names the mode the terminal read back',async({page})=>{
