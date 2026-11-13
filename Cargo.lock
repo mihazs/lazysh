@@ -3817,6 +3817,7 @@ dependencies = [
  "lazysh-account-usage",
  "lazysh-agent",
  "lazysh-common",
+ "lazysh-companion-release",
  "lazysh-et-transport",
  "lazysh-mosh-transport",
  "lazysh-parakeet-runtime",
@@ -3883,6 +3884,7 @@ dependencies = [
  "image",
  "lazysh-account-usage",
  "lazysh-common",
+ "lazysh-companion-release",
  "lazysh-notification-client",
  "lazysh-notifications",
  "libc",
@@ -3911,6 +3913,26 @@ dependencies = [
  "tokio",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "lazysh-companion-release"
+version = "1.55.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http 1.5.0",
+ "hyper-util",
+ "lazysh-common",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

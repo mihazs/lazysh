@@ -36,6 +36,7 @@
     "packages/apple-speech/CHANGELOG.md",
     "packages/apple-status/CHANGELOG.md",
     "packages/common/CHANGELOG.md",
+    "packages/companion-release/CHANGELOG.md",
     "packages/credential-vault/CHANGELOG.md",
     "packages/display-idle/CHANGELOG.md",
     "packages/et-transport/CHANGELOG.md",

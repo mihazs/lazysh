@@ -27,6 +27,7 @@ path = "../../../packages/deep-link-vendor/tests/manifest.rs"
 lazysh-account-usage = { path = "../../../packages/account-usage" }
 tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
 lazysh-common = { path = "../../../packages/common", features = ["url"] }
+lazysh-companion-release = { path = "../../../packages/companion-release" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }

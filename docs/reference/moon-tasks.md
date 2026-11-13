@@ -26,7 +26,7 @@ CI installs nothing extra: `bun install --frozen-lockfile` provides the pinned m
 | --- | --- | --- |
 | `cargo` | every Cargo workspace member | inherits `check-rust`, `test-rust`, `lint`, `format-check`, `sources` |
 | `cargo-binary` | agent, notification-service, share-service, transcription-service | inherits the release `build` |
-| `companion` | agent, the three services, notification-client, account-usage | the set the `agent` CI job verifies |
+| `companion` | agent, the three services, notification-client, account-usage, companion-release | the set the `agent` CI job verifies |
 | `vendor` | ai-usagebar-vendor, deep-link-vendor, portable-pty-vendor, herdr-upstream, herdr-guard | vendored or separately built code; inherits no tasks |
 
 `client` is the only `application`. `client-native`, the services, the agent and the Herdr projects are

@@ -17,6 +17,7 @@
       "dependencies": {
         "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
+        "@lazysh/companion-release": "workspace:*",
         "@lazysh/notification-client": "workspace:*",
       },
       "devDependencies": {
@@ -109,6 +110,13 @@
     "packages/common": {
       "name": "@lazysh/common",
       "version": "1.55.0",
+    },
+    "packages/companion-release": {
+      "name": "@lazysh/companion-release",
+      "version": "1.55.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/credential-vault": {
       "name": "@lazysh/credential-vault",
@@ -321,6 +329,8 @@
     "@lazysh/client": ["@lazysh/client@workspace:apps/client"],
 
     "@lazysh/common": ["@lazysh/common@workspace:packages/common"],
+
+    "@lazysh/companion-release": ["@lazysh/companion-release@workspace:packages/companion-release"],
 
     "@lazysh/credential-vault": ["@lazysh/credential-vault@workspace:packages/credential-vault"],
 

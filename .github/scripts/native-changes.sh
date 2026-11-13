@@ -28,7 +28,7 @@ package() {
     */ios) add ios ;;
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
-    account-usage/* | ai-usagebar-vendor/*) add client agent ;;
+    account-usage/* | ai-usagebar-vendor/* | companion-release/*) add client agent ;;
     notification-client/*) add agent push relay ;; # native-linux-runtimes runs the real Apprise API relay case.
     push-registration/*) add client android ios push ;;
     mosh-transport/*) add client ios mosh ;;

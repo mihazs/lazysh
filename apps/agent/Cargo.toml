@@ -7,9 +7,17 @@ description = "Lifecycle event companion with explicit opt-in bound relay publis
 
 [features]
 storage-observation = []
+# Lets `update` talk to a local HTTPS release server named by LAZYSH_UPDATE_TEST_ENDPOINT. Tests only.
+update-test-endpoint = ["lazysh-companion-release/test-endpoint"]
+
+[[test]]
+name = "update"
+# Drives the real binary built with the local endpoint seam: `cargo test --features update-test-endpoint`.
+required-features = ["update-test-endpoint"]
 
 [dependencies]
 lazysh-account-usage = { path = "../../packages/account-usage", features = ["collector"] }
+lazysh-companion-release = { path = "../../packages/companion-release" }
 lazysh-notification-client = { path = "../../packages/notification-client" }
 tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "io-std", "io-util"] }
 lazysh-common = { path = "../../packages/common" }
@@ -34,6 +42,7 @@ lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }
 
 [target.'cfg(unix)'.dev-dependencies]
+lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
 lazysh-notifications = { path = "../notification-service", features = ["test-support"] }
 axum = "0.8.9"

@@ -1,0 +1,9 @@
+{
+  "name": "@lazysh/companion-release",
+  "version": "1.55.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "@lazysh/common": "workspace:*"
+  }
+}
