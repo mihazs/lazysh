@@ -1,6 +1,6 @@
 # Agent view design
 
-Status: slice 1 (conversation) shipped; the rest is planned. Tracked by
+Status: slices 1 (conversation) and 2 (work rows) shipped; the rest is planned. Tracked by
 [#1452](https://github.com/mihazs/lazysh/issues/1452) under the Agent view epic
 [#1277](https://github.com/mihazs/lazysh/issues/1277). Behaviour lives in [Agent view](../agent-view.md); the feature
 gaps against other clients live in [Agent view parity](agent-view-parity.md). This page is the visual and interaction
@@ -74,11 +74,30 @@ Behaviour:
   selection, or lands on a link, button, summary or code block, does not toggle it. On a pointer device, hovering shows
   it.
 
+## Work rows (slice 2)
+
+Everything the agent does besides talking is one row, in the same shape, so a long turn is a quiet list that opens where
+you tap. The tokens (`--av-row`, `--av-row-hover`, `--av-code`, `--av-rule`, `--av-quiet`, `--av-add`) live in
+`AgentTokens.css`; the rows in `AgentRows.css`.
+
+| Part | Value |
+| --- | --- |
+| Row | tonal bar (`--av-row`), radius 12 px, no border, 44 px tall, 13.5 px text, a chevron at the end that turns when it is open |
+| Tool call | tool icon, name (600), one line of what it did (monospace, ellipsis), then its outcome |
+| Outcome | a call that went well is one check mark (its word, *Done*, stays for a screen reader); *Running* has a spinner in the accent colour; *Failed* (with the exit code) is danger red; *Declined* is the warning colour |
+| Folded activity | the row that opens a turn's work (`Ran 2 commands · Made 1 edit · 1 failed`); open, it is a list of rows 6 px apart |
+| Open tool row | the input and the last 20 lines of output on a darker fill, **Show earlier lines** and **Copy output** as quiet text buttons; an edit shows its lines with green and red tints |
+| Thinking | the same row; its text sits under a 2 px rule instead of in a box |
+| Plan, question, failure | a tonal card with a small title; a plan is a checklist (a mark per step: empty, dotted for the current one, filled with a tick when done; the step's state is still read aloud); a failure is tinted with the danger colour |
+| Chips above the composer | one tonal pill each for running work (**2 running**, **1 shell**, **1 monitor**) and the plan (**1 of 3** with the pill filling from the start as steps finish) |
+
+The result of a plan call (*Todos have been modified successfully*) is not a row of its own: the plan chip already shows it.
+
 ## Planned slices
 
 | Slice | Covers | Status |
 | --- | --- | --- |
 | 1. Conversation | Column, bubbles, typography, Markdown, code blocks, tables, quotes, time on tap | Shipped |
-| 2. Work rows | Tool, thinking, sub-agent, background-task and plan rows with status marks and a chevron | Planned |
+| 2. Work rows | Tool, thinking, sub-agent, background-task and plan rows with status marks and a chevron | Shipped |
 | 3. Composer | Rounded growing field, attach, send and stop states, slash and mention affordances | Planned |
 | 4. Header and states | Header chip, floating jump to latest, streaming indicator, empty and error states, compact mode | Planned |

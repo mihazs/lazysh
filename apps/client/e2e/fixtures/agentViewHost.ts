@@ -10,6 +10,10 @@ export type AgentViewOptions={
   session?:Record<string,unknown>;
   /** The app theme preference: `forest` (default, dark), `midnight` (dark) or `paper` (light). */
   theme?:'forest'|'midnight'|'paper';
+  /** What the recorded turn says the agent is doing; `working` makes the last call of the turn a running one. */
+  activity?:'working'|'waiting'|'idle';
+  /** Sub-agents, background commands and monitors of the conversation. */
+  work?:unknown[];
   /** Messages the agent has not taken yet. */
   queued?:{text:string;timestamp?:string}[];
 };
@@ -49,12 +53,12 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
         }
         case 'agent_snapshot':return {schemaVersion:1,sessions:[{sessionId:'design-thread',agent:claude?'Claude Code':'Codex',project:'/work/lazysh',state:options.state??'working',updatedAt:new Date().toISOString(),summary:'Working on your prompt',paneId:'%3',eventCount:4}]};
         case 'agent_reported_history':return {schemaVersion:1,sessionId:'design-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
-        case 'agent_transcript':return {schemaVersion:1,agent:claude?'claude':'codex',view:'active_branch',nextOffset:0,hasMore:false,session:options.session,...(options.queued?.length?{queued:options.queued}:{}),messages:options.messages};
+        case 'agent_transcript':return {schemaVersion:1,agent:claude?'claude':'codex',view:'active_branch',nextOffset:0,hasMore:false,session:options.session,...(options.activity?{activity:options.activity}:{}),...(options.work?{work:options.work}:{}),...(options.queued?.length?{queued:options.queued}:{}),messages:options.messages};
         case 'agent_approvals':return {schemaVersion:1,requests:[]};
         case 'agent_watch_start':{
           // The companion's live stream: it opens, then carries the whole recorded conversation.
           const events=args.events as {onmessage:(event:unknown)=>void},emit=(frame:unknown)=>events.onmessage({type:'frame',frame});
-          setTimeout(()=>{emit({type:'hello',protocol:1,agent:claude?'claude':'codex'});emit({type:'snapshot',gen:1,seq:1,entries:options.messages.map(message=>({id:(message as {id:string}).id,rev:1,message}))});});
+          setTimeout(()=>{emit({type:'hello',protocol:1,agent:claude?'claude':'codex'});emit({type:'snapshot',gen:1,seq:1,entries:options.messages.map(message=>({id:(message as {id:string}).id,rev:1,message})),...(options.work?{work:options.work}:{}),...(options.activity?{activity:options.activity}:{}),session:options.session});});
           return 'watch-1';
         }
         case 'multiplexer_tree':return {tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]};

@@ -1,11 +1,12 @@
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {openAgentView} from './fixtures/agentViewHost';
-import {designMessages} from './fixtures/agentDesignConversation';
+import {designMessages,designWork,questionMessages,workMessages} from './fixtures/agentDesignConversation';
 import {controlContrast} from './fixtures/controlContrast';
 import {designAudit} from './fixtures/designAudit';
 
 type Theme='forest'|'midnight'|'paper';
 const open=(page:Page,theme:Theme)=>openAgentView(page,{theme,messages:designMessages,state:'working'});
+const openWork=(page:Page,theme:Theme)=>openAgentView(page,{theme,messages:workMessages,work:designWork,state:'working',activity:'working'});
 /** Waits for the timeline to settle at its end, where a new reply is read. */
 const settled=(agent:Locator)=>expect.poll(()=>agent.locator('.chat-messages').evaluate(list=>list.scrollHeight-list.clientHeight-list.scrollTop)).toBeLessThanOrEqual(1);
 const boxOf=async(locator:Locator)=>(await locator.boundingBox())!;
@@ -91,19 +92,93 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
     expect(found).toEqual({borderedControls:[],cyan:[]});
   });
 
+  test('work is quiet: a folded row opens to borderless tool rows, a call that went well is one mark, a failure and a running call say so',async({page})=>{
+    const agent=await openWork(page,'forest');await settled(agent);
+    const fold=agent.locator('.agent-turn-activity');
+    await expect(fold).not.toHaveAttribute('open','');
+    await expect(fold.locator(':scope > summary')).toContainText('Ran 2 commands');
+    await fold.locator(':scope > summary').click();
+    const rows=fold.locator('.agent-tool');
+    await expect(rows).toHaveCount(5);
+    // Every row is a full-width bar at least 44 px tall with no border of its own.
+    for(const row of await rows.all()) {
+      const box=await boxOf(row.locator('summary'));
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(await row.evaluate(node=>getComputedStyle(node).borderTopWidth)).toBe('0px');
+    }
+    const [read,edit,failed,sub,running]=[0,1,2,3,4].map(index=>rows.nth(index));
+    // A call that went well shows a mark; its word stays in the page for a screen reader.
+    expect(await read.locator('.agent-tool-status-text').evaluate(node=>node.getBoundingClientRect().width)).toBeLessThanOrEqual(1);
+    await expect(read.locator('.agent-tool-status-text')).toHaveText('Done');
+    await expect(edit.locator('.agent-diff-counts').first()).toBeVisible();
+    await expect(failed.locator('.agent-tool-status-text')).toBeVisible();
+    await expect(failed.locator('.agent-tool-status-text')).toHaveText('Failed · exit code 1');
+    await expect(running.locator('.agent-tool-status-text')).toBeVisible();
+    await expect(running).toHaveAttribute('data-status','running');
+    await expect(sub.locator('summary')).toContainText('Audit the other retry tests');
+    // Opening a row shows what it did without moving the rows above it.
+    const above=await boxOf(read.locator('summary'));
+    await failed.locator('summary').click();
+    await expect(failed.getByLabel('Output')).toContainText('expected 3 attempts');
+    expect(await boxOf(read.locator('summary'))).toEqual(above);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  });
+
+  test('the plan is one chip that fills as steps finish, and opens to a checklist',async({page})=>{
+    const agent=await openWork(page,'forest');await settled(agent);
+    const chip=agent.getByRole('button',{name:/1 of 3/});
+    await expect(chip).toContainText('Run the whole suite');
+    const [width,fill]=await chip.evaluate(node=>[node.getBoundingClientRect().width,node.style.getPropertyValue('--plan-done')]);
+    expect(width).toBeGreaterThan(200);expect(fill).toBe('33%');
+    await chip.click();
+    const plan=agent.getByRole('region',{name:'Plan'});
+    await expect(plan.getByRole('listitem')).toHaveText(['DoneUse a fake clock in the retry test','In progressRun the whole suite','PendingUpdate the contributor guide']);
+    // The marks are drawn, not typed: each step has an 18 px circle and no pill of text.
+    for(const mark of await plan.locator('.chat-plan-status').all())expect((await boxOf(mark)).width).toBe(18);
+  });
+
+  test('a question and a failure read as cards, not as boxed forms',async({page})=>{
+    const asked=await openAgentView(page,{theme:'forest',messages:questionMessages,state:'needs_attention'});
+    const card=asked.getByRole('region',{name:'Question'});
+    await expect(card).toContainText('Which registry should the release publish to?');
+    await expect(card).toContainText('GitHub Packages');
+    expect(await card.evaluate(node=>getComputedStyle(node).borderTopWidth)).toBe('0px');
+    expect(await card.locator('fieldset').evaluate(node=>getComputedStyle(node).borderTopWidth)).toBe('0px');
+  });
+
+  for(const theme of ['forest','midnight','paper'] as const)test(`the work rows keep 4.5:1 text and add no border or cyan in the ${theme} theme`,async({page})=>{
+    const agent=await openWork(page,theme);await settled(agent);
+    await agent.locator('.agent-turn-activity > summary').click();
+    await agent.getByRole('button',{name:/1 of 3/}).click();
+    await agent.locator('.agent-tool[data-kind="diff"] > summary').click();
+    await agent.locator('.agent-tool[data-status="error"] > summary').click();
+    const selector='.agent-diff-lines > span, .agent-tool pre, .agent-turn-activity > summary, .agent-tool > summary strong, .agent-tool-summary, .agent-tool-status, .agent-diff-counts span, .chat-card h5, .chat-card p, .chat-plan-entries li > span:last-child, .agent-plan-chip button, .agent-status-bar button';
+    const ratios=await agent.evaluate(controlContrast,{selector});
+    expect(ratios.length).toBeGreaterThan(18);
+    for(const row of ratios)expect(row.ratio,`${row.tag} "${row.text}"`).toBeGreaterThanOrEqual(4.5);
+    expect(await agent.evaluate(designAudit)).toEqual({borderedControls:[],cyan:[]});
+  });
+
   // `LAZYSH_AGENT_VIEW_SHOTS=<directory> bunx playwright test e2e/agent-view-design.spec.ts -g screenshots` writes the review images of the
-  // design brief (docs/reference/agent-view-design.md): the same conversation in two themes at 415 x 900. `LAZYSH_AGENT_VIEW_SHOT_TAG` names the set.
+  // design brief (docs/reference/agent-view-design.md): the same conversations in two themes at 415 x 900. `LAZYSH_AGENT_VIEW_SHOT_TAG` names the set.
   test('writes the review screenshots when asked',async({page})=>{
     const directory=process.env.LAZYSH_AGENT_VIEW_SHOTS;
     test.skip(!directory,'Only when LAZYSH_AGENT_VIEW_SHOTS names a directory.');
+    const shot=async(set:string,theme:Theme,name:string)=>{await page.waitForTimeout(400);await page.screenshot({path:`${directory}/${set}-${process.env.LAZYSH_AGENT_VIEW_SHOT_TAG??'after'}-${theme}-${name}.png`});};
     for(const theme of ['forest','paper'] as const) {
       const agent=await open(page,theme);await settled(agent);
-      const shot=async(name:string)=>{await page.waitForTimeout(400);await page.screenshot({path:`${directory}/${process.env.LAZYSH_AGENT_VIEW_SHOT_TAG??'after'}-${theme}-${name}.png`});};
-      await shot('latest');
+      await shot('conversation',theme,'latest');
       await agent.getByText('export async function restore').first().evaluate(node=>(node.closest('figure')??node).scrollIntoView({block:'center'}));
-      await shot('code');
+      await shot('conversation',theme,'code');
       await agent.locator('.chat-messages').evaluate(list=>{list.scrollTop=0;});
-      await shot('start');
+      await shot('conversation',theme,'start');
+      const work=await openWork(page,theme);await settled(work);
+      await work.locator('.agent-turn-activity > summary').click();
+      await shot('work',theme,'rows');
+      await work.locator('.agent-tool[data-status="error"] > summary').click();
+      await work.getByRole('button',{name:/1 of 3/}).click();
+      await work.locator('.chat-messages').evaluate(list=>{list.scrollTop=list.scrollHeight;});
+      await shot('work',theme,'plan');
       await page.reload();
     }
   });

@@ -23,16 +23,6 @@
 .agent-view .agent-card-summary > .agent-row-action { color: var(--accent); font-weight: 600; }
 .agent-view-fallback .button-row { flex-wrap: wrap; }
 .agent-view-fallback .button-row button { min-height: 44px; white-space: nowrap; }
-/* The look of the conversation: one set of tokens, derived from the theme, so every bundled and imported theme gets the same calm
- * reading surface. Light and dark follow the theme; nothing here is a fixed colour. */
-.agent-view {
-  --av-fs: 15px; --av-lh: 1.62; --av-measure: 40rem;
-  --av-bubble: color-mix(in srgb, var(--theme-text, #e4e9df) 11%, var(--theme-panel, var(--surface)));
-  --av-code: color-mix(in srgb, var(--theme-text, #e4e9df) 7%, var(--theme-bg, #101311));
-  --av-code-head: color-mix(in srgb, var(--theme-text, #e4e9df) 12%, var(--theme-bg, #101311));
-  --av-rule: color-mix(in srgb, var(--theme-text, #e4e9df) 18%, transparent);
-  --av-quiet: color-mix(in srgb, var(--theme-text, #e4e9df) 84%, var(--theme-bg, #101311));
-}
 /* Turns are a centred column with a comfortable measure; the prompt sits on the trailing edge, the answer reads as plain text. */
 .agent-view .agent-turn { display: grid; gap: 14px; align-content: start; width: 100%; max-width: var(--av-measure); margin: 14px auto; min-width: 0; }
 .agent-view .agent-bubble { border: 0; padding: 0; font-size: var(--av-fs); line-height: var(--av-lh); }
@@ -73,9 +63,6 @@
 .agent-view .agent-bubble[data-stamped] > .agent-copy, .agent-view .agent-bubble:focus-within > .agent-copy { position: static; display: inline-flex; width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin: 0 -10px -10px; overflow: visible; clip-path: none; border-radius: 50%; }
 @media (hover: hover) { .agent-view .agent-bubble:hover > .agent-copy { position: static; display: inline-flex; width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin: 0 -10px -10px; overflow: visible; clip-path: none; border-radius: 50%; } }
 .agent-view .agent-bubble-user > .agent-copy { float: right; }
-.agent-view .agent-turn-activity .agent-bubble { padding-inline-start: 12px; border-inline-start: 2px solid var(--theme-border, var(--border)); }
-.agent-view .agent-turn-activity > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--muted); }
-.agent-view .agent-turn-activity[open] { display: grid; gap: 8px; }
 /* The timeline scrolls; the composer stays in reach below it. */
 .agent-view > .chat-panel[data-bound] { overflow: hidden; }
 .agent-view > .chat-panel[data-bound] > .chat-messages { overflow-anchor: none; flex: 1 1 auto; min-height: 120px; max-height: none; max-width: none; margin: 0; padding: 8px 16px 20px; gap: 0; overflow: auto; }

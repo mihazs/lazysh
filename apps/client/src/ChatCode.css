@@ -1,6 +1,6 @@
 /* A code block: language and Copy on top, the code below scrolling sideways. Colours come from the theme tokens. */
-.chat-code { margin: 0; overflow: hidden; border-radius: 12px; background: var(--av-code, color-mix(in srgb, var(--theme-text, #e4e9df) 7%, var(--theme-bg, #101311))); font-size: 13px; }
-.chat-code > figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 0 4px 0 14px; background: var(--av-code-head, color-mix(in srgb, var(--theme-text, #e4e9df) 12%, var(--theme-bg, #101311))); color: var(--muted); font-size: 12px; }
+.chat-code { margin: 0; overflow: hidden; border-radius: 12px; background: var(--av-code); font-size: 13px; }
+.chat-code > figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 0 4px 0 14px; background: var(--av-code-head); color: var(--muted); font-size: 12px; }
 .chat-code-language { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; letter-spacing: 0.02em; }
 /* The tap area is 44px tall while the bar stays slim: it overlaps the bar's edges, not another control. */
 .chat-code .chat-code-copy { display: inline-flex; align-items: center; gap: 6px; width: auto; height: auto; min-width: 0; min-height: 44px; margin-block: -4px; padding: 0 10px; border-radius: 8px; background: transparent; color: inherit; font-size: 12px; opacity: 1; }

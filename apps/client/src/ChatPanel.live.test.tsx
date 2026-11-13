@@ -234,6 +234,17 @@ describe('tool calls in the timeline',()=>{
   });
 });
 
+describe('plan calls in the timeline',()=>{
+  it('draws no row for the result of a plan call, which the plan chip already shows',async()=>{
+    const plan={id:'m-plan',role:'assistant',blocks:[{type:'tool_use',id:'todo-1',name:'TodoWrite',text:'{}',card:{kind:'plan',entries:[{text:'Run the suite',status:'in_progress'}]}}]};
+    const result={id:'m-res',role:'tool',blocks:[{type:'tool_result',id:'todo-1',text:'Todos have been modified successfully'}]};
+    poll=polled(...first,plan,result);
+    render_();await advance(0);
+    expect(screen.queryByText('Todos have been modified successfully')).toBeNull();
+    expect(screen.getByRole('button',{name:/0 of 1/})).toBeTruthy();
+  });
+});
+
 describe('message time',()=>{
   const stamped=(id:string,role:string,value:string,timestamp?:string)=>({...text(id,role,value),...(timestamp?{timestamp}:{})});
   it('keeps the time of a message under it for a screen reader and shows it after a tap, without rendering the list again',async()=>{

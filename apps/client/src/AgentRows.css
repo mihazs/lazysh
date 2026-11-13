@@ -1,0 +1,80 @@
+/* Work is quiet. A tool call, the thinking, the folded activity of a turn and a sub-agent are each one row: a tonal bar with a
+ * label, a status mark and a chevron. A row opens on a tap and never competes with the answer. No border, no coloured edge:
+ * the fill marks it as something to open, and only a state (running, failed, declined) gets a colour. */
+.agent-view :is(.agent-tool, .agent-thinking, .agent-bubble > details) { margin: 0; border: 0; border-radius: 12px; background: var(--av-row); overflow: hidden; min-width: 0; color: var(--av-quiet); }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; min-height: 44px; padding: 0 8px 0 12px; list-style: none; cursor: pointer; font-size: 13.5px; line-height: 1.3; color: var(--av-quiet); -webkit-tap-highlight-color: transparent; }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary::-webkit-details-marker { display: none; }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary::after {
+  content: ''; flex: none; margin-inline-start: auto; width: 16px; height: 16px; background: currentColor; opacity: 0.7;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary:dir(rtl)::after { transform: scaleX(-1); }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details)[open] > summary::after { transform: rotate(90deg); }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-bubble > details) > summary:hover { background: var(--av-row-hover); }
+.agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary:focus-visible { outline: 2px solid var(--ui-focus-ring); outline-offset: -2px; border-radius: 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .agent-view :is(.agent-tool, .agent-thinking, .agent-turn-activity, .agent-bubble > details) > summary::after { transition: transform 0.15s ease; }
+}
+
+/* The folded activity of a turn: the row is a chip of its own, what it holds is a list of rows. */
+.agent-view .agent-turn-activity > summary { border-radius: 12px; background: var(--av-row); }
+.agent-view .agent-turn-activity > summary:hover { background: var(--av-row-hover); }
+.agent-view .agent-turn-activity[open] > summary { margin-bottom: 8px; }
+.agent-view .agent-turn-activity[open] { display: grid; gap: 6px; }
+.agent-view .agent-turn-activity .agent-bubble { padding: 0; border: 0; display: grid; gap: 6px; font-size: 14px; color: var(--av-quiet); }
+.agent-view .agent-turn-activity .agent-bubble > * + * { margin-top: 0; }
+
+/* A tool call: icon, name, one line of what it did, then its outcome. */
+.agent-view .agent-tool > summary > strong { flex: none; font-weight: 600; color: var(--theme-text); }
+.agent-view .agent-tool > summary > svg:first-child { flex: none; color: var(--muted); }
+.agent-view .agent-tool .agent-tool-summary { flex: 1 1 0; min-width: 0; font-size: 12.5px; }
+.agent-view .agent-tool .agent-diff-counts { font-size: 12.5px; }
+.agent-view .agent-tool .agent-tool-status { gap: 4px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+/* A call that went well is one quiet mark; its words stay for a screen reader. Only a call in motion or in trouble says so. */
+.agent-view .agent-tool[data-status="ok"] .agent-tool-status-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.agent-view .agent-tool[data-status="running"] .agent-tool-status { color: var(--accent); }
+.agent-view .agent-tool[data-status="error"] .agent-tool-status { color: var(--danger); }
+.agent-view .agent-tool[data-status="denied"] .agent-tool-status { color: var(--theme-warning, var(--muted)); }
+.agent-view .agent-tool > :is(pre, .agent-diff-file) { margin: 0; border-top: 1px solid var(--av-rule); background: var(--av-code); }
+.agent-view .agent-tool pre { padding: 10px 12px; font-size: 12.5px; line-height: 1.5; color: var(--theme-text); border-radius: 0; }
+.agent-view .agent-tool .agent-diff-file pre { border-top: 0; }
+.agent-view .agent-tool-actions { padding: 2px 4px; }
+.agent-view .agent-tool-actions > button, .agent-view .agent-tool-copy { border: 0; background: transparent; color: var(--muted); font-size: 12.5px; }
+.agent-view .agent-tool-actions > button:hover:not(:disabled) { background: var(--av-row-hover); color: var(--theme-text); }
+
+/* Thinking: the same row, its text quieter and set off by a rule rather than a box. */
+.agent-view :is(.agent-thinking, .agent-bubble > details:not(.agent-tool)) > :not(summary) { margin: 0 12px 12px; padding-inline-start: 12px; border-inline-start: 2px solid var(--av-rule); overflow-wrap: anywhere; font-size: 13.5px; }
+.agent-view .agent-bubble > details:not(.agent-tool) > pre { background: none; }
+
+/* Cards the agent asks you to read: a plan, a question, a failure. Tonal like a row, never bordered. */
+.agent-view .chat-card { gap: 10px; margin-block: 0; padding: 12px 14px; border: 0; border-radius: 12px; background: var(--av-row); font-size: 14px; line-height: 1.5; }
+.agent-view .chat-card > h5 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.03em; color: var(--muted); }
+.agent-view .chat-error-card { border: 0; background: color-mix(in srgb, var(--theme-danger, #ffb2aa) 13%, var(--theme-bg, #101311)); }
+.agent-view .chat-error-card > h5 { color: var(--danger); }
+.agent-view .chat-card :is(fieldset, .chat-question-options li) { border: 0; background: var(--av-code); border-radius: 10px; }
+.agent-view .chat-card legend { font-weight: 600; }
+/* A plan reads as a checklist: a mark per step instead of a labelled pill. The word stays for a screen reader. */
+.agent-view .chat-plan-entries { gap: 8px; padding: 0; list-style: none; }
+.agent-view .chat-plan-entries li { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; }
+.agent-view .chat-plan-status { position: relative; width: 18px; height: 18px; margin-top: 1px; padding: 0; overflow: hidden; border: 2px solid var(--muted); border-radius: 50%; color: transparent; font-size: 0; line-height: 0; }
+.agent-view .chat-plan-entries li[data-status="in_progress"] .chat-plan-status { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px); }
+.agent-view .chat-plan-entries li[data-status="completed"] .chat-plan-status { border-color: var(--accent); background: var(--accent); }
+.agent-view .chat-plan-entries li[data-status="completed"] .chat-plan-status::after { content: ''; position: absolute; left: 3.5px; top: 0.5px; width: 4px; height: 8px; border: solid var(--theme-on-accent, var(--theme-bg)); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.agent-view .chat-plan-entries li[data-status="cancelled"] .chat-plan-status { border-style: dashed; }
+
+/* Chips above the composer: how much is running and where the plan stands. One tonal pill each. */
+.agent-view .agent-status-bar > button, .agent-view .agent-plan-chip > button { border: 0; border-radius: 999px; background: var(--av-row); color: var(--av-quiet); font-size: 13px; }
+.agent-view .agent-status-bar > button:hover:not(:disabled), .agent-view .agent-plan-chip > button:hover:not(:disabled) { background: var(--av-row-hover); }
+.agent-view .agent-status-bar > button[aria-expanded="true"] { background: var(--av-row-hover); }
+.agent-view .agent-status-bar > .agent-status-toggle { color: var(--theme-text); }
+/* The plan chip fills from the start as steps finish: "2 of 3" is also a bar. */
+.agent-view .agent-plan-chip > button { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 24%, var(--av-row)) var(--plan-done, 0%), var(--av-row) var(--plan-done, 0%)); }
+.agent-view .agent-plan-chip > button:hover:not(:disabled) { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, var(--av-row-hover)) var(--plan-done, 0%), var(--av-row-hover) var(--plan-done, 0%)); }
+.agent-view .agent-plan-chip > button > span:first-of-type { color: var(--theme-text); }
+.agent-view .agent-status-tree > li { padding: 8px 12px; border: 0; border-radius: 12px; background: var(--av-row); }
+.agent-view .agent-status-tree > li[data-state="running"], .agent-view .agent-status-tree > li[data-state="failed"] { border: 0; }
+.agent-view .agent-status-tree > li[data-state="running"] .agent-status-state { color: var(--accent); }
+.agent-view .agent-status-state { border: 0; background: var(--av-code); }
+.agent-view .agent-status-state[data-state="running"] { border: 0; }
+.agent-view .agent-status-state[data-state="failed"] { border: 0; color: var(--danger); }
