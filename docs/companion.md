@@ -8,9 +8,9 @@ The terminal works without this optional host component. The companion observes 
 
 Follow [install and configure the companion](how-to/configure-companion.md). Installation, lifecycle hook setup, [product skills](product-skills.md) and [host settings](companion-settings.md) are separate explicit actions. Ordinary SSH needs none of them.
 
-## Check for a newer companion
+## Update the companion
 
-On the host, `lazysh-agent update --check` reports whether a newer release is published for this platform and exits 10 when there is one (0 when up to date); `lazysh-agent update --status` shows the installed and previous copy offline. Both are read-only, and `--json` gives a stable result for scripts and the app. The release is verified against the same chain the app's installer uses, and nothing is downloaded. Installing from the command is not available yet. Flags, exit codes and the JSON result: [Companion update](reference/companion-update.md).
+On the host, `lazysh-agent update --check` reports whether a newer release is published for this platform and exits 10 when there is one (0 when up to date). `lazysh-agent update` installs it: the host downloads the release over its own network, checks size and SHA-256 against the verified release metadata, runs the new binary once in an empty environment to prove it answers its version and the hook protocol, and only then replaces the managed copy atomically. The replaced companion is kept, so `lazysh-agent update --rollback` restores it, and `--dry-run` rehearses everything but the replace. `lazysh-agent update --status` shows the installed and previous copy offline. Settings, hooks and event state are never touched, and nothing runs `sudo`. A terminal asks before it installs; scripts pass `--yes`. Installing is available on Linux and macOS hosts; the Windows companion supports `--check` and `--status`. Flags, exit codes, the JSON result and what is verified: [Companion update](reference/companion-update.md).
 
 ## Claude Code
 
