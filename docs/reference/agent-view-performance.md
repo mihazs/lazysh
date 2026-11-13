@@ -180,6 +180,24 @@ Tap to first content, median of 5 runs (`bun run bench:agent-view`), desktop Chr
 
 Each fix lands as its own change; this table is updated with the new numbers by the change that makes them.
 
+### Folded tool activity drawn on open
+
+A finished turn keeps its prompt, its folded summary row and its answer in the page; the tool cards and the intermediate text inside the
+fold are drawn the first time it is opened (`AgentFold`). Guarded by `AgentView.test.tsx` ("draw cost of a long conversation"). Desktop
+Chromium with a 4x CPU throttle, the `typical` 100-message page unless noted, medians of 5 runs, the first read of the conversation:
+
+| Measure at 4x CPU | Before | After |
+| --- | ---: | ---: |
+| DOM nodes after load | 1,489 | **414** |
+| Main-thread script during load (LAN) | 356 ms | 174 ms |
+| Main-thread script during load (mobile link) | 224 ms | 163 ms |
+| Longest task during load (LAN, median of runs) | 222 ms | 102 ms |
+| `heavy` page: DOM nodes / script / longest task | 1,084 / 197 ms / 107 ms | 282 / 114 ms / 64 ms |
+| Herdr, mobile link: script / longest task | 262 ms / 135 ms | 131 ms / 77 ms |
+
+The longest task is still above 50 ms at a 4x throttle: one React commit of the message list. A time-sliced render of the newest turns
+first would split it; not done. The Agent view's own search (`AgentSearch`) matches on the messages, and the folds that hold a match draw their rows (`reveal`), so it still finds and opens text inside a fold; the browser's find in page does not see text in a fold that was never opened.
+
 ### Not measured
 
 - A real phone, the Android WebView, and the radio: needs a device number.

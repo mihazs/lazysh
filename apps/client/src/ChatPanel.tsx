@@ -28,11 +28,12 @@ import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
+import AgentFold from './AgentFold';
 import type {StatusItem} from './agentBackgroundWork';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
-import {AgentSearch,CopyButton,messageMarkdown,type Reading} from './AgentReading';
+import {AgentSearch,CopyButton,matchingIds,messageMarkdown,type Reading} from './AgentReading';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -630,6 +631,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const workSince = turnRunning ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
   // Conversation only hides the folded tool work, so it cannot be searched either.
   const searchable = useMemo(() => reading?.full === false ? turns.flatMap(turn => [turn.event, turn.prompt, turn.answer].filter((message): message is Message => !!message)) : flow, [reading?.full, turns, flow]);
+  // The folds that hold a match of the search draw their rows, so the search can open the one it is on.
+  const found = useMemo(() => new Set(reading?.search ? matchingIds(searchable, (reading.query ?? '').trim().toLowerCase()) : []), [reading?.search, reading?.query, searchable]);
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
@@ -863,7 +866,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             // Only the last turn can still wait for its question.
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
             const folded = turn.activity.filter(message => !pending.includes(message));
-            return <>{folded.length > 0 && <details className="agent-turn-activity"><summary>{activitySummary({...turn, activity: folded})}</summary>{folded.map(renderMessage)}</details>}{pending.map(renderMessage)}</>;
+            return <>{folded.length > 0 && <AgentFold summary={activitySummary({...turn, activity: folded})} reveal={folded.some(message => found.has(message.id))}>{() => folded.map(renderMessage)}</AgentFold>}{pending.map(renderMessage)}</>;
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}

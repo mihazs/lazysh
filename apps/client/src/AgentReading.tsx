@@ -37,10 +37,14 @@ export const codeBlockWithCopy: Components['pre'] = ({node, children}) => <div c
 
 const highlights = (): Map<string, unknown> | undefined => typeof CSS === 'undefined' ? undefined : (CSS as unknown as {highlights?: Map<string, unknown>}).highlights;
 
+/** The ids of the messages whose text holds `needle` (lower case), oldest first. */
+export const matchingIds = (messages: Searchable[], needle: string) =>
+  needle ? messages.filter(message => message.blocks.some(block => block.text?.toLowerCase().includes(needle))).map(message => message.id) : [];
+
 /** Search over the loaded conversation: finds text in tool output too, opens the folded rows that hold the current match and highlights every match. */
 export function AgentSearch({messages, query, onQuery, onClose, list}: {messages: Searchable[]; query: string; onQuery: (query: string) => void; onClose: () => void; list: RefObject<HTMLElement | null>}) {
   const needle = query.trim().toLowerCase();
-  const ids = useMemo(() => needle ? messages.filter(message => message.blocks.some(block => block.text?.toLowerCase().includes(needle))).map(message => message.id) : [], [messages, needle]);
+  const ids = useMemo(() => matchingIds(messages, needle), [messages, needle]);
   const [picked, setPicked] = useState<string>();
   // The newest match first, like a chat search; a live append keeps the match the reader is on.
   const index = picked !== undefined && ids.includes(picked) ? ids.indexOf(picked) : ids.length - 1;

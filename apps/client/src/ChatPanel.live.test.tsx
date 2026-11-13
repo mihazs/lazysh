@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 import ChatPanel from './ChatPanel';
+import {openFolds} from './test/openFolds';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn(),Channel:class{onmessage:((event:unknown)=>void)|undefined;}}));
 
 // Counts how often each message body is rendered: an update must not re-render the unchanged ones.
@@ -90,6 +91,7 @@ describe('a bound conversation with a live watch',()=>{
     await send(delta(1,2,[entry(text('a2','assistant','Replayed'))]));
     await send(delta(1,3,[entry(text('a1','assistant','Old answer'),1)]));
     expect(screen.queryByText('Replayed')).toBeNull();expect(screen.queryByText('Old answer')).toBeNull();
+    await openFolds();
     expect(screen.getByText('Answer')).toBeTruthy();
     const order=()=>screen.getAllByRole('article').map(node=>node.textContent);
     expect(order()).toEqual(['Question','Answer','Second']);
@@ -212,6 +214,7 @@ describe('tool calls in the timeline',()=>{
     render_();await advance(0);await goLive();
     const call={id:'t1',role:'assistant',blocks:[{type:'tool_use',id:'tool-1',name:'Bash',text:JSON.stringify({command:'cargo test'})}]};
     await send(snapshot(1,2,[...first.map(message=>entry(message)),entry(call as never)],'working'));
+    await openFolds();
     const card=()=>[...new Set(screen.getAllByText('cargo test').map(node=>node.closest('details.agent-tool')))];
     expect(card()).toHaveLength(1);
     expect(card()[0]!.getAttribute('data-status')).toBe('running');
@@ -228,6 +231,7 @@ describe('tool calls in the timeline',()=>{
     render_();await advance(0);await goLive();
     const call=(id:string,command:string)=>({id:`m-${id}`,role:'assistant',blocks:[{type:'tool_use',id,name:'Bash',text:JSON.stringify({command})}]});
     await send(snapshot(1,2,[...first.map(message=>entry(message)),entry(call('old','sleep 1') as never),entry(text('p2','user','Next') as never),entry(call('new','sleep 2') as never)],'working'));
+    await openFolds();
     const status=(command:string)=>screen.getAllByText(command)[0].closest('details.agent-tool')!.getAttribute('data-status');
     expect(status('sleep 2')).toBe('running');
     expect(status('sleep 1')).toBe('unknown');

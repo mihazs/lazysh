@@ -8,6 +8,7 @@ import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,fakeTerminal,modelScreen} from './test/agentDialogScreens';
+import {openFolds} from './test/openFolds';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -921,6 +922,7 @@ describe('answering the open question of the agent',()=>{
   });
   it('shows no answer controls for a question the agent already got an answer to',async()=>{
     await open([...question([single]),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]}]);await bind();await advance(400);
+    await openFolds();
     expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();
   });
 });
@@ -1129,5 +1131,29 @@ describe('working row',()=>{
     cleanup();
     await mount('done','idle',turn('Old prompt','Old answer'));
     expect(working()).toEqual([]);
+  });
+});
+
+describe('draw cost of a long conversation',()=>{
+  it('draws only prompts and answers, and the tool cards of a turn once its activity is opened',async()=>{
+    const turns=Array.from({length:24},(_,index)=>turn(`Prompt ${index}`,`Answer ${index}`)).flat();
+    host('claude',[row('Claude Code','%3')],'available',[turns]);
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await advance(0);
+    const timeline=screen.getByRole('region',{name:'Agent view'});
+    expect(screen.getByText('Answer 23')).toBeTruthy();
+    // Twenty-four finished turns: forty-eight bubbles, and none of the seventy-two tool calls or their results are drawn yet.
+    expect(timeline.querySelectorAll('article').length).toBe(48);
+    expect(timeline.querySelectorAll('.agent-tool').length).toBe(0);
+    const folds=timeline.querySelectorAll('details.agent-turn-activity');
+    expect(folds.length).toBe(24);
+    fireEvent.click(folds[3].querySelector('summary')!);
+    await advance(0);
+    expect(folds[3].querySelectorAll('.agent-tool').length).toBe(3);
+    expect(timeline.querySelectorAll('.agent-tool').length).toBe(3);
+    // Closing it again keeps the rows, so reopening costs nothing.
+    fireEvent.click(folds[3].querySelector('summary')!);
+    await advance(0);
+    expect(folds[3].querySelectorAll('.agent-tool').length).toBe(3);
   });
 });
