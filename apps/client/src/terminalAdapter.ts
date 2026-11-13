@@ -7,6 +7,10 @@
 
 import type {PathLink} from './terminalLinks';
 
+/** What app code matches instead of a backend's own class names: the typed-input editor and the root of the drawn terminal. A DOM backend sets these on attach. */
+export const terminalEditorSelector = '[data-terminal-editor]';
+export const terminalRootSelector = '[data-terminal-root]';
+
 export type TerminalBackendId = 'native' | 'xterm';
 
 export type TerminalSize = {columns: number; rows: number; pixelWidth?: number; pixelHeight?: number};

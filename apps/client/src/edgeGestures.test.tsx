@@ -585,7 +585,7 @@ describe('the typing and text-editing guard', () => {
     expect(swiped(log)).toEqual([]);
     act(() => field.blur());
     const sink = document.createElement('textarea');
-    sink.className = 'xterm-helper-textarea';
+    sink.setAttribute('data-terminal-editor', '');
     document.body.append(sink);
     act(() => sink.focus());
     expect(swiped(log).at(-1)).toBe('commit:left');
@@ -612,6 +612,21 @@ describe('the typing and text-editing guard', () => {
     window.getSelection()!.removeAllRanges();
     text.remove();
     expect(swiped(log).at(-1)).toBe('commit:left');
+  });
+  it('does not count a document range inside the drawn terminal as a text selection (the terminal reports its own)', () => {
+    const log: Log = [];
+    render390({log});
+    const root = document.createElement('div');
+    root.setAttribute('data-terminal-root', '');
+    root.textContent = 'mirrored rows';
+    document.body.append(root);
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(swiped(log).at(-1)).toBe('commit:left');
+    window.getSelection()!.removeAllRanges();
+    root.remove();
   });
   it('does not start during a long-press cursor drag or a selection handle drag reported by the app', () => {
     const log: Log = [];

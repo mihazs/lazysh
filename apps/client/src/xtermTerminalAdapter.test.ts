@@ -2,6 +2,7 @@
 import {beforeAll, describe, expect, it} from 'vitest';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
 import {XtermTerminalAdapter} from './xtermTerminalAdapter';
+import {terminalEditorSelector, terminalRootSelector} from './terminalAdapter';
 import {Terminal} from '@xterm/xterm';
 
 beforeAll(() => {
@@ -23,6 +24,9 @@ describe('xterm backend specifics', () => {
     await adapter.attach({kind: 'dom', element});
     expect(adapter.inputElement()).toBeInstanceOf(HTMLTextAreaElement);
     expect(adapter.screenElement()?.classList.contains('xterm-screen')).toBe(true);
+    // App code finds the editor and the root through these markers, not through xterm's class names.
+    expect(adapter.inputElement()!.matches(terminalEditorSelector)).toBe(true);
+    expect(element.querySelector(terminalRootSelector)).toBe(element.firstElementChild);
     // jsdom lays nothing out: no proposal, no row height, and fitting or re-syncing the view changes nothing.
     expect(adapter.proposeSize()).toBeUndefined();
     expect(adapter.layoutRowHeight()).toBe(0);

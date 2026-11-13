@@ -2,8 +2,9 @@ import {useEffect, useRef} from "react";
 import {protectedInvoke} from "./access";
 import {isAndroidApp} from "./isAndroidApp";
 import {usePreferences} from "./preferences";
+import {terminalEditorSelector} from "./terminalAdapter";
 
-const terminalEditor = (node: EventTarget | null) => node instanceof HTMLTextAreaElement && node.classList.contains("xterm-helper-textarea");
+const terminalEditor = (node: EventTarget | null) => node instanceof HTMLTextAreaElement && node.matches(terminalEditorSelector);
 
 /**
  * Android only. While a terminal's hidden editor is focused and Private keyboard is on, tell the shell, which then

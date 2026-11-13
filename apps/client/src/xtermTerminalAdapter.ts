@@ -54,6 +54,8 @@ export class XtermTerminalAdapter implements TerminalAdapter {
     if (!this.fitAddon) this.xterm.loadAddon(this.fitAddon = new TerminalFitAddon());
     if (!this.xterm.element) this.xterm.open(target.element);
     else if (this.xterm.element.parentElement !== target.element) target.element.append(this.xterm.element);
+    this.xterm.element?.setAttribute('data-terminal-root', '');
+    this.xterm.textarea?.setAttribute('data-terminal-editor', '');
     this.unmount = this.mountSeams(target.element);
   }
 
