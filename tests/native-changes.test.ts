@@ -149,6 +149,7 @@ test.each([
   ['Herdr', ['packages/herdr-guard/client.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
     'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1 }],
   ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1 }],
+  ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
     'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2 }],

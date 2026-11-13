@@ -53,6 +53,16 @@ impl Renderer {
         })
     }
 
+    /// The cursor's cell in the viewport (the live screen when the viewport is at the bottom).
+    pub(crate) fn cursor_cell(&mut self, terminal: &Terminal) -> Result<(u16, u16), Error> {
+        self.state.update(terminal)?;
+        Ok(self
+            .state
+            .cursor()?
+            .viewport
+            .map_or((0, 0), |cursor| (cursor.x, cursor.y)))
+    }
+
     /// Collect changed rows and mark them clean. `None` when nothing changed and `force` is off.
     pub(crate) fn frame(
         &mut self,

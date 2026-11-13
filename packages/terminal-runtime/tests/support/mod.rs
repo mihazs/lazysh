@@ -148,6 +148,7 @@ pub fn config(cols: u16, rows: u16, scrollback_bytes: usize) -> Config {
         },
         scrollback_bytes,
         ingress_bytes: WINDOW,
+        ..Config::default()
     }
 }
 
