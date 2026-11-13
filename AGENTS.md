@@ -13,6 +13,15 @@ Use trunk-based development.
 - Release every completed issue; do not batch finished work into a later release. After a PR with a user-facing changeset merges, merge the regenerated Changesets version PR (`chore(release): version lazysh packages`) as soon as its `release-tools` check passes and the `main-verdict` run for its base commit (the `main` tip it was generated from) has completed green (a running verdict is not green; a red one means fix `main` first), then verify the published GitHub release and its assets before reporting the issue released. Do not hold other ready PRs to keep releases separate; the next version PR ships whatever merged meanwhile.
 - Create every Git worktree under `~/dev/.worktrees/`.
 
+# Continuous delivery without waiting
+
+Never idle on CI. A merged pull request is a finished checkpoint.
+
+- Open a pull request only when its slice is complete, tested and shippable on its own (tests, docs, CHANGELOG and changeset included). It is merged as soon as its required checks are green, so it must never carry half-wired code or work in progress.
+- After pushing a pull request, keep implementing the next slice while CI runs. Start the next branch from fresh `origin/main`, or locally on top of the pushed branch when it depends on it, but do not open stacked pull requests: open the dependent pull request after its prerequisite has merged. The 10-open-PR limit still applies; at the limit, keep developing locally and open the pull request when a slot frees.
+- Do not poll CI, sleep on checks or merge your own pull requests when the PR driver is running (`/tmp/lazysh-driver/driver.py`, status in `/tmp/lazysh-pr-status.json`). It squash-merges a pull request when its required checks are green, reruns failed jobs up to twice, approves and merges the Changesets version pull request under its safety conditions, and records `needs-owner` or `needs-rebase`. Read the status at natural breaks and fix those states immediately. A pull request that must not merge yet is listed in `/tmp/lazysh-pr-hold.txt`.
+- Without the driver, merge your own pull request when the required checks pass, as described above, and still continue with the next slice instead of waiting.
+
 # Continuing implementation
 
 Treat “continue”, “resume”, and “keep implementing” as requests to execute the
