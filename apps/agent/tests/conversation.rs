@@ -589,6 +589,49 @@ fn codex_rollback_counts_empty_and_compaction_only_turns_and_recent_limit_is_exp
     );
 }
 #[test]
+fn codex_goal_and_compaction_records_become_event_lines_once() {
+    let goal = |status: &str, used: u64| {
+        codex_event(
+            "thread_goal_updated",
+            json!({"goal":{"objective":"Fix the build","status":status,"tokensUsed":used}}),
+        )
+    };
+    let (_directory, path) = codex_file(&[
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_turn("one"),
+        goal("active", 0),
+        codex_event("user_message", json!({"message":"go"})),
+        goal("active", 10),
+        goal("paused", 11),
+        codex_record("compacted", json!({"message":"PRIVATE"})),
+        goal("complete", 12),
+    ]);
+    let page = conversation(&path, TranscriptAgent::Codex, 100).unwrap();
+    let lines: Vec<Value> = page
+        .messages
+        .iter()
+        .map(|message| {
+            if message["role"] == "event" {
+                json!([message["event"]["kind"], message["event"]["text"]])
+            } else {
+                json!(message["role"])
+            }
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            json!(["goal", "Fix the build"]),
+            json!("user"),
+            json!(["compacted", ""]),
+            json!(["goalMet", "Fix the build"]),
+        ]
+    );
+    assert!(!serde_json::to_string(&page.messages)
+        .unwrap()
+        .contains("PRIVATE"));
+}
+#[test]
 fn codex_complete_lines_are_followable_without_admitting_a_partial_tail() {
     use std::io::Write;
     let (_directory, path) = codex_file(&[

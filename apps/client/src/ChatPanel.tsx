@@ -20,7 +20,7 @@ import RecordedImagePreview from './RecordedImagePreview';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
 import {applyWatchOp} from './transcriptWatch';
-import {projectMessages,type InjectedEvent} from './chatInjected';
+import {projectMessages,recordedEventKinds,type InjectedEvent} from './chatInjected';
 import {ChatRich} from './ChatRich';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
@@ -29,6 +29,7 @@ import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
 import type {StatusItem} from './agentBackgroundWork';
+import AgentThinking from './AgentThinking';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
@@ -46,7 +47,7 @@ type Block = {
 };
 type Message = {
   id: string;
-  role: "user" | "assistant" | "tool" | "record";
+  role: "user" | "assistant" | "tool" | "record" | "event";
   record?: { source: string; type: string; status: string; stepIndex?: number; exitCode?: number; errorCode?: number; truncatedFields: string[] };
   timestamp?: string;
   blocks: Block[];
@@ -109,7 +110,8 @@ export function parseTranscript(value: unknown): Page {
       !message ||
       typeof message.id !== "string" ||
       message.id.length > 4096 ||
-      !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")) ||
+      !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")
+        || (message.role === "event" && ["claude", "codex"].includes(page.agent) && page.view === "active_branch")) ||
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
@@ -123,6 +125,11 @@ export function parseTranscript(value: unknown): Page {
         || (metadata.exitCode !== undefined && (!Number.isInteger(metadata.exitCode) || metadata.exitCode < -2147483648 || metadata.exitCode > 2147483647)))
         throw new LocalUiError('chatInvalidRecordMetadata');
     } else if (message.record !== undefined) throw new LocalUiError('chatUnexpectedRecordMetadata');
+    // The companion writes an event message for the harness records it chose to show; it carries nothing else.
+    const event = message.event;
+    if (message.role === "event" ? (message.blocks.length > 0 || !event || typeof event !== "object" || !(recordedEventKinds as readonly string[]).includes(event.kind)
+        || typeof event.text !== "string" || event.text.length > 4096 || (event.detail !== undefined && (typeof event.detail !== "string" || event.detail.length > 4096)))
+      : event !== undefined) throw new LocalUiError('chatInvalidMessage');
     for (const block of message.blocks) {
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
@@ -191,6 +198,8 @@ export function groupTurns(messages: Message[]): Turn[] {
 
 /** The timeline keeps the latest plan in one chip above the composer, so a plan block is not drawn in its turn. */
 const isPlanBlock = (block: Block) => block.card?.kind === 'plan';
+/** The timeline folds all thinking of a turn into one row, so a thinking block is not drawn in its message. */
+const isThinking = (block: Block) => block.type === 'thinking';
 const commandTools = new Set(['bash', 'command', 'shell', 'exec_command', 'local_shell', 'run_terminal_cmd']);
 const editTools = new Set(['edit', 'multiedit', 'write', 'notebookedit', 'apply_patch', 'str_replace_based_edit_tool']);
 /** The folded activity row: what the agent did ("Ran 3 commands · Made 2 edits · 1 failed · 1:12"). */
@@ -638,8 +647,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
   }
-  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
-  const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord"} as const)[message.role]);
+  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer',goal:'chatEventGoal',goalMet:'chatEventGoalMet',planMode:'chatEventPlanMode',planModeExit:'chatEventPlanModeExit',recap:'chatEventRecap',hookFailed:'chatEventHookFailed'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
+  const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord",event:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
   const renderMessage = (message: Message) => message.event ? (
@@ -648,7 +657,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
         : <p>{eventLabel(message.event)}</p>}
     </article>
-  ) : (timeline && message.blocks.every(isPlanBlock)) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
+  ) : (timeline && message.blocks.every(block => isPlanBlock(block) || isThinking(block))) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
     <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
       {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
       {!timeline && <h4>{roleName(message)}</h4>}
@@ -660,7 +669,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {message.record.truncatedFields.length > 0 && ` · ${t("chatTruncation", {fields:message.record.truncatedFields.join(", ")})}`}
       </p>}
       {message.blocks.map((block, index) => {
-        if (timeline && isPlanBlock(block)) return null;
+        if (timeline && (isPlanBlock(block) || isThinking(block))) return null;
         if (paired(block)) return null;
         if (timeline && block.id && block.type === 'tool_use' && !block.card) return <AgentToolCard key={index} use={block} result={toolResults.get(block.id)} live={liveCalls.has(block.id)} resultMessage={resultAnchors.get(block.id)} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
@@ -859,6 +868,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {timeline ? turns.map((turn, index) => <section key={turn.key} data-anchor={turn.key} data-running={turnRunning && index === turns.length - 1 || undefined} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
+          <AgentThinking turn={turn} />
           {(()=>{
             // Only the last turn can still wait for its question.
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];

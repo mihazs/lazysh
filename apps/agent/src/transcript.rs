@@ -20,6 +20,7 @@ mod database;
 mod discovery;
 mod droid;
 mod event_adapters;
+mod events;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
