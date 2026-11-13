@@ -39,6 +39,9 @@ pub enum WatchTarget {
         inline_images: bool,
         #[serde(default)]
         allow_large_history: bool,
+        /// OpenCode keeps every session in one database: `path` names it and this picks the session.
+        #[serde(default)]
+        transcript_session_id: Option<String>,
     },
     /// A Herdr pane's agent session, resolved on the host and re-checked while it is watched.
     #[serde(rename_all = "camelCase")]
@@ -88,6 +91,7 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             path,
             inline_images,
             allow_large_history,
+            transcript_session_id,
         } => {
             ssh::check_path(path)?;
             let images = if *inline_images {
@@ -95,9 +99,27 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             } else {
                 ""
             };
+            // A database session is the OpenCode source and only that; previews are a transcript file's.
+            let session = match (agent.as_str(), transcript_session_id) {
+                ("opencode", Some(id))
+                    if !*inline_images
+                        && !id.is_empty()
+                        && id.len() <= 256
+                        && !id.chars().any(char::is_control) =>
+                {
+                    format!(" --database-session {}", quote(id))
+                }
+                ("opencode", _) | (_, Some(_)) => {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Invalid live conversation source",
+                    ))
+                }
+                _ => String::new(),
+            };
             (
                 agent,
-                format!("--path {}{images}", quote(path)),
+                format!("--path {}{images}{session}", quote(path)),
                 *allow_large_history,
             )
         }
@@ -107,9 +129,11 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             allow_large_history,
             ..
         } => {
-            if uuid::Uuid::parse_str(agent_session_id)
-                .ok()
-                .is_none_or(|id| id.to_string() != *agent_session_id)
+            // A provider session id is Claude Code's and Codex's; OpenCode is read from its database.
+            if agent == "opencode"
+                || uuid::Uuid::parse_str(agent_session_id)
+                    .ok()
+                    .is_none_or(|id| id.to_string() != *agent_session_id)
             {
                 return Err(SshError::new(
                     "invalid_input",
@@ -123,10 +147,10 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             )
         }
     };
-    if !matches!(agent.as_str(), "claude" | "codex") {
+    if !matches!(agent.as_str(), "claude" | "codex" | "opencode") {
         return Err(SshError::new(
             "invalid_input",
-            "Live updates cover Claude Code and Codex",
+            "Live updates cover Claude Code, Codex and OpenCode",
         ));
     }
     if large && agent != "codex" {
@@ -414,12 +438,13 @@ mod tests {
     const ID: &str = "11111111-1111-4111-8111-111111111111";
 
     #[test]
-    fn commands_name_one_source_and_only_the_two_streamed_agents() {
+    fn commands_name_one_source_and_only_the_streamed_agents() {
         let path = WatchTarget::Path {
             agent: "claude".into(),
             path: "/home/o wner/it's.jsonl".into(),
             inline_images: false,
             allow_large_history: false,
+            transcript_session_id: None,
         };
         assert_eq!(target_command(&path).unwrap(), "lazysh-agent transcript-watch --agent claude --path '/home/o wner/it'\\''s.jsonl' --limit 50");
         let with_images = WatchTarget::Path {
@@ -427,11 +452,33 @@ mod tests {
             path: "/x".into(),
             inline_images: true,
             allow_large_history: false,
+            transcript_session_id: None,
         };
         assert_eq!(
             target_command(&with_images).unwrap(),
             "lazysh-agent transcript-watch --agent codex --path '/x' --inline-images --limit 50"
         );
+        let database = |agent: &str, images: bool, id: Option<&str>| WatchTarget::Path {
+            agent: agent.into(),
+            path: "/db/opencode.db".into(),
+            inline_images: images,
+            transcript_session_id: id.map(Into::into),
+        };
+        assert_eq!(
+            target_command(&database("opencode", false, Some("ses_a'b"))).unwrap(),
+            "lazysh-agent transcript-watch --agent opencode --path '/db/opencode.db' --database-session 'ses_a'\\''b' --limit 50"
+        );
+        // An OpenCode watch names its session and takes no previews; a session means nothing to another agent.
+        for bad in [
+            database("opencode", false, None),
+            database("opencode", false, Some("")),
+            database("opencode", false, Some("a\nb")),
+            database("opencode", false, Some(&"s".repeat(257))),
+            database("opencode", true, Some("ses_a")),
+            database("claude", false, Some("ses_a")),
+        ] {
+            assert!(target_command(&bad).is_err());
+        }
         let herdr = |agent: &str, id: &str| WatchTarget::Herdr {
             agent: agent.into(),
             agent_session_id: id.into(),
@@ -466,6 +513,7 @@ mod tests {
         assert!(target_command(&invalid).is_err());
         for bad in [
             herdr("pi", ID),
+            herdr("opencode", ID),
             herdr("claude", "not-a-uuid"),
             herdr("claude", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
         ] {
@@ -476,6 +524,7 @@ mod tests {
             path: "/x".into(),
             inline_images: false,
             allow_large_history: false,
+            transcript_session_id: None,
         };
         assert!(target_command(&other).is_err());
     }
@@ -512,6 +561,13 @@ mod tests {
         let path: WatchTarget =
             serde_json::from_value(json!({"kind":"path","agent":"claude","path":"/a"})).unwrap();
         assert!(matches!(path, WatchTarget::Path { .. }));
+        let database: WatchTarget = serde_json::from_value(
+            json!({"kind":"path","agent":"opencode","path":"/a.db","transcriptSessionId":"ses_a"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(database, WatchTarget::Path { transcript_session_id: Some(id), .. } if id == "ses_a")
+        );
         let herdr: WatchTarget = serde_json::from_value(json!({"kind":"herdr","agent":"codex","agentSessionId":ID,"herdrSession":"s","paneId":"p","terminalId":"t"})).unwrap();
         assert!(matches!(herdr, WatchTarget::Herdr { .. }));
         for bad in [

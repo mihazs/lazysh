@@ -75,6 +75,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         path: transcript.display().to_string(),
         inline_images: false,
         allow_large_history: false,
+        transcript_session_id: None,
     };
     let start = |events| {
         agent_watch_start(

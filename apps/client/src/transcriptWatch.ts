@@ -35,7 +35,8 @@ function entries<M extends {id: string}>(value: unknown, agent: string, extra: {
     if (typeof entry.id !== 'string' || !entry.id || entry.id.length > 4096) throw invalid();
     return {id: entry.id, rev: integer(entry.rev, 1), message: entry.message};
   });
-  const page = parsePage({schemaVersion: 1, agent, view: 'active_branch', messages: rows.map(row => row.message), nextOffset: 0, hasMore: false, ...(extra.activity == null ? {} : {activity: extra.activity}), ...(extra.queued === undefined ? {} : {queued: extra.queued}), ...(extra.work == null ? {} : {work: extra.work}), ...(extra.session == null ? {} : {session: extra.session})});
+  // An OpenCode page names its database session; the stream was opened for one session, so the frame needs no second claim.
+  const page = parsePage({schemaVersion: 1, agent, view: 'active_branch', messages: rows.map(row => row.message), nextOffset: 0, hasMore: false, ...(agent === 'opencode' ? {branchId: 'stream', truncated: false} : {}), ...(extra.activity == null ? {} : {activity: extra.activity}), ...(extra.queued === undefined ? {} : {queued: extra.queued}), ...(extra.work == null ? {} : {work: extra.work}), ...(extra.session == null ? {} : {session: extra.session})});
   if (page.messages.length !== rows.length || new Set(rows.map(row => row.id)).size !== rows.length
     || page.messages.some((message, index) => message.id !== rows[index].id)) throw invalid();
   return {entries: rows.map((row, index) => ({id: row.id, rev: row.rev, message: page.messages[index]})), activity: page.activity, queued: page.queued, work: page.work, session: page.session};
