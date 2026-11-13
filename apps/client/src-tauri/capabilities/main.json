@@ -151,6 +151,7 @@
     "allow-agent-snapshot",
     "allow-agent-reported-history",
     "allow-install-companion",
+    "allow-install-companion-from-device",
     "allow-companion-hooks",
     "allow-companion-hook-discovery",
     "allow-get-companion-settings",

@@ -2918,12 +2918,17 @@ pub(crate) async fn exec_bounded(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
-    until_closed(
+    exec_status(
+        session,
+        command,
         lease,
-        session.cancel.subscribe(),
-        exec_inner(session, command, lease, duration, limit, retained),
+        duration,
+        limit,
+        retained,
+        &mut |_| {},
     )
-    .await
+    .await?
+    .text()
 }
 /// Runs host work until it settles, app access changes or its session closes.
 pub(crate) async fn until_closed<T>(
@@ -2975,28 +2980,52 @@ pub(crate) fn command_text(bytes: Vec<u8>) -> Result<String> {
     String::from_utf8(bytes)
         .map_err(|_| SshError::new("invalid_output", "Remote command did not return UTF-8"))
 }
-async fn exec_inner(
+/// What a host command printed and how it ended; a non-zero exit is data here, not an error.
+pub(crate) struct ExecOutput {
+    pub(crate) status: Option<u32>,
+    pub(crate) stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+impl ExecOutput {
+    /// The output of a command that had to succeed.
+    fn text(self) -> Result<String> {
+        check_exit(self.status, &self.stderr)?;
+        command_text(self.stdout)
+    }
+}
+/// Runs a host command whose exit status the caller interprets, handing every stdout chunk to
+/// `on_stdout` as it arrives. `exec_bounded` stays the only way to run a command that must succeed.
+pub(crate) async fn exec_status(
     session: &Session,
     command: String,
     lease: &AccessLease,
     duration: Duration,
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
-) -> Result<String> {
-    let handle = match &session.file_control {
-        Some(control) => control.command_handle()?,
-        None => session.handle.clone(),
-    };
-    let closed = || {
-        SshError::new(
-            "ssh_host_tools_closed",
-            "The host-tools SSH connection is closed. Reconnect host tools to continue.",
+    on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+) -> Result<ExecOutput> {
+    until_closed(lease, session.cancel.subscribe(), async {
+        let handle = match &session.file_control {
+            Some(control) => control.command_handle()?,
+            None => session.handle.clone(),
+        };
+        let closed = || {
+            SshError::new(
+                "ssh_host_tools_closed",
+                "The host-tools SSH connection is closed. Reconnect host tools to continue.",
+            )
+        };
+        if handle.is_closed() {
+            return Err(closed());
+        }
+        collect(
+            &handle,
+            command,
+            lease,
+            (duration, limit),
+            retained,
+            on_stdout,
         )
-    };
-    if handle.is_closed() {
-        return Err(closed());
-    }
-    exec_inner_with_handle(&handle, command, lease, duration, limit, retained)
         .await
         .map_err(|error| {
             if error.kind() == "ssh_error" && handle.is_closed() {
@@ -3005,6 +3034,8 @@ async fn exec_inner(
                 error
             }
         })
+    })
+    .await
 }
 async fn exec_inner_with_handle(
     handle: &SshHandle,
@@ -3014,6 +3045,25 @@ async fn exec_inner_with_handle(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    collect(
+        handle,
+        command,
+        lease,
+        (duration, limit),
+        retained,
+        &mut |_| {},
+    )
+    .await?
+    .text()
+}
+async fn collect(
+    handle: &SshHandle,
+    command: String,
+    lease: &AccessLease,
+    (duration, limit): (Duration, usize),
+    retained: Option<Arc<dyn Send + Sync>>,
+    on_stdout: &mut (dyn FnMut(&[u8]) + Send),
+) -> Result<ExecOutput> {
     #[cfg(test)]
     handle
         .execs
@@ -3026,20 +3076,24 @@ async fn exec_inner_with_handle(
     let result = timeout(duration, async {
         lease.check()?;
         channel.exec(true, command).await?;
-        let mut bytes = Vec::new();
-        let mut error = Vec::new();
-        let mut status = None;
+        let mut output = ExecOutput {
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
         while let Some(msg) = channel.wait().await {
             match msg {
-                ChannelMsg::Data { data } => bytes.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, .. } => error.extend_from_slice(&data),
-                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                ChannelMsg::Data { data } => {
+                    on_stdout(&data);
+                    output.stdout.extend_from_slice(&data)
+                }
+                ChannelMsg::ExtendedData { data, .. } => output.stderr.extend_from_slice(&data),
+                ChannelMsg::ExitStatus { exit_status } => output.status = Some(exit_status),
                 _ => {}
             }
-            check_output_budget(bytes.len() + error.len(), limit)?;
+            check_output_budget(output.stdout.len() + output.stderr.len(), limit)?;
         }
-        check_exit(status, &error)?;
-        command_text(bytes)
+        Ok(output)
     })
     .await
     .map_err(|_| SshError::new("timeout", "Remote command timed out"));
@@ -4462,12 +4516,16 @@ mod tests {
         }
     }
 
+    /// Stdout chunks and the exit status of a scripted exec.
+    type ScriptedExec = (Vec<Vec<u8>>, u32);
     #[derive(Clone)]
     struct TestServer {
         /// When set, public-key authentication accepts only this exact key.
         authorized_key: Arc<StdMutex<Option<russh::keys::PublicKey>>>,
         clipboard_mode: Arc<AtomicUsize>,
         legacy_exec: Arc<std::sync::atomic::AtomicBool>,
+        /// Stdout chunks and exit status the next exec requests answer with.
+        scripted_exec: Arc<StdMutex<Option<ScriptedExec>>>,
         clipboard_eof: Arc<tokio::sync::Notify>,
         auth_attempts: Arc<AtomicUsize>,
         sizes: Arc<StdMutex<Vec<(u32, u32)>>>,
@@ -4655,6 +4713,15 @@ mod tests {
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
+            let scripted = self.scripted_exec.lock().unwrap().clone();
+            if let Some((chunks, status)) = scripted {
+                for chunk in chunks {
+                    session.data(channel, chunk)?;
+                }
+                session.exit_status_request(channel, status)?;
+                session.close(channel)?;
+                return Ok(());
+            }
             if self.legacy_exec.load(Ordering::SeqCst) {
                 let probe = text.starts_with("sh -c ");
                 session.data(
@@ -4964,6 +5031,7 @@ mod tests {
         let test_server = TestServer {
             authorized_key: Arc::new(StdMutex::new(None)),
             legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scripted_exec: Arc::new(StdMutex::new(None)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
             auth_attempts: Arc::new(AtomicUsize::new(0)),
@@ -5532,6 +5600,51 @@ mod tests {
                 original.as_bytes()
             );
         }
+    }
+    #[tokio::test]
+    async fn exec_status_returns_a_failing_exit_with_streamed_stdout_where_exec_bounded_discards_it(
+    ) {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        let chunks = vec![b"{\"stage\":1}\n{\"sta".to_vec(), b"ge\":2}\n".to_vec()];
+        *fixture.server.scripted_exec.lock().unwrap() = Some((chunks.clone(), 22));
+        let mut seen = Vec::new();
+        let output = exec_status(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            1024,
+            None,
+            &mut |chunk| seen.extend_from_slice(chunk),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.status, Some(22));
+        assert_eq!(output.stdout, chunks.concat());
+        assert_eq!(seen, chunks.concat(), "stdout is handed over as it arrives");
+        let discarded = exec_bounded(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            1024,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(discarded.kind(), "remote_command_failed");
+        let over = exec_status(
+            &fixture.session,
+            "owned update".into(),
+            &lease,
+            Duration::from_secs(5),
+            8,
+            None,
+            &mut |_| {},
+        )
+        .await;
+        assert_eq!(over.err().unwrap().kind(), "output_too_large");
     }
     #[tokio::test]
     async fn non_unix_herdr_probe_runs_once_per_ssh_handle() {
@@ -6525,6 +6638,7 @@ mod tests {
         let mut context = tauri::generate_context!(test = true);
         for command in [
             "install_companion",
+            "install_companion_from_device",
             "restore_file_transfer",
             "restore_host_tools",
             "host_home",
@@ -6565,7 +6679,8 @@ mod tests {
                 crate::host_clipboard::host_clipboard_copy,
                 crate::companion_settings::get_companion_settings,
                 crate::companion_settings::update_companion_settings,
-                crate::companion::install_companion
+                crate::companion::install_companion,
+                crate::companion::install_companion_from_device
             ])
             .build(context)
             .unwrap();
@@ -6636,19 +6751,21 @@ mod tests {
         );
         let installer =
             serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"});
-        let failure = tauri::test::get_ipc_response(
-            &main,
-            request(local_url, "install_companion", installer.clone()),
-        )
-        .unwrap_err();
-        assert_eq!(
-            failure["kind"], "disconnected",
-            "the real installer handler must accept the Channel/body and reach session preflight"
-        );
-        assert!(
-            failure.get("phase").is_some_and(serde_json::Value::is_null),
-            "preflight rejection must carry the companion-only structured failure phase"
-        );
+        for command in ["install_companion", "install_companion_from_device"] {
+            let failure = tauri::test::get_ipc_response(
+                &main,
+                request(local_url, command, installer.clone()),
+            )
+            .unwrap_err();
+            assert_eq!(
+                failure["kind"], "disconnected",
+                "the real installer handler must accept the Channel/body and reach session preflight: {command}"
+            );
+            assert!(
+                failure.get("phase").is_some_and(serde_json::Value::is_null),
+                "preflight rejection must carry the companion-only structured failure phase"
+            );
+        }
         let clipboard_read = serde_json::json!({"request":{"token":"00000000-0000-4000-8000-000000000001","kind":"text"}});
         let clipboard_cancel = serde_json::json!({"token":"00000000-0000-4000-8000-000000000001"});
         assert!(
@@ -6683,7 +6800,8 @@ mod tests {
             );
         }
         for (command, body) in [
-            ("install_companion", installer),
+            ("install_companion", installer.clone()),
+            ("install_companion_from_device", installer),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),

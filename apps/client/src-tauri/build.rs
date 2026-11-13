@@ -182,6 +182,7 @@ fn main() {
         "agent_snapshot",
         "agent_reported_history",
         "install_companion",
+        "install_companion_from_device",
         "companion_hooks",
         "companion_hook_discovery",
         "get_companion_settings",

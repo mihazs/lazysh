@@ -966,10 +966,18 @@ The existing Linux concurrent-hooks syscall fixture opts in only its traced chil
 
 ## Explicit local installation prerequisite
 
-Future companion binaries expose `lazysh-agent installation inspect` and
+Companion binaries expose `lazysh-agent installation inspect` and
 `lazysh-agent installation install --expected-plan <planSha256>` on Linux and
-macOS. This is the local operation needed by the future in-app SSH installer;
-the application does not yet transfer or install the companion for you. Historical
+macOS. The app's **Install through this device** fallback (a host that cannot reach
+GitHub) uses them after it uploads a companion; the default **Install companion**
+and **Update companion** actions do not: the host downloads the pinned release
+itself with a fixed script (`apps/client/src-tauri/src/companion/install/bootstrap.sh`,
+reviewed like code and embedded in the app) that checks the exact size and SHA-256,
+tests the file in a cleared environment, keeps the previous companion as
+`lazysh-agent.previous` and renames the new one over the managed executable. That
+script reports newline-delimited JSON progress and one result and exits with the
+documented update codes (20 network, 22 verification, 23 newer installed, 24 self
+test, 25 rolled back, 26 busy, 27 unsafe location, 30 missing host tool). Historical
 v0.23.0 binaries and release assets remain unchanged.
 
 Inspect does not create directories, locks, settings or event state. Its schema-v1

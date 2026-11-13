@@ -186,7 +186,12 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     let session = app.state::<AppState>().session(id).await.unwrap();
     let lease = access_lease();
     let installed = serde_json::to_value(
-        crate::companion::owned_install(session.clone(), &lease, &binary)
+        crate::companion::Owned::new(&binary, env!("CARGO_PKG_VERSION"))
+            .install(
+                session.clone(),
+                &lease,
+                crate::companion::install::Route::Device,
+            )
             .await
             .unwrap(),
     )

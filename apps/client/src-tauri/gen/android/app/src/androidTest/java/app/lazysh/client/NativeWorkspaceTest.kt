@@ -4086,8 +4086,8 @@ class NativeWorkspaceTest {
             openReportedActivity()
             val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
-            val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
-            val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
+            val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "selfTesting", "installing", "checkingInstalled", "cleaningUp", "preflight")
+            val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "companion_host_network", "companion_host_tool_missing", "companion_verification_failed", "companion_self_test_failed", "companion_rolled_back", "companion_host_busy", "companion_unsafe_location", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
             val recheckPattern = Regex("lazysh-tag-recheck-v1:(transport:(timeout|connect|redirect|body|decode|request|other)|status:([1-5][0-9]{2}|other)|body|json|ref|type|sha)")
             for (reused in listOf(false, true)) {
                 if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")

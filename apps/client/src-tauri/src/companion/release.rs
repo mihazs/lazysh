@@ -18,10 +18,33 @@ fn recheck_error(code: &str) -> SshError {
         format!("lazysh-tag-recheck-v1:{code}"),
     )
 }
+/// What a fixture publisher was asked for: the host route must never reach `downloads`.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct Calls {
+    selects: std::sync::atomic::AtomicUsize,
+    downloads: std::sync::atomic::AtomicUsize,
+}
+#[cfg(test)]
+impl Calls {
+    #[cfg(unix)]
+    pub fn selects(&self) -> usize {
+        self.selects.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(unix)]
+    pub fn downloads(&self) -> usize {
+        self.downloads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn bump(counter: &std::sync::atomic::AtomicUsize) {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 pub(super) struct Publisher {
     inner: shared::Publisher,
     #[cfg(test)]
     fixture: Option<(Selection, Vec<u8>)>,
+    #[cfg(test)]
+    pub calls: std::sync::Arc<Calls>,
 }
 impl Publisher {
     #[cfg(test)]
@@ -56,12 +79,15 @@ impl Publisher {
             inner,
             #[cfg(test)]
             fixture: None,
+            #[cfg(test)]
+            calls: std::sync::Arc::default(),
         })
     }
     pub async fn select(&self, target: &str) -> Result<Selection> {
         #[cfg(test)]
         if let Some((selection, _)) = &self.fixture {
             let _ = target;
+            Calls::bump(&self.calls.selects);
             return Ok(selection.clone());
         }
         // The app installs only onto a positively identified Unix shell.
@@ -79,6 +105,7 @@ impl Publisher {
     pub async fn download(&self, selection: &Selection) -> Result<Vec<u8>> {
         #[cfg(test)]
         if let Some((_, bytes)) = &self.fixture {
+            Calls::bump(&self.calls.downloads);
             if shared::sha(bytes) != selection.digest || bytes.len() as u64 != selection.bytes {
                 return Err(rejected());
             }
