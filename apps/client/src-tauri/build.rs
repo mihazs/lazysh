@@ -144,6 +144,7 @@ fn main() {
         "herdr_agent_kinds",
         "herdr_repository",
         "zellij_action",
+        "zellij_tabs",
         "multiplexer_sessions",
         "attach_multiplexer",
         "tmux_action",

@@ -206,7 +206,16 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: false, fontSize: 20}, mine))).toMatchObject({privateKeyboard: true, fontSize: 20});
   expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, privateKeyboard: true}, parsePreferences({...defaults}))), "privateKeyboard")).toBe(false);
  });
- it("remembers a hidden or shown toolbar on this device only, and nothing until it was chosen", () => {
+ it("remembers a forced tab strip on this device only; Auto stores nothing", () => {
+  expect(Object.hasOwn(parsePreferences({...defaults}), "tabStrip")).toBe(false);
+  for (const mode of ["on", "off"]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, tabStrip: mode})))).tabStrip).toBe(mode);
+  for (const junk of ["auto", "yes", true, 1, null, []]) expect(Object.hasOwn(parsePreferences({...defaults, tabStrip: junk}), "tabStrip")).toBe(false);
+  const mine = parsePreferences({...defaults, tabStrip: "off"});
+  expect(Object.hasOwn(syncablePreferences(mine), "tabStrip")).toBe(false);
+  expect(parsePreferences(keepDevicePreferences({...defaults, tabStrip: "on", fontSize: 20}, mine))).toMatchObject({tabStrip: "off", fontSize: 20});
+  expect(Object.hasOwn(parsePreferences(keepDevicePreferences({...defaults, tabStrip: "on"}, parsePreferences({...defaults}))), "tabStrip")).toBe(false);
+});
+it("remembers a hidden or shown toolbar on this device only, and nothing until it was chosen", () => {
   expect(Object.hasOwn(parsePreferences({...defaults}), "toolbarHidden")).toBe(false);
   for (const hidden of [true, false]) expect(parsePreferences(JSON.parse(JSON.stringify(parsePreferences({...defaults, toolbarHidden: hidden})))).toolbarHidden).toBe(hidden);
   for (const junk of ["true", 1, null, [], {}]) expect(Object.hasOwn(parsePreferences({...defaults, toolbarHidden: junk}), "toolbarHidden")).toBe(false);

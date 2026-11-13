@@ -1,6 +1,6 @@
 use crate::app_lock::AccessLease;
 use crate::ssh::{quote, AppState, Result, SshError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +52,62 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
     };
     Ok(format!("zellij --session={session} action {args}"))
 }
+/// One tab of a session as `zellij action list-tabs --json` reports it; the strip shows only these three facts.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct ZellijTab {
+    position: u32,
+    name: String,
+    active: bool,
+}
+const MAX_TABS: usize = 1000;
+fn tabs_command(session: &str) -> Result<String> {
+    Ok(format!(
+        "zellij --session={} action list-tabs --json",
+        text(session, 200)?
+    ))
+}
+fn parse_tabs(output: &str) -> Result<Vec<ZellijTab>> {
+    let invalid = || SshError::new("zellij_protocol", "Zellij returned an unreadable tab list");
+    let rows: Vec<serde_json::Value> = serde_json::from_str(output).map_err(|_| invalid())?;
+    if rows.len() > MAX_TABS {
+        return Err(invalid());
+    }
+    rows.iter()
+        .map(|row| {
+            Ok(ZellijTab {
+                position: row["position"]
+                    .as_u64()
+                    .and_then(|position| u32::try_from(position).ok())
+                    .filter(|position| (*position as usize) < MAX_TABS)
+                    .ok_or_else(invalid)?,
+                // A tab name is host-controlled text shown in the strip: drop control characters and bound it.
+                name: row["name"]
+                    .as_str()
+                    .ok_or_else(invalid)?
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .take(200)
+                    .collect(),
+                active: row["active"].as_bool().ok_or_else(invalid)?,
+            })
+        })
+        .collect()
+}
+#[tauri::command]
+pub async fn zellij_tabs(
+    state: State<'_, AppState>,
+    session_id: String,
+    name: String,
+    access: AccessLease,
+) -> crate::ssh::AccessResult<Vec<ZellijTab>> {
+    access
+        .run(async {
+            let command = tabs_command(&name)?;
+            let session = state.session(&session_id).await?;
+            parse_tabs(&crate::ssh::exec_for_access(&session, command, &access).await?)
+        })
+        .await
+}
 #[tauri::command]
 pub async fn zellij_action(
     state: State<'_, AppState>,
@@ -78,6 +134,59 @@ mod tests {
         assert!(command("test", &ZellijAction::GoToTab { index: 0 }).is_err());
         assert!(command("test", &ZellijAction::GoToTab { index: 1001 }).is_err());
         assert_eq!(command("a'$(echo x)", &ZellijAction::NewTab { name: "title;$(echo no)".into(), directory: "/a b".into() }).unwrap(), "zellij --session='a'\\''$(echo x)' action new-tab --name='title;$(echo no)' --cwd='/a b'");
+    }
+    #[test]
+    fn lists_tabs_from_the_json_the_cli_prints_and_refuses_anything_else() {
+        let tabs = parse_tabs(r#"[{"position":0,"name":"one\u001b[31m","active":false,"viewport_rows":9},{"position":1,"name":"two","active":true}]"#).unwrap();
+        assert_eq!(
+            tabs,
+            vec![
+                ZellijTab {
+                    position: 0,
+                    name: "one[31m".into(),
+                    active: false
+                },
+                ZellijTab {
+                    position: 1,
+                    name: "two".into(),
+                    active: true
+                },
+            ]
+        );
+        assert_eq!(
+            parse_tabs(&format!(
+                r#"[{{"position":0,"name":"{}","active":true}}]"#,
+                "n".repeat(300)
+            ))
+            .unwrap()[0]
+                .name
+                .len(),
+            200
+        );
+        for bad in [
+            "",
+            "{}",
+            "[1]",
+            r#"[{"position":-1,"name":"a","active":true}]"#,
+            r#"[{"position":1000,"name":"a","active":true}]"#,
+            r#"[{"position":0,"name":3,"active":true}]"#,
+            r#"[{"position":0,"name":"a"}]"#,
+        ] {
+            assert_eq!(
+                parse_tabs(bad).unwrap_err().kind(),
+                "zellij_protocol",
+                "{bad}"
+            );
+        }
+        let many = format!(
+            "[{}]",
+            vec![r#"{"position":0,"name":"a","active":true}"#; MAX_TABS + 1].join(",")
+        );
+        assert!(parse_tabs(&many).is_err());
+        assert_eq!(
+            tabs_command("a'$(touch nope)").unwrap(),
+            "zellij --session='a'\\''$(touch nope)' action list-tabs --json"
+        );
     }
     #[test]
     fn navigation_is_fixed_and_keeps_hostile_session_names_literal() {
@@ -313,6 +422,16 @@ mod tests {
             quote(&name)
         ));
         assert!(tabs.contains("literal'$(touch nope)"));
+        // The strip's reader accepts the CLI's real output: two tabs, the first (left active by `previous-tab`) selected.
+        let listed = parse_tabs(&tabs).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|tab| (tab.position, tab.active))
+                .collect::<Vec<_>>(),
+            vec![(0, true), (1, false)]
+        );
+        assert_eq!(listed[1].name, "literal'$(touch nope)");
         assert!(!temp.path().join("nope").exists());
         run(format!("zellij kill-session -- {}", quote(&name)));
     }

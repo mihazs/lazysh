@@ -1,13 +1,29 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import {mountPreferences,showingPage} from "./test/preferencesPanel";
 import {budgetStyleLookups} from "./test/styleBudget";
+import {uiI18n,t} from "./i18n/core";
 import { defaults, getPreferences, parseChord, savePreferences, toolbarRows } from "./preferences";
 afterEach(() => cleanup());
 budgetStyleLookups(1150);
 
 describe("keyboard settings", () => {
+  it.each([['en','Show tab strip','Always'],['pt-BR','Mostrar faixa de abas','Sempre'],['es','Mostrar franja de pestañas','Siempre']])('forces the tab strip on or off in %s and returns to Auto without storing it', async (language, label, always) => {
+    await act(async()=>{await uiI18n.changeLanguage(language);});
+    try {
+      savePreferences({...defaults});const page=mountPreferences(t('preferencesCategoryInput'));
+      const select=page.getByRole('combobox',{name:label}) as HTMLSelectElement;
+      expect(select.value).toBe('auto');
+      fireEvent.change(select,{target:{value:'on'}});
+      expect(getPreferences().tabStrip).toBe('on');
+      expect(page.getByRole('option',{name:always})).toHaveProperty('selected',true);
+      fireEvent.change(select,{target:{value:'off'}});
+      expect(getPreferences().tabStrip).toBe('off');
+      fireEvent.change(select,{target:{value:'auto'}});
+      expect(Object.hasOwn(getPreferences(),'tabStrip')).toBe(false);
+    } finally {cleanup();await act(async()=>{await uiI18n.changeLanguage('en');});}
+  });
   it('keeps Advanced default and existing records, while saving Simple text verbatim', () => {
     savePreferences({...defaults,chords:[{label:'Existing',keys:'F12, M-h'}]});
     const page=mountPreferences('Keyboard and gestures','Keyboard chords');
