@@ -186,3 +186,26 @@ it('denies with a trimmed message and sends nothing for a blank one',async()=>{
   fireEvent.click(send);await act(async()=>{});
   expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',{sessionId:'ssh1',id:request.id,expectedHash:request.expectedHash,agentSessionId:'agent-session',paneId:'%7',decision:'deny',message:'Use staging'},expect.anything());
 });
+
+const mine = {agentSessionId: 'agent-session', paneId: '%7'};
+it('says a request was answered elsewhere and sends nothing when the host no longer lists it',async()=>{
+  let listed=[request];
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:listed}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1" match={mine} compactEmpty/>);
+  const allow=await screen.findByRole('button',{name:'Allow this request'});
+  // The terminal answers it first; the card on screen is still the old one.
+  listed=[];
+  fireEvent.click(allow);await act(async()=>{});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(0);
+  expect(screen.getByRole('status').textContent).toContain('already answered');
+  expect(screen.queryByRole('button',{name:'Allow this request'})).toBeNull();
+});
+it('says nothing about a request that the agent answered here or that expired',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[request]}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1" match={mine} compactEmpty/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Deny request'}));
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[]}:{schemaVersion:1,accepted:true});
+  await act(async()=>{});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(1);
+  expect(screen.queryByRole('status')).toBeNull();
+});

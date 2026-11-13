@@ -67,6 +67,9 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const running = useRef(false);
+  const [elsewhere, setElsewhere] = useState(false);
+  const shown = useRef<Approval[]>([]);
+  const decided = useRef(new Set<string>());
   const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
   const owns=(current:number)=>current===generation.current && scope.current.visible && scope.current.sessionId===sessionId;
   function beginRequest() {
@@ -74,13 +77,22 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
     running.current=true;setBusy(true);setError('');
     return generation.current;
   }
+  async function list() {
+    const rows = parseApprovals(await invoke("agent_approvals", { sessionId }));
+    return match ? rows.filter(row=>row.agent==='claude' && row.sessionId===match.agentSessionId && row.paneId===match.paneId) : rows;
+  }
+  /** Shows `rows`; a request this view showed that is gone, was not answered here and had not expired was answered at the host. */
+  function show(rows: Approval[]) {
+    const left=shown.current.some(item=>!decided.current.has(item.id) && Date.parse(item.expiresAt)>Date.now() && !rows.some(row=>row.id===item.id));
+    shown.current=rows;
+    setRequests(rows);
+    if(match)setElsewhere(rows.length===0 ? left || elsewhere : false);
+  }
   async function refresh() {
     const current=beginRequest();if(current===null)return;
     try {
-      const rows = parseApprovals(
-        await invoke("agent_approvals", { sessionId }),
-      );
-      if (owns(current)) setRequests(match ? rows.filter(row=>row.agent==='claude' && row.sessionId===match.agentSessionId && row.paneId===match.paneId) : rows);
+      const rows = await list();
+      if (owns(current)) show(rows);
     } catch (e) {
       if (owns(current)) setError(captureUiError(e));
     } finally {
@@ -93,7 +105,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
   useEffect(() => {
     generation.current++;
     running.current = false;
-    setRequests([]);setBusy(false);setError("");
+    setRequests([]);shown.current=[];setElsewhere(false);setBusy(false);setError("");
     if(!visible)return ()=>{generation.current++;};
     void refresh();
     const interval = window.setInterval(() => {
@@ -108,6 +120,13 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
     const current=beginRequest();if(current===null)return;
     try {
       if (validate && (!await validate() || !owns(current) || Date.parse(request.expiresAt)<=Date.now())) throw new LocalUiError('approvalsNotAccepted');
+      if (match) {
+        // The terminal may have answered it since the last poll: send nothing for a request the host no longer lists.
+        const rows = await list();
+        if (!owns(current)) return;
+        if (!rows.some(row=>row.id===request.id && row.expectedHash===request.expectedHash)) {show(rows);setElsewhere(true);return;}
+      }
+      decided.current.add(request.id);
       const result = await invoke<{ schemaVersion: number; accepted: boolean }>(
         "resolve_agent_approval",
         {
@@ -123,10 +142,10 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       );
       if (result?.schemaVersion !== 1 || result.accepted !== true)
         throw new LocalUiError('approvalsNotAccepted');
-      if (owns(current))
-        setRequests((previous) =>
-          previous.filter((item) => item.id !== request.id),
-        );
+      if (owns(current)) {
+        shown.current = shown.current.filter((item) => item.id !== request.id);
+        setRequests(shown.current);
+      }
     } catch (e) {
       if (owns(current)) setError(captureUiError(e));
     } finally {
@@ -137,7 +156,8 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
     }
   }
   const now=useNow(1000,visible && requests.length>0);
-  if(compactEmpty && requests.length===0 && !error)return null;
+  useEffect(()=>{if(!elsewhere)return;const timer=window.setTimeout(()=>setElsewhere(false),8000);return ()=>window.clearTimeout(timer);},[elsewhere]);
+  if(compactEmpty && requests.length===0 && !error && !elsewhere)return null;
   return (
     <section hidden={!visible} style={visible?undefined:{display:'none'}} aria-label={t('approvalsTitle')} className="approval-panel">
       <div className="approval-header">
@@ -149,6 +169,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       <p className="approval-hint">
         {t('approvalsHint')}
       </p>
+      {elsewhere && <p role="status" className="approval-note">{t('approvalsAnsweredElsewhere')}</p>}
       {error && (
         <p role="alert" className="inline-error">
           {uiErrorText(error)}

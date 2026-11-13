@@ -8,7 +8,7 @@ import {preview} from './fixtures/recorded-images/browser';
 type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
-declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
+declare global {interface Window {approvals:{id:string;decisions:unknown[];gone:boolean};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
 
 /** The commands every synthetic host answers the same way; each fixture adds its own on top. */
@@ -222,9 +222,9 @@ async function claudeApproval(page:Page,extra:object={}) {
   await asClaude(page);
   await page.evaluate(extra=>{
     const base=window.nativeFixtureInvoke!;
-    window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[]};
+    window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[],gone:false};
     window.nativeFixtureInvoke=async(command,args)=>{
-      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),...extra}]};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length||window.approvals.gone?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),...extra}]};
       if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
       return base(command,args);
     };
@@ -280,6 +280,18 @@ test('offers the permission updates Claude suggests behind a confirmation that s
   await expect(dock).toHaveCount(0);
   expect(await decided(page)).toEqual([expect.objectContaining({...expected,decision:'allow',option:0})]);
   await expectNoKeys(page,before);
+});
+
+test('says a Claude permission request was answered in the terminal and sends nothing for the tap that came late',async({page})=>{
+  await open(page);
+  const dock=await claudeApproval(page);
+  const allow=dock.getByRole('button',{name:'Allow this request',exact:true});
+  await expect(allow).toBeEnabled();
+  await page.evaluate(()=>{window.approvals.gone=true;});
+  await allow.click();
+  await expect(dock).toContainText('already answered');
+  await expect(dock.getByRole('button',{name:'Allow this request',exact:true})).toHaveCount(0);
+  expect(await decided(page)).toEqual([]);
 });
 
 test('denies a Claude permission request with a message the agent reads',async({page})=>{

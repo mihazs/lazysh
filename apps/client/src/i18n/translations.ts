@@ -1803,6 +1803,7 @@ const translations = {
   approvalsNotAccepted: ["O servidor não aceitou esta decisão. Atualize a solicitação atual.", "El servidor no aceptó esta decisión. Actualiza su solicitud actual."],
   approvalsExpiresIn: ["Expira em {{time}}", "Caduca en {{time}}"],
   approvalsExpired: ["Expirada. Responda no terminal do agente.", "Caducada. Respóndela en el terminal del agente."],
+  approvalsAnsweredElsewhere: ["Esta solicitação já foi respondida, no terminal ou em outro dispositivo. Nada foi enviado daqui.", "Esta solicitud ya se respondió, en el terminal o en otro dispositivo. No se envió nada desde aquí."],
   approvalsDenyMessage: ["Negar com uma mensagem", "Denegar con un mensaje"],
   approvalsOptionRule: ["Permitir e lembrar {{rule}}…", "Permitir y recordar {{rule}}…"],
   approvalsOptionRuleSession: ["Permitir {{rule}} nesta sessão…", "Permitir {{rule}} en esta sesión…"],

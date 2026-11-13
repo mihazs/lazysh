@@ -1805,6 +1805,7 @@ export const english = {
   approvalsExpiresIn: "Expires in {{time}}",
   approvalsExpired: "Expired. Answer it in the agent's terminal instead.",
   approvalsPermission: "Permission",
+  approvalsAnsweredElsewhere: "This request was already answered, in the terminal or on another device. Nothing was sent from here.",
   approvalsDenyMessage: "Deny with a message",
   approvalsOptionRule: "Allow and remember {{rule}}…",
   approvalsOptionRuleSession: "Allow {{rule}} for this session…",
