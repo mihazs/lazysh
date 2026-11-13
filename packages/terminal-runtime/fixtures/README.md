@@ -58,8 +58,8 @@ have flooded the pty under any-event tracking); `tests/conformance.rs` pins the 
 ## Replay time (by-product measurement)
 
 Measured on the Linux x86_64 development host (not a device, not the baseline of `terminal-benchmarks.md`): the xterm.js suite
-(186 tests, jsdom included) took 1.62 to 1.81 s wall in two `vitest run` invocations; the core suite (90 screens, 75 key presses,
-130 mouse events, in a debug build) reported 0.03 to 0.04 s in three `cargo test --test vt_fixtures` runs. The two numbers measure
+(194 tests, jsdom included) reported 1.20 to 1.87 s in three `vitest run` invocations; the core suite (91 screens, 75 key presses,
+130 mouse events, in a debug build) reported 0.03 s in three `cargo test --test vt_fixtures` runs. The two numbers measure
 different things (jsdom start-up and a DOM-mounted terminal versus the bare core), so they are not a speed comparison of the engines.
 
 ## What is not here
@@ -76,7 +76,8 @@ different things (jsdom start-up and a DOM-mounted terminal versus the bare core
 - Key encodings under Kitty keyboard flags: xterm.js does not implement the protocol, so there is nothing to compare.
   The core's own golden encodings (Ctrl and Alt chords, release and repeat events, the alternate-key and text flags)
   are in `tests/conformance.rs` and `tests/keys.rs` (#1316).
-- The canonical (non-reflowing, host-applied) Mosh resize of #1317: `vt/mosh-frames.json` replays three of the six
-  captured frames (2, 3 and 6; 4, 5 and 7 redraw the same screens after different resize sequences, and the e2e
-  spec covers them) after a plain resize, which both engines render identically.
+- The canonical (non-reflowing, host-applied) Mosh resize of #1317: `vt/mosh-frames.json` replays frames 2, 3 and 6 each after
+  a plain resize, and all six captured frames in the order the e2e spec feeds them (`mosh-frames-in-order`, ending with one more
+  shrink), which both engines render identically. That is what a plain resize does with Mosh's repeated redraws, not the
+  canonical resize.
 - Android, iOS, Windows and macOS: both suites ran on Linux only.

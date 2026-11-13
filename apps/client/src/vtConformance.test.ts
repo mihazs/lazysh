@@ -45,15 +45,20 @@ describeSent<MouseFixture>('xterm.js 5.5.0 mouse reports', 'mouse.json', observe
 
 describe('Mosh frame fixtures', () => {
   const captured = JSON.parse(readFileSync(join(__dirname, '../e2e/fixtures/mosh-resize-frames.json'), 'utf8')) as {
-    frames: {frameId: number; bytesHex: string; expectedCursor: [number, number]; expectedLongRow: string; expectedFirstRowBoldRed: boolean}[];
+    frames: {frameId: number; cols: number; rows: number; bytesHex: string; expectedCursor: [number, number]; expectedLongRow: string; expectedFirstRowBoldRed: boolean}[];
   };
-  // Frames 4, 5 and 7 differ from 3, 2 and 6 only in the resize sequence around the same redraw; the e2e
-  // spec covers those against moshResize, and replaying them here would only duplicate these screens.
   const fixtures: Fixture[] = JSON.parse(readFileSync(join(dir, 'mosh-frames.json'), 'utf8'));
-  it.each(captured.frames.filter(frame => [2, 3, 6].includes(frame.frameId)).map(frame => [frame.frameId, frame] as const))('frame %s is the e2e capture and meets its expectations', (_id, frame) => {
+  it.each(captured.frames.map(frame => [frame.frameId, frame] as const))('captures/mosh-frame-%s.bin is the e2e capture', (_id, frame) => {
+    expect(readFileSync(join(fixturesDir, `captures/mosh-frame-${frame.frameId}.bin`)).toString('hex')).toBe(frame.bytesHex);
+  });
+  it('mosh-frames-in-order resizes to each frame\'s envelope size before writing it, in capture order, then shrinks once more', () => {
+    const steps = fixtures.find(candidate => candidate.id === 'mosh-frames-in-order')!.steps;
+    expect(steps).toEqual([...captured.frames.flatMap(frame => [{resize: [frame.cols, frame.rows]}, {writeFile: `captures/mosh-frame-${frame.frameId}.bin`}]), {resize: [40, 8]}]);
+  });
+  // Frames 4, 5 and 7 redraw the screens of 3, 2 and 6 after other resize sequences, so only the six
+  // in order (`mosh-frames-in-order`) replay them; the single frames carry the e2e expectations.
+  it.each(captured.frames.filter(frame => [2, 3, 6].includes(frame.frameId)).map(frame => [frame.frameId, frame] as const))('frame %s meets the expectations of the e2e capture', (_id, frame) => {
     const fixture = fixtures.find(candidate => candidate.id === `mosh-frame-${frame.frameId}`)!;
-    const bytes = fixture.steps.flatMap(step => ('writeBase64' in step ? [step.writeBase64] : []));
-    expect(Buffer.from(bytes[0], 'base64').toString('hex')).toBe(frame.bytesHex);
     expect(fixture.expect.cursor).toEqual({x: frame.expectedCursor[0], y: frame.expectedCursor[1]});
     expect(fixture.expect.lines![1]).toContain(frame.expectedLongRow);
     expect(fixture.expect.cells![0].flags).toContain('bold');
