@@ -127,8 +127,8 @@ fn read_in(
                 bytes,
                 limit,
                 false,
-                4 * 1024 * 1024,
-                20_000,
+                super::conversation::CONVERSATION_LINE,
+                super::conversation::MAX_RECORDS,
                 Some(id),
                 window,
             )?
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_sessions_handle_large_unrelated_records_without_changing_default_limits() {
+    fn selected_sessions_and_paths_handle_large_unrelated_records() {
         let temp = tempfile::tempdir().unwrap();
         let claude = temp.path().canonicalize().unwrap().join("projects");
         let project = claude.join("one");
@@ -331,7 +331,13 @@ mod tests {
             json!({"type":"user","uuid":"last","sessionId":ID,"message":{"content":"hello"}})
         ));
         fs::write(&path, input).unwrap();
-        assert!(super::super::conversation(&path, TranscriptAgent::Claude, 50).is_err());
+        // The bound read and the path read share their limits: a 300 KB record that is not a message does not hide the conversation.
+        assert_eq!(
+            super::super::conversation(&path, TranscriptAgent::Claude, 50)
+                .unwrap()
+                .messages[0]["blocks"][0]["text"],
+            "hello"
+        );
         assert_eq!(
             read_in(&claude, TranscriptAgent::Claude, ID, 50, &Window::Tail)
                 .unwrap()

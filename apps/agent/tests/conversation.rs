@@ -153,9 +153,68 @@ fn cycles_oversize_files_and_wrong_provider_input_fail_closed() {
     assert!(conversation(&path, TranscriptAgent::Codex, 100).is_err());
     fs::File::create(&path)
         .unwrap()
-        .set_len(16 * 1024 * 1024 + 1)
+        .set_len(64 * 1024 * 1024 + 1)
         .unwrap();
     assert!(conversation(&path, TranscriptAgent::Claude, 100).is_err());
+}
+
+#[test]
+fn a_long_session_with_a_screenshot_and_a_huge_tool_result_opens_with_bounded_blocks() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("long.jsonl");
+    let filler = "word ".repeat(1400);
+    let mut records = vec![message("root", None, "user", "start")];
+    // About 20 MiB of ordinary turns: past the 16 MiB the reader used to accept.
+    for index in 0..2800 {
+        let parent = if index == 0 {
+            "root".to_string()
+        } else {
+            format!("m{}", index - 1)
+        };
+        let role = if index % 2 == 0 { "assistant" } else { "user" };
+        records.push(message(&format!("m{index}"), Some(&parent), role, &filler));
+    }
+    // One pasted screenshot (a 1.5 MB base64 line) and one 600 KB tool result.
+    records.push(json!({"type":"user","uuid":"shot","parentUuid":"m2799","message":{"role":"user","content":[{"type":"text","text":"see this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"A".repeat(1_500_000)}}]}}));
+    records.push(json!({"type":"assistant","uuid":"call","parentUuid":"shot","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat big.log"}}]}}));
+    records.push(json!({"type":"user","uuid":"dump","parentUuid":"call","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"y".repeat(600_000)}]}}));
+    records.push(message("done", Some("dump"), "assistant", "finished"));
+    write(&path, &records);
+    assert!(fs::metadata(&path).unwrap().len() > 16 * 1024 * 1024);
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
+    assert_eq!(
+        ids(&page).iter().rev().take(4).copied().collect::<Vec<_>>(),
+        vec!["done", "dump", "call", "shot"]
+    );
+    assert!(page.truncated, "older messages exist beyond the page");
+    let dump = page
+        .messages
+        .iter()
+        .find(|message| message["id"] == "dump")
+        .unwrap();
+    let text = dump["blocks"][0]["text"].as_str().unwrap();
+    assert!(
+        text.len() < 100_000,
+        "the dump is cut to a bounded block, not sent whole"
+    );
+    assert!(text.ends_with("more bytes not shown]"));
+    assert!(text.starts_with("yyyy"));
+    for message in &page.messages {
+        assert!(serde_json::to_vec(message).unwrap().len() < 512 * 1024);
+    }
+}
+
+#[test]
+fn a_cut_note_never_splits_a_character() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("multibyte.jsonl");
+    // 3-byte characters: the cap falls inside one whatever its offset.
+    let text = "世".repeat(60_000);
+    write(&path, &[message("root", None, "user", &text)]);
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
+    let shown = page.messages[0]["blocks"][0]["text"].as_str().unwrap();
+    assert!(shown.starts_with('世') && shown.contains("more bytes not shown"));
+    assert!(shown.len() < 100_000);
 }
 
 #[test]

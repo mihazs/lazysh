@@ -180,6 +180,30 @@ Tap to first content, median of 5 runs (`bun run bench:agent-view`), desktop Chr
 
 Each fix lands as its own change; this table is updated with the new numbers by the change that makes them.
 
+### Long sessions open (companion)
+
+`transcript --view conversation` took at most 16 MiB per file and 256 KiB per record line, so a session with one pasted screenshot or a
+day of work failed with a bare error. It now takes the limits `herdr-conversation` already used (64 MiB, 4 MiB lines, 100,000 records) and cuts
+every text block it returns at 96 KiB with a note, because the client refuses blocks over 256 KiB and a page over 512 KiB. The page
+schema is unchanged and an older companion keeps the old limits. Tests: `tests/conversation.rs` (a 20 MiB session with a 1.5 MB screenshot line
+and a 600 KB tool result opens; the cut never splits a character) and the unit test that the path read and the bound read share their
+limits. Release companion, median of 5 runs, same machine:
+
+| Session | Before | After |
+| --- | --- | --- |
+| fixture medium (11.3 MB, 4.6k records) | 88-96 ms, 57 MiB | 96 ms, 57 MiB |
+| fixture large (21.1 MB) | **fails** | 187 ms, 101 MiB |
+| fixture huge (61.1 MB, 22.6k records) | **fails** | 527 ms, 267 MiB |
+| real local session, 36 MB | **fails** | 272 ms, 146 MiB |
+| real local session, 21 MB | **fails** | 186 ms, 85 MiB |
+| real local session, 12.5 MB (12 lines over 256 KiB) | **fails** | 43 ms, 38 MiB |
+| real local session, 11.3 MB (5 lines over 256 KiB) | **fails** | 66 ms, 43 MiB |
+| real local session, 9.3 MB | 80 ms, 52 MiB | 80 ms, 52 MiB |
+
+Four of the five real sessions failed before and all five open now. The read is still O(file): about 8 ms per MB and 4 MiB of memory per MB
+of file. The live stream's watcher already waits three times the cost of its last read between reads, so a 36 MB session costs the host
+at most about a quarter of a core while streaming; an incremental watcher that parses only the appended bytes is the next step and is not done.
+
 ### Not measured
 
 - A real phone, the Android WebView, and the radio: needs a device number.

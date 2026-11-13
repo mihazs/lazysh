@@ -77,7 +77,7 @@ fn anchored_capture(
             check_owner(&metadata)?;
             Ok(file)
         },
-        64 * 1024 * 1024,
+        conversation::CONVERSATION_SNAPSHOT,
     )
 }
 
@@ -454,6 +454,33 @@ fn copy_usage(output: &mut Value, input: &Value, fields: &[(&str, &str)]) {
 }
 fn string(value: &Value, field: &str) -> Option<String> {
     value.get(field)?.as_str().map(str::to_owned)
+}
+/// The longest text one block carries to the client. A larger tool result or file dump is cut here, on a character boundary, with
+/// a note of how much was left out: the client refuses blocks over 256 KiB and a message over 512 KiB, which would hide the whole page.
+pub(crate) const BLOCK_TEXT_CAP: usize = 96 * 1024;
+/// Cuts every block of a normalized message to `BLOCK_TEXT_CAP`.
+pub(crate) fn cap_blocks(message: &mut Value) {
+    for block in message["blocks"].as_array_mut().into_iter().flatten() {
+        if let Some(text) = block["text"]
+            .as_str()
+            .filter(|text| text.len() > BLOCK_TEXT_CAP)
+        {
+            block["text"] = json!(capped(text.to_owned()));
+        }
+    }
+}
+fn capped(mut text: String) -> String {
+    if text.len() <= BLOCK_TEXT_CAP {
+        return text;
+    }
+    let mut end = BLOCK_TEXT_CAP;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let left_out = text.len() - end;
+    text.truncate(end);
+    text.push_str(&format!("\n[... {left_out} more bytes not shown]"));
+    text
 }
 fn block(kind: &str, text: String, id: Option<String>, name: Option<String>) -> Value {
     let mut value = json!({"type":kind,"text":text});

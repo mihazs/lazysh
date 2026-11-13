@@ -56,6 +56,12 @@ fn conversation_options(
     Ok(page)
 }
 
+/// The most of one Claude Code session file a conversation read takes: the bound `herdr-conversation` already reads that much,
+/// and real sessions pass 16 MiB within a day of work. A larger file is refused, not cut, so no branch is ever shown truncated.
+pub(super) const CONVERSATION_SNAPSHOT: u64 = 64 * 1024 * 1024;
+/// The longest record line of a conversation read. One base64 image or one large tool result is enough to pass 256 KiB.
+pub(super) const CONVERSATION_LINE: u64 = 4 * 1024 * 1024;
+
 pub(super) fn project_claude(
     bytes: Vec<u8>,
     limit: u8,
@@ -66,16 +72,16 @@ pub(super) fn project_claude(
         bytes,
         limit,
         inline_images,
-        super::MAX_LINE,
+        CONVERSATION_LINE,
         MAX_RECORDS,
         None,
         window,
     )
 }
 
-/// A 16 MiB snapshot holds at most this many records of any realistic size; the cap stops a file of
+/// A snapshot holds at most this many records of any realistic size; the cap stops a file of
 /// tiny records from costing more memory than the snapshot budget implies.
-const MAX_RECORDS: usize = 100_000;
+pub(super) const MAX_RECORDS: usize = 100_000;
 
 pub(super) fn project_claude_bounded(
     bytes: Vec<u8>,
@@ -217,11 +223,13 @@ pub(super) fn project_claude_bounded(
         .into_iter()
         .filter_map(|index| {
             let (position, record) = &records[index];
-            if inline_images {
+            let mut message = if inline_images {
                 super::normalize_images(record, agent, *position)
             } else {
                 normalize(record, agent, *position)
-            }
+            }?;
+            super::cap_blocks(&mut message);
+            Some(message)
         })
         .collect();
     let selected = select(all, window, limit)?;
@@ -247,7 +255,7 @@ pub(super) fn project_claude_bounded(
 // Observe one initial prefix, allowing append-only growth without pausing Follow.
 // Changed metadata requires one exact prefix comparison, never a capture retry.
 pub(super) fn capture(path: &Path) -> Result<Vec<u8>> {
-    capture_with(|| open_transcript(path))
+    capture_with_limit(|| open_transcript(path), CONVERSATION_SNAPSHOT)
 }
 
 pub(super) fn capture_with(open: impl Fn() -> Result<File>) -> Result<Vec<u8>> {
