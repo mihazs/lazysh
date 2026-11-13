@@ -480,3 +480,55 @@ Record: device model, One UI version, Android version, navigation mode, back sen
 | not yet run | | | | |
 
 Known unverified points (Android documents none of them): whether the 200 dp exclusion cap applies per edge or per window, whether a WebView honours exclusion rects set on it for every touch, and what the Edge panel and back-sensitivity settings do to the reported zones. The script records the evidence for each.
+
+## Appium suite in CI (#1412)
+
+The `native-android-appium` job of `checks.yml` runs the Appium and WebdriverIO suite ([ADR 0002](architecture/adr-0002-appium-webdriverio-android-e2e.md))
+on the same API 36 x86_64 emulator, runner action and Rust, Gradle and download caches as `native-android-runtime`. It builds the
+x86_64 debug APK first (`bun run build:android:emulator`), so the emulator's minutes go to the suite, starts the owned SSH host
+and the same-run stock Herdr with the real companion, and runs `bun run test:mobile-e2e:ci` (`moon run client:test-mobile-e2e-ci`).
+
+| Event | Tiers | Jobs |
+| --- | --- | --- |
+| Pull request | `smoke`, `regression` | `native-android-appium`, only when `native-changes.sh` sets `android_appium`: client, Android, agent, Herdr and `mobile-e2e` paths, and the shared SSH, Herdr and tmux fixtures; documentation alone runs nothing |
+| Push to `main` | plus `journeys` | the same job, plus `native-android-appium-quarantine` while a spec carries `@flaky` |
+| Nightly (03:41 UTC) | plus `journeys` | the same jobs, and nothing else from `checks.yml` (`client` and `agent` skip it); the nightly has its own concurrency group, so a push to `main` neither cancels it nor waits for it |
+
+- **Selection.** `LAZYSH_E2E_TIERS` (`smoke,regression[,journeys]`), `LAZYSH_E2E_FLAKY` (`exclude` for the gating run, `only` for the
+  quarantine run, unset for everything) and `LAZYSH_E2E_SHARD` (`x/y`, one-based) choose what a run covers; `bun run test:mobile-e2e:ci` reads them.
+  The gating run never sees a `@flaky` test and the quarantine run sees nothing else.
+- **Retries.** `specFileRetries` is 1 when `CI` is set (a fresh session for the failed spec file) and 0 otherwise; Mocha `retries` is always 0.
+  A spec file that fails and then passes is written to the job summary under "passed only on retry"; open or update its flaky-test
+  issue the same day. A file that fails twice is a failure, not a flake. Emulator boot, adb, ntfy, biometric, D-pad, notification, apt DNS and
+  artifact-upload hiccups are handled by this retry and the summary, never by loosening an assertion.
+- **Artifacts.** Every run uploads `lazysh-appium-gating-<shard index>` (or `lazysh-appium-quarantine`) for seven days: `reports/junit/`,
+  `reports/artifacts/<spec>/<test>/` (native and WebView screenshots and sources, a logcat tail, the Appium log; nothing is captured while a
+  key or password is on screen), `reports/wdio-appium.log` and the emulator's system diagnostics.
+- **Quarantine.** A `@flaky` test links an issue, runs only in `native-android-appium-quarantine` (`continue-on-error`, so it never decides
+  a merge), and is capped at five tests and 14 days ([policy](reference/mobile-e2e-conventions.md#flake-quarantine)). With no tagged spec the job does not start.
+- **Sharding.** The job is a matrix over `shard: ['1/1']`, and `wdio --shard x/y` is wired through `LAZYSH_E2E_SHARD`. Once the suite's wall
+  time passes 25 minutes, list `'1/2'` and `'2/2'` in the matrix (and the job counts in `tests/native-changes.test.ts`): each shard is its own job
+  with its own emulator. The required check name carries the shard, `native-android-appium (1/1)` today.
+- **Timeout.** 38 minutes, below the 40 minute ceiling of `native-android-runtime`; a cancelled job retains no verdict.
+
+### Promotion to a required check
+
+The job starts **report-only**: it is not in the ruleset, so a red run is visible but does not block a merge. It becomes required after
+20 consecutive concluded runs on `main` are green. Cancelled runs (a busy trunk cancels pending ones) do not count, which is why the nightly exists.
+List the latest outcomes of the gating job:
+
+```sh
+gh run list --workflow checks.yml --branch main --limit 100 --json databaseId -q '.[].databaseId' |
+  while read -r id; do gh run view "$id" --json jobs -q '.jobs[] | select(.name | startswith("native-android-appium (")) | .conclusion | select(. == "success" or . == "failure")'; done | head -20
+```
+
+Twenty `success` lines promote it. Adding `native-android-appium (1/1)` to the ruleset and the PR driver's required list stays a maintainer
+action, as for every required check. A failure after promotion is fixed forward or the check is demoted in the same ruleset change; it is never
+made green by retrying an assertion.
+
+### Run the same thing locally
+
+```sh
+export ANDROID_HOME=<sdk> JAVA_HOME=<jdk 21> ANDROID_SERIAL=<serial>
+LAZYSH_E2E_APK=<x86_64 debug apk> LAZYSH_E2E_TIERS=smoke,regression,journeys LAZYSH_E2E_FLAKY=exclude bun run test:mobile-e2e:ci
+```

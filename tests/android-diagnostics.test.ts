@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {OwnedProcess} from './support/ownedProcess';
 import {commandLine,moonScript,moonTask} from './support/moon';
+import {interpolate} from './support/workflowGraph';
+import {quarantine,shard,tiers} from '../apps/client/mobile-e2e/support/ci';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
@@ -123,10 +125,37 @@ test('standalone native Mosh has its own bounded emulator owner without a client
   expect(mosh.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!.name).toBe('${{ env.LAZYSH_ANDROID_RUNTIME_ARTIFACT }}');
 });
 
+test('the Appium jobs select tiers, shard and quarantine the suite accepts, build the APK before the emulator and always upload reports',()=>{
+  const gating=workflow.jobs['native-android-appium'],quarantined=workflow.jobs['native-android-appium-quarantine'],runtime=workflow.jobs['native-android-runtime'];
+  expect(gating.needs).toEqual(['changes','herdr-native']);
+  expect(gating['timeout-minutes']).toBeLessThan(runtime['timeout-minutes']!);
+  expect(quarantined.steps).toBe(gating.steps);
+  expect((quarantined as {'continue-on-error'?:boolean})['continue-on-error']).toBe(true);
+  const matrix=(gating as unknown as {strategy:{matrix:{shard:string[]}}}).strategy.matrix.shard;
+  const envFor=(job:typeof gating,event:string,shardValue='')=>Object.fromEntries(Object.entries(job.env!).map(([key,value])=>
+    [key,String(interpolate(value,{github:{event_name:event,workspace:'/work'},matrix:{shard:shardValue}}))]));
+  for(const value of matrix) {
+    const request=envFor(gating,'pull_request',value),main=envFor(gating,'push',value);
+    expect(tiers(request.LAZYSH_E2E_TIERS)).toEqual(['smoke','regression']);
+    expect(tiers(main.LAZYSH_E2E_TIERS)).toEqual(['smoke','regression','journeys']);
+    expect(shard(request.LAZYSH_E2E_SHARD)).toEqual({current:Number(value.split('/')[0]),total:Number(value.split('/')[1])});
+    expect(quarantine(request.LAZYSH_E2E_FLAKY)).toBe('exclude');
+  }
+  const nightly=envFor(quarantined,'schedule');
+  expect(quarantine(nightly.LAZYSH_E2E_FLAKY)).toBe('only');
+  expect(tiers(nightly.LAZYSH_E2E_TIERS)).toEqual(['smoke','regression','journeys']);
+  expect(nightly.LAZYSH_E2E_APK).toBe('/work/apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk');
+  const names=gating.steps.map(step=>step.name??step.uses??'');
+  const build=names.indexOf('Build the x86_64 debug APK'),emulator=gating.steps.findIndex(step=>step.uses?.startsWith('mihazs/lazysh-android-emulator-runner@')),upload=gating.steps.findIndex(step=>step.uses==='actions/upload-artifact@v4');
+  expect(build).toBeGreaterThan(-1);expect(emulator).toBeGreaterThan(build);expect(upload).toBeGreaterThan(emulator);
+  expect(gating.steps[upload].if).toBe('always()');
+  expect(gating.steps[upload].with!.path).toContain('apps/client/mobile-e2e/reports/');
+});
+
 test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
   const name='Fingerprint Android native build tools';
   const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
-  for(const job of ['native-android','native-android-runtime','native-android-mosh','native-android-herdr-navigation','native-android-auxiliary','native-android-biometric','native-android-ntfy']) {
+  for(const job of ['native-android','native-android-runtime','native-android-mosh','native-android-herdr-navigation','native-android-appium','native-android-auxiliary','native-android-biometric','native-android-ntfy']) {
     const steps=workflow.jobs[job].steps;
     const fingerprint=steps.findIndex(step=>step.name===name);
     const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
@@ -244,6 +273,8 @@ test.each([
   { owner:'tmux', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'ssh-parity', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'ssh-parity', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
+  { owner:'appium', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
+  { owner:'appium', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'unknown', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
 ])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
@@ -306,17 +337,17 @@ exit "$SDK_EXIT"
     stdout: 'pipe', stderr: 'pipe',
   });
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : ['herdr-navigation','tmux','ssh-parity'].includes(owner) ? instrumentation : 1;
+  const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : ['herdr-navigation','tmux','ssh-parity','appium'].includes(owner) ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
   // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
   expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
-  if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity'].includes(owner)?'':'Unknown Android runtime owner\n');
+  if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
-  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?['run test:android-tmux']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
+  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?['run test:android-tmux']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
     'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),
     ...(sdkExpected?['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture']:[]),
   ]:[]);

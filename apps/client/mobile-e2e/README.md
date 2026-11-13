@@ -29,6 +29,13 @@ serial, records window size, density, navigation mode, IME, animation scale, rot
 restores them after each spec file and at the end. After a crashed run the next one refuses until you restore the device
 or set `LAZYSH_E2E_RECOVER=1`. Set `LAZYSH_E2E_CHROMEDRIVER` to pin a ChromeDriver instead of the automatic download, and `LAZYSH_E2E_APPIUM_PORT` when port 4723 is taken.
 
+## Select what runs
+
+`LAZYSH_E2E_TIERS` (`smoke,regression` by default, add `journeys`), `LAZYSH_E2E_FLAKY` (`exclude` leaves out `@flaky` tests, `only` runs just those)
+and `LAZYSH_E2E_SHARD` (`x/y`, one-based) choose a run; `bun run test:mobile-e2e:ci` is the CI entry point and sets nothing itself. With `CI` set a
+failed spec file is retried once in a fresh session and, if that passes, listed as flaky in the GitHub job summary. The emulator job is described in
+[Android instrumentation](../../../docs/android-testing.md#appium-suite-in-ci-1412).
+
 ## Check without a device
 
 ```sh

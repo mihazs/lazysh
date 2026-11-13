@@ -119,6 +119,8 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 
 ## In CI
 
-The path-filtered job (CI issue) runs `smoke` and `regression` on pull requests and everything on `main`, uploads
-`reports/junit/` and `reports/artifacts/`, and lists any spec that passed only on its retry in the job summary. Open or update
-a flaky-test issue for each one the same day.
+The path-filtered `native-android-appium` job runs `smoke` and `regression` on pull requests and everything on `main` and nightly, uploads
+`reports/junit/` and `reports/artifacts/`, and lists any spec file that passed only on its retry in the job summary. Open or update a
+flaky-test issue for each one the same day. It is report-only until it has 20 consecutive green runs on `main`; the job, the quarantine run,
+sharding and the promotion rule are in [Android instrumentation](../android-testing.md#appium-suite-in-ci-1412). Run the same selection
+locally with `LAZYSH_E2E_TIERS`, `LAZYSH_E2E_FLAKY` and `LAZYSH_E2E_SHARD`.
