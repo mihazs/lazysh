@@ -929,6 +929,7 @@ fn watch_adoption(state: &AppState, id: &str, session: &Arc<Session>) {
         {
             session.cancel.send_replace(true);
             session.output_credits.close();
+            session.core.discard();
             retire_session(&sessions, &retiring, &id, &session).await;
         }
     });
@@ -2417,6 +2418,10 @@ pub async fn resize(
                 .send(Input::Resize(cols, rows, lease.clone()))
                 .await
                 .map_err(|_| SshError::new("disconnected", "Session is disconnected"))?;
+            session
+                .core
+                .resize(cols, rows)
+                .map_err(|message| SshError::new("native_terminal", message))?;
             Ok(())
         })
         .await
@@ -5126,7 +5131,7 @@ mod tests {
     async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
         use crate::terminal_core::{
             credit_to,
-            fake::{sha256, workload, ChecksumCore},
+            fake::{workload, ChecksumCore},
         };
         // SSH, ET and Mosh all deliver through `send_output`, so this covers their shared path.
         let (session, _dir, server_task) = output_session().await;
@@ -5140,24 +5145,7 @@ mod tests {
         let events = counting_events(&ipc);
         let payload = workload(3 * 1024 * 1024);
         send_output(&session, &events, &payload).await.unwrap();
-        timeout(Duration::from_secs(10), async {
-            while core.seen.lock().unwrap().len() < payload.len() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(sha256(&core.seen.lock().unwrap()), sha256(&payload));
-        let peak = core.peak_queued.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(
-            peak <= OUTPUT_WINDOW as usize,
-            "{peak} bytes queued over the {OUTPUT_WINDOW} window"
-        );
-        assert_eq!(
-            ipc.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "no per-chunk IPC on the core path"
-        );
+        core.assert_received(&payload, &ipc).await;
         timeout(Duration::from_secs(3), async {
             while *session.output_inflight.lock().unwrap() != 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -5206,6 +5194,187 @@ mod tests {
             core.closed.load(std::sync::atomic::Ordering::SeqCst),
             "the renderer never learns this session's id, so only the failure path can free the core"
         );
+        server_task.abort();
+    }
+    /// A Channel that counts what crosses it, with a core offered for it (taken by the next terminal
+    /// started with that Channel).
+    fn counted_events_with_core() -> (
+        Arc<crate::terminal_core::fake::ChecksumCore>,
+        Channel<SshEvent>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = counting_events(&ipc);
+        crate::terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+        (core, events, ipc)
+    }
+    #[tokio::test]
+    async fn a_russh_terminal_delivers_its_channel_data_to_the_core_byte_exact_and_in_order() {
+        use crate::terminal_core::{self, fake::workload};
+        let (host, _, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, ipc) = counted_events_with_core();
+        let creation = access_lease();
+        let connected = spawn_terminal(&state, creation.clone(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let session = state.session(&connected.session_id).await.unwrap();
+        // The test server echoes what it is sent: 1 MiB of printable pseudo-random text in 32 KiB
+        // writes, so the stream crosses a real russh channel in both directions.
+        let text: String = workload(1024 * 1024)
+            .iter()
+            .map(|byte| (b'!' + byte % 90) as char)
+            .collect();
+        for piece in text.as_bytes().chunks(32 * 1024) {
+            let piece = String::from_utf8(piece.to_vec()).unwrap();
+            session
+                .input
+                .send(Input::Data(piece.into(), creation.clone()))
+                .await
+                .unwrap();
+        }
+        let expected = [b"ready\r\n".as_slice(), text.as_bytes()].concat();
+        core.assert_received(&expected, &ipc).await;
+        terminal_core::close(&connected.session_id);
+        let _ = session.cancel.send(true);
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn native_terminal_driver_output_the_mosh_and_et_shape_reaches_the_core_byte_exact() {
+        use crate::terminal_core::{self, fake::workload};
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        let (core, events, ipc) = counted_events_with_core();
+        let payload = workload(2 * 1024 * 1024);
+        let produced = payload.clone();
+        // Mosh and ET drivers hand 16 KiB-bounded chunks to `output`; this one only plays that part.
+        let connected = spawn_native_terminal(
+            &state,
+            access_lease(),
+            parent,
+            events,
+            NativeTerminalKind::Fixture,
+            None,
+            check_size,
+            move |_access, input, mut cancellation, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    ready.send(Ok(())).unwrap();
+                    for chunk in produced.chunks(16 * 1024) {
+                        output
+                            .send(chunk.to_vec())
+                            .await
+                            .map_err(|_| SshError::new("fixture", "output closed"))?;
+                    }
+                    // Stay open: a finished driver would add the Closed notice to the Channel count.
+                    let _ = cancellation.changed().await;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        core.assert_received(&payload, &ipc).await;
+        terminal_core::close(&connected.session_id);
+        server_task.abort();
+    }
+    /// Rust-side cost of the data path, host microbenchmark: 64 MiB of 80-column text through
+    /// `send_output` to (a) the Channel with an instant renderer that acknowledges every chunk, and
+    /// (b) the real core. Wall time and the process's CPU time (user + system, all threads).
+    #[cfg(feature = "native-terminal")]
+    #[tokio::test]
+    #[ignore = "benchmark: cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture"]
+    async fn bridge_throughput_channel_versus_core() {
+        fn cpu_seconds() -> f64 {
+            let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+            seconds(usage.ru_utime) + seconds(usage.ru_stime)
+        }
+        const MIB: usize = 64;
+        let payload: Vec<u8> = (0..)
+            .flat_map(|n: u32| format!("line {n:08} {}\r\n", "x".repeat(60)).into_bytes())
+            .take(MIB * 1024 * 1024)
+            .collect();
+        for run in 0..3 {
+            let (session, _dir, server_task) = output_session().await;
+            let acknowledged = session.clone();
+            let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = ipc.clone();
+            let events = Channel::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                // The renderer is instant: it returns the credit of a full 16 KiB chunk.
+                let _ = acknowledge(&acknowledged, 16384);
+                Ok(())
+            });
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            eprintln!(
+                "run {run} channel: {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, {:.0} Channel messages per MiB",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+                ipc.load(Ordering::SeqCst) as f64 / MIB as f64,
+            );
+            let (session, _dir, core_server) = output_session().await;
+            let events = Channel::new(|_| Ok(()));
+            crate::terminal_core::terminal_core_open(access_lease(), events.clone(), 80, 24, None)
+                .await
+                .unwrap();
+            let prepared = crate::terminal_core::prepare(&events).unwrap().unwrap();
+            prepared.attach(
+                "bench-core",
+                &session.core,
+                crate::terminal_core::credit_to(&session, acknowledge),
+            );
+            let (wall, cpu) = (std::time::Instant::now(), cpu_seconds());
+            send_output(&session, &events, &payload).await.unwrap();
+            while *session.output_inflight.lock().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            eprintln!(
+                "run {run} core:    {:.0} MiB/s, {:.2} CPU s per {MIB} MiB, 0 Channel messages (every credit returned after VT processing)",
+                MIB as f64 / wall.elapsed().as_secs_f64(),
+                cpu_seconds() - cpu,
+            );
+            crate::terminal_core::close("bench-core");
+            server_task.abort();
+            core_server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn a_resize_command_reaches_the_remote_pty_and_the_core_of_a_core_fed_session() {
+        use tauri::Manager;
+        let (host, server, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, _) = counted_events_with_core();
+        let connected = spawn_terminal(&state, access_lease(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        let id = connected.session_id;
+        resize(access_lease(), app.state(), id.clone(), 132, 43)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        assert!(resize(access_lease(), app.state(), id.clone(), 0, 43)
+            .await
+            .is_err());
+        assert_eq!(*core.sizes.lock().unwrap(), [(132, 43)]);
+        timeout(Duration::from_secs(5), async {
+            while !server.sizes.lock().unwrap().contains(&(132, 43)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the remote PTY was resized too");
+        crate::terminal_core::close(&id);
         server_task.abort();
     }
     #[tokio::test(start_paused = true)]
@@ -8168,19 +8337,28 @@ mod tests {
             state: &AppState,
             handle: Arc<SshHandle>,
             creation: AccessLease,
-        ) -> (String, Arc<Session>) {
+            attach_core: bool,
+        ) -> (
+            String,
+            Arc<Session>,
+            Arc<crate::terminal_core::fake::ChecksumCore>,
+        ) {
             let (input, _) = mpsc::channel(1);
             let (cancel, _) = watch::channel(false);
             let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
             session.finished.send_replace(true);
             let id = uuid::Uuid::new_v4().to_string();
+            let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+            if attach_core {
+                prepared.attach(&id, &session.core, Arc::new(|_| {}));
+            }
             state
                 .sessions
                 .lock()
                 .await
                 .insert(id.clone(), session.clone());
             watch_adoption(state, &id, &session);
-            (id, session)
+            (id, session, core)
         }
         let (host, _, server_task) = server(false).await;
         let (_directory, state) = fixture_state();
@@ -8193,7 +8371,8 @@ mod tests {
             access.ready(access.generation().unwrap()).unwrap();
             let nonce = access.status().unwrap().nonce.unwrap();
             let creation = access.lease(Some(&nonce)).unwrap();
-            let (id, session) = register(&state, handle.clone(), creation.clone()).await;
+            let (id, session, core) =
+                register(&state, handle.clone(), creation.clone(), true).await;
             let response = creation
                 .guard(Connected {
                     session_id: id.clone(),
@@ -8217,6 +8396,10 @@ mod tests {
             .await
             .unwrap();
             assert!(*session.cancel.borrow());
+            assert!(
+                core.closed.load(std::sync::atomic::Ordering::SeqCst),
+                "an unadopted session's screen is freed with it"
+            );
             access.authorize(access.generation().unwrap()).unwrap();
             let fresh = ready_lease(&access);
             assert!(mark_adopted(&session, &fresh).is_err());
@@ -8224,7 +8407,7 @@ mod tests {
         let creation = access
             .lease(access.status().unwrap().nonce.as_deref())
             .unwrap();
-        let (id, session) = register(&state, handle, creation.clone()).await;
+        let (id, session, _) = register(&state, handle, creation.clone(), false).await;
         mark_adopted(&session, &creation).unwrap();
         creation
             .guard(Connected {
@@ -8335,14 +8518,18 @@ mod tests {
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let stopped = shutdowns.clone();
         let observed = old_events.clone();
+        let pending_events = Channel::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        // The old renderer's native core must not outlive it either.
+        let (old_core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        crate::terminal_core::offer(&pending_events, Box::new(move || Ok(prepared)));
         let pending = spawn_native_terminal(
             &state,
             creation.clone(),
             parent_session.clone(),
-            Channel::new(move |_| {
-                observed.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }),
+            pending_events,
             NativeTerminalKind::Fixture,
             None,
             check_size,
@@ -8362,6 +8549,8 @@ mod tests {
         .await
         .unwrap();
         let pending_session = state.session(&pending.session_id).await.unwrap();
+        let pending_id = pending.session_id.clone();
+        assert!(crate::terminal_core::live(&pending_id).is_ok());
         creation.guard(pending).unwrap().body().unwrap(); // ACK can be lost in the replaced renderer.
         access.replace_renderer().unwrap();
         assert!(creation.check().is_err());
@@ -8371,6 +8560,8 @@ mod tests {
             .unwrap();
         assert!(state.sessions.lock().await.is_empty());
         assert!(state.retiring.lock().await.is_empty());
+        assert!(old_core.closed.load(Ordering::SeqCst));
+        assert!(crate::terminal_core::live(&pending_id).is_err());
         for session in [&parent_session, &pending_session] {
             assert!(*session.renderer_gone.borrow());
             assert!(*session.cancel.borrow());

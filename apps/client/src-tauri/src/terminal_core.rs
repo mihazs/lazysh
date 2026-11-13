@@ -12,6 +12,7 @@
 //! routed back to the transport yet (#1316): the real core's writer refuses them.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::SshEvent;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
@@ -45,6 +46,8 @@ pub(crate) trait Core: Send + Sync {
     fn feed(&self, chunk: Vec<u8>) -> Result<(), String>;
     /// Text of the visible rows, on request: React never receives cells.
     fn viewport_text(&self) -> Result<String, String>;
+    /// The renderer's grid changed: the terminal's size, so the transport's output wraps as drawn.
+    fn resize(&self, cols: u32, rows: u32) -> Result<(), String>;
     /// Free the core now. Idempotent.
     fn close(&self);
 }
@@ -91,6 +94,13 @@ impl CoreSlot {
     /// A renderer must not acknowledge output a core consumes: the core alone returns that credit.
     pub(crate) fn is_attached(&self) -> bool {
         self.0.get().is_some()
+    }
+
+    /// A resize the renderer sent to the transport, for the core to follow (a no-op without a core).
+    pub(crate) fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+        self.0
+            .get()
+            .map_or(Ok(()), |(_, core)| core.resize(cols, rows))
     }
 
     /// Free the core of a session whose id the renderer will never receive (the connect failed or was
@@ -209,6 +219,15 @@ pub(crate) fn prepare(channel: &Channel<SshEvent>) -> Result<Option<Prepared>, S
     factory.map(|factory| factory()).transpose()
 }
 
+/// The registry is process-wide, so in tests any renderer replacement would close the cores of
+/// tests running beside it. A test that needs its core to survive holds a read guard from this;
+/// `close_all` waits for all of them.
+#[cfg(test)]
+pub(crate) fn tests_keeping_cores() -> &'static std::sync::RwLock<()> {
+    static KEEPING: std::sync::RwLock<()> = std::sync::RwLock::new(());
+    &KEEPING
+}
+
 pub(crate) fn live(id: &str) -> Result<Arc<dyn Core>, String> {
     registry()
         .live
@@ -228,26 +247,38 @@ pub(crate) fn close(id: &str) {
 /// so a screen cannot outlive the lock that protected it. Unclaimed offers hold no core yet and are
 /// left to the cap above.
 pub(crate) fn close_all() {
+    #[cfg(test)]
+    let _exclusive = tests_keeping_cores().write();
     let live = std::mem::take(&mut registry().live);
     live.values().for_each(|core| core.close());
 }
 
+type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
+
+/// Like the terminal commands, the two that create or read a screen belong to the current renderer:
+/// a replaced renderer's lease is refused.
 #[tauri::command]
-pub fn terminal_core_open(
+pub async fn terminal_core_open(
+    lease: AccessLease,
     events: Channel<SshEvent>,
     cols: u32,
     rows: u32,
     scrollback_bytes: Option<u32>,
-) -> Result<(), String> {
-    crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
-    let factory = native::factory(cols, rows, scrollback_bytes)?;
-    offer(&events, factory);
-    Ok(())
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
+            offer(&events, native::factory(cols, rows, scrollback_bytes)?);
+            Ok(())
+        })
+        .await
 }
 
 #[tauri::command]
-pub fn terminal_core_text(session_id: String) -> Result<String, String> {
-    live(&session_id)?.viewport_text()
+pub async fn terminal_core_text(lease: AccessLease, session_id: String) -> AccessResult<String> {
+    lease
+        .run(async { live(&session_id)?.viewport_text() })
+        .await
 }
 
 #[tauri::command]
@@ -284,6 +315,12 @@ mod native {
         }
     }
 
+    /// Live sessions and reserved scrollback bytes in the process-wide hub, for the lifecycle test.
+    #[cfg(test)]
+    pub(super) fn hub_usage() -> (usize, usize) {
+        (HUB.live(), HUB.scrollback_reserved())
+    }
+
     struct Runtime(Session);
 
     impl Core for Runtime {
@@ -300,6 +337,15 @@ mod native {
             self.0
                 .with(|runtime| runtime.viewport_text())
                 .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+        }
+
+        fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+            let size = Size::new(cols as u16, rows as u16);
+            self.0
+                .with(|runtime| runtime.request_size(size))
+                .map_err(|error| error.to_string())?
+                .map(drop)
                 .map_err(|error| error.to_string())
         }
 
@@ -337,6 +383,12 @@ mod native {
     }
 }
 
+/// Live sessions and reserved scrollback bytes of the real core's hub (lifecycle test only).
+#[cfg(all(test, feature = "native-terminal"))]
+pub(crate) fn hub_usage() -> (usize, usize) {
+    native::hub_usage()
+}
+
 /// A core stand-in for the transport tests: it parses (stores) chunks on its own thread, then
 /// returns their credit, exactly the contract the real core's session honours.
 #[cfg(test)]
@@ -351,6 +403,7 @@ pub(crate) mod fake {
         /// Bytes fed and not yet credited back, at their peak.
         pub(crate) peak_queued: Arc<AtomicUsize>,
         pub(crate) feeds: Arc<AtomicUsize>,
+        pub(crate) sizes: Mutex<Vec<(u32, u32)>>,
         pub(crate) closed: std::sync::atomic::AtomicBool,
         queued: Arc<AtomicUsize>,
     }
@@ -370,6 +423,7 @@ pub(crate) mod fake {
                 seen: Arc::default(),
                 peak_queued: Arc::default(),
                 feeds: Arc::default(),
+                sizes: Mutex::default(),
                 closed: Default::default(),
                 queued: Arc::default(),
             });
@@ -387,6 +441,27 @@ pub(crate) mod fake {
         }
     }
 
+    impl ChecksumCore {
+        /// Waits for `expected.len()` parsed bytes, then checks the stream's checksum, that at most one
+        /// transport window was ever queued unreturned, and that nothing crossed the Channel (`ipc`).
+        pub(crate) async fn assert_received(&self, expected: &[u8], ipc: &AtomicUsize) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while self.seen.lock().unwrap().len() < expected.len() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the core parsed the whole stream");
+            assert_eq!(sha256(&self.seen.lock().unwrap()), sha256(expected));
+            let (peak, window) = (self.peak_queued.load(SeqCst), crate::ssh::OUTPUT_WINDOW);
+            assert!(
+                peak <= window as usize,
+                "{peak} bytes queued over the {window} window"
+            );
+            assert_eq!(ipc.load(SeqCst), 0, "no per-chunk IPC on the core path");
+        }
+    }
+
     impl Core for ChecksumCore {
         fn feed(&self, chunk: Vec<u8>) -> Result<(), String> {
             self.feeds.fetch_add(1, SeqCst);
@@ -397,6 +472,11 @@ pub(crate) mod fake {
 
         fn viewport_text(&self) -> Result<String, String> {
             Ok(String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned())
+        }
+
+        fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
+            self.sizes.lock().unwrap().push((cols, rows));
+            Ok(())
         }
 
         fn close(&self) {
@@ -514,12 +594,45 @@ mod tests {
     }
 
     #[cfg(not(feature = "native-terminal"))]
-    #[test]
-    fn without_the_feature_the_commands_say_the_core_is_not_built() {
-        let error = terminal_core_open(channel(), 80, 24, None).unwrap_err();
+    fn lease() -> AccessLease {
+        crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap()
+    }
+
+    #[cfg(not(feature = "native-terminal"))]
+    #[tokio::test]
+    async fn without_the_feature_the_commands_say_the_core_is_not_built() {
+        let error = terminal_core_open(lease(), channel(), 80, 24, None)
+            .await
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap();
         assert!(error.contains("not built"), "{error}");
-        assert!(terminal_core_open(channel(), 0, 24, None).is_err());
-        assert!(terminal_core_text("none".into()).is_err());
+        assert!(terminal_core_open(lease(), channel(), 0, 24, None)
+            .await
+            .is_err());
+        assert!(terminal_core_text(lease(), "none".into()).await.is_err());
         terminal_core_close("none".into()).unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn a_replaced_renderer_cannot_read_a_core() {
+        let _kept = tests_keeping_cores().read();
+        let access = crate::app_lock::AccessState::disabled();
+        let renderer = access.lease(None).unwrap();
+        let (_core, prepared) = ChecksumCore::prepared();
+        prepared.attach("lease-gated", &CoreSlot::default(), Arc::new(|_| {}));
+        let text = terminal_core_text(renderer.clone(), "lease-gated".into())
+            .await
+            .unwrap();
+        assert!(text.into_inner().is_ok());
+        access.replace_renderer().unwrap();
+        assert!(terminal_core_text(renderer, "lease-gated".into())
+            .await
+            .is_err());
+        close("lease-gated");
     }
 }
