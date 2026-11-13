@@ -4,7 +4,8 @@
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
 transcript=$1 log=$2 companion=$3 state=$4
 modes=('manual mode on' 'accept edits on' 'plan mode on')
-mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0
+mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0
+session=${transcript%.jsonl}
 escape() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; printf '%s' "$s"; }
 note() { printf '%s\n' "$1" >> "$log"; }
 # One transcript record: the chain of parentUuid is what makes the reader follow a branch.
@@ -25,6 +26,29 @@ background() {
   record user '{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bg","content":[{"type":"text","text":"Command running in background with ID: bg1. Output is being written to: /tmp/bg1.output"}],"is_error":false}]}'
 }
 ended() { record user "{\"role\":\"user\",\"content\":\"$(escape $'<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>toolu_bg</tool-use-id>\n<status>completed</status>\n<summary>Background command "Wait" completed (exit code 0)</summary>\n</task-notification>')\"}"; }
+# A background sub-agent: the call and its launch notice go in the conversation, the sub-agent's own records and its
+# meta file (`toolUseId`, `finished`) next to the session, as Claude Code 2.1 writes them.
+subagent() {
+  record assistant '{"id":"msg_sub","type":"message","role":"assistant","model":"fixture-model","content":[{"type":"tool_use","id":"toolu_sub","name":"Agent","input":{"description":"Explore the layout","subagent_type":"Explore","run_in_background":true}}]}'
+  record user '{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":[{"type":"text","text":"Async agent launched successfully.\nagentId: sub1 (internal ID - do not mention to user)"}],"is_error":false}]}'
+  mkdir -p "$session/subagents"
+  printf '%s\n' '{"parentUuid":null,"isSidechain":true,"agentId":"sub1","type":"user","uuid":"c1","message":{"role":"user","content":"Explore the layout"}}' \
+    '{"parentUuid":"c1","isSidechain":true,"agentId":"sub1","type":"assistant","uuid":"c2","message":{"role":"assistant","content":[{"type":"text","text":"Found two folders."}]}}' > "$session/subagents/agent-sub1.jsonl"
+  printf '%s' '{"toolUseId":"toolu_sub","agentType":"Explore","finished":false}' > "$session/subagents/agent-sub1.meta.json"
+}
+subagent_ended() { printf '%s' '{"toolUseId":"toolu_sub","agentType":"Explore","finished":true}' > "$session/subagents/agent-sub1.meta.json"; }
+# A dynamic workflow: its progress file and journal live next to the session, outside the conversation.
+workflow() {
+  record assistant '{"id":"msg_flow","type":"message","role":"assistant","model":"fixture-model","content":[{"type":"tool_use","id":"toolu_flow","name":"Workflow","input":{"script":"export const meta = { name: '"'"'review-flow'"'"' }"}}]}'
+  record user "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_flow\",\"content\":[{\"type\":\"text\",\"text\":\"Workflow started. Progress: $session/workflows/wf_fix1.json\"}],\"is_error\":false}]}"
+  mkdir -p "$session/workflows" "$session/subagents/workflows/wf_fix1"
+  printf '%s' '{"workflowName":"review-flow","status":"running","phases":[{"title":"Plan"}],"workflowProgress":[{"type":"workflow_agent","agentId":"wa1","label":"Planner","state":"progress","phaseTitle":"Plan","tokens":1200,"toolCalls":3}]}' > "$session/workflows/wf_fix1.json"
+  printf '%s\n' '{"type":"launched"}' '{"type":"started","agentId":"wa1","label":"Planner","phase":"Plan"}' > "$session/subagents/workflows/wf_fix1/journal.jsonl"
+}
+workflow_ended() {
+  printf '%s' '{"workflowName":"review-flow","status":"completed","phases":[{"title":"Plan"}],"workflowProgress":[{"type":"workflow_agent","agentId":"wa1","label":"Planner","state":"done","phaseTitle":"Plan","tokens":2400,"toolCalls":5}]}' > "$session/workflows/wf_fix1.json"
+  printf '%s\n' '{"type":"result","agentId":"wa1"}' >> "$session/subagents/workflows/wf_fix1/journal.jsonl"
+}
 # The PermissionRequest hook Claude Code runs before a tool: it blocks until someone decides, and prints the decision.
 permission() {
   local request='{"hook_event_name":"PermissionRequest","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","cwd":"/work/fixture","tool_name":"Bash","tool_input":{"command":"git push --force-with-lease"}}'
@@ -41,7 +65,10 @@ while true; do
   status=$?
   if ((status > 128)); then
     # No key: the background command the agent started finishes on its own a moment later.
-    if ((due && ${EPOCHREALTIME/./} / 1000 >= due)); then due=0; note BACKGROUND_ENDED; ended; fi
+    now=$((${EPOCHREALTIME/./} / 1000))
+    if ((due && now >= due)); then due=0; note BACKGROUND_ENDED; ended; fi
+    if ((sub_due && now >= sub_due)); then sub_due=0; note SUBAGENT_ENDED; subagent_ended; fi
+    if ((flow_due && now >= flow_due)); then flow_due=0; note WORKFLOW_ENDED; workflow_ended; fi
     continue
   fi
   ((status == 0)) || break
@@ -72,6 +99,8 @@ while true; do
           *'"behavior":"allow"'*) note 'PERMISSION allow'; text 'Ran the command.' ;;
           *) note 'PERMISSION deny'; text 'Not allowed.' ;;
         esac ;;
+      subagent*) note SUBAGENT; subagent; sub_due=$((${EPOCHREALTIME/./} / 1000 + 1500)) ;;
+      workflow*) note WORKFLOW; workflow; flow_due=$((${EPOCHREALTIME/./} / 1000 + 1500)) ;;
       background*) note BACKGROUND; background; due=$((${EPOCHREALTIME/./} / 1000 + 1000)) ;;
       *) text "Answered: ${buf:0:40}" ;;
     esac

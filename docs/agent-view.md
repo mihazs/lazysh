@@ -397,8 +397,11 @@ Tests assert behaviour, not source text.
   background command that goes from `running` to `done`. The agent also runs its
   real `PermissionRequest` hook through `lazysh-agent approval-request`; the client lists
   the request over the same SSH session, a decision naming another pane is refused, the
-  exact one releases the agent once and a second decision fails. Still to add: a sub-agent
-  child conversation and a workflow journal, guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
+  exact one releases the agent once and a second decision fails. A background sub-agent and a
+  dynamic workflow are written the way Claude Code 2.1 does (`subagents/agent-*.jsonl` with its meta
+  file, `workflows/wf_*.json` and its journal): the companion lists each as running with the child
+  file or the agent tree, the child opens as a conversation of its own, and both end by
+  themselves. Still to add: guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
   `tauri-driver`) and the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.

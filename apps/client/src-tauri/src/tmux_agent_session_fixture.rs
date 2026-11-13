@@ -228,6 +228,43 @@ async fn session() {
     expected.push("BACKGROUND_ENDED".into());
     assert_eq!(log_until(&log, expected.len()).await, expected);
     assert_eq!(background_state(&transcript).await.as_deref(), Some("done"));
+    // A background sub-agent: the companion ties the call to the sub-agent's own file, which opens as a conversation of its
+    // own, and the sub-agent's meta file ends the work by itself a moment later.
+    step!(
+        json!({"kind":"send","text":"subagent please"}),
+        "SUBMIT subagent please",
+        "SUBAGENT"
+    );
+    let running = work(&transcript, "agent").await;
+    assert_eq!(running["state"], "running");
+    let child_file = running["childPath"]
+        .as_str()
+        .expect("the sub-agent's own file is listed");
+    assert!(child_file.ends_with("/subagents/agent-sub1.jsonl"));
+    assert_eq!(
+        message_texts(&conversation(Path::new(child_file)).await),
+        ["Explore the layout", "Found two folders."]
+    );
+    expected.push("SUBAGENT_ENDED".into());
+    assert_eq!(log_until(&log, expected.len()).await, expected);
+    assert_eq!(work(&transcript, "agent").await["state"], "done");
+    // A dynamic workflow: its progress file and journal give the tree, and the completed file ends it.
+    step!(
+        json!({"kind":"send","text":"workflow please"}),
+        "SUBMIT workflow please",
+        "WORKFLOW"
+    );
+    let running = work(&transcript, "workflow").await;
+    assert_eq!(running["title"], "review-flow");
+    assert_eq!(running["state"], "running");
+    assert_eq!(running["workflow"]["agents"][0]["label"], "Planner");
+    assert_eq!(running["workflow"]["agents"][0]["state"], "running");
+    expected.push("WORKFLOW_ENDED".into());
+    assert_eq!(log_until(&log, expected.len()).await, expected);
+    let done = work(&transcript, "workflow").await;
+    assert_eq!(done["state"], "done");
+    assert_eq!(done["workflow"]["agents"][0]["state"], "done");
+    assert_eq!(done["workflow"]["totals"]["tokens"], 2400);
     // A prompt over the single-command bound is pasted whole and submitted once.
     let long = format!("first line\n{}", "y".repeat(5000));
     step!(
@@ -297,10 +334,39 @@ async fn conversation(transcript: &Path) -> Value {
     assert!(output.status.success());
     serde_json::from_slice(&output.stdout).unwrap()
 }
+/// The work the companion lists for the conversation.
+async fn work_list(transcript: &Path) -> Vec<Value> {
+    conversation(transcript).await["work"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+/// The one listed work item of a kind (`agent`, `shell`, `workflow`).
+async fn work(transcript: &Path, kind: &str) -> Value {
+    let items: Vec<Value> = work_list(transcript)
+        .await
+        .into_iter()
+        .filter(|item| item["kind"] == kind)
+        .collect();
+    assert_eq!(items.len(), 1, "one {kind} work item: {items:?}");
+    items[0].clone()
+}
 /// The state of the one background command of the conversation, if the companion lists it.
 async fn background_state(transcript: &Path) -> Option<String> {
-    let work = conversation(transcript).await["work"].clone();
-    work.as_array()?.first()?["state"]
+    work_list(transcript)
+        .await
+        .into_iter()
+        .find(|item| item["kind"] == "shell")?["state"]
         .as_str()
         .map(str::to_owned)
+}
+/// The text blocks of a conversation page, in order.
+fn message_texts(page: &Value) -> Vec<String> {
+    page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["blocks"].as_array().unwrap())
+        .filter_map(|block| block["text"].as_str().map(str::to_owned))
+        .collect()
 }
