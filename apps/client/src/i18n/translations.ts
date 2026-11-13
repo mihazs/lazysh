@@ -1323,6 +1323,7 @@ const translations = {
   chatPlanInProgress: ["Em andamento", "En curso"],
   chatPlanCompleted: ["Concluído", "Hecho"],
   chatPlanCancelled: ["Cancelado", "Cancelado"],
+  chatPlanBlocked: ["Bloqueado", "Bloqueado"],
   chatErrorTitle: ["O agente não conseguiu continuar", "El agente no pudo continuar"],
   chatErrorRateLimit: ["Um limite de uso foi atingido. Aguarde a renovação ou troque de conta ou modelo no terminal.", "Se alcanzó un límite de uso. Espera a que se restablezca o cambia de cuenta o modelo en el terminal."],
   chatErrorServer: ["O agente não conseguiu acessar a API. Confira a rede do host e envie o prompt de novo.", "El agente no pudo acceder a la API. Revisa la red del host y vuelve a enviar el prompt."],

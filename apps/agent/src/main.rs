@@ -170,7 +170,10 @@ enum Command {
         reported_history: bool,
     },
     /// Print a Gemini hook fragment; never changes settings.
-    GeminiConfig,
+    GeminiConfig {
+        #[arg(long)]
+        reported_history: bool,
+    },
     /// Print a standalone Droid hooks.json fragment; never changes settings.
     DroidConfig,
     /// Print legacy Kimi CLI 1.52 TOML hooks; never changes settings. Kimi Code 2.4 lifecycle is unqualified.
@@ -443,7 +446,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } else {
             lazysh_agent::hooks::codex_config()
         }),
-        Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
+        Command::GeminiConfig { reported_history } => Some(if reported_history {
+            lazysh_agent::reported_history::gemini_config()
+        } else {
+            lazysh_agent::hooks::gemini_config()
+        }),
         Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
         Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
         Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),

@@ -48,6 +48,9 @@ fn conversation_options(
     if matches!(agent, TranscriptAgent::GrokAcp) {
         return super::grok_conversation::conversation(path, limit, window);
     }
+    if matches!(agent, TranscriptAgent::Gemini) {
+        return super::gemini_conversation::conversation(path, limit, window);
+    }
     if !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }

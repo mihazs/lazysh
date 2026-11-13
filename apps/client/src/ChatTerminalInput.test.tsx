@@ -68,7 +68,7 @@ it('rejects malformed/forged destination, receipt, source and operation shapes',
   expect(parseTerminalDelivered({kind:'delivered',nextOperation:2},1)).toBe(2);
   expect(parseTerminalCycle({kind:'delivered',nextOperation:2,mode:'plan'},1)).toEqual({nextOperation:2,mode:'plan'});
   for(const value of [{kind:'delivered',nextOperation:2},{kind:'delivered',nextOperation:2,mode:'yolo'},{kind:'delivered',nextOperation:3,mode:'plan'},{kind:'delivered',nextOperation:2,mode:'plan',extra:1}])expect(()=>parseTerminalCycle(value,1)).toThrow();
-  for(const value of [{...source,agent:'gemini'},{...source,view:'future'},{...source,path:'bad\npath'},{...source,transcriptSessionId:'invented'}])expect(validTerminalSource(value)).toBe(false);
+  for(const value of [{...source,agent:'qwen'},{...source,view:'future'},{...source,path:'bad\npath'},{...source,transcriptSessionId:'invented'}])expect(validTerminalSource(value)).toBe(false);
 });
 it('rejects a malformed input acknowledgement as uncertain and never clears or resends the draft',async()=>{
   const {sent}=fixture();await confirm();vi.mocked(invoke).mockResolvedValueOnce({kind:'delivered',nextOperation:9});
@@ -142,12 +142,12 @@ it.each(Object.keys(transcriptAgents))('admits explicit Records context for the 
 it.each(Object.keys(transcriptAgents) as TranscriptAgentId[])('enforces the native-reader option matrix for %s',agent=>{
   for(const view of ['records','conversation'])for(const inlineImages of [false,true]){
     const context={...tmuxChatReaderSource(agent),view,inlineImages};
-    const expected=(view==='records'||['claude','grok-acp','opencode','codex'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
+    const expected=(view==='records'||['claude','grok-acp','opencode','codex','gemini'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
     expect(validTerminalSource(context)).toBe(expected);
   }
 });
 it('rejects unknown agents and extra selector fields, retaining strict UTF-8 database selectors',()=>{
-  for(const agent of ['gemini','qwen','future','constructor','__proto__','qoder_ide'])expect(validTerminalSource({...source,agent})).toBe(false);
+  for(const agent of ['qwen','future','constructor','__proto__','qoder_ide'])expect(validTerminalSource({...source,agent})).toBe(false);
   for(const transcriptSessionId of [null,undefined,'','invented'])expect(validTerminalSource({...source,transcriptSessionId})).toBe(false);
   for(const agent of ['hermes','opencode'] as const){
     expect(validTerminalSource({...source,agent})).toBe(false);
