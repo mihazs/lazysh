@@ -4,7 +4,7 @@ The native `tmux_chat` command adds an explicit terminal destination to a suppor
 recorded Chat view. It does not establish that the recorded file and a running agent
 process are the same session. It never launches an agent or uses a provider API.
 Without a verified display-owned tmux binding, ordinary terminal input and Stage
-remain the fallback. Zellij and plain shells remain outside confirmed input. Guarded Herdr input is described below.
+remain the fallback. Plain shells remain outside confirmed input. Zellij input is sent only from the Agent view, to the pane the agent's own hook report names ([Zellij input](agent-view.md#zellij-input)). Guarded Herdr input is described below.
 
 The destination comes from the retained control channel on the authenticated
 terminal's immutable tmux server. It matches the original displayed client by

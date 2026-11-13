@@ -431,6 +431,28 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
     Ok(Some(event))
 }
 
+/// The terminal pane a hook runs in: tmux's `TMUX_PANE`, else Zellij's session and terminal pane as `zellij:<session>:<pane>`.
+/// tmux wins when both are exported, as before Zellij was recognised.
+pub fn pane_identity() -> Option<String> {
+    let var = |name| std::env::var(name).ok();
+    identity(
+        var("TMUX_PANE"),
+        var("ZELLIJ_SESSION_NAME").as_deref(),
+        var("ZELLIJ_PANE_ID").as_deref(),
+    )
+}
+fn identity(tmux: Option<String>, session: Option<&str>, pane: Option<&str>) -> Option<String> {
+    tmux.or_else(|| {
+        let (session, pane) = (session?, pane?);
+        let valid = !session.is_empty()
+            && session.len() <= 200
+            && !session.chars().any(char::is_control)
+            && (1..=10).contains(&pane.len())
+            && pane.bytes().all(|c| c.is_ascii_digit());
+        valid.then(|| format!("zellij:{session}:{pane}"))
+    })
+}
+
 pub fn state_directory() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("LAZYSH_STATE_DIR") {
         return Ok(path.into());
@@ -949,6 +971,31 @@ mod test_permissions;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn names_the_pane_of_tmux_else_zellij_and_nothing_malformed() {
+        let zellij = |session, pane| identity(None, Some(session), Some(pane));
+        assert_eq!(
+            identity(Some("%4".into()), Some("work"), Some("2")),
+            Some("%4".into())
+        );
+        assert_eq!(zellij("work", "2"), Some("zellij:work:2".into()));
+        assert_eq!(
+            zellij("my:odd name", "12"),
+            Some("zellij:my:odd name:12".into())
+        );
+        for (session, pane) in [
+            ("", "2"),
+            ("work", ""),
+            ("work", "terminal_2"),
+            ("work", "-1"),
+            ("bad\nname", "2"),
+            ("work", "12345678901"),
+        ] {
+            assert_eq!(zellij(session, pane), None, "{session:?} {pane:?}");
+        }
+        assert_eq!(identity(None, Some("work"), None), None);
+        assert_eq!(identity(None, None, None), None);
+    }
     #[cfg(unix)]
     #[test]
     fn sidecar_diagnostics_use_fixed_kinds_and_security_metadata_only() {

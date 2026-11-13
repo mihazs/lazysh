@@ -327,10 +327,10 @@ const views = () => [
   { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
 ];
 
-/** Confirmed input is offered only for native tmux and guarded Herdr terminals. */
-function terminalInputFor(session:LiveSession, tools?:MultiplexerTool[]) {
+/** Confirmed input is offered for native tmux and Herdr terminals, and for Zellij only to the Agent view, which names the pane. */
+function terminalInputFor(session:LiveSession, tools?:MultiplexerTool[], zellij=false) {
   const kind=session.attached?.kind;
-  return native && (kind==='tmux' || kind==='herdr') && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
+  return native && (kind==='tmux' || kind==='herdr' || (zellij && kind==='zellij')) && tools?.some(tool=>tool.kind===kind && !tool.missing.includes('confirmedInput')) ? {backend:kind,hostLabel:session.destination,terminalLabel:session.name} : undefined;
 }
 function Dialog({
   title,
@@ -2547,7 +2547,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <Suspense key={session.id} fallback={null}>
                   <AgentView sessionId={session.id} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
-                    tmux={native && session.attached?.kind==='tmux'} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id])} onShowTerminal={()=>chooseSessionView(session,'terminal')}
+                    tmux={native && session.attached?.kind==='tmux'} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                   </Suspense>
                 ))}

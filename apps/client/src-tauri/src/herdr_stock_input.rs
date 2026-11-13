@@ -130,22 +130,47 @@ pub(crate) async fn deliver(
         .map_err(after_send)
 }
 
-/// Delivers one message (or Escape) to the pane of the followed agent through Herdr's own commands.
-#[tauri::command]
-pub async fn herdr_agent_input(
-    state: tauri::State<'_, ssh::AppState>,
-    session_id: String,
-    target: StockTarget,
-    input: Input,
-    access: AccessLease,
+/// Runs one agent input against the host of `session_id` under the caller's access lease. The stock Herdr and Zellij
+/// commands differ only in the target they take and how `deliver` writes to it.
+pub(crate) async fn run_agent_input<T>(
+    state: &ssh::AppState,
+    session_id: &str,
+    access: &AccessLease,
+    (target, input): (&T, &Input),
+    deliver: impl AsyncFnOnce(&Session, &AccessLease, &T, &Input) -> Result<()>,
 ) -> ssh::AccessResult<()> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            deliver(&session, &access, &target, &input).await
+            let session = state.session(session_id).await?;
+            deliver(&session, access, target, input).await
         })
         .await
 }
+
+/// Defines the Tauri command that delivers one input to a target type through `run_agent_input`.
+macro_rules! agent_input_command {
+    ($(#[$doc:meta])* $name:ident, $target:ty, $deliver:path) => {
+        $(#[$doc])*
+        #[tauri::command]
+        pub async fn $name(
+            state: tauri::State<'_, ssh::AppState>,
+            session_id: String,
+            target: $target,
+            input: Input,
+            access: AccessLease,
+        ) -> ssh::AccessResult<()> {
+            run_agent_input(&state, &session_id, &access, (&target, &input), $deliver).await
+        }
+    };
+}
+pub(crate) use agent_input_command;
+
+agent_input_command!(
+    /// Delivers one message (or Escape) to the pane of the followed agent through Herdr's own commands.
+    herdr_agent_input,
+    StockTarget,
+    deliver
+);
 
 #[cfg(test)]
 mod tests {

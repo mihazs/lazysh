@@ -177,21 +177,30 @@ it('never targets the stock pane when the conversation does not belong to the pr
   type('hello');expect(agentInputs()).toEqual([]);
 });
 
-it.each([
-  ['the agent waits for an answer',{kind:'herdr_chat_blocked',message:'blocked'},'agentNoticeNotSentTitle','agentNoticeBlocked',['chatOpenTerminal'],['agentReceiptRetry']],
-  ['the pane changed',{kind:'herdr_chat_stale',message:'changed'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
-  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
-  ['Herdr refuses the message',{kind:'herdr_chat_rejected',message:'agent_prompt_failed: pty closed'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
-  ['delivery cannot be confirmed',{kind:'herdr_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
-] as const)('says one thing in one notice when %s, keeps the draft and never offers a blind resend',async(_name,rejection,title,reason,offered,absent)=>{
-  stockHerdr(()=>{throw rejection;});const open=vi.fn();mountStock({onOpenTerminal:open});
+// Keys of strings without parameters, so each reads the same through `t`.
+type Plain=Parameters<typeof t>[0] & ('agentNoticeNotSentTitle'|'agentNoticeOfflineTitle'|'agentNoticeUnconfirmedTitle'|'agentNoticeBlocked'|'agentNoticeChanged'|'agentNoticeOffline'|'agentNoticeRejected'|'agentNoticeUnconfirmed'|'chatOpenTerminal'|'chatStage'|'agentReceiptRetry');
+type NoticeCase=readonly [name:string,rejection:{kind:string;message:string},title:Plain,reason:Plain,offered:readonly Plain[],absent:readonly Plain[]];
+/** One failed send says one thing in one notice, keeps the draft, and offers exactly the actions that cannot send twice. */
+async function expectOneNotice([,,title,reason,offered,absent]:NoticeCase,sends:()=>unknown[]) {
   await sendTyped('keep this');
   const alert=await screen.findByRole('alert');
   expect(screen.getAllByRole('alert')).toHaveLength(1);
   expect(within(alert).getByText(t(title))).toBeTruthy();expect(within(alert).getByText(t(reason))).toBeTruthy();
   expect(within(alert).getAllByRole('button').map(button=>button.textContent || button.getAttribute('aria-label'))).toEqual([...offered.map(key=>t(key)),t('appDismiss')]);
   for(const key of absent)expect(within(alert).queryByRole('button',{name:t(key)})).toBeNull();
-  expect(box().value).toBe('keep this');expect(agentInputs()).toHaveLength(1);
+  expect(box().value).toBe('keep this');expect(sends()).toHaveLength(1);
+  return alert;
+}
+it.each([
+  ['the agent waits for an answer',{kind:'herdr_chat_blocked',message:'blocked'},'agentNoticeNotSentTitle','agentNoticeBlocked',['chatOpenTerminal'],['agentReceiptRetry']],
+  ['the pane changed',{kind:'herdr_chat_stale',message:'changed'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
+  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
+  ['Herdr refuses the message',{kind:'herdr_chat_rejected',message:'agent_prompt_failed: pty closed'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
+  ['delivery cannot be confirmed',{kind:'herdr_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
+] as const satisfies readonly NoticeCase[])('says one thing in one notice when %s, keeps the draft and never offers a blind resend',async(...row)=>{
+  const [,rejection]=row;
+  stockHerdr(()=>{throw rejection;});const open=vi.fn();mountStock({onOpenTerminal:open});
+  const alert=await expectOneNotice(row,agentInputs);
   // The two long paragraphs of the old error area are gone.
   expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
   if(rejection.kind==='herdr_chat_uncertain'){expect(alert.querySelector('details')?.textContent).toContain(t('chatTerminalUncertain'));fireEvent.click(within(alert).getByRole('button',{name:t('chatOpenTerminal')}));expect(open).toHaveBeenCalledTimes(1);}
@@ -227,6 +236,52 @@ it('explains a terminal that takes no guarded input in one notice with Stage fir
   expect(within(alert).getAllByRole('button').map(button=>button.textContent)).toContain(t('chatOpenTerminal'));
   expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
   expect(screen.queryByRole('button',{name:'Reconnect to the terminal'})).toBeNull();
+});
+
+// Zellij has no guard and no destination to confirm: the host writes to the pane the agent's report names.
+const zellijLabels={backend:'zellij' as const,hostLabel:'host',terminalLabel:'work'};
+const zellijProof={kind:'zellij' as const,session:'work',pane:7};
+const zellijTarget={zellijSession:'work',pane:7,agent:'claude'};
+const zellijInputs=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='zellij_agent_input').map(([,args])=>args);
+function zellij(input:(args:unknown)=>unknown=()=>null) {
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='zellij_agent_input')return input(args);throw new Error(`unexpected ${command}`);});
+}
+const mountZellij=(props:Partial<Parameters<typeof AgentComposer>[0]>={})=>mount({labels:zellijLabels,proof:zellijProof,...props});
+
+it('sends to a Zellij pane through its own agent input with nothing to confirm, and stops it the same way',async()=>{
+  zellij();mountZellij();
+  expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();
+  await sendTyped('Run the tests\nthen commit');
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(zellijInputs()).toEqual([{sessionId:'ssh',target:zellijTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
+  expect(vi.mocked(invoke).mock.calls.map(([command])=>command)).toEqual(['zellij_agent_input']);
+  expect(screen.queryByRole('alert')).toBeNull();
+  fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalStop')}));fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(zellijInputs()).toHaveLength(2));
+  expect(zellijInputs()[1]).toMatchObject({target:zellijTarget,input:{kind:'request_stop'}});
+});
+
+it('keeps a Zellij pane at the 4 KiB its host can type and says so',async()=>{
+  zellij();mountZellij();
+  type('x'.repeat(4097));
+  expect(await screen.findByText(t('agentComposerTooLong',{limit:'4,096'}))).toBeTruthy();
+  expect(sendButton().disabled).toBe(true);expect(zellijInputs()).toEqual([]);
+});
+
+it.each([
+  ['the pane no longer runs the agent',{kind:'zellij_chat_stale',message:'The Zellij pane no longer runs this agent'},'agentNoticeNotSentTitle','agentNoticeChanged',['agentReceiptRetry','chatOpenTerminal'],[]],
+  ['Zellij refuses the first write',{kind:'zellij_chat_rejected',message:'zellij: no such pane'},'agentNoticeNotSentTitle','agentNoticeRejected',['agentReceiptRetry','chatStage'],[]],
+  ['the host is not reachable',{kind:'disconnected',message:'Session closed'},'agentNoticeOfflineTitle','agentNoticeOffline',['agentReceiptRetry','chatStage'],[]],
+  ['Enter is not confirmed after the text was typed',{kind:'zellij_chat_uncertain',message:'unknown'},'agentNoticeUnconfirmedTitle','agentNoticeUnconfirmed',['chatOpenTerminal','chatStage'],['agentReceiptRetry']],
+] as const satisfies readonly NoticeCase[])('says one thing, keeps the draft and never resends blindly when %s on Zellij',async(...row)=>{
+  zellij(()=>{throw row[1];});mountZellij({onOpenTerminal:vi.fn()});
+  await expectOneNotice(row,zellijInputs);
+});
+
+it('offers no Zellij send without a proof of the pane, only Stage',async()=>{
+  zellij();mountZellij({proof:undefined});
+  type('hello');await waitFor(()=>expect(screen.getByRole('button',{name:t('chatStage')})).toBeTruthy());
+  expect(zellijInputs()).toEqual([]);
 });
 
 it('does not hold a binding while the view is hidden',async()=>{

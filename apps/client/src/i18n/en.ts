@@ -2165,7 +2165,7 @@ export const english = {
   agentNoticeChanged: "The pane no longer shows this agent, or more than one pane claims it. Nothing was sent.",
   agentNoticeBusy: "Another message is still being delivered. Nothing was sent twice. Try again in a moment.",
   agentNoticeOffline: "The host did not answer. Nothing was sent. Check the connection, then retry.",
-  agentNoticeRejected: "Herdr on the host refused the message. Nothing was sent.",
+  agentNoticeRejected: "The terminal multiplexer on the host refused the message. Nothing was sent.",
   agentNoticeInvalid: "The message is empty, over 4,096 bytes or has control characters. Shorten it or stage it in the terminal.",
   agentNoticeUnconfirmed: "The message may have reached the terminal. Check it there before sending again, so it is not sent twice.",
   agentNoticeOther: "Something unexpected stopped the message. Nothing is known to have been sent.",

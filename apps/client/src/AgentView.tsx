@@ -9,6 +9,7 @@ import AgentApprovalDock from './AgentApprovalDock';
 import {publishAnswerGuard} from './agentDialogAnswer';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
+import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
 import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
@@ -43,8 +44,8 @@ type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: Agent
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLaunch, terminalInput, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; tmux: boolean; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; onShowTerminal: () => void;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -99,8 +100,9 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
         const reports = parseSnapshot(await invoke('agent_snapshot', {sessionId}));
         if (!alive || !access.current()) return;
         setSessions(reports.filter(row=>!!conversationAgents[row.agent] && reports.filter(other=>other.sessionId===row.sessionId).length===1));
-        // Pane identity is the evidence: only TMUX_PANE ties a hook report to this terminal.
-        const pane = tmux ? parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId : undefined;
+        // Pane identity is the evidence: TMUX_PANE ties a hook report to this tmux terminal; in a Zellij session, the one report that names a pane of it.
+        const own = zellijSession ? reports.filter(row => zellijPane(row.paneId)?.session === zellijSession) : [];
+        const pane = tmux ? parseTerminalSnapshot(await invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}})).destination.paneId : own.length === 1 ? own[0].paneId ?? undefined : undefined;
         const matching = pane === undefined ? [] : reports.filter(row => row.paneId === pane);
         const row = matching.length===1 ? matching[0] : undefined;
         const agent = row && conversationAgents[row.agent];
@@ -120,7 +122,7 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
     void bind();
     const timer = setInterval(() => void bind(), 5000);
     return () => {alive = false; request.current++; clearInterval(timer);};
-  }, [shown, sessionId, tmux, herdrSession, invoke, access]);
+  }, [shown, sessionId, tmux, zellijSession, herdrSession, invoke, access]);
   useEffect(()=>{
     if(!menu)return;
     if(!shown){setMenu(false);return;}
@@ -179,9 +181,14 @@ export default function AgentView({sessionId, shown, tmux, herdrSession, herdrLa
   // The pane a hook report names, or the pane Herdr reports as focused, is the evidence the composer binds on. A conversation the person
   // picked has none, so its destination stays an explicit confirmation (tmux) or is not offered (Herdr).
   const isLinked = !!selected?.linked;
+  // A Zellij pane is named by the agent's own report, so a conversation picked from the list has it too, unless another report claims the pane.
+  const zellij = zellijSession ? zellijPane(row?.paneId) : undefined;
   const proof:ComposerProof|undefined = tmux && !selected && row?.paneId ? {kind:'tmux',paneId:row.paneId}
+    : zellij && zellij.session === zellijSession && sessions.filter(session => session.paneId === row?.paneId).length === 1 ? {kind:'zellij',session:zellij.session,pane:zellij.pane}
     : isLinked && selected?.conversation.herdr ? {kind:'herdr',pane:selected.conversation.herdr.paneId,terminal:selected.conversation.herdr.terminalId} : undefined;
-  const composerLabels = selected && !isLinked && terminalInput?.backend!=='tmux' ? undefined : terminalInput;
+  // A picked conversation has no destination to confirm under Herdr; under Zellij it takes input only through its own report's pane.
+  const composerLabels = terminalInput?.backend==='zellij' ? (proof?.kind==='zellij' ? terminalInput : undefined)
+    : selected && !isLinked && terminalInput?.backend!=='tmux' ? undefined : terminalInput;
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{
     request.current++;setSelecting(false);setUnavailable(false);
