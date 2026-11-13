@@ -3,8 +3,7 @@ import {isUiLanguage, t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import { xtermOptions } from "./xtermOptions";
-import type { TerminalPreferences } from "./terminalAdapter";
-import type { ITheme, ITerminalOptions } from "@xterm/xterm";
+import type { TerminalPreferences, TerminalTheme } from "./terminalAdapter";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
 import type { UsageBarMode } from "./usageAgentProvider";
 
@@ -12,7 +11,7 @@ export const themes = {
   forest: { background: "#101311", foreground: "#d9e0d6", cursor: "#c4eb89", selectionBackground: "#40543a", black: "#1d231f", red: "#f48781", green: "#b9df83", yellow: "#e4ce8b", blue: "#8caee4", magenta: "#c4a1dd", cyan: "#8ccfc1", white: "#d9e0d6", brightBlack: "#788478", brightRed: "#ffb0a6", brightGreen: "#d0f0a6", brightYellow: "#f3e0ac", brightBlue: "#b1caf0", brightMagenta: "#dfc3ef", brightCyan: "#b0e8de", brightWhite: "#f3f5ee" },
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
-} satisfies Record<string, ITheme>;
+} satisfies Record<string, TerminalTheme>;
 export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "agents", "workspaces", "arrows", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
 export function toolbarKeyLabel(key: ToolbarKey): string {
@@ -285,7 +284,7 @@ export function terminalPreferences(p: Preferences, fontFamily = `${p.fontFamily
   const boldColor = terminalBoldColor(p);
   return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollbackLines: p.scrollback, optionAsMeta: p.optionAsMeta, screenReader: p.screenReader, brightBold: bold !== undefined || legacy, ...(boldColor ? {boldColor} : {}), theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
 }
-export function terminalOptions(p: Preferences, fontFamily?: string): ITerminalOptions {
+export function terminalOptions(p: Preferences, fontFamily?: string) {
   return xtermOptions(terminalPreferences(p, fontFamily));
 }
 export function terminalBoldColor(p: Preferences): string | undefined {

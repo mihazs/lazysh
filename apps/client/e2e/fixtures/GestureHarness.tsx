@@ -2,6 +2,7 @@ import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
 import {createTerminal,type LiveSession} from '../../src/terminal';
+import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import {uiErrorText} from '../../src/i18n/localError';
 import type {MultiplexerKind} from '../../src/bridge';
@@ -26,7 +27,7 @@ export function mountGestureHarness(kind?:MultiplexerKind) {
   host.append(header,body);
   document.body.append(host);
   const terminal=createTerminal();
-  const session:LiveSession={id:'gesture-fixture',hostId:'fixture',name:'Gesture fixture',destination:'fixture',terminal,connected:true,
+  const session:LiveSession={id:'gesture-fixture',hostId:'fixture',name:'Gesture fixture',destination:'fixture',terminal,adapter:new XtermTerminalAdapter(terminal),connected:true,
     ...(kind?{attached:{kind,name:`${kind}-work`}}:{})};
   const steps:string[][]=[],zellij:string[]=[],sessions:string[]=[],errors:string[]=[];
   const app=window.nativeFixtureInvoke;
