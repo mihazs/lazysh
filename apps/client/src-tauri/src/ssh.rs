@@ -3782,6 +3782,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "connection_parity_fixture.rs"]
     mod connection_parity_fixture;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[path = "core_output_fixture.rs"]
+    mod core_output_fixture;
     #[cfg(unix)]
     #[path = "file_download_fixture.rs"]
     mod file_download_fixture;
@@ -6840,11 +6843,25 @@ mod tests {
         openssh_interoperability(OpenSshCheck::Mosh).await;
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[ignore = "requires local OpenSSH sshd and official mosh-server; run explicitly for interoperability"]
+    async fn openssh_and_mosh_deliver_checksummed_output_to_a_core() {
+        openssh_interoperability(OpenSshCheck::CoreOutput).await;
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires OpenSSH and official ET_SERVER_BIN/ET_TERMINAL_BIN; run explicitly"]
     async fn openssh_et_bootstrap_and_control_interoperability() {
         openssh_interoperability(OpenSshCheck::Et).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires OpenSSH and official ET_SERVER_BIN/ET_TERMINAL_BIN; run explicitly"]
+    async fn openssh_et_delivers_checksummed_output_to_a_core() {
+        openssh_interoperability(OpenSshCheck::EtCoreOutput).await;
     }
 
     #[cfg(target_os = "macos")]
@@ -6914,8 +6931,12 @@ mod tests {
         ClientEnvironment,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Mosh,
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        CoreOutput,
         #[cfg(target_os = "linux")]
         Et,
+        #[cfg(target_os = "linux")]
+        EtCoreOutput,
         #[cfg(target_os = "macos")]
         Clipboard,
         TranscriptImages,
@@ -6957,11 +6978,11 @@ mod tests {
     #[cfg(unix)]
     async fn openssh_check(check: OpenSshCheck) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let mosh = matches!(check, OpenSshCheck::Mosh);
+        let mosh = matches!(check, OpenSshCheck::Mosh | OpenSshCheck::CoreOutput);
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let mosh = false;
         #[cfg(target_os = "linux")]
-        let et = matches!(check, OpenSshCheck::Et);
+        let et = matches!(check, OpenSshCheck::Et | OpenSshCheck::EtCoreOutput);
         #[cfg(not(target_os = "linux"))]
         let et = false;
         #[cfg(target_os = "macos")]
@@ -7064,6 +7085,11 @@ mod tests {
             client_environment_fixture::verify(&app.state(), &host, &user_key).await;
             return;
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if matches!(check, OpenSshCheck::CoreOutput) {
+            core_output_fixture::verify(&app, &id).await;
+            return;
+        }
         if matches!(check, OpenSshCheck::AccountUsage) {
             account_usage_fixture::verify(&app, &id, dir.path()).await;
             return;
@@ -7088,6 +7114,11 @@ mod tests {
         }
         if matches!(check, OpenSshCheck::TemporaryAttachments) {
             temporary_attachment_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if matches!(check, OpenSshCheck::EtCoreOutput) {
+            core_output_fixture::verify_et(&app, &id, dir.path()).await;
             return;
         }
         #[cfg(target_os = "linux")]

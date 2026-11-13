@@ -467,6 +467,72 @@ pub(crate) mod tests {
         .validate()
         .is_err());
     }
+    /// A running official `etserver` on a free loopback port; killed, with its terminals, on drop.
+    #[cfg(target_os = "linux")]
+    pub(crate) struct Server {
+        process: std::process::Child,
+        fifo: std::path::PathBuf,
+        terminal: std::path::PathBuf,
+        address: SocketAddr,
+    }
+    #[cfg(target_os = "linux")]
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.process.kill();
+            let _ = self.process.wait();
+            lazysh_common::test_support::terminate_processes_matching(
+                &self.terminal,
+                self.fifo.as_os_str(),
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    impl Server {
+        pub(crate) async fn start(directory: &std::path::Path) -> Self {
+            let server = std::env::var_os("ET_SERVER_BIN")
+                .expect("Set ET_SERVER_BIN to official ET 7.0.0 etserver");
+            let terminal = std::path::PathBuf::from(
+                std::env::var_os("ET_TERMINAL_BIN")
+                    .expect("Set ET_TERMINAL_BIN to official ET 7.0.0 etterminal"),
+            );
+            let fifo = directory.join("et-ssh-test.fifo");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            drop(listener);
+            let process = &mut std::process::Command::new(server);
+            process
+                .arg("--port")
+                .arg(address.port().to_string())
+                .args(["--bindip", "127.0.0.1", "--serverfifo"])
+                .arg(&fifo)
+                .arg("--logdir")
+                .arg(directory)
+                .arg("--logtostdout")
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("SHELL", "/bin/sh")
+                .env("HOME", directory)
+                .env("LANG", "C.UTF-8");
+            let mut server = Self {
+                process: crate::ssh::test_support::spawn_quiet(process),
+                fifo,
+                terminal,
+                address,
+            };
+            crate::ssh::test_support::wait_for_listener(&mut server.process, address, String::new)
+                .await;
+            server
+        }
+
+        /// The connection options that reach this server through its `etterminal`.
+        pub(crate) fn options(&self) -> Options {
+            Options {
+                server_path: self.terminal.to_string_lossy().into_owned(),
+                port: self.address.port(),
+                server_fifo: Some(self.fifo.to_string_lossy().into_owned()),
+            }
+        }
+    }
     #[cfg(target_os = "linux")]
     pub(crate) async fn openssh_interoperability(
         app: &tauri::App<tauri::test::MockRuntime>,
@@ -474,52 +540,7 @@ pub(crate) mod tests {
         directory: &std::path::Path,
     ) {
         use tauri::Manager;
-        struct Server {
-            process: std::process::Child,
-            fifo: std::path::PathBuf,
-            terminal: std::path::PathBuf,
-        }
-        impl Drop for Server {
-            fn drop(&mut self) {
-                let _ = self.process.kill();
-                let _ = self.process.wait();
-                lazysh_common::test_support::terminate_processes_matching(
-                    &self.terminal,
-                    self.fifo.as_os_str(),
-                );
-            }
-        }
-        let server = std::env::var_os("ET_SERVER_BIN")
-            .expect("Set ET_SERVER_BIN to official ET 7.0.0 etserver");
-        let terminal = std::path::PathBuf::from(
-            std::env::var_os("ET_TERMINAL_BIN")
-                .expect("Set ET_TERMINAL_BIN to official ET 7.0.0 etterminal"),
-        );
-        let fifo = directory.join("et-ssh-test.fifo");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        let process = &mut std::process::Command::new(server);
-        process
-            .arg("--port")
-            .arg(address.port().to_string())
-            .args(["--bindip", "127.0.0.1", "--serverfifo"])
-            .arg(&fifo)
-            .arg("--logdir")
-            .arg(directory)
-            .arg("--logtostdout")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("SHELL", "/bin/sh")
-            .env("HOME", directory)
-            .env("LANG", "C.UTF-8");
-        let mut server = Server {
-            process: crate::ssh::test_support::spawn_quiet(process),
-            fifo: fifo.clone(),
-            terminal: terminal.clone(),
-        };
-        crate::ssh::test_support::wait_for_listener(&mut server.process, address, String::new)
-            .await;
+        let server = Server::start(directory).await;
         let invalid = Options {
             server_path: directory
                 .join("missing-helper")
@@ -545,16 +566,11 @@ pub(crate) mod tests {
             }
             Ok(())
         });
-        let options = Options {
-            server_path: terminal.to_string_lossy().into_owned(),
-            port: address.port(),
-            server_fifo: Some(fifo.to_string_lossy().into_owned()),
-        };
         let connected = connect_et(
             access_lease(),
             app.state(),
             parent.clone(),
-            options,
+            server.options(),
             80,
             24,
             events,
