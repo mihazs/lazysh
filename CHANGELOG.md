@@ -229,6 +229,7 @@
 - Add explicitly selected OpenCode recorded Conversation views for V1 and V2 databases, with current tool updates, revert handling and recorded token counters. Records remains the default; recorded history does not establish live agent identity or enable unconfirmed input.
 
 - Preserve owned IME corrections across zero-code Process keys and keep subsequent hardware keypresses ordered and sent once; retain focus, access and unsupported-edit protections.
+- Show a Grok Build plan as the plan chip and card in the Agent view. With the updated host companion, a Grok ACP `plan` update (each one replaces the whole plan) in the conversation view is one plan card with its steps and their state, and the latest one is pinned above the composer like the plan of Claude Code, Codex and OpenCode, instead of a block of labeled text. A plan with a status the card does not know keeps the labeled text. No Grok sub-agent or background-job record shape is verified, so none show. No defaults change.
 
 - Keep owned ASCII forward deletions without key229 synchronized with later terminal suggestions and typing; preserve composition fallback and review for edits outside the locally owned input.
 

@@ -86,6 +86,11 @@ fn questions(input: &Value, multiple: Option<&str>) -> Option<Value> {
     Some(json!({"kind":"question","questions":questions}))
 }
 
+/// A Grok ACP `plan` update, which replaces the whole plan: `entries[{content,status}]`.
+pub(super) fn grok_plan(update: &Value) -> Option<Value> {
+    plan(&update["entries"], "content", &PLAN_STATUSES)
+}
+
 /// Recognized tools that stop the turn until the user answers in the terminal.
 pub(super) fn awaits_answer(agent: TranscriptAgent, name: &str) -> bool {
     matches!(
