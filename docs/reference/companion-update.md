@@ -105,4 +105,4 @@ The app is the trust anchor of an app-driven update. An app sets `LAZYSH_APP_VER
 
 ## Not yet available
 
-The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and the operating system timers of [#1446](https://github.com/mihazs/lazysh/issues/1446) (`auto-update enable|disable`); the checks themselves ship, see [the auto-update reference](companion-settings.md#auto-update-policy).
+The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and the settings page of the app ([#1446](https://github.com/mihazs/lazysh/issues/1446)); the scheduled checks and the operating system timers ship, see [the auto-update reference](companion-settings.md#auto-update-policy).

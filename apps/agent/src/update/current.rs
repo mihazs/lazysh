@@ -91,6 +91,13 @@ fn same_file(left: &Path, right: &Path) -> bool {
         _ => false,
     }
 }
+/// The managed companion's path when it is there: what a timer or a hook is told to run.
+pub fn managed_executable() -> Option<PathBuf> {
+    let path = managed_directory().ok()?.join(NAME);
+    fs::symlink_metadata(&path)
+        .is_ok_and(|metadata| metadata.is_file())
+        .then_some(path)
+}
 /// Is this process the managed copy: the one the app, the hooks and the timers run, and the only one
 /// that updates itself in the background. A development build or a copy on `PATH` is not.
 pub fn running_managed() -> bool {

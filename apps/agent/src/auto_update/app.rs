@@ -271,7 +271,8 @@ fn active_turn(directory: &Path, now: DateTime<Utc>) -> bool {
 /// when it could not run or overran `limit`. A child that writes more than a pipe holds waits for
 /// the limit, which only a broken `update` would make it do.
 fn update_child(args: &[&str], limit: Wait, capture: bool) -> Option<(i32, Vec<u8>)> {
-    let mut child = Command::new(std::env::current_exe().ok()?)
+    let mut command = Command::new(std::env::current_exe().ok()?);
+    command
         .arg("update")
         .args(args)
         .stdin(Stdio::null())
@@ -280,9 +281,11 @@ fn update_child(args: &[&str], limit: Wait, capture: bool) -> Option<(i32, Vec<u
         } else {
             Stdio::null()
         })
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    // CREATE_NO_WINDOW: the runner has no console, and a child that needs one must not open a window.
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000);
+    let mut child = command.spawn().ok()?;
     let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = child.try_wait().ok()? {

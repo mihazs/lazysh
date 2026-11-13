@@ -98,6 +98,8 @@ pub enum Error {
     Relay(&'static str),
     Browser(&'static str),
     Listeners(&'static str),
+    /// `auto-update enable|disable`: a fixed word and, through `exit_code`, the status it exits with.
+    AutoUpdate(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -113,8 +115,21 @@ impl Error {
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
             Self::Browser(kind) | Self::Listeners(kind) => kind,
+            Self::AutoUpdate(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
+        }
+    }
+}
+impl Error {
+    /// The exit status of the process: 1, except for the `auto-update` words the contract names.
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::AutoUpdate("unsafeInstallLocation") => 27,
+            Self::AutoUpdate("policyOff") => 40,
+            Self::AutoUpdate("timerUnsupported") => 41,
+            Self::AutoUpdate("timerFailed") => 42,
+            _ => 1,
         }
     }
 }

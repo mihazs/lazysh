@@ -67,6 +67,8 @@ pub fn recent_check() -> Value {
 pub struct Host {
     pub fixture: Fixture,
     pub old: Vec<u8>,
+    /// Tools of the system the companion may call, ahead of the system's own, when a test stands one in.
+    pub tools: Option<PathBuf>,
 }
 impl Host {
     /// A host that was checked a moment ago, so only a newer app can ask for an update now.
@@ -87,7 +89,11 @@ impl Host {
         let old = old_companion().to_vec();
         fixture.managed_binary(&old);
         fs::write(fixture.root.path().join("ca.pem"), &fixture.server.ca_pem).unwrap();
-        Self { fixture, old }
+        Self {
+            fixture,
+            old,
+            tools: None,
+        }
     }
     pub fn due() -> Self {
         Self::due_with(&[release_of(NEW, &companion(NEW))])
@@ -123,6 +129,9 @@ impl Host {
         ];
         if let Some(app) = app {
             environment.push(("LAZYSH_APP_VERSION", app.to_owned()));
+        }
+        if let Some(tools) = &self.tools {
+            environment.push(("PATH", format!("{}:/usr/bin:/bin", path(tools.clone()))));
         }
         environment
     }
