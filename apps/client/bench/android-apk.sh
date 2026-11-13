@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds a throwaway benchmark APK from src/**/*.java with the Android SDK command-line tools, no Gradle (#1323). The manifest is
-# generated: one launcher activity; NETWORK=1 adds the INTERNET permission and cleartext traffic (a WebView loading the benchmark server).
+# generated: one launcher activity that handles every configuration change itself (the display of a shared Waydroid guest is resized by other users); NETWORK=1 adds the INTERNET permission and cleartext traffic (a WebView loading the benchmark server).
 # Usage: android-apk.sh <app-dir> <package> <activity> <sdk> <jdk> <out.apk> [assets-dir]
 set -eu
 APP=$(cd "$1" && pwd); PKG=$2; ACTIVITY=$3; SDK=$4; JDK=$5; OUT=$6; ASSETS=${7:-}
@@ -15,7 +15,7 @@ cat > "$W/AndroidManifest.xml" <<XML
     <uses-sdk android:minSdkVersion="31" android:targetSdkVersion="33" />
     $PERMISSION
     <application android:label="${PKG##*.}" android:debuggable="true" android:hardwareAccelerated="true" $CLEARTEXT>
-        <activity android:name=".$ACTIVITY" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
+        <activity android:name=".$ACTIVITY" android:exported="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|keyboard|keyboardHidden|navigation|fontScale|layoutDirection|locale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
