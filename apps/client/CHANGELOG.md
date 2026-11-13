@@ -1,5 +1,23 @@
 # @lazysh/client
 
+## 1.56.0
+
+### Minor Changes
+
+- 00c3e7d: Fold the thinking of each turn into one timed **Thought for N s** row in the Agent view.
+- 00c3e7d: Show Claude Code goal, plan-mode, recap and hook-failure records and Codex goal and compaction records as compact event lines in the Agent view.
+- 87bb9c3: Say in the Agent view when a Claude permission request was answered in the terminal first, and send nothing for a tap on a request the host no longer lists.
+- 87bb9c3: Offer the permission updates Claude Code suggests (allow and remember a rule, switch mode, add folders) in the approval card and the Agent view, each behind a confirmation that shows the exact rule and where it is kept, and let a denial carry a message the agent reads.
+
+### Patch Changes
+
+- 6650427: Fix Back leaving the app and the phone gestures losing the system gesture zones after Android recreates the app's window (a navigation-style switch, for example). The Back handler and the gesture plugin are rebound to the new window, and the launcher icon, keyboard, file and background-session plugins act on it too.
+- @lazysh/account-usage@1.56.0
+  - @lazysh/common@1.56.0
+  - @lazysh/display-idle@1.56.0
+  - @lazysh/et-transport@1.56.0
+  - @lazysh/mosh-transport@1.56.0
+
 ## 1.55.0
 
 ### Minor Changes

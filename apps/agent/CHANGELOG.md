@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.56.0
+
+### Minor Changes
+
+- 00c3e7d: Show Claude Code goal, plan-mode, recap and hook-failure records and Codex goal and compaction records as compact event lines in the Agent view.
+- 87bb9c3: Offer the permission updates Claude Code suggests (allow and remember a rule, switch mode, add folders) in the approval card and the Agent view, each behind a confirmation that shows the exact rule and where it is kept, and let a denial carry a message the agent reads.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.56.0
+  - @lazysh/common@1.56.0
+  - @lazysh/notification-client@1.56.0
+
 ## 1.55.0
 
 ### Patch Changes
