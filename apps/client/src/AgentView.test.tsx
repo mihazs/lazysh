@@ -823,6 +823,11 @@ describe('OpenCode pane',()=>{
     expect(card.textContent).toContain('cat notes.txt');
     expect(card.querySelector('[aria-label="Output"]')!.textContent).toBe('hello');
     expect(screen.getAllByText('hello').length).toBeGreaterThan(1);
+    // The footer facts the companion read from the same database: the model and the context in use; the default `build` agent is no pill.
+    const header=screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
+    expect(header.textContent).toContain('big-pickle');
+    expect(header.textContent).toContain('15K tokens used');
+    expect(header.querySelector('[data-mode]')).toBeNull();
   });
 
   it('sends the prompt through the guarded input with its database session, and Stop is two Escapes a moment apart',async()=>{

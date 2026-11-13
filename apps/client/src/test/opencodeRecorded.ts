@@ -10,7 +10,8 @@ export const opencodePage = {agent: 'opencode', branchId: opencodeSession, hasMo
     usage: {cacheReadTokens: 1792, cacheWriteTokens: 0, inputTokens: 3568, outputTokens: 3}}]};
 /** A second real OpenCode 2.2.7 session in which its free model ran one shell command (`cat notes.txt`), read the same way. */
 export const opencodeToolSession = 'ses_e2b12bce3ffegHavmv3jQvfgV3';
-export const opencodeToolPage = {agent: 'opencode', branchId: opencodeToolSession, hasMore: false, nextOffset: 0, schemaVersion: 1, truncated: false, view: 'active_branch', messages: [
+export const opencodeToolPage = {agent: 'opencode', branchId: opencodeToolSession, hasMore: false, nextOffset: 0, schemaVersion: 1, truncated: false, view: 'active_branch',
+  session: {cost: {usd: 0}, folder: 'work', mode: 'build', model: 'big-pickle', usage: {usedTokens: 14912}}, messages: [
   {blocks: [{text: 'Use the bash tool to run: cat notes.txt  Then reply with the file content only.', type: 'text'}], id: 'msg_1d4ed435b001d0aj7WrXVgV65i', role: 'user', timestamp: '2026-11-13T12:41:21.576+00:00'},
   {blocks: [
     {id: 'call_48a3aa1a0096451c826f53ca', name: 'shell', status: 'completed', text: '{"command":"cat notes.txt"}', type: 'tool_use'},
