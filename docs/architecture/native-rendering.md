@@ -46,7 +46,7 @@ The review changed the API in these ways: a statistics record with bytes uploade
 | Candidate | Why considered | Known unknowns (all unmeasured) |
 | --- | --- | --- |
 | Current xterm.js DOM renderer | Baseline and fallback | CPU, memory, energy, idle activity |
-| Optimized xterm.js (WebGL or canvas renderer, binary IPC) | Cheapest possible improvement; no new composition risk | Gain size; interaction with the version-pinned bold-color seam (`terminalBold.ts` reaches into the DOM renderer's row factory) |
+| Optimized xterm.js (WebGL or canvas renderer, binary IPC) | Cheapest possible improvement; no new composition risk | Measured on one desktop Chromium host only ([shootout](terminal-benchmarks.md#renderer-shootout-xtermjs-renderers-1323)): the WebGL addon on hardware GL is on par with DOM for plain output and much cheaper for ANSI-heavy output but has worse W3 frame pacing; the canvas addon is far slower; software GL is unusable. The bold-color seam is refused on both addons. Android: unmeasured |
 | wgpu (Vulkan on Android and Linux, Metal on Apple, D3D12 on Windows) | One renderer in Rust shared with the core | Android driver quality, binary size, idle wakeups, shaping and font fallback effort |
 | Native drawing (Skia or Canvas, especially Android) | Platform-tuned text drawing and fonts | Cross-platform reuse, Rust integration cost |
 | WASM terminal in the WebView | Keeps DOM composition and removes JS parsing | JS bridge still carries bytes; GPU access from WebView |

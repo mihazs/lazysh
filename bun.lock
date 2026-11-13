@@ -69,6 +69,8 @@
         "@wdio/mocha-framework": "10.1.0",
         "@wdio/spec-reporter": "10.1.0",
         "@wdio/types": "10.1.0",
+        "@xterm/addon-canvas": "0.7.0",
+        "@xterm/addon-webgl": "0.18.0",
         "appium": "3.9.0",
         "appium-uiautomator2-driver": "8.7.3",
         "eslint": "10.14.0",
@@ -780,7 +782,11 @@
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.9.12", "", {}, "sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A=="],
 
+    "@xterm/addon-canvas": ["@xterm/addon-canvas@0.7.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-LF5LYcfvefJuJ7QotNRdRSPc9YASAVDeoT5uyXS/nZshZXjYplGXRECBGiznwvhNL2I8bq1Lf5MzRwstsYQ2Iw=="],
+
     "@xterm/addon-fit": ["@xterm/addon-fit@0.10.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ=="],
+
+    "@xterm/addon-webgl": ["@xterm/addon-webgl@0.18.0", "", { "peerDependencies": { "@xterm/xterm": "^5.0.0" } }, "sha512-xCnfMBTI+/HKPdRnSOHaJDRqEpq2Ugy8LEj9GiY4J3zJObo3joylIFaMvzBwbYRg8zLtkO0KQaStCeSfoaI2/w=="],
 
     "@xterm/xterm": ["@xterm/xterm@5.5.0", "", {}, "sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A=="],
 
