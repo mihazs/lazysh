@@ -932,3 +932,73 @@ fn a_long_queue_keeps_its_first_entries_and_bounds_each_text() {
     assert!(page.queued[0]["text"].as_str().unwrap().len() <= 4096);
     assert!(page.queued[0]["text"].as_str().unwrap().starts_with("0世"));
 }
+
+#[test]
+fn history_command_lists_one_folder_and_honors_the_discovery_setting() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("projects");
+    let state = directory.path().join("companion-state");
+    fs::create_dir_all(root.join("-work-app")).unwrap();
+    fs::create_dir_all(root.join("-work-other")).unwrap();
+    write(
+        &root.join("-work-app/11111111-1111-4111-8111-111111111111.jsonl"),
+        &[
+            json!({"type":"user","cwd":"/work/app","message":{"content":"SECRET prompt"}}),
+            json!({"type":"ai-title","aiTitle":"Fix the build"}),
+        ],
+    );
+    write(
+        &root.join("-work-other/22222222-2222-4222-8222-222222222222.jsonl"),
+        &[json!({"type":"user","cwd":"/work/other"})],
+    );
+    let run = |folder: &str| {
+        Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+            .env("LAZYSH_STATE_DIR", &state)
+            .args(["history", "--agent", "claude", "--folder", folder, "--root"])
+            .arg(&root)
+            .output()
+            .unwrap()
+    };
+    let output = run("/work/app");
+    assert!(output.status.success());
+    let page: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(page["sessions"][0]["title"], "Fix the build");
+    assert_eq!(
+        page["sessions"][0]["sessionId"],
+        "11111111-1111-4111-8111-111111111111"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("SECRET"));
+    assert!(!run("relative/path").status.success());
+    // Turning transcript discovery off turns the list off with it.
+    let settings = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", &state)
+        .args(["settings", "show"])
+        .output()
+        .unwrap();
+    let revision = serde_json::from_slice::<Value>(&settings.stdout).unwrap()["revision"]
+        .as_u64()
+        .unwrap();
+    let off = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", &state)
+        .args([
+            "settings",
+            "update",
+            "--expected-revision",
+            &revision.to_string(),
+            "--transcript-discovery-enabled",
+            "false",
+            "--recorded-usage-enabled",
+            "true",
+            "--device-tools-enabled",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        off.status.success(),
+        "{}",
+        String::from_utf8_lossy(&off.stderr)
+    );
+    assert!(!run("/work/app").status.success());
+}

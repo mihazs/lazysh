@@ -3,11 +3,8 @@ use super::window::Window;
 use super::{Error, Result, TranscriptAgent, TranscriptPage};
 use std::path::{Path, PathBuf};
 
-fn session_root(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
-    let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
-    if parsed.to_string() != id {
-        return Err(Error::InvalidArgument);
-    }
+/// The directory the agent keeps its own sessions in: its configured home, else the default one.
+pub(super) fn provider_root(agent: TranscriptAgent) -> Result<PathBuf> {
     let (variable, fallback, child) = match agent {
         TranscriptAgent::Claude => ("CLAUDE_CONFIG_DIR", ".claude", "projects"),
         TranscriptAgent::Codex => ("CODEX_HOME", ".codex", "sessions"),
@@ -18,6 +15,14 @@ fn session_root(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
         .or_else(|| dirs::home_dir().map(|path| path.join(fallback)))
         .ok_or(Error::InvalidArgument)?;
     Ok(home.join(child))
+}
+
+fn session_root(agent: TranscriptAgent, id: &str) -> Result<PathBuf> {
+    let parsed = uuid::Uuid::parse_str(id).map_err(|_| Error::InvalidArgument)?;
+    if parsed.to_string() != id {
+        return Err(Error::InvalidArgument);
+    }
+    provider_root(agent)
 }
 
 pub fn read_herdr_conversation(

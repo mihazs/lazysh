@@ -476,8 +476,8 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
           agent_session:{source:'herdr:claude',agent:'claude',kind:'id',value:`0000000${index}-0000-4000-8000-000000000000`}}))};
     };
     const reports=Array.from({length:50},(_,index)=>({sessionId:`ended-${index}`,agent:'Claude Code',project:`/home/owner/old-${index}`,state:'done',updatedAt:new Date().toISOString(),summary:'Session ended',paneId:null,eventCount:3}));
-    type Fixture={conversations:unknown[];entered:unknown[];focus:string;inputs:unknown[];inputError?:unknown};
-    (window as unknown as {herdrFixture:Fixture}).herdrFixture={conversations:[],entered:[],focus:start.focus??'',inputs:[]};
+    type Fixture={conversations:unknown[];entered:unknown[];focus:string;inputs:unknown[];history:unknown[];inputError?:unknown};
+    (window as unknown as {herdrFixture:Fixture}).herdrFixture={conversations:[],entered:[],history:[],focus:start.focus??'',inputs:[]};
     const record=(window as unknown as {herdrFixture:Fixture}).herdrFixture;
     window.nativeFixtureInvoke=async(command,args)=>{
       const base=window.agentViewBase(command);if(base)return base.value;
@@ -496,6 +496,14 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
         return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:rich?richConversation:[
           {id:'p',role:'user',blocks:[{type:'text',text:'Explain the build'}]},{id:'t',role:'assistant',blocks:[{type:'tool_use',name:'Bash',text:'ls'}]},{id:'a',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.'}]}]};
       }
+      // Earlier sessions of the focused pane's folder, and one of them as a recorded conversation.
+      if(command==='agent_history'){
+        (record as unknown as {history:unknown[]}).history.push(args);
+        return {schemaVersion:1,agent:args.agent,sessions:args.agent==='claude'?[{agent:'claude',sessionId:'11111111-1111-4111-8111-111111111111',title:'Add dark mode',modifiedAt:new Date(Date.now()-3600_000).toISOString(),bytes:900,
+          path:'/home/owner/.claude/projects/-home-owner-dev-project-0/11111111-1111-4111-8111-111111111111.jsonl'}]:[]};
+      }
+      if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+        {id:'ep',role:'user',blocks:[{type:'text',text:'Earlier prompt'}]},{id:'ea',role:'assistant',blocks:[{type:'text',text:'Earlier answer'}]}]};
       if(command==='multiplexer_tree')return {tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.3',support:start.launch?'full':'navigationOnly',missing:[]}],sessions:[]};
       throw new Error(`Unexpected Agent view fixture command: ${command}`);
     };
@@ -749,6 +757,31 @@ test('Herdr: with no agent running the Agent view offers to start one through th
   await expect(dialog.getByRole('radio',{name:'Yes, start an agent'})).toBeChecked();
   await dialog.getByRole('button',{name:'Cancel'}).click();
   expect((await herdrFixture(page)).entered).toEqual([]);
+});
+
+test('Herdr: the earlier sessions of the pane folder open read-only, and Resume stages the agent command in the terminal for review',async({page})=>{
+  await openHerdr(page,true,false,{focus:'w0:p2',agents:0,launch:true});
+  const agent=agentView(page);
+  await page.evaluate(()=>{const drafts:unknown[]=[];(window as unknown as {drafts:unknown[]}).drafts=drafts;window.addEventListener('lazysh-prompt-draft',event=>drafts.push((event as CustomEvent).detail));});
+  await agent.getByRole('button',{name:'Earlier sessions',exact:true}).click();
+  const list=agent.getByRole('region',{name:'Earlier sessions in this folder',exact:true});
+  const open=list.getByRole('button',{name:/^Claude Code · Add dark mode · /});
+  await expect(open).toBeVisible();
+  // The development server mounts effects twice; the set of requests is what counts.
+  expect([...new Set((await page.evaluate(()=>(window as unknown as {herdrFixture:{history:unknown[]}}).herdrFixture.history)).map(call=>JSON.stringify(call)))].map(call=>JSON.parse(call))).toEqual([
+    {sessionId:'display-owned',agent:'claude',folder:'/home/owner/dev/project-0'},{sessionId:'display-owned',agent:'codex',folder:'/home/owner/dev/project-0'}]);
+  const box=(await list.boundingBox())!,view=page.viewportSize()!;
+  expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(view.width);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await open.click();
+  await expect(agent.getByText('Earlier answer',{exact:true})).toBeVisible();
+  // A past session is read, not driven: no composer, no Not-this-pane marker.
+  await expect(agent.getByRole('textbox')).toHaveCount(0);
+  await expect(agent.locator('header')).toContainText('Claude Code · Add dark mode');
+  await expect(agent.locator('header')).not.toContainText('Not this pane');
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await agent.getByRole('button',{name:'Resume in the terminal',exact:true}).click();
+  expect(await page.evaluate(()=>(window as unknown as {drafts:unknown[]}).drafts)).toEqual([{sessionId:'display-owned',text:'claude --resume 11111111-1111-4111-8111-111111111111'}]);
 });
 
 test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
