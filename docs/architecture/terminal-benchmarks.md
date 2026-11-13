@@ -319,6 +319,39 @@ What this says, and does not say:
 - IPC calls per MB: the native path issues none per chunk (credits are returned inside Rust after VT processing). The xterm path issues one `ack_output` per `write` callback, so at the 16 KiB maximum chunk that is at most 64 calls per MiB by construction; the actual count depends on how the transports chunk, and was not measured.
 - With several sessions the p99 credit latency is 3 to 4 times the p95 (up to 16 ms with 10 sessions on one worker). The cause was not investigated; shared-host scheduling of the producer and worker threads is a candidate, queueing behind other sessions' windows is another.
 
+### Renderer pipeline cost (host microbenchmark, not a candidate)
+
+Measured with `cargo run --release --example render_bench` in `packages/terminal-runtime` ([#1322](https://github.com/mihazs/lazysh/issues/1322)). It adds the stages above the VT, one at a time, to the same kind of 16 KiB feed as the parse benchmark: `take_frame`, the renderer-side `Screen::apply` plus its dirty-row query, and the CPU reference renderer's draw and present. Frames are taken either after every 16 KiB chunk or once per 256 KiB of output (the credit window, the most that can be in flight); the second is what a renderer that draws once per display refresh sees at best. The reference renderer is a correctness vehicle with a dot-pattern glyph and no font; its row is the cost of a software renderer, not of a candidate. Every reference run ends by checking that its incrementally drawn image equals a full repaint of the final screen. No transport, JS bridge, GPU or device is involved, and none of this may be compared with the xterm.js baseline: its generators are not W2 to W4.
+
+Environment: AMD Ryzen 9 5900X (24 threads), Linux 7.3.3, rustc 1.96.1 release profile, libghostty-vt from the vendored Ghostty commit `44f2a44df` built with Zig 0.16.0 `ReleaseFast`, x86_64. Host load average at start 13.3 (1 minute); other agents shared the machine, so absolute figures move between runs: four runs at load averages 1.1, 6.3, 7.7 and 13.3 gave 618, 656, 702 and 680 MiB/s for VT-only plain text at 80x24 (a 14 % spread), and the table is the last one, taken with the final code ([raw output](benchmarks/terminal-render-bench-1.txt)). A fifth run of the same code rebased on a later `main` (load average 14.1, same host and toolchain) is committed as [raw output](benchmarks/terminal-render-bench-2.txt): its cells agree with the table within the run-to-run spread above (for example 80x24 plain text per chunk: 638, 78.0, 66.6 and 14.3 MiB/s against 680, 78.4, 69.6 and 14.8), and its reference stage passed the incremental-equals-full-repaint check. 16 MiB per workload, 5 runs, MiB/s median with minimum and maximum. Grids are 80x24 and 152x38 (the desktop baseline geometry); the redraw fixture repaints 24 rows of 80 columns, so it touches 24 rows on either grid.
+
+| grid | workload | frame cadence | VT only | + take_frame | + Screen::apply | + reference draw and present | frames | rows drawn | MiB uploaded |
+|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 680.1 (457.4 to 690.2) | 78.4 (76.5 to 79.9) | 69.6 (66.6 to 70.8) | 14.8 (14.8 to 15.1) | 1024 | 24576 | 720.0 |
+| 80x24 | plain text | per window | 683.0 (630.9 to 686.5) | 462.0 (452.6 to 470.3) | 439.5 (406.5 to 444.6) | 179.1 (172.6 to 180.9) | 64 | 1536 | 45.0 |
+| 80x24 | ANSI + truecolor | per chunk | 71.8 (70.9 to 73.4) | 44.7 (43.3 to 45.4) | 41.5 (41.1 to 42.2) | 18.9 (18.5 to 19.2) | 1024 | 24576 | 720.0 |
+| 80x24 | ANSI + truecolor | per window | 73.3 (72.1 to 73.4) | 70.8 (69.2 to 71.3) | 69.8 (68.7 to 70.7) | 61.4 (60.7 to 63.4) | 64 | 1536 | 45.0 |
+| 80x24 | full-screen redraw | per chunk | 402.7 (393.3 to 403.4) | 68.2 (66.7 to 68.3) | 61.6 (61.3 to 61.8) | 21.9 (21.7 to 22.0) | 1024 | 24576 | 720.0 |
+| 80x24 | full-screen redraw | per window | 402.3 (395.0 to 404.1) | 303.0 (272.5 to 311.0) | 298.0 (276.1 to 298.7) | 188.5 (187.3 to 191.5) | 64 | 1536 | 45.0 |
+| 80x24 | CJK/emoji/combining | per chunk | 66.6 (62.4 to 71.6) | 42.3 (41.7 to 43.4) | 39.8 (39.3 to 40.4) | 16.0 (15.8 to 16.1) | 1024 | 24576 | 720.0 |
+| 80x24 | CJK/emoji/combining | per window | 70.2 (68.1 to 71.9) | 65.9 (63.6 to 67.1) | 68.0 (66.1 to 68.3) | 54.6 (52.8 to 57.7) | 64 | 1536 | 45.0 |
+| 152x38 | plain text | per chunk | 556.7 (524.9 to 574.1) | 35.1 (34.5 to 35.6) | 30.9 (30.4 to 31.1) | 6.7 (6.2 to 7.0) | 1024 | 38912 | 2166.0 |
+| 152x38 | plain text | per window | 565.9 (505.0 to 613.6) | 304.3 (293.4 to 307.5) | 277.5 (270.8 to 281.8) | 89.5 (86.6 to 92.9) | 64 | 2432 | 135.4 |
+| 152x38 | ANSI + truecolor | per chunk | 47.9 (45.9 to 49.5) | 22.5 (21.7 to 22.9) | 20.8 (20.6 to 21.4) | 7.5 (5.4 to 8.1) | 1024 | 38912 | 2166.0 |
+| 152x38 | ANSI + truecolor | per window | 47.6 (46.3 to 49.5) | 37.9 (29.0 to 43.3) | 36.6 (34.3 to 45.8) | 31.7 (25.3 to 36.1) | 64 | 2432 | 135.4 |
+| 152x38 | full-screen redraw | per chunk | 324.0 (247.7 to 397.4) | 45.5 (37.4 to 48.4) | 41.6 (37.5 to 43.9) | 14.4 (13.7 to 14.4) | 1024 | 24590 | 1368.8 |
+| 152x38 | full-screen redraw | per window | 393.0 (307.1 to 405.4) | 267.3 (230.8 to 274.1) | 259.9 (226.5 to 266.7) | 144.7 (142.7 to 146.1) | 64 | 1550 | 86.3 |
+| 152x38 | CJK/emoji/combining | per chunk | 41.7 (36.2 to 42.6) | 20.7 (19.7 to 21.0) | 19.6 (19.4 to 19.9) | 7.1 (7.0 to 7.2) | 1024 | 38912 | 2166.0 |
+| 152x38 | CJK/emoji/combining | per window | 42.1 (40.6 to 42.4) | 39.0 (37.7 to 39.7) | 39.1 (38.3 to 39.3) | 31.8 (31.7 to 32.3) | 64 | 2432 | 135.4 |
+
+What this says, and does not say:
+
+- **Making a frame costs several times what parsing does.** For plain text on 80x24 the VT alone ran at 680 MiB/s and 78 MiB/s with a frame after every chunk; at 152x38, 557 against 35. Plain text and redraws, which parse fast, lose 83 to 94 % of their throughput; style-heavy and Unicode-heavy output parses slowly (42 to 73 MiB/s) and loses 36 to 53 %. The owned `String` per cell of `Frame` is the likely cause, which this run did not isolate; [#1337](https://github.com/mihazs/lazysh/issues/1337) owns the compact format.
+- **Taking one frame per 256 KiB instead of per 16 KiB recovers most of it** for plain text (78 to 462 MiB/s at 80x24) and redraws (68 to 303). A renderer scheduled once per display refresh therefore matters more than the renderer implementation for output bursts.
+- **`Screen::apply` is a small addition** (from within noise to 12 % below the frame-only figure), but it copies every dirty row's cells once more.
+- **The CPU reference renderer** adds a further factor of 1.1 to 4.7 over `Screen::apply` and uploads (copies) whole pixel rows: with a frame per chunk each of the 1024 frames redraws every row of a scrolling screen, 720 MiB copied for 16 MiB of text at 80x24. It is not a performance candidate and no GPU or font cost is represented.
+- Nothing here says which renderer wins on any device.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.
