@@ -26,3 +26,32 @@ export function companionUpdateRow(update: CompanionUpdate): 'running' | 'done' 
     case 'skipped': return update.reason === 'policyOff' || update.reason === 'policyNotify' ? 'off' : update.reason === 'activeTurn' ? 'waiting' : undefined;
   }
 }
+
+/** Strict `X.Y.Z` comparison: a negative number when `a` is older than `b`; `undefined` unless both parse. */
+export function compareVersions(a: string, b: string): number | undefined {
+  if (!version.test(a) || !version.test(b)) return undefined;
+  const [x, y] = [a, b].map(value => value.split('.').map(Number));
+  return x.map((part, index) => part - y[index]).find(difference => difference !== 0) ?? 0;
+}
+
+/** What the user decided, once, for a host whose companion cannot update itself. `undefined` is "ask". */
+export type Consent = 'always' | 'never';
+const consentKey = 'lazysh.companion-update-consent.v1';
+export const consentEvent = 'lazysh-companion-consent';
+function readConsents(): Record<string, Consent> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(consentKey) ?? '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([host, choice]) => host.length <= 256 && (choice === 'always' || choice === 'never'))) as Record<string, Consent>;
+  } catch { return {}; }
+}
+export function readConsent(host: string): Consent | undefined { return readConsents()[host]; }
+export function writeConsent(host: string, choice: Consent | undefined) {
+  try {
+    const all = readConsents();
+    if (choice) all[host] = choice; else delete all[host];
+    const entries = Object.entries(all).slice(-200);
+    localStorage.setItem(consentKey, JSON.stringify(Object.fromEntries(entries)));
+  } catch { /* A browser without storage asks again next time. */ }
+  window.dispatchEvent(new CustomEvent(consentEvent, {detail: {host}}));
+}

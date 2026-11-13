@@ -139,6 +139,50 @@ pub(crate) async fn exec(
 ) -> Result<String> {
     ssh::exec_for_access(session, command(session, original, lease).await?, lease).await
 }
+/// What the app knows of the host's companion before it asks to change it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Version {
+    schema_version: u8,
+    /// `X.Y.Z` of `lazysh-agent --version`; none when there is no companion or it did not answer.
+    version: Option<String>,
+    /// A positively identified Unix shell: the only kind of host the app sends its version to and
+    /// can install a companion on.
+    unix: bool,
+}
+fn parse_version(text: &str) -> Option<String> {
+    let version = text.trim().strip_prefix("lazysh-agent ")?;
+    release::version(version).map(|_| version.to_owned())
+}
+#[tauri::command]
+pub async fn companion_version(
+    state: State<'_, AppState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<Version>, GuardedError<SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let Some(unix) = resolve::detect(&session, &access).await? else {
+                return Ok(Version {
+                    schema_version: 1,
+                    version: None,
+                    unix: false,
+                });
+            };
+            // A host without a companion, or one that does not answer, simply has no version.
+            let answer =
+                ssh::exec_for_access(&session, unix.command("lazysh-agent --version")?, &access)
+                    .await
+                    .ok();
+            Ok(Version {
+                schema_version: 1,
+                version: answer.as_deref().and_then(parse_version),
+                unix: true,
+            })
+        })
+        .await
+}
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Stage {
@@ -417,5 +461,28 @@ mod probe_tests {
             .unwrap()
             .is_some());
         assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::parse_version;
+    #[test]
+    fn only_a_strict_companion_version_line_is_a_version() {
+        assert_eq!(
+            parse_version("lazysh-agent 1.28.0\n").as_deref(),
+            Some("1.28.0")
+        );
+        for text in [
+            "",
+            "lazysh-agent",
+            "lazysh-agent 1.28",
+            "lazysh-agent 01.28.0",
+            "lazysh-agent 1.28.0-dev",
+            "other 1.28.0",
+            "lazysh-agent 1.28.0 extra",
+        ] {
+            assert_eq!(parse_version(text), None, "{text:?}");
+        }
     }
 }

@@ -190,6 +190,7 @@
     "allow-check-companion-update",
     "allow-install-managed-herdr",
     "allow-remove-managed-herdr",
+    "allow-companion-version",
     "allow-companion-hooks",
     "allow-companion-hook-discovery",
     "allow-get-companion-settings",

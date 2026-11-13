@@ -227,4 +227,8 @@ What it does not detect, which therefore notifies as before:
 
 The schema is strict like `settings.json`: another schema version, an unknown field or policy, and a file above 4 KiB are refused, and a policy that cannot be read blocks app-driven updates (`reason: "policyUnreadable"`); it is never replaced by the default. `status` also prints `appUpdate`, the record in `app-update.json` (`state`, `from`, `to`, `reason`, `failures`, `notBefore`, `blocked`), which the runner owns.
 
+## The first-time question
+
+`companion_version` (a Tauri command guarded by the app lock like the other host commands) runs `lazysh-agent --version` through the managed-executable resolver and returns `{schemaVersion: 1, version, unix}`: `version` is `X.Y.Z` or `null` (no companion, or no answer), and `unix` says whether the host is a positively identified Linux or macOS shell. The app asks the question only when `unix` is true, the version is strictly lower than the app's, and the `snapshot` reply carried no `update` field (a companion that sends one updates itself and has its policy as its consent). The answer (`always` or `never`, per host key) is kept in this device's browser storage under `lazysh.companion-update-consent.v1`; if storage is unavailable the app asks again. **Always** runs the same `install_companion` flow as **Update companion**.
+
 Related: [change host settings](../companion-settings.md) · [companion event storage](companion-events.md) · [documentation](../README.md).

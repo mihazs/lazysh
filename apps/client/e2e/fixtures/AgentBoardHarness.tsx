@@ -9,12 +9,15 @@ export function mountAgentBoard(host?:{key:string;label:string}){
   let hostBrowser={schemaVersion:1,revision:0,hostBrowserEnabled:false};
   let reports=[agentBoardRecord];
   let update:{state:string;from:string;to:string;reason?:string}|undefined;
+  let companion:string|undefined;
   const approval=agentApproval();let decided=false;let finish!:(value:unknown)=>void;
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic agent board authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
   acknowledgeAccessReady(accessSnapshot().epoch);
-  Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:unknown)=>{
+  Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:unknown)=>{
     calls.push({command,args});
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:reports,...(update?{update}:{})};
+    if(command==='companion_version')return {schemaVersion:1,version:companion??null,unix:true};
+    if(command==='install_companion'){companion=undefined;return {};}
     if(command==='agent_approvals')return {schemaVersion:1,requests:decided?[]:[approval]};
     if(command==='get_companion_settings')return companionSettings;
     if(command==='get_notification_policy')return notificationPolicy;
@@ -28,5 +31,5 @@ export function mountAgentBoard(host?:{key:string;label:string}){
   const container=document.createElement('div');container.className='agent-board-fixture';
   Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
   const root=createRoot(container);root.render(<AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/>);
-  return {calls,setReports(rows:typeof reports){reports=rows;},setUpdate(next?:typeof update){update=next;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
+  return {calls,setReports(rows:typeof reports){reports=rows;},setUpdate(next?:typeof update){update=next;},setCompanionVersion(next?:string){companion=next;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
 }

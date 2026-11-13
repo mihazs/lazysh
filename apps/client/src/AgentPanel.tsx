@@ -12,6 +12,7 @@ import type {ReportedSessionSource} from './HerdrSessionDetails';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import CompanionUpdateRow from './CompanionUpdateRow';
+import CompanionUpdateConsent,{CompanionConsentSetting} from './CompanionUpdateConsent';
 import {companionUpdatedEvent,parseCompanionUpdate,type CompanionUpdate} from './companionUpdate';
 import CompanionInstallPanel from './CompanionInstallPanel';
 import CompanionHooksPanel from './CompanionHooksPanel';
@@ -225,11 +226,13 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     {merged ? <AllHostsBoard hosts={peers} visible={panelVisible && activityVisible} onOpen={()=>setScope('host')}/> : <>
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><SearchField query={query} onChange={setQuery}/><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
     {ready && !error && companionUpdate && <CompanionUpdateRow update={companionUpdate}/>}
+    <CompanionUpdateConsent sessionId={sessionId} host={archiveHost} ready={ready && !error && !local} companionReplied={!!companionUpdate} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t(local?'agentsSetupLocal':'agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
       <h3>{t('agentsSetupAction')}</h3>
       <p className="agent-note">{t('agentsReportedHint')}</p>
       <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
+      <CompanionConsentSetting host={archiveHost}/>
       {local?<p className="agent-note" data-companion-source={companionSource}>{companionSource?t('companionLocalSource',{source:t(companionSourceLabels[companionSource])}):t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>}
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
       {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={panelVisible && !error} />}
