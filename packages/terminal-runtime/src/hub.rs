@@ -199,6 +199,8 @@ struct Cell {
     replies_written: AtomicU64,
     replies_dropped: AtomicU64,
     input_refused: AtomicU64,
+    /// Typing or pasting returns a scrolled-back viewport to the live screen (xterm's `scrollOnUserInput`).
+    scroll_on_user_input: AtomicBool,
 }
 
 impl Cell {
@@ -371,6 +373,7 @@ impl Hub {
             replies_written: AtomicU64::new(0),
             replies_dropped: AtomicU64::new(0),
             input_refused: AtomicU64::new(0),
+            scroll_on_user_input: AtomicBool::new(true),
         });
         registry.sessions.insert(id, Arc::clone(&cell));
         Ok(Session { cell })
@@ -520,8 +523,14 @@ impl Session {
         Ok(self.with(|runtime| runtime.take_frame())??)
     }
 
+    /// Whether typing or pasting returns a viewport scrolled into history to the live screen
+    /// (default true, like xterm.js's `scrollOnUserInput`). Mouse and focus reports never do.
+    pub fn set_scroll_on_user_input(&self, enabled: bool) {
+        self.cell.scroll_on_user_input.store(enabled, Relaxed);
+    }
+
     pub fn send_key(&self, input: &KeyInput) -> Result<usize, SessionError> {
-        self.send(|runtime| runtime.encode_key(input))
+        self.send_typed(|runtime| runtime.encode_key(input))
     }
 
     pub fn send_mouse(&self, input: MouseInput) -> Result<usize, SessionError> {
@@ -530,12 +539,34 @@ impl Session {
 
     /// Bracketed only when the program enabled it; pasted text can never close its own bracket.
     pub fn send_paste(&self, text: &str) -> Result<usize, SessionError> {
-        self.send(|runtime| runtime.encode_paste(text))
+        self.send_typed(|runtime| runtime.encode_paste(text))
     }
 
     /// Focus in/out report, sent only while the program enabled focus events (mode 1004).
     pub fn send_focus(&self, focused: bool) -> Result<usize, SessionError> {
         self.send(|runtime| runtime.encode_focus(focused))
+    }
+
+    /// Input the user typed: once the writer accepted it, the viewport follows the live screen again, so
+    /// a reply to the very key that was pressed is never left out of view (#1043). A refusal (input
+    /// gated) leaves the viewport where the reader put it. A moved viewport wakes an attached view.
+    fn send_typed(
+        &self,
+        encode: impl FnOnce(&mut TerminalRuntime) -> Result<Vec<u8>, Error>,
+    ) -> Result<usize, SessionError> {
+        let sent = self.send(encode)?;
+        if sent > 0 && self.cell.scroll_on_user_input.load(Relaxed) {
+            // A close racing this call already freed the state; the bytes are out, nothing to scroll.
+            let moved = self
+                .with(TerminalRuntime::scroll_to_bottom)
+                .unwrap_or(false);
+            if moved && self.cell.attached.load(Acquire) {
+                if let Some(changed) = &self.cell.hooks.changed {
+                    changed();
+                }
+            }
+        }
+        Ok(sent)
     }
 
     /// Encode under the session lock, write outside it. Nothing to send is `Ok(0)`.

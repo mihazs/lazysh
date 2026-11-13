@@ -325,6 +325,73 @@ fn user_input_is_encoded_from_terminal_modes_and_gated_by_the_writer() {
     assert_eq!(f.writer.sent().len(), 7, "a refused key reaches nobody");
 }
 
+/// #1043: the reader scrolled into history, tapped the toolbar Enter and the agent's reply stayed out of
+/// view. Typing and pasting return to the live screen (unless the preference is off); a refused key,
+/// a mouse report and a focus report do not move the reader.
+#[test]
+fn typing_returns_a_scrolled_back_reader_to_the_live_screen_unless_it_was_refused() {
+    let hub = Hub::new(HubConfig::default());
+    let (f, wakeups) = session_watched(&hub, "a", config(40, 5, 1 << 20));
+    f.session.attach().unwrap();
+    let text = numbered_lines(100);
+    f.send(&text);
+    f.settle(text.len() as u64);
+    let live = f.session.with(|rt| rt.viewport_text().unwrap()).unwrap();
+    f.session.take_frame().unwrap();
+    let scrolled_back = || {
+        f.session.with(|rt| rt.scroll_viewport(-20)).unwrap();
+        // The view has drawn the history the reader scrolled to.
+        f.session.take_frame().unwrap().expect("history redraw");
+        assert_ne!(
+            f.session.with(|rt| rt.viewport_text().unwrap()).unwrap(),
+            live
+        );
+    };
+    let viewport = || f.session.with(|rt| rt.viewport_text().unwrap()).unwrap();
+    let enter = key(ffi::GhosttyKey_GHOSTTY_KEY_ENTER, 0, None);
+
+    scrolled_back();
+    f.writer.open.store(false, Release);
+    assert!(f.session.send_key(&enter).is_err());
+    assert_ne!(viewport(), live, "a refused key moves nothing");
+    f.writer.open.store(true, Release);
+    f.session.send_focus(true).unwrap();
+    assert_ne!(viewport(), live, "a focus report is not typing");
+
+    let woken = wakeups.load(SeqCst);
+    assert_eq!(f.session.send_key(&enter).unwrap(), 1);
+    assert_eq!(viewport(), live, "toolbar Enter returns to the live screen");
+    assert_eq!(
+        wakeups.load(SeqCst),
+        woken + 1,
+        "the attached view is told to redraw"
+    );
+    assert_eq!(f.session.send_key(&enter).unwrap(), 1);
+    assert_eq!(
+        wakeups.load(SeqCst),
+        woken + 1,
+        "already live: nothing moved"
+    );
+    let redraw = f.session.take_frame().unwrap().expect("the redraw");
+    assert!(lines(&redraw)
+        .iter()
+        .any(|row| row.contains("line 0000099")));
+
+    scrolled_back();
+    assert_eq!(f.session.send_paste("x").unwrap(), 1);
+    assert_eq!(viewport(), live, "pasting returns to the live screen too");
+    f.session.take_frame().unwrap().expect("the redraw");
+
+    f.session.set_scroll_on_user_input(false);
+    scrolled_back();
+    assert_eq!(f.session.send_key(&enter).unwrap(), 1);
+    assert_ne!(
+        viewport(),
+        live,
+        "the preference keeps the reader in history"
+    );
+}
+
 #[test]
 fn a_view_can_detach_and_reattach_without_losing_screen_or_scrollback() {
     let hub = Hub::new(HubConfig::default());
