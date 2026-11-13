@@ -32,6 +32,7 @@ import type {StatusItem} from './agentBackgroundWork';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
+import {AgentSearch,CopyButton,messageMarkdown,type Reading} from './AgentReading';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -216,7 +217,7 @@ export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: strin
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -285,6 +286,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // The Agent view draws a call and its result as one card; a result whose call is not loaded keeps its own block.
   const toolResults = useMemo(() => timeline ? new Map(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_result' && block.id).map(block => [block.id!, block])) : new Map<string, Block>(), [timeline, messages]);
   const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && !block.card).map(block => block.id!)), [messages]);
+  // A message whose blocks are all results of loaded calls draws nothing of its own; the call's card carries its anchor so search and copy still find it.
+  const resultAnchors = useMemo(() => new Map(messages.filter(message => timeline && message.blocks.length > 0 && message.blocks.every(block => block.type === 'tool_result' && block.id && toolCalls.has(block.id))).flatMap(message => message.blocks.map(block => [block.id!, message.id] as const))), [timeline, messages, toolCalls]);
   const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
   const answerer = useDialogAnswerer(sessionId);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
@@ -625,6 +628,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A turn the transcript already closed is not what a live "working" is running: the row then starts its own clock.
   const turnRunning = !history.newer && (activity === 'working' || activity === 'waiting' || (!activity && !lastTurn?.answer));
   const workSince = turnRunning ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
+  // Conversation only hides the folded tool work, so it cannot be searched either.
+  const searchable = useMemo(() => reading?.full === false ? turns.flatMap(turn => [turn.event, turn.prompt, turn.answer].filter((message): message is Message => !!message)) : flow, [reading?.full, turns, flow]);
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
@@ -638,13 +643,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);
   const renderMessage = (message: Message) => message.event ? (
-    <article key={message.id} data-anchor={message.id} className="chat-message agent-event">
+    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className="chat-message agent-event">
       {message.event.detail
         ? <details><summary>{eventLabel(message.event)}</summary><pre>{message.event.detail}</pre></details>
         : <p>{eventLabel(message.event)}</p>}
     </article>
   ) : (timeline && message.blocks.every(isPlanBlock)) || (message.blocks.length > 0 && message.blocks.every(paired)) ? null : (
-    <article key={message.id} data-anchor={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
+    <article key={message.id} data-anchor={message.id} data-message-id={message.id} className={timeline ? `chat-message agent-bubble agent-bubble-${message.role}` : "chat-message"} aria-label={timeline ? roleName(message) : undefined}>
+      {timeline && messageMarkdown(message) && <CopyButton text={messageMarkdown(message)} label={t('agentCopyMessage')} />}
       {!timeline && <h4>{roleName(message)}</h4>}
       {message.record && <p>
         {message.record.stepIndex !== undefined ? `${t("chatStep", {index:message.record.stepIndex})} · ` : ""}
@@ -656,12 +662,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {message.blocks.map((block, index) => {
         if (timeline && isPlanBlock(block)) return null;
         if (paired(block)) return null;
-        if (timeline && block.id && block.type === 'tool_use' && !block.card) return <AgentToolCard key={index} use={block} result={toolResults.get(block.id)} live={liveCalls.has(block.id)} />;
+        if (timeline && block.id && block.type === 'tool_use' && !block.card) return <AgentToolCard key={index} use={block} result={toolResults.get(block.id)} live={liveCalls.has(block.id)} resultMessage={resultAnchors.get(block.id)} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
         return block.type === "text" ? (
-          <Fragment key={index}>{card ?? <ChatRich text={block.text || ""} />}</Fragment>
+          <Fragment key={index}>{card ?? <ChatRich text={block.text || ""} copy={timeline} />}</Fragment>
         ) : (
           <Fragment key={index}>{card}<details>
             <summary>
@@ -839,6 +845,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         {(!atLatest || history.newer) && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
       </div>}
       {conversation && sourceMatches && !bound && <ChatActivity activity={activity} />}
+      {timeline && reading?.search && onReading && <AgentSearch messages={searchable} query={reading.query} list={messageList} onQuery={query => onReading({...reading, query})} onClose={() => onReading({...reading, search: false, query: ''})} />}
       <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}

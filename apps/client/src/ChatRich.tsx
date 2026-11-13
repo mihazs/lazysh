@@ -3,6 +3,7 @@ import Markdown, {type Components} from 'react-markdown';
 import {useProtectedApi} from './access';
 import {api as nativeApi} from './bridge';
 import {hasHtml, htmlPlugins, isDataImage, maxHtmlLength, urlTransform} from './chatHtml';
+import {codeBlockWithCopy} from './AgentReading';
 import {t} from './i18n/core';
 import {openWebPage, webUrl} from './webPage';
 import './ChatRich.css';
@@ -48,14 +49,16 @@ const components:Components={
   table:({children})=> <div className="chat-table-scroll" role="region" tabIndex={0} aria-label={t('chatHtmlTable')}><table>{children}</table></div>,
 };
 
+const withCopy:Components={...components,pre:codeBlockWithCopy};
+
 /** Markdown with the HTML an agent or a person put in it, rendered through the allow-list of `chatHtml`. Links ask before they
  * open, a remote image is not requested, and the original text is one tap away. */
-export const ChatRich=memo(function ChatRich({text}:{text:string}) {
+export const ChatRich=memo(function ChatRich({text,copy=false}:{text:string;copy?:boolean}) {
   const [source,setSource]=useState(false);
   const html=text.length<=maxHtmlLength && hasHtml(text);
   return <>
     {source ? <pre className="chat-html-source">{text}</pre>
-      : <Markdown components={components} urlTransform={urlTransform} rehypePlugins={html ? htmlPlugins : undefined}>{text}</Markdown>}
+      : <Markdown components={copy ? withCopy : components} urlTransform={urlTransform} rehypePlugins={html ? htmlPlugins : undefined}>{text}</Markdown>}
     {html && <button type="button" className="chat-html-toggle" aria-pressed={source} onClick={()=>setSource(value=>!value)}>{t(source?'chatHtmlShowRendered':'chatHtmlShowSource')}</button>}
   </>;
 });

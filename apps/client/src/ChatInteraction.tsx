@@ -5,6 +5,7 @@ import type {DialogAnswerer} from './ChatTerminalInput';
 import {ChatRich} from './ChatRich';
 import {t} from './i18n/core';
 import {LocalUiError} from './i18n/localError';
+import {codeBlockWithCopy} from './AgentReading';
 import './ChatInteraction.css';
 
 export type PlanStatus='pending'|'in_progress'|'completed'|'cancelled';
@@ -88,8 +89,9 @@ export function parseActivity(value:unknown,agent:string,view?:string):Activity|
 }
 
 /** Markdown without raw HTML, remote images or active links; `image` replaces each image. */
-export const ChatMarkdown=memo(function ChatMarkdown({text,image}:{text:string;image?:string}) {
-  return <Markdown components={{img:()=> <span>{image ?? t('chatImagePlaceholder')}</span>,a:({children})=> <span>{children}</span>}}>{text}</Markdown>;
+export const ChatMarkdown=memo(function ChatMarkdown({text,image,copy=false}:{text:string;image?:string;copy?:boolean}) {
+  return <Markdown components={{img:()=> <span>{image ?? t('chatImagePlaceholder')}</span>,a:({children})=> <span>{children}</span>,
+    ...(copy ? {pre:codeBlockWithCopy} : {})}}>{text}</Markdown>;
 });
 
 const planStatus={pending:'chatPlanPending',in_progress:'chatPlanInProgress',completed:'chatPlanCompleted',cancelled:'chatPlanCancelled'} as const;

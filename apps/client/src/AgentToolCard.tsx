@@ -19,7 +19,7 @@ function CopyButton({text, label}: {text: string; label: 'agentToolCopy' | 'agen
 
 /** One card for a recorded tool call and its result: a one-line summary, the outcome, and the output tail with Show all and Copy.
  * An edit shows the lines it changed instead. `live` says the agent is still working, so a call without a result is running. */
-export default function AgentToolCard({use, result, live}: {use: ToolUse; result?: ToolResult; live: boolean}) {
+export default function AgentToolCard({use, result, live, resultMessage}: {use: ToolUse; result?: ToolResult; live: boolean; resultMessage?: string}) {
   const call = describeTool(use, result);
   const files = fileChanges(call);
   const [all, setAll] = useState(false), [wrap, setWrap] = useState(true);
@@ -29,7 +29,7 @@ export default function AgentToolCard({use, result, live}: {use: ToolUse; result
   const out = call.output === undefined ? undefined : all ? {lines: call.output, hidden: 0} : tail(call.output, TAIL);
   const diffText = files.map(file => `${file.path}\n${file.lines.map(line => `${line.kind}${line.text}`).join('\n')}`).join('\n\n');
   const long = files.some(file => file.lines.length > DIFF_HEAD);
-  return <details className="agent-tool" data-kind={files.length ? 'diff' : call.kind} data-status={shown ? call.status : 'unknown'}>
+  return <details className="agent-tool" data-message-id={resultMessage} data-kind={files.length ? 'diff' : call.kind} data-status={shown ? call.status : 'unknown'}>
     <summary>
       <Icon size={16} aria-hidden="true" />
       <strong>{call.name || t('chatBlockToolUse')}</strong>

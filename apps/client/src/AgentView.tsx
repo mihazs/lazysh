@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
-import {Ellipsis,TerminalSquare} from 'lucide-react';
+import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
@@ -19,6 +19,7 @@ import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiti
 import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
 import type {AgentSessionInfo} from './agentSession';
 import type {LiveState} from './AgentWorkingRow';
+import {noReading, type Reading} from './AgentReading';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -89,6 +90,10 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   // Focus moved to another pane, tab or workspace: a hand-picked conversation and an open list no longer apply.
   useEffect(()=>{if(herdrSession && focusKey!==undefined){setPicked(previous=>previous && previous.focusKey!==focusKey?undefined:previous);setChoosing(false);}},[herdrSession,focusKey]);
   const [info,setInfo] = useState<AgentSessionInfo>();
+  // Full history is remembered per device and per terminal; a search is not.
+  const fullKey=`lazysh.agentView.full.${sessionId}`;
+  const [reading,setReading]=useState<Reading>(()=>{try{return {...noReading,full:localStorage.getItem(fullKey)!=='0'};}catch{return noReading;}});
+  const changeReading=useCallback((next:Reading)=>{setReading(next);try{localStorage.setItem(fullKey,next.full?'1':'0');}catch{/* The choice then lasts until the view closes. */}},[fullKey]);
   const request=useRef(0);
   const active=useRef({sessionId,shown});active.current={sessionId,shown};
   const retained = useRef<{id:string;conversation:BoundConversation} | undefined>(undefined);
@@ -214,13 +219,14 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const focusedFolder=herdrSession ? navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.cwd ?? undefined : undefined;
   const viewFolder=selected ? selected.cwd ?? selected.row?.project : row?.project ?? focusedFolder;
   const listing=!!herdrSession && !selected && (!reader || choosing);
-  return <section className="agent-view" hidden={!shown} aria-label={t('agentViewTitle')}>
+  return <section className="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
       {state && <StatusRing tone={state.tone} />}
       <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
       {state && <span title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && row && <> · <time dateTime={row.waitingSince ?? row.updatedAt}>{formatRelativeTime(row.waitingSince ?? row.updatedAt, now)}</time></>}</span>}
       {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
       {reader && <AgentHeaderPills session={info}/>}
+      {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
     </header>
@@ -234,6 +240,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {selected && !selected.linked && <button type="button" onClick={back}>{t(herdrSession && linked ? 'agentViewThisPane' : 'agentViewBackSessions')}</button>}
       {reader && viewFolder && !selected?.history && <button type="button" onClick={()=>{setHistory(viewFolder);setMenu(false);}}>{t('agentHistoryOpen')}</button>}
       {enter && <EnterSessionButton server={selected.enter!.server} target={selected.enter!.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}
+      {reader && <button type="button" aria-pressed={!reading.full} onClick={()=>changeReading({...reading,full:!reading.full})}>{t('agentConversationOnly')}</button>}
       {/* The safety rule is unchanged: a shown conversation grants no terminal input beyond the confirmed-input flow. */}
       {selected?.linked && <p>{t('agentViewLinkedNote',{place:selected.place??''})}</p>}
       {selected && !selected.linked && <p>{t(selected.history ? 'agentHistoryReadOnly' : 'agentViewSelectedNoStage')}</p>}
@@ -273,7 +280,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
     {reader && !selected && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} answerable={tmux && row?.agent === 'Claude Code' && !!row.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
     {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }

@@ -692,6 +692,26 @@ test('live: the stream follows the tail while the reader is there and shows the 
   await expect(flow.getByText('Fresh answer',{exact:true})).toBeInViewport();
 });
 
+test('search and the history choice fit the compact header, and search jumps to a match',async({page})=>{
+  await open(page);
+  const agent=await showAgent(page);
+  const header=agent.locator('header');
+  const before=(await header.boundingBox())!.height;
+  await header.getByRole('button',{name:'Search conversation',exact:true}).click();
+  const search=agent.getByRole('search',{name:'Search conversation',exact:true});
+  await search.getByRole('searchbox').fill('vite');
+  await expect(search.getByRole('status')).toHaveText('1 of 1');
+  expect((await header.boundingBox())!.height).toBe(before);
+  expect((await search.boundingBox())!.height).toBeLessThanOrEqual(48);
+  for(const name of ['Search conversation','Agent view options','Terminal'])await expect(header.getByRole('button',{name,exact:true})).toBeInViewport();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await search.getByRole('button',{name:'Close search',exact:true}).click();
+  await header.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await agent.getByRole('button',{name:'Conversation only',exact:true}).click();
+  await expect(agent.locator('details.agent-turn-activity')).toBeHidden();
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+});
+
 test('delayed: without a watch channel the view polls every 2 seconds and says it can lag',async({page})=>{
   const agent=await openLive(page,'off');
   await expect(agent.getByText('Live updates are unavailable, so this view refreshes every 2 seconds and can lag.',{exact:true})).toBeVisible();
