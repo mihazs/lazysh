@@ -330,20 +330,29 @@ fn admit_update(
     Ok(Some(spawn()?))
 }
 
+/// CREATE_NO_WINDOW: the runner has no console, and a child that needs one must not open a window.
+fn no_window(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(command, 0x0800_0000);
+    command
+}
+
 fn spawn_update(target: &str, channel: Channel) -> io::Result<Child> {
-    Command::new(std::env::current_exe()?)
-        .args([
-            "update",
-            "--yes",
-            "--version",
-            target,
-            "--channel",
-            channel.name(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+    no_window(
+        Command::new(std::env::current_exe()?)
+            .args([
+                "update",
+                "--yes",
+                "--version",
+                target,
+                "--channel",
+                channel.name(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .spawn()
 }
 
 fn admit_and_settle(
@@ -396,13 +405,15 @@ fn update_child(mut child: Child) -> Option<i32> {
 /// `update --check --json` of `channel`: the status it exits with and the result it printed, or
 /// `None` when it could not run or overran `limit`.
 pub(super) fn check_child(channel: Channel, limit: Wait) -> Option<(i32, Value)> {
-    let mut child = Command::new(std::env::current_exe().ok()?)
-        .args(["update", "--check", "--json", "--channel", channel.name()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = no_window(
+        Command::new(std::env::current_exe().ok()?)
+            .args(["update", "--check", "--json", "--channel", channel.name()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .spawn()
+    .ok()?;
     let code = wait_exit(&mut child, limit)?.code()?;
     let mut output = Vec::new();
     if let Some(stdout) = child.stdout.take() {

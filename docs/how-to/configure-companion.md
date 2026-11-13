@@ -43,7 +43,7 @@ For this source/PATH installation, make `lazysh-agent` available on the noninter
   ```
 
   Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract) and the [companion update reference](../reference/companion-update.md). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
-- **Automatic updates.** A companion older than the lazysh app that connects updates itself to the app's version unless you turn it off; see [Keep the companion current](#keep-the-companion-current). Scheduled checks, a channel, interval and window setting, a timer and the update-available badge are planned and not released yet ([#1446](https://github.com/mihazs/lazysh/issues/1446)).
+- **Automatic updates.** A companion older than the lazysh app that connects updates itself to the app's version unless you turn it off; see [Keep the companion current](#keep-the-companion-current). It also checks for a newer release by itself (channel, interval and window are settings, and `auto-update enable` adds a timer for hosts nobody opens the app on); the update-available badge in the app is planned and not released yet ([#1446](https://github.com/mihazs/lazysh/issues/1446)).
 
 ## Keep the companion current
 
