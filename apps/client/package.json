@@ -32,8 +32,10 @@
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
-    "@lazysh/credential-vault": "workspace:*",
     "@lazysh/apple-speech": "workspace:*",
+    "@lazysh/apple-status": "workspace:*",
+    "@lazysh/credential-vault": "workspace:*",
+    "@lazysh/push-registration": "workspace:*",
     "@playwright/test": "^1.55.1",
     "@tauri-apps/cli": "^2.8.4",
     "@testing-library/react": "^16.3.0",
@@ -42,13 +44,12 @@
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
+    "@xterm/headless": "5.5.0",
     "jsdom": "^27.0.0",
     "typescript": "~5.9.2",
     "vite": "^7.1.7",
     "vitest": "^5.0.5",
-    "webdriverio": "10.1.0",
-    "@lazysh/apple-status": "workspace:*",
-    "@lazysh/push-registration": "workspace:*"
+    "webdriverio": "10.1.0"
   },
   "license": "GPL-3.0-or-later"
 }
