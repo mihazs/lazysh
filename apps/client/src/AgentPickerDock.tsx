@@ -3,20 +3,20 @@ import {liftDialog, none, type Lift} from './agentDialogLift';
 import {liftCodexDialog} from './agentDialogLiftCodex';
 import {useComposerControl} from './agentDialogAnswer';
 import {t} from './i18n/core';
+import type {TerminalAdapter} from './terminalAdapter';
 import './AgentPickerDock.css';
 
-/** The part of an xterm.js terminal the lift reads: the rows of the live screen and a signal that output was parsed. */
-export type ScreenSource = Readonly<{
-  rows: number;
-  buffer: Readonly<{active: Readonly<{baseY: number; getLine: (y: number) => {translateToString: (trim?: boolean) => string} | undefined}>}>;
-  onWriteParsed: (listener: () => void) => {dispose: () => void};
-}>;
+/** What the lift reads from the session's terminal: the text of the live screen's rows and a signal that output was parsed. */
+export type ScreenSource = Pick<TerminalAdapter, 'readRows' | 'viewport' | 'subscribe'>;
 /** The agents whose dialogs were captured from a real session (`src/test/agentDialogs`): each reads its own screen, and no other agent's dialog is guessed. */
 const lifters: Readonly<Record<string, (screen: readonly string[]) => Lift>> = {'Claude Code': liftDialog, Codex: liftCodexDialog};
 export const hasDialogProfile = (agent: string | undefined) => agent !== undefined && agent in lifters;
 const readLift = (terminal: ScreenSource, agent: string): Lift => {
-  const {active} = terminal.buffer;
-  return lifters[agent]?.(Array.from({length: terminal.rows}, (_, row) => active.getLine(active.baseY + row)?.translateToString(true) ?? '')) ?? none;
+  // A backend that cannot inspect rows shows no dialog here; the terminal still has it.
+  if (!terminal.readRows) return none;
+  const {length, rows} = terminal.viewport();
+  // The live screen is the last `rows` rows of the buffer.
+  return lifters[agent]?.(terminal.readRows(length - rows, rows)) ?? none;
 };
 const same = (a: Lift, b: Lift) => a.kind === b.kind && (a.kind !== 'dialog' || b.kind !== 'dialog' || JSON.stringify(a.dialog) === JSON.stringify(b.dialog));
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -29,7 +29,7 @@ function useScreenLift(terminal: ScreenSource | undefined, active: boolean, agen
     let timer: ReturnType<typeof setTimeout> | undefined;
     const read = () => {timer = undefined; const next = readLift(terminal, agent); setLift(previous => same(previous, next) ? previous : next);};
     read();
-    const subscription = terminal.onWriteParsed(() => {timer ??= setTimeout(read, 150);});
+    const subscription = terminal.subscribe(() => {timer ??= setTimeout(read, 150);}, ['output']);
     return () => {subscription.dispose(); clearTimeout(timer);};
   }, [terminal, active, agent]);
   return lift;
