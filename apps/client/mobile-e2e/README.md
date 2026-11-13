@@ -11,7 +11,9 @@ wdio.android.conf.ts  Appium service, UiAutomator2 capabilities, device lock and
 specs/{smoke,regression,journeys}/   the tier is the directory; files are *.e2e.ts
 pageobjects/          one object per screen or component, no assertions; connect-owned-host.ts signs in for `before` hooks
 support/              device.ts (the only module that changes device state), hosts.ts (owned hosts), app.ts (lifecycle),
-                      contexts.ts, artifacts.ts, guards.ts, data.ts, setup.ts
+                      contexts.ts, artifacts.ts, guards.ts, data.ts, setup.ts; screen.ts (phone geometry), geometry.ts (WebView
+                      boxes to screen pixels, keyboard window), gestures.ts (real touches), keyboard.ts (key events, text),
+                      ime.ts (the keyboard's editor setup), receiver.ts (bytes a host received)
 data/                 static inputs with a {nonce} placeholder, no secrets, no keys
 reports/  .appium/    generated and git-ignored (JUnit, failure artifacts, Appium log; Appium home)
 ```

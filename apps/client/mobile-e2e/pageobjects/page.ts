@@ -20,13 +20,13 @@ export default abstract class Page {
 
   /** `select` is a thunk: `$()` starts resolving when it is called, so the lookup must run inside this page's context. */
   protected tap(select: () => ChainablePromiseElement) {
-    return this.in(async () => { const element = select(); await element.waitForClickable({timeoutMsg: `${this.constructor.name}: element was not clickable`}); await element.click(); });
+    return this.in(async () => { const element = select(); await element.waitForClickable(); await element.click(); });
   }
 
   protected enter(select: () => ChainablePromiseElement, value: string | number) {
     return this.in(async () => {
       const element = select();
-      await element.waitForDisplayed({timeoutMsg: `${this.constructor.name}: element was not displayed`});
+      await element.waitForDisplayed();
       // Selects and types over the text, as a user does. `setValue` clears first, and clearing a pre-filled number field (the port
       // starts at 22) was seen to leave the old digits in front of the new ones.
       await element.click();

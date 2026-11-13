@@ -30,7 +30,8 @@ export const config: WebdriverIO.Config = {
     'appium:automationName': 'UiAutomator2',
     'appium:udid': serial,
     // Without LAZYSH_E2E_APK the already installed build is tested.
-    ...(process.env.LAZYSH_E2E_APK ? {'appium:app': process.env.LAZYSH_E2E_APK} : {}),
+    // enforceAppInstall: a build of the same version already on the device (another run's APK) is replaced by the one given here.
+    ...(process.env.LAZYSH_E2E_APK ? {'appium:app': process.env.LAZYSH_E2E_APK, 'appium:enforceAppInstall': true} : {}),
     'appium:appPackage': 'app.lazysh.client',
     'appium:appActivity': '.MainActivity',
     'appium:noReset': false,
