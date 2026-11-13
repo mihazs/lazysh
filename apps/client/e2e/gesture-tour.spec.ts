@@ -21,7 +21,9 @@ const seed=(page:Page,entries:Record<string,string>)=>page.addInitScript(entries
 const connect=(page:Page)=>connectAttachmentTerminal(page,{nonce:'e'.repeat(64),ready:'gesture-tour-ready'});
 /** Connects the device's first phone session and waits for the tour that opens over it. */
 async function connectToTour(page:Page) {
-  const dialog=await connectToTour(page);
+  await connect(page);
+  const dialog=tour(page);
+  await expect(dialog).toBeVisible();
   return dialog;
 }
 const finger=(page:Page)=>tour(page).locator('.gt-finger');
