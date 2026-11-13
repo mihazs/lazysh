@@ -15,6 +15,11 @@ const answers: DialogAnswer[] = [];
 let screenOf: ReturnType<typeof fakeTerminal>;
 let ahead = 0;
 /** The bound input of a pane running the picker: arrow keys move the highlight on screen, Enter and Escape close it. */
+/** Publishes a bound input whose answers are `answer`, as the composer of a pane would. */
+function bindTo(answer: TerminalControl['answer']) {
+  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer, cycleMode: vi.fn(async () => undefined)};
+  act(() => publishComposerControl('s', control));
+}
 function bind(react = true) {
   answers.length = 0; ahead = 0;
   const answer = vi.fn(async (body: DialogAnswer) => {
@@ -24,8 +29,7 @@ function bind(react = true) {
     else screenOf.set(closed);
     return true;
   });
-  const control: TerminalControl = {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer, cycleMode: vi.fn(async () => undefined)};
-  act(() => publishComposerControl('s', control));
+  bindTo(answer);
   return answer;
 }
 function mount(rows: string[], props: Partial<Parameters<typeof AgentPickerDock>[0]> = {}) {
@@ -33,6 +37,12 @@ function mount(rows: string[], props: Partial<Parameters<typeof AgentPickerDock>
   const onShowTerminal = vi.fn(), guard = vi.fn(async () => true);
   render(<AgentPickerDock sessionId="s" shown terminal={screenOf.terminal} answerable guard={guard} onShowTerminal={onShowTerminal} {...props}/>);
   return {onShowTerminal, guard};
+}
+/** Taps an option as soon as it can be answered, then waits for the card to go with its dialog. */
+async function chooseAndClose(name: string) {
+  await waitFor(() => expect(option(name).disabled).toBe(false));
+  fireEvent.click(option(name));
+  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
 }
 const option = (name: string) => screen.getByRole('button', {name: new RegExp(`^${name}`)}) as HTMLButtonElement;
 beforeEach(() => {bind();});
@@ -98,11 +108,9 @@ it('finds the chosen option by what it says when the list scrolls as the highlig
     else screenOf.set(closed);
     return true;
   });
-  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control, cycleMode: vi.fn(async () => undefined)}));
+  bindTo(control);
   mount(list(0, 0));
-  await waitFor(() => expect(option('Three').disabled).toBe(false));
-  fireEvent.click(option('Three'));
-  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
+  await chooseAndClose('Three');
   // Two rows down from "One"; the redrawn list shows other sessions, with "Three" highlighted, so Enter is pressed.
   expect(answers).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });
@@ -174,15 +182,13 @@ it('answers a Codex approval prompt: moves the highlight to the chosen row, read
     if (body.kind === 'pick' && !body.enter) {ahead += body.rows; screenOf.set(codexApproval(1 + ahead));} else screenOf.set(onTmux([]));
     return true;
   });
-  act(() => publishComposerControl('s', {ready: true, busy: false, failed: false, send: vi.fn(), stop: vi.fn(), retry: vi.fn(), answer: control, cycleMode: vi.fn(async () => undefined)}));
+  bindTo(control);
   mount(codexApproval(1), {agent: 'Codex', waiting: 'approval'});
   const card = await screen.findByRole('region', {name: t('agentPickerTitle')});
   expect(within(card).getByRole('heading', {name: 'Would you like to run the following command?'})).toBeTruthy();
   expect(card.textContent).toContain('$ touch note.txt');
-  await waitFor(() => expect(option('Yes, and').disabled).toBe(false));
-  fireEvent.click(option('Yes, and'));
-  await waitFor(() => expect(screen.queryByRole('region')).toBeNull());
-  expect(answers).toEqual([{kind: 'pick', rows: 1, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+  await chooseAndClose('No, and');
+  expect(answers).toEqual([{kind: 'pick', rows: 2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });
 
 it('reads each agent\'s own dialogs only: another agent\'s screen is never answerable', async () => {
@@ -202,4 +208,21 @@ it('says a Codex dialog it cannot read waits in the terminal, even while Codex r
   mount(onTmux(fixture('codex-resume').slice(1, 40)), {agent: 'Codex', waiting: 'approval'});
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
   expect(answers).toEqual([]);
+});
+
+it('shows what a Codex option that keeps a permission rule keeps, and sends nothing until it is confirmed', async () => {
+  bind(false);
+  const control = vi.fn(async (body: DialogAnswer) => {answers.push(body); screenOf.set(onTmux([])); return true;});
+  bindTo(control);
+  mount(codexApproval(2), {agent: 'Codex'});
+  await waitFor(() => expect(option('Yes, and').disabled).toBe(false));
+  fireEvent.click(option('Yes, and'));
+  const confirm = screen.getByRole('region', {name: t('agentPickerRememberTitle')});
+  expect(confirm.textContent).toContain("Yes, and don't ask again for commands that start with `touch note.txt` (p)");
+  fireEvent.click(within(confirm).getByRole('button', {name: t('agentPickerRememberCancel')}));
+  expect(screen.queryByRole('region', {name: t('agentPickerRememberTitle')})).toBeNull();
+  expect(answers).toEqual([]);
+  fireEvent.click(option('Yes, and'));
+  fireEvent.click(screen.getByRole('button', {name: t('agentPickerRememberApply')}));
+  await waitFor(() => expect(answers).toEqual([{kind: 'pick', rows: 0, enter: true}]));
 });

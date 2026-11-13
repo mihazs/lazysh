@@ -12,6 +12,8 @@ const footers = [/^ {2}enter select · esc back$/, /^ {2}enter default · s sess
 const keyRow = /^ {1,2}(?:Press )?enter\b.*\besc\b/i;
 const option = /^([› ]) (\d{1,2})\. (\S.*)$/;
 const rowsBelowFooter = 2;
+/** Codex's approval options that add a rule ("Yes, and don't ask again for commands that start with …"). */
+const remembers = /\bdon't ask again\b/i;
 
 export function liftCodexDialog(screen: readonly string[]): Lift {
   const lines = screen.map(line => line.trimEnd());
@@ -50,7 +52,7 @@ export function liftCodexDialog(screen: readonly string[]): Lift {
   const options = items.map(({rows}) => {
     const [label, ...columns] = rows[0].split(/ {2,}/);
     const detail = [...columns, ...rows.slice(1)].join(' ');
-    return {label: clip(label), ...(detail ? {detail: clip(detail)} : {})};
+    return {label: clip(label), ...(detail ? {detail: clip(detail)} : {}), ...(remembers.test(label) ? {remember: true as const} : {})};
   });
   const hint = [lines[footer].trim()];
   return {kind: 'dialog', dialog: Object.freeze({title: clip(title), body: body.map(clip), options: Object.freeze(options), highlighted: items.findIndex(item => item.marked), hint,

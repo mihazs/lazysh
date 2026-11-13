@@ -347,6 +347,13 @@ test('answers a Codex approval prompt open on the terminal with the keys a perso
   await expect(decline).toBeEnabled();
   const box=await dialog.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
+  // A choice that keeps a permission rule shows what it keeps first; going back sends nothing.
+  await dialog.getByRole('button',{name:/^Yes, don't ask again/}).click();
+  const keep=dialog.getByRole('region',{name:'Confirm a choice that is kept',exact:true});
+  await expect(keep).toContainText("Yes, don't ask again (p)");
+  await keep.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(keep).toHaveCount(0);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
   await decline.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);

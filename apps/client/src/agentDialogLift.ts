@@ -7,7 +7,8 @@ export type LiftedDialog = Readonly<{
   title: string;
   /** Text between the title and the options, such as the folder a trust prompt asks about. */
   body: readonly string[];
-  options: readonly Readonly<{label: string; detail?: string}>[];
+  /** `remember`: choosing it keeps a permission rule the agent will not ask about again, so a tap needs its own confirmation. */
+  options: readonly Readonly<{label: string; detail?: string; remember?: true}>[];
   /** The option the TUI highlights now. */
   highlighted: number;
   /** What the dialog says about its keys, the footer last. */

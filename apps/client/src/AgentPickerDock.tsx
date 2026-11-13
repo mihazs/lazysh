@@ -86,7 +86,10 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
     // The card is gone once the dialog closes; one that is still open says so.
     setPhase(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
   }
-  const choose = (index: number) => void answer(index);
+  const [confirm, setConfirm] = useState<number>();
+  useEffect(() => setConfirm(undefined), [signature]);
+  // An option that keeps a permission rule is never one tap: it first shows what it keeps.
+  const choose = (index: number) => {if (dialog?.options[index]?.remember && confirm !== index) setConfirm(index); else {setConfirm(undefined); void answer(index);}};
   // On a desktop keyboard the digits pick the options of the open dialog, as they do in the terminal.
   useEffect(() => {
     if (!dialog || busy) return;
@@ -108,6 +111,14 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
         <span>{option.label}</span>{option.detail && <small>{option.detail}</small>}
       </button> : <p aria-current={index === dialog.highlighted || undefined}><span>{option.label}</span>{option.detail && <small>{option.detail}</small>}</p>}
     </li>)}</ol>
+    {confirm !== undefined && dialog.options[confirm] && <section className="agent-picker-confirm" aria-label={t('agentPickerRememberTitle')}>
+      <p>{t('agentPickerRemember')}</p>
+      <p><code>{dialog.options[confirm].label}</code></p>
+      <div className="button-row">
+        <button type="button" onClick={() => setConfirm(undefined)}>{t('agentPickerRememberCancel')}</button>
+        <button type="button" disabled={busy} onClick={() => choose(confirm)}>{t('agentPickerRememberApply')}</button>
+      </div>
+    </section>}
     {dialog.hint.length > 0 && <p className="agent-picker-hint">{dialog.hint.join(' ')}</p>}
     {!live && <p role="note">{t('agentPickerTerminalOnly')}</p>}
     {phase !== 'idle' && phase !== 'sending' && <p role="alert">{phaseNote(phase)}</p>}

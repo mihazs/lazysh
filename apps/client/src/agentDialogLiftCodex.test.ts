@@ -47,6 +47,8 @@ describe('liftCodexDialog on recorded Codex screens', () => {
     expect(before.options.map(option => option.label)).toEqual(['Yes, proceed (y)', "Yes, and don't ask again for commands that start with `touch note.txt` (p)", 'No, and tell Codex what to do differently (esc)']);
     expect([before.highlighted, after.highlighted]).toEqual([0, 1]);
     expect(after.signature).toBe(before.signature);
+    // The option that adds a permission rule says so; the others do not.
+    expect(before.options.map(option => option.remember === true)).toEqual([false, true, false]);
     expect(before.hint).toEqual(['Press enter to confirm or esc to cancel']);
   });
 
