@@ -137,49 +137,89 @@ async fn a_flow_listens_on_the_announced_port_and_forwards_one_request_through_t
         "the redirect URI is never rewritten, so the device port is the host's"
     );
     // The test server echoes what the channel carries: the host would have received exactly this.
-    let request = callback_request(
-        port,
-        &format!("{CALLBACK}?code={CODE}&state={STATE}"),
-        "Connection: keep-alive\r\nSec-Fetch-Mode: navigate\r\n",
-    );
     let mut families = vec![LOOPBACK];
     if tunnel.addresses.contains(&"[::1]") {
         families.push(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST));
     }
     for family in families {
-        let echoed = String::from_utf8(
-            timeout(Duration::from_secs(5), async {
-                let mut stream = tokio::net::TcpStream::connect((family, port))
-                    .await
-                    .unwrap();
-                stream.write_all(&request).await.unwrap();
-                let mut seen = Vec::new();
-                let mut chunk = [0; 1024];
-                while !seen.ends_with(b"\r\n\r\n") {
-                    let count = stream.read(&mut chunk).await.unwrap();
-                    assert_ne!(count, 0, "{}", String::from_utf8_lossy(&seen));
-                    seen.extend_from_slice(&chunk[..count]);
-                }
-                seen
-            })
-            .await
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            echoed.starts_with(&format!(
-                "GET {CALLBACK}?code={CODE}&state={STATE} HTTP/1.1\r\n"
-            )),
-            "{echoed}"
-        );
-        assert!(
-            echoed.contains("Connection: close\r\n") && !echoed.contains("keep-alive"),
-            "{echoed}"
-        );
+        assert_forwarded(family, port).await;
     }
     event_where(&log, |event| event["type"] == "callback").await;
     event_where(&log, ended("callbackDelivered")).await;
     closed(port).await;
+}
+
+/// Sends a callback to the tunnel and checks the bytes the host would have received, which the
+/// in-process SSH server echoes back: the request unchanged except for a forced `Connection: close`.
+async fn assert_forwarded(family: IpAddr, port: u16) {
+    let request = callback_request(
+        port,
+        &format!("{CALLBACK}?code={CODE}&state={STATE}"),
+        "Connection: keep-alive\r\nSec-Fetch-Mode: navigate\r\n",
+    );
+    let echoed = String::from_utf8(
+        timeout(Duration::from_secs(5), async {
+            let mut stream = tokio::net::TcpStream::connect((family, port))
+                .await
+                .unwrap();
+            stream.write_all(&request).await.unwrap();
+            let mut seen = Vec::new();
+            let mut chunk = [0; 1024];
+            while !seen.ends_with(b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "{}", String::from_utf8_lossy(&seen));
+                seen.extend_from_slice(&chunk[..count]);
+            }
+            seen
+        })
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        echoed.starts_with(&format!(
+            "GET {CALLBACK}?code={CODE}&state={STATE} HTTP/1.1\r\n"
+        )),
+        "{echoed}"
+    );
+    assert!(
+        echoed.contains("Connection: close\r\n") && !echoed.contains("keep-alive"),
+        "{echoed}"
+    );
+}
+
+#[tokio::test]
+async fn a_native_terminal_session_tunnels_through_its_parent_ssh_connection() {
+    // Eternal Terminal sessions are native terminals on the SSH connection that bootstrapped them and
+    // keep no restorable control connection; no ET server runs here, so this stands in for them.
+    let fixture = Fixture::new().await;
+    let state = fixture.app.state::<AppState>();
+    let parent = state.session(&fixture.session).await.unwrap();
+    let native = spawn_native_terminal(
+        &state,
+        AccessState::disabled().lease(None).unwrap(),
+        parent,
+        Channel::new(|_| Ok(())),
+        NativeTerminalKind::Fixture,
+        None,
+        check_size,
+        |_access, input, _cancel, _initial, output, ready| {
+            ready.send(Ok(())).unwrap();
+            tauri::async_runtime::spawn(async move {
+                let (_input, _output) = (input, output);
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap()
+    .session_id;
+    let port = free_port();
+    let (tunnel, log) = start(&fixture.app, &native, hint(port), allow(), quick()).await;
+    tunnel.unwrap();
+    assert_forwarded(LOOPBACK, port).await;
+    event_where(&log, ended("callbackDelivered")).await;
 }
 
 #[tokio::test]
