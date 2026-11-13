@@ -14,3 +14,6 @@ export function parseSystemZones(dump: string): SystemZones {
   const [, , leftEdge] = frame('LEFT_GESTURES'), [rightStart, , rightEdge] = frame('RIGHT_GESTURES'), [, bottomStart, , bottomEdge] = frame('BOTTOM_MANDATORY_GESTURES');
   return {left: leftEdge, right: rightEdge - rightStart, bottomMandatory: bottomEdge - bottomStart};
 }
+
+/** The package of the window in front, from `dumpsys window displays` (`mCurrentFocus=Window{1a2b u0 package/Activity}`); undefined when nothing has the focus. */
+export const parseFocusedPackage = (dump: string) => /mCurrentFocus=Window\{\S+ u\d+ ([\w.]+)\//.exec(dump)?.[1];

@@ -3,7 +3,7 @@ import {adbFor, setNavigation, type Adb} from './device';
 import {inNative, inWebView} from './contexts';
 import {screenSize, swipe, type ScreenPoint} from './gestures';
 import {relaunchApp} from './app';
-import {parseSystemZones} from './zones';
+import {parseFocusedPackage, parseSystemZones} from './zones';
 
 export type {SystemZones} from './zones';
 
@@ -62,19 +62,22 @@ export const centreOf = ({x, y, width, height}: Rect): ScreenPoint => ({x: x + w
 /** One touch down and up at `at`, as a finger taps. */
 export const tap = (at: ScreenPoint) => swipe(at, at, 0);
 
-/** The package in front, which is the launcher after the app went back. */
-export const foregroundPackage = () => inNative(() => browser.getCurrentPackage());
+/**
+ * The package in front, which is the launcher after the app went back. Read from the window manager, not through Appium: once the app
+ * has left, a command that switches back to its WebView waits for a page that is gone.
+ */
+export async function foregroundPackage() { return parseFocusedPackage(await adbFor(serial())('shell', 'dumpsys', 'window', 'displays')); }
 
 /**
  * Android's own Back, given the way each mode gives it: the Back button of three-button navigation, and a swipe in from the side
  * edge of the screen on the gestural overlays. The swipe starts at 2 px, inside the system's Back zone, and moves inward. It starts
- * low on the edge, below the row where the app claims the edge for its own handle, because a person who wants Back swipes anywhere
- * else and the app must leave that swipe to the system.
+ * at 65 % of the height: the app claims the edge from the system only in the rows of its handles (measured on the guest: about 30 %
+ * and 85 % of the height), and a swipe that begins in a claimed row is the app's own, so a person who wants Back swipes elsewhere.
  */
 export async function systemBack(overlay: Overlay) {
   if (!isGestural(overlay)) { await inNative(() => browser.back()); return; }
   const {width, height} = await screenSize();
-  await swipe({x: 2, y: height * 0.8}, {x: width * 0.4, y: height * 0.8}, 180);
+  await swipe({x: 2, y: height * 0.65}, {x: width * 0.4, y: height * 0.65}, 180);
 }
 
 /**

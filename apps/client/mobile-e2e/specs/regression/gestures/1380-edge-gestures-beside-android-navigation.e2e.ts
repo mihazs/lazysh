@@ -3,7 +3,7 @@ import {connectOwnedHost} from '../../../pageobjects/connect-owned-host';
 import BottomMenu from '../../../pageobjects/components/bottom-menu.component';
 import Handles from '../../../pageobjects/components/gesture-handles.component';
 import SideMenu from '../../../pageobjects/components/side-menu.component';
-import {launchApp, resetApp} from '../../../support/app';
+import {launchApp, relaunchApp, resetApp} from '../../../support/app';
 import {screenSize, swipe} from '../../../support/gestures';
 import {
   devicePixelRatio, foregroundPackage, gestureUntil, isGestural, OVERLAYS, readAppInsets, readSystemZones, systemBack, tap, useNavigation, webViewRect,
@@ -84,7 +84,8 @@ for (const overlay of OVERLAYS) describe(`#1380 edge gestures beside ${overlay} 
   it('goes back from the edge instead of opening the side menu when nothing is open', async () => {
     await systemBack(overlay);
     await browser.waitUntil(async () => await foregroundPackage() !== APP, {timeoutMsg: 'Back at rest did not leave the app'});
-    await launchApp();
+    // The app went to the background with its WebView: start it again from nothing, so the next look is at a fresh page.
+    await relaunchApp();
     await SideMenu.in(() => expect(SideMenu.root).not.toBeDisplayedInViewport());
   });
 });

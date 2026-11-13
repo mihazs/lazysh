@@ -12,19 +12,24 @@ class HostPathSheetComponent extends Page {
   async close() { await this.tap(() => this.dismiss); }
 
   /**
-   * Where `text` is on the screen in device pixels: its row is found in xterm's own DOM, its column from the width of one
-   * character cell. The point is the middle of the text, so it holds a few characters of slack either side.
+   * Where `text` is on the screen in device pixels: its row is found in xterm's own DOM and the browser measures the text itself
+   * (a range over the characters), so no cell width is assumed. The point is the middle of the text, with slack either side.
    */
   private async locate(text: string) {
     const css = await inWebView(() => browser.execute((needle: string) => {
-      const rows = Array.from(document.querySelectorAll('.xterm-rows > div'));
-      const row = rows.find(candidate => (candidate.textContent ?? '').includes(needle));
-      const probe = document.querySelector('.xterm-char-measure-element');
-      if (!row || !probe) return null;
-      const box = row.getBoundingClientRect();
-      const cell = probe.getBoundingClientRect().width / Math.max(1, (probe.textContent ?? '').length);
-      const column = (row.textContent ?? '').indexOf(needle) + needle.length / 2;
-      return {x: box.left + column * cell, y: box.top + box.height / 2, offsetTop: window.visualViewport?.offsetTop ?? 0};
+      const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(candidate => (candidate.textContent ?? '').includes(needle));
+      if (!row) return null;
+      const from = (row.textContent ?? '').indexOf(needle), to = from + needle.length, range = document.createRange();
+      let seen = 0, started = false;
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const length = node.textContent?.length ?? 0;
+        if (!started && from < seen + length) { range.setStart(node, from - seen); started = true; }
+        if (started && to <= seen + length) { range.setEnd(node, to - seen); break; }
+        seen += length;
+      }
+      const box = range.getBoundingClientRect();
+      return {x: box.left + box.width / 2, y: box.top + box.height / 2, offsetTop: window.visualViewport?.offsetTop ?? 0};
     }, text));
     if (!css) throw new Error(`"${text}" is not on the terminal screen`);
     const [view, ratio] = [await webViewRect(), await devicePixelRatio()];

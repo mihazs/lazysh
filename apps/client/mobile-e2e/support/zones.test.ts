@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {parseSystemZones} from './zones';
+import {parseFocusedPackage, parseSystemZones} from './zones';
 
 // Lines as `dumpsys window displays` prints them on Android 13 (the Waydroid guest); the first copy of each source is the one read.
 const source = (type: string, frame: string) => `        InsetsSource type=ITYPE_${type} frame=${frame} visible=true insetsRoundedCornerFrame=false`;
@@ -16,4 +16,10 @@ test('a gestural overlay reports the width of the Back zone on both sides', () =
 
 test('a window dump without the gesture sources is refused instead of read as no zones', () => {
   expect(() => parseSystemZones('  Display: mDisplayId=0')).toThrow('shows no LEFT_GESTURES insets source');
+});
+
+test('the package in front is read from the focused window, and a dump with no focus has none', () => {
+  expect(parseFocusedPackage('  mCurrentFocus=Window{611e1ce u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}')).toBe('com.android.launcher3');
+  expect(parseFocusedPackage('  mCurrentFocus=Window{3f2550 u0 app.lazysh.client/app.lazysh.client.MainActivity}')).toBe('app.lazysh.client');
+  expect(parseFocusedPackage('  mCurrentFocus=null')).toBeUndefined();
 });
