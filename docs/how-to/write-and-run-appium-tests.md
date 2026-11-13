@@ -116,6 +116,10 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 - A WebView `session not created` or `chrome not reachable` error usually means ChromeDriver does not match the guest
   WebView or the build is not debuggable. Check `adb shell cat /proc/net/unix | grep webview_devtools_remote` and that
   `reports/wdio-appium.log` shows the matching ChromeDriver download.
+- On a Waydroid guest the WebView renderer can fail to start (`logcat` shows `Failed to make and chown /sys/fs/cgroup/uid_...:
+  Read-only file system` and `sandboxed_process... failed to attach`), and the session then times out with `No webviews found`.
+  Restart the container as in the local procedure, or run the WebView in one process for the session with
+  `adb -s <serial> shell cmd webviewupdate disable-multiprocess` and put it back with `enable-multiprocess` afterwards.
 - For a selector problem, list the contexts and dump the page source from a short script, or use Appium Inspector against the
   same server and serial. Fix the selector, not the timeout.
 
