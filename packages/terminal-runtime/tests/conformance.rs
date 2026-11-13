@@ -273,9 +273,13 @@ fn modified_enter_tab_and_ctrl_bracket_stay_legacy_until_the_program_asks_for_a_
     let ctrl_tab = key(ffi::GhosttyKey_GHOSTTY_KEY_TAB, ctrl, None);
     let ctrl_bracket = key(ffi::GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, ctrl, Some("["));
     let mut rt = runtime(20, 3);
-    for mods in [shift, ctrl, shift | ctrl] {
+    for mods in [ctrl, shift | ctrl] {
         assert_eq!(rt.encode_key(&enter(mods)).unwrap(), b"\r", "mods {mods}");
     }
+    // #805: Shift+Enter must stay distinct from Enter for agent TUIs (xterm.js would send CR and submit);
+    // this is the `CSI 13;2u` lazysh sends today, so the native path does not change what Codex receives.
+    assert_eq!(rt.encode_key(&enter(shift)).unwrap(), b"\x1b[13;2u");
+    assert_eq!(rt.encode_key(&enter(0)).unwrap(), b"\r");
     assert_eq!(rt.encode_key(&ctrl_tab).unwrap(), b"\t");
     assert_eq!(rt.encode_key(&ctrl_bracket).unwrap(), b"\x1b");
     // Alt+Enter keeps its ESC prefix, a release is not turned into a press, and composition sends nothing.

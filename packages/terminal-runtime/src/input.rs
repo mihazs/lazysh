@@ -97,14 +97,17 @@ impl Encoders {
 /// libghostty-vt encodes a few keys in a keyboard-protocol form (`CSI 27;<mods>;<code>~` for modified
 /// Enter and Tab, `CSI 91;5u` for Ctrl+[) even when the program never asked for one, which a shell prints
 /// as junk. While neither Kitty keyboard flags nor modifyOtherKeys is enabled, send what xterm.js sends
-/// (CR, HT, ESC: fixtures/keys.json); once the program enables a protocol the encoder's form is the
-/// answer. `None` leaves the key to the encoder.
+/// (CR, HT, ESC) with one deliberate exception, Shift+Enter: xterm.js sends CR, so an agent TUI would
+/// submit instead of inserting a newline (#805), and lazysh has always sent `CSI 13;2u` for it (Codex,
+/// OpenCode and Claude Code read that form). Once the program enables a protocol the encoder's form is
+/// the answer. `None` leaves the key to the encoder.
 fn legacy_bytes(terminal: &Terminal, input: &KeyInput) -> Result<Option<&'static [u8]>, Error> {
     if input.release || input.composing {
         return Ok(None);
     }
     let modifiers = input.mods & (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER);
     let bytes: &[u8] = match (input.key, modifiers) {
+        (ffi::GhosttyKey_GHOSTTY_KEY_ENTER, MOD_SHIFT) => b"\x1b[13;2u",
         (ffi::GhosttyKey_GHOSTTY_KEY_ENTER, m) if m != 0 && m & !(MOD_SHIFT | MOD_CTRL) == 0 => {
             b"\r"
         }
