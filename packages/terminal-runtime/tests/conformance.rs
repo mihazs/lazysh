@@ -356,6 +356,33 @@ fn modified_enter_tab_and_ctrl_bracket_stay_legacy_until_the_program_asks_for_a_
     );
 }
 
+/// A program that never enabled a keyboard protocol cannot read `CSI 59;5u`: a shell printed it as junk
+/// where xterm.js sends nothing, and Cmd+C typed a "c". Once the program asks, the chords are reported.
+#[test]
+fn chords_only_a_keyboard_protocol_can_express_send_nothing_until_a_program_enables_one() {
+    let (ctrl, alt, shift, sup) = (1 << 1, 1 << 2, 1, 1 << 3);
+    let ctrl_semicolon = key(ffi::GhosttyKey_GHOSTTY_KEY_SEMICOLON, ctrl, Some(";"));
+    let cmd_c = key(ffi::GhosttyKey_GHOSTTY_KEY_C, sup, Some("c"));
+    let ctrl_alt_shift_a = key(ffi::GhosttyKey_GHOSTTY_KEY_A, ctrl | alt | shift, Some("A"));
+    let escape = key(ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE, ctrl, None);
+    let mut rt = runtime(20, 3);
+    for chord in [&ctrl_semicolon, &cmd_c, &ctrl_alt_shift_a] {
+        assert!(rt.encode_key(chord).unwrap().is_empty(), "{chord:?}");
+    }
+    // Chords xterm.js does send keep their legacy bytes: Ctrl+Esc, Shift+Alt+Tab (back tab).
+    assert_eq!(rt.encode_key(&escape).unwrap(), b"\x1b");
+    let shift_alt_tab = key(ffi::GhosttyKey_GHOSTTY_KEY_TAB, shift | alt, None);
+    assert_eq!(rt.encode_key(&shift_alt_tab).unwrap(), b"\x1b[Z");
+
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>1u");
+    assert_eq!(rt.encode_key(&ctrl_semicolon).unwrap(), b"\x1b[59;5u");
+    assert_eq!(rt.encode_key(&cmd_c).unwrap(), b"\x1b[99;9u");
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>4;2m");
+    assert_eq!(rt.encode_key(&ctrl_semicolon).unwrap(), b"\x1b[27;5;59~");
+}
+
 #[test]
 fn ime_commit_is_sent_once_and_composition_sends_nothing() {
     let mut rt = runtime(20, 3);

@@ -58,8 +58,13 @@ impl Encoders {
                 .filter(|_| !input.composing && !input.release);
             return Ok(text.map_or_else(Vec::new, |text| text.as_bytes().to_vec()));
         }
-        if let Some(bytes) = legacy_bytes(terminal, input)? {
-            return Ok(bytes.to_vec());
+        // Kitty keyboard flags or modifyOtherKeys: the program asked for the protocol forms.
+        let protocol =
+            terminal.kitty_keyboard_flags()? != 0 || terminal.modify_other_keys_enabled()?;
+        if !protocol {
+            if let Some(bytes) = legacy_bytes(input) {
+                return Ok(bytes.to_vec());
+            }
         }
         let mut event = KeyEvent::new()?;
         event.set_action(if input.release {
@@ -80,7 +85,14 @@ impl Encoders {
             event.set_consumed_mods(input.mods & MOD_SHIFT);
         }
         self.key.set_from_terminal(terminal);
-        Ok(self.key.encode(&event)?)
+        let bytes = self.key.encode(&event)?;
+        // A program that never asked for a protocol cannot read its escape codes: a shell would print
+        // them as junk, and xterm.js sends nothing for these chords either.
+        Ok(if !protocol && is_protocol_form(&bytes) {
+            Vec::new()
+        } else {
+            bytes
+        })
     }
 
     pub(crate) fn mouse(
@@ -104,29 +116,43 @@ impl Encoders {
     }
 }
 
-/// libghostty-vt encodes a few keys in a keyboard-protocol form (`CSI 27;<mods>;<code>~` for modified
-/// Enter and Tab, `CSI 91;5u` for Ctrl+[) even when the program never asked for one, which a shell prints
-/// as junk. While neither Kitty keyboard flags nor modifyOtherKeys is enabled, send what xterm.js sends
-/// (CR, HT, ESC) with one deliberate exception, Shift+Enter: xterm.js sends CR, so an agent TUI would
-/// submit instead of inserting a newline (#805), and lazysh has always sent `CSI 13;2u` for it (Codex,
-/// OpenCode and Claude Code read that form). Once the program enables a protocol the encoder's form is
-/// the answer. `None` leaves the key to the encoder.
-fn legacy_bytes(terminal: &Terminal, input: &KeyInput) -> Result<Option<&'static [u8]>, Error> {
+/// libghostty-vt encodes some chords in a keyboard-protocol form (`CSI 27;<mods>;<code>~` for modified
+/// Enter, Tab and Escape, `CSI <code>;<mods>u` for Ctrl+[ or Ctrl+-) even when the program never asked
+/// for one. While neither Kitty keyboard flags nor modifyOtherKeys is enabled the caller sends what
+/// xterm.js sends for the keys below, with one deliberate exception, Shift+Enter: xterm.js sends CR, so
+/// an agent TUI would submit instead of inserting a newline (#805), and lazysh has always sent
+/// `CSI 13;2u` for it (Codex, OpenCode and Claude Code read that form). Printable keys with the Super key send nothing and other chords the
+/// encoder answers with a protocol form are dropped by [`is_protocol_form`]. `None` leaves the key to the encoder.
+fn legacy_bytes(input: &KeyInput) -> Option<&'static [u8]> {
     if input.release || input.composing {
-        return Ok(None);
+        return None;
     }
     let modifiers = input.mods & (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER);
-    let bytes: &[u8] = match (input.key, modifiers) {
+    Some(match (input.key, modifiers) {
         (ffi::GhosttyKey_GHOSTTY_KEY_ENTER, MOD_SHIFT) => b"\x1b[13;2u",
-        (ffi::GhosttyKey_GHOSTTY_KEY_ENTER, m) if m != 0 && m & !(MOD_SHIFT | MOD_CTRL) == 0 => {
-            b"\r"
-        }
+        (ffi::GhosttyKey_GHOSTTY_KEY_ENTER, m) if m != 0 && m & MOD_ALT == 0 => b"\r",
         (ffi::GhosttyKey_GHOSTTY_KEY_TAB, MOD_CTRL) => b"\t",
+        (ffi::GhosttyKey_GHOSTTY_KEY_TAB, m) if m & MOD_SHIFT != 0 && m & MOD_SUPER == 0 => {
+            b"\x1b[Z"
+        }
+        (ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE, m) if m != 0 && m & MOD_ALT == 0 => b"\x1b",
         (ffi::GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, MOD_CTRL) => b"\x1b",
-        _ => return Ok(None),
+        // Cmd or the Meta key is the host's shortcut modifier; typing the text would insert "c" for Cmd+C.
+        (_, m) if m & MOD_SUPER != 0 && input.text.is_some() => b"",
+        _ => return None,
+    })
+}
+
+/// `CSI <numbers> u` (Kitty) and `CSI 27;<mods>;<code>~` (modifyOtherKeys): no legacy key sends these.
+fn is_protocol_form(bytes: &[u8]) -> bool {
+    let params = |end: u8| {
+        bytes
+            .strip_prefix(b"\x1b[")
+            .and_then(|rest| rest.strip_suffix(&[end]))
     };
-    let protocol = terminal.kitty_keyboard_flags()? != 0 || terminal.modify_other_keys_enabled()?;
-    Ok((!protocol).then_some(bytes))
+    let numbers = |rest: &[u8]| rest.iter().all(|b| b.is_ascii_digit() || b";:".contains(b));
+    params(b'u').is_some_and(numbers)
+        || params(b'~').is_some_and(|rest| rest.starts_with(b"27;") && numbers(rest))
 }
 
 /// The character the physical key produces without Shift on a US layout, from the key itself; other

@@ -13,6 +13,7 @@ mod frame;
 mod hub;
 mod ingress;
 mod input;
+mod keymap;
 pub mod layout;
 mod reference;
 mod render;
@@ -30,6 +31,7 @@ pub use render::{
     Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
+pub use keymap::dom_mods;
 pub use runtime::{Config, Error, Events, Modes, TerminalRuntime};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
