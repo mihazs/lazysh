@@ -25,4 +25,7 @@ it('names the mode a leading character selects in the agent\'s own prompt box',(
   expect(promptMode('claude','#remember this')).toBe('memory');
   expect(promptMode('codex','#remember this')).toBeUndefined();
   expect(promptMode('claude','ls !')).toBeUndefined();
+  // Not checked against OpenCode, so its prompt names no mode and offers no command.
+  expect(promptMode('opencode','!ls')).toBeUndefined();
+  expect(matchSlash('opencode','/')).toBeUndefined();
 });

@@ -260,7 +260,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const ready=!!binding,mismatch=auto && !!snapshot && !proven && !binding,refused=!binding && !busy && (!!error || mismatch);
   const problem:TerminalProblem|undefined=error?{key:'key' in error?error.key:'chatHerdrRejected',raw:error.raw,uncertain}:mismatch?{key:'agentComposerWrongPane',uncertain:''}:undefined;
   const problemKey=problem&&JSON.stringify(problem);
-  useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void latestInput.current('request_stop'),answer:body=>latestInput.current(body),cycleMode:async()=>{landed.current=undefined;return await latestInput.current({kind:'cycle_mode'})?landed.current:undefined;},retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
+  useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void stopAgent(),answer:body=>latestInput.current(body),cycleMode:async()=>{landed.current=undefined;return await latestInput.current({kind:'cycle_mode'})?landed.current:undefined;},retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
@@ -288,6 +288,13 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
   latestInput.current=input;
+  /** OpenCode interrupts on a second Escape within a moment of the first ("esc again to interrupt", checked on 2.2.7; both in one
+   * send are read as one key), so Stop is two guarded Escapes with a pause; every other agent takes one. */
+  async function stopAgent() {
+    if(!await latestInput.current('request_stop') || source.agent!=='opencode')return;
+    await new Promise(resolve=>setTimeout(resolve,400));
+    await latestInput.current('request_stop');
+  }
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
     <h4 hidden={!notes}>{t('chatTerminalTitle')}</h4><p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrExplanation':'chatTerminalExplanation')}</p>
     <p hidden={!notes}>{t(labels.backend==='herdr'?'chatHerdrPasteNote':'chatTerminalPasteNote')}</p>

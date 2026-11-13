@@ -235,7 +235,7 @@ impl Input {
             _ => None,
         }
     }
-    /// Only `SendLong` is assembled in chunks; it has no key form.
+    /// Only `SendLong` is assembled in chunks; it has no key form. `pasted` adds the prompts an agent takes only as a paste.
     fn long_text(&self) -> Option<&str> {
         match self {
             Self::SendLong { text } => Some(text),
@@ -274,6 +274,15 @@ impl Input {
             .to_owned(),
         };
         Ok(command)
+    }
+}
+
+/// The text written as one bracketed paste followed by Enter: a long prompt for every agent, and every prompt for OpenCode,
+/// whose prompt box drops a short prompt written as a burst of keys (checked on OpenCode 2.2.7; a paste arrives whole).
+fn pasted<'a>(agent: &Agent, input: &'a Input) -> Option<&'a str> {
+    match input {
+        Input::Send { text } if *agent == Agent::Opencode => Some(text),
+        _ => input.long_text(),
     }
 }
 
@@ -535,6 +544,7 @@ impl Control {
     async fn chat_dispatch(
         &mut self,
         target: &Destination,
+        agent: &Agent,
         input: &Input,
         budget: &mut usize,
     ) -> Result<()> {
@@ -570,7 +580,7 @@ impl Control {
             format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
-        let delivered = if let Some(text) = input.long_text() {
+        let delivered = if let Some(text) = pasted(agent, input) {
             self.paste_long(&guard, &target.pane_id, text, budget).await
         } else if let Some(text) = input.paste_text() {
             let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
@@ -698,7 +708,7 @@ impl Control {
                 }
                 // Dispatch cutoff: after this write begins, cancellation cannot
                 // recall bytes. A failed/partial response retires the actor.
-                self.chat_dispatch(&bound.destination, &input, budget)
+                self.chat_dispatch(&bound.destination, &bound.source.agent, &input, budget)
                     .await?;
                 // The key has no echo of its own: the status line is the only proof of where the cycle landed.
                 let mode = match input {
@@ -1119,6 +1129,30 @@ mod tests {
             3,
         ) {
             assert_eq!(received, "1b 5b 41");
+        }
+    }
+
+    #[test]
+    fn opencode_takes_every_prompt_as_a_paste_and_other_agents_only_the_long_ones() {
+        let short = Input::Send {
+            text: "hello".into(),
+        };
+        let long = Input::SendLong {
+            text: "x".repeat(5000),
+        };
+        for agent in [Agent::Claude, Agent::Codex, Agent::GrokAcp] {
+            assert_eq!(
+                pasted(&agent, &short),
+                None,
+                "{agent:?} types a short prompt"
+            );
+            assert_eq!(pasted(&agent, &long).map(str::len), Some(5000));
+        }
+        assert_eq!(pasted(&Agent::Opencode, &short), Some("hello"));
+        assert_eq!(pasted(&Agent::Opencode, &long).map(str::len), Some(5000));
+        // Keys other than prompts stay keys for every agent.
+        for input in [Input::RequestStop, Input::Select { option: 1, of: 2 }] {
+            assert_eq!(pasted(&Agent::Opencode, &input), None);
         }
     }
 

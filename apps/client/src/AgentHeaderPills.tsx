@@ -6,10 +6,12 @@ import './AgentHeaderPills.css';
 const modeNames = {
   default: 'agentModeDefault', plan: 'agentModePlan', acceptEdits: 'agentModeAcceptEdits', auto: 'agentModeAuto', bypassPermissions: 'agentModeBypass',
 } as const;
+/** The modes an agent starts in; not worth a pill. */
+const defaultModes = ['default', 'build'];
 export const modeName = (mode: string) => Object.hasOwn(modeNames, mode) ? t(modeNames[mode as keyof typeof modeNames]) : mode;
 const compact = (tokens: number) => formatNumber(tokens, {notation: 'compact'});
 
-/** Model, mode, context and git branch in the header row. Unknown pills are not drawn; the default mode is not worth a pill. */
+/** Model, mode, context and git branch in the header row. Unknown pills are not drawn; the default mode is not worth a pill (OpenCode's `build` agent is its default). */
 export function AgentHeaderPills({session}: {session?: AgentSessionInfo}) {
   if (!session) return null;
   const left = contextLeft(session);
@@ -17,7 +19,7 @@ export function AgentHeaderPills({session}: {session?: AgentSessionInfo}) {
     {session.branch && <span className="agent-pill agent-pill-branch" title={t('agentSessionBranch')}><GitBranch size={11} aria-hidden="true"/> {session.branch}</span>}
     {session.worktree && <span className="agent-pill agent-pill-branch" title={t('agentSessionWorktree')}><FolderGit2 size={11} aria-hidden="true"/> {session.worktree}</span>}
     {session.model && <span className="agent-pill agent-pill-model" title={t('agentSessionModel')}>{session.model}</span>}
-    {session.mode && session.mode !== 'default' && <span className="agent-pill" data-mode={session.mode} title={t('agentSessionMode')}>{modeName(session.mode)}</span>}
+    {session.mode && !defaultModes.includes(session.mode) && <span className="agent-pill" data-mode={session.mode} title={t('agentSessionMode')}>{modeName(session.mode)}</span>}
     {session.usage && <span className="agent-pill" data-low={left === undefined ? undefined : left < 10 ? 'danger' : left < 20 ? 'warn' : undefined} title={t('agentSessionContext')}>
       {left === undefined ? t('agentContextUsed', {tokens: compact(session.usage.usedTokens)}) : t('agentContextLeft', {percent: left})}</span>}
   </span>;

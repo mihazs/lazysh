@@ -79,20 +79,22 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   // What the agent receives: every token already replaced by the path of its uploaded file.
   const text=attach.expanded;
   const source=useMemo<TerminalSource|undefined>(()=>{
-    const value={agent:conversation.agent,path:conversation.path,view:'conversation' as const,inlineImages:false};
+    const value={agent:conversation.agent,path:conversation.path,view:'conversation' as const,inlineImages:false,...(conversation.transcriptSessionId?{transcriptSessionId:conversation.transcriptSessionId}:{})};
     return validTerminalSource(value)?Object.freeze(value):undefined;
-  },[conversation.agent,conversation.path]);
+  },[conversation.agent,conversation.path,conversation.transcriptSessionId]);
+  // The Herdr and Zellij commands know Claude Code and Codex only; any other agent never reaches them.
+  const guarded=conversation.agent==='claude'||conversation.agent==='codex' ? conversation.agent : undefined;
   const automatic=!!proof && !!labels && proof.kind===labels.backend;
   const proofKey=JSON.stringify(proof);
   const proofCheck=useMemo(()=>automatic?proves(proof!):undefined,[automatic,proofKey]);
   // A host without the guard takes input through Herdr's own commands, addressed to the pane Herdr links to this conversation.
   const stock=useMemo<StockTarget|undefined>(()=>{
     const host=conversation.herdr;
-    return proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal
-      ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent:conversation.agent,agentSessionId:conversation.path}) : undefined;
-  },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,conversation.agent,conversation.path]);
+    return proof?.kind==='herdr' && host && host.paneId===proof.pane && host.terminalId===proof.terminal && guarded
+      ? Object.freeze({herdrSession:host.herdrSession,pane:host.paneId,terminal:host.terminalId,agent:guarded,agentSessionId:conversation.path}) : undefined;
+  },[proofKey,conversation.herdr?.herdrSession,conversation.herdr?.paneId,conversation.herdr?.terminalId,guarded,conversation.path]);
   // A Zellij host takes input to the pane the agent's report names, and only while that pane still runs this agent.
-  const zellij=useMemo<ZellijTarget|undefined>(()=>proof?.kind==='zellij' ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent:conversation.agent}) : undefined,[proofKey,conversation.agent]);
+  const zellij=useMemo<ZellijTarget|undefined>(()=>proof?.kind==='zellij' && guarded ? Object.freeze({zellijSession:proof.session,pane:proof.pane,agent:guarded}) : undefined,[proofKey,guarded]);
   const live=shown && !!labels && !!source && access.current();
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
@@ -104,7 +106,8 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const modeSwitch=useModeSwitch(control,labels?.backend==='tmux' && agent==='claude',key);
   const slash=!slashClosed && !compositionActive ? matchSlash(agent,draft) : undefined;
   const mode=promptMode(agent,draft),picker=pickerCommand(agent,draft);
-  const mention=!slash && !slashClosed && !compositionActive && cwd ? mentionAt(draft,caret) : undefined;
+  // An @ path is plain text to OpenCode (its own picker makes the real mention), so the folder is not offered.
+  const mention=!slash && !slashClosed && !compositionActive && cwd && agent!=='opencode' ? mentionAt(draft,caret) : undefined;
   const files=useAgentFileSuggestions({sessionId,invoke,cwd,mention});
   // One list for both kinds of suggestion, so the keys and the listbox behave the same.
   const popup:{label:string;items:Suggestion[];pick:(index:number)=>void}|undefined=slash?{label:t('agentComposerCommands'),

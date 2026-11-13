@@ -4,6 +4,7 @@ import {workspaceControl} from './fixtures/workspaceControl';
 import {connectHost} from './fixtures/connectHost';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
+import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
 
 type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
@@ -74,8 +75,15 @@ async function open(page:Page) {
       if(command==='upload_reserve')return {uploadId:'4d1c9ace-94cf-4588-8775-3888061a05bd'};
       if(command==='upload_cancel')return {outcome:'unknown_or_settled'};
       if(command==='upload_file'){fixture.uploads.push(String(args.path));return {path:`/tmp/lazysh-fixture/${String(args.path)}`};}
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'codex-thread',agent:'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
-      if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+      // An OpenCode pane keeps its session in one database: the host lists it, and the report names no transcript file.
+      const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
+      if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
+      if(command==='agent_reported_history' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+      if(command==='agent_transcript' && opencode){
+        if(args.path!==opencode.database || args.agent!=='opencode' || args.view!=='conversation' || args.transcriptSessionId!==opencode.session)throw new Error('Unexpected OpenCode transcript');
+        fixture.polls++;return opencode.page;
+      }
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
         fixture.polls++;
@@ -921,6 +929,38 @@ test('Herdr: the earlier sessions of the pane folder open read-only, and Resume 
   await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Resume in the terminal',exact:true}).click();
   expect(await page.evaluate(()=>(window as unknown as {drafts:unknown[]}).drafts)).toEqual([{sessionId:'display-owned',text:'claude --resume 11111111-1111-4111-8111-111111111111'}]);
+});
+
+test('OpenCode: the pane\'s session is read from its database, and the prompt goes through the guarded input with that session',async({page})=>{
+  await page.addInitScript(fixture=>{(window as unknown as {opencodeFixture:unknown}).opencodeFixture=fixture;},{session:opencodeSession,database:opencodeDatabase,discovery:opencodeDiscovery,page:opencodePage});
+  await open(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.getByText('reply with the single word ok',{exact:true})).toBeVisible();
+  await expect(agent.getByText('ok',{exact:true})).toBeVisible();
+  await expect(agent.locator('header')).toContainText('OpenCode');
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('Run the tests');
+  await expectInViewport(page,draft);
+  await agent.getByRole('button',{name:'Send to the agent',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.agentView.inputs.filter(action=>(action as {input?:{kind:string}}).input?.kind==='send').length)).toBe(1);
+  const sent=await page.evaluate(()=>window.agentView.inputs.find(action=>(action as {input?:{kind:string}}).input?.kind==='send'));
+  expect(sent).toMatchObject({input:{kind:'send',text:'Run the tests'},source:{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'}});
+  // No mode switch or file picker that only another agent has verified.
+  await expect(agent.getByRole('button',{name:/mode/i})).toHaveCount(0);
+});
+
+test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
+  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Gemini CLI';});
+  await open(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.locator('header')).toContainText('Gemini CLI');
+  await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
+  await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);
+  await agent.getByRole('button',{name:'Show terminal',exact:true}).click();
+  await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
 });
 
 test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
