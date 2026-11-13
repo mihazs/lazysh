@@ -542,6 +542,16 @@
     ],
     "nextOffset": 0,
     "schemaVersion": 1,
+    "session": {
+      "cost": {
+        "usd": 0.0
+      },
+      "mode": "build",
+      "model": "fixture-model",
+      "usage": {
+        "usedTokens": 18
+      }
+    },
     "truncated": false,
     "view": "active_branch"
   },
