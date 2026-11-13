@@ -601,3 +601,27 @@ it('offers the mode button only for Claude Code on tmux',async()=>{
   await screen.findByRole('textbox',{name:t('chatDraftLabel')});
   expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
 });
+
+it('offers the slash and the file chips for a touch keyboard that hides / and @, and they open the palettes a typed character opens',async()=>{
+  listing([{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:12}]);
+  await bound({cwd:'/work'});
+  const chips=within(await screen.findByRole('group',{name:t('agentComposerInsert')}));
+  fireEvent.click(chips.getByRole('button',{name:/Commands/}));
+  expect(box().value).toBe('/');
+  expect(screen.getByRole('listbox',{name:t('agentComposerCommands')})).toBeTruthy();
+  // Commands are only for an empty box: a draft in progress offers files only.
+  type('Look at');
+  expect(within(screen.getByRole('group',{name:t('agentComposerInsert')})).queryByRole('button',{name:/Commands/})).toBeNull();
+  box().setSelectionRange(7,7);fireEvent.select(box());
+  fireEvent.click(within(screen.getByRole('group',{name:t('agentComposerInsert')})).getByRole('button',{name:/Files/}));
+  expect(box().value).toBe('Look at @');
+  await waitFor(()=>expect(screen.getByRole('listbox',{name:t('agentComposerFiles')})).toBeTruthy());
+  type('');
+});
+
+it('offers no file chip without a folder to read',async()=>{
+  await bound();
+  const group=await screen.findByRole('group',{name:t('agentComposerInsert')});
+  expect(within(group).getByRole('button',{name:/Commands/})).toBeTruthy();
+  expect(within(group).queryByRole('button',{name:/Files/})).toBeNull();
+});

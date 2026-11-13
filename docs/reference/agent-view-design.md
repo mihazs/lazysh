@@ -1,6 +1,6 @@
 # Agent view design
 
-Status: slices 1 (conversation) and 2 (work rows) shipped; the rest is planned. Tracked by
+Status: slices 1 (conversation), 2 (work rows) and 3 (composer) shipped; the rest is planned. Tracked by
 [#1452](https://github.com/mihazs/lazysh/issues/1452) under the Agent view epic
 [#1277](https://github.com/mihazs/lazysh/issues/1277). Behaviour lives in [Agent view](../agent-view.md); the feature
 gaps against other clients live in [Agent view parity](agent-view-parity.md). This page is the visual and interaction
@@ -93,11 +93,29 @@ you tap. The tokens (`--av-row`, `--av-row-hover`, `--av-code`, `--av-rule`, `--
 
 The result of a plan call (*Todos have been modified successfully*) is not a row of its own: the plan chip already shows it.
 
+## Composer (slice 3)
+
+The message box is one rounded field (radius 24 px), tonal like the rows above it, with an inset hairline that becomes the focus
+ring. It is the only place a person types, so its states are explicit.
+
+| Part | Value |
+| --- | --- |
+| Field | 16 px text in the app font (the old 12 px monospace made a phone zoom on focus), 1.4 line height, 44 px minimum, grows with what is typed, soft wraps included, up to 40% of the screen or 14 rem, then scrolls |
+| One line | attach and the mode switch, the field, then Stop and Send, all 44 px circles in one row |
+| Tall | once a draft needs a second line, the field takes the full width and the controls drop to a row under it; the layout is decided once per draft and returns to one line when the draft is empty, so it cannot flip back and forth |
+| Send | the one filled control: the accent when it can send, a quiet disc when it cannot, a spinner while the guarded input is busy |
+| Stop | a solid square in a quiet circle; it asks twice, and the second tap turns it danger red (unchanged behaviour) |
+| `/` and `@` | while the field has the focus, **Commands** (an empty box) and **Files** (a folder is known) chips put the character in the field and open the palette a typed one opens, for keyboards that hide `/` and `@` on a second page; the chips keep the keyboard up |
+| Palette | a tonal sheet of 44 px rows above the field; the active row is tinted with the accent |
+| Notices | the send receipt, the refusal notice and notes are tinted lines inside the box, never bordered boxes |
+
+Nothing about sending changed: the same guarded input, receipts, drafts, history, mentions and attachments.
+
 ## Planned slices
 
 | Slice | Covers | Status |
 | --- | --- | --- |
 | 1. Conversation | Column, bubbles, typography, Markdown, code blocks, tables, quotes, time on tap | Shipped |
 | 2. Work rows | Tool, thinking, sub-agent, background-task and plan rows with status marks and a chevron | Shipped |
-| 3. Composer | Rounded growing field, attach, send and stop states, slash and mention affordances | Planned |
+| 3. Composer | Rounded growing field, attach, send and stop states, slash and mention affordances | Shipped |
 | 4. Header and states | Header chip, floating jump to latest, streaming indicator, empty and error states, compact mode | Planned |

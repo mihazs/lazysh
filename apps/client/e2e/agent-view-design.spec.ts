@@ -1,5 +1,6 @@
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {openAgentView} from './fixtures/agentViewHost';
+import {setKeyboard} from './fixtures/softKeyboard';
 import {designMessages,designWork,questionMessages,workMessages} from './fixtures/agentDesignConversation';
 import {controlContrast} from './fixtures/controlContrast';
 import {designAudit} from './fixtures/designAudit';
@@ -159,6 +160,72 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
     expect(await agent.evaluate(designAudit)).toEqual({borderedControls:[],cyan:[]});
   });
 
+  test('the composer is one rounded line that grows, with round 44 px controls and the slash and file chips while it has the focus',async({page})=>{
+    const agent=await openWork(page,'forest');await settled(agent);
+    const composer=agent.getByRole('region',{name:'Message composer'});
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    const send=agent.getByRole('button',{name:'Send to the agent'}),stop=agent.getByRole('button',{name:'Request stop'});
+    await expect(send).toBeDisabled();
+    // One row: the field and the controls share a baseline band; the controls are 44 px circles.
+    const one=await boxOf(composer);
+    for(const control of [send,stop,agent.getByRole('button',{name:'Add attachment'})]) {
+      const box=await boxOf(control);
+      expect(box.width).toBe(44);expect(box.height).toBe(44);
+      expect(await control.evaluate(node=>getComputedStyle(node).borderTopLeftRadius)).toBe('50%');
+      expect(box.y).toBeGreaterThanOrEqual(one.y);expect(box.y+box.height).toBeLessThanOrEqual(one.y+one.height);
+    }
+    expect(one.height).toBeLessThan(80);
+    // The chips are not there until the field has the focus, and the page does not move when they appear.
+    await expect(agent.getByRole('group',{name:'Insert'})).toBeHidden();
+    await field.focus();
+    await expect(agent.getByRole('group',{name:'Insert'})).toBeVisible();
+    await agent.getByRole('button',{name:'Commands'}).click();
+    await expect(field).toHaveValue('/');
+    await expect(agent.getByRole('listbox',{name:'Slash commands'})).toBeVisible();
+    await field.fill('');
+    // A text that needs a second line takes the tall layout: the field has the whole width and the controls move under it.
+    await field.fill('Run the whole suite again and tell me which tests sleep, then update the contributor guide with the new key.');
+    const tall=await boxOf(composer),area=await boxOf(field),sendBox=await boxOf(send);
+    expect(tall.height).toBeGreaterThan(one.height+40);
+    expect(area.width).toBeGreaterThan(tall.width-24);
+    expect(sendBox.y).toBeGreaterThan(area.y+area.height-1);
+    expect(await send.isEnabled()).toBe(true);
+    // Back to nothing: the one-line layout returns.
+    await field.fill('');
+    await field.blur();
+    expect((await boxOf(composer)).height).toBeLessThan(80);
+    const viewport=page.viewportSize()!;
+    expect((await boxOf(composer)).x+(await boxOf(composer)).width).toBeLessThanOrEqual(viewport.width);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  });
+
+  test('with the on-screen keyboard up the composer and the line being typed stay in view',async({page})=>{
+    const agent=await openWork(page,'forest');await settled(agent);
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    await field.focus();
+    await setKeyboard(page,true);
+    await field.fill('First line\nSecond line\nThird line');
+    const viewport=page.viewportSize()!,box=await boxOf(agent.locator('.agent-composer'));
+    expect(box.y).toBeGreaterThanOrEqual(0);expect(box.y+box.height).toBeLessThanOrEqual(viewport.height);
+    // The conversation keeps room to be read above it.
+    expect((await boxOf(agent.locator('.chat-messages'))).height).toBeGreaterThan(120);
+  });
+
+  for(const theme of ['forest','midnight','paper'] as const)test(`the composer keeps 4.5:1 on its controls, chips and palette in the ${theme} theme`,async({page})=>{
+    const agent=await openWork(page,theme);await settled(agent);
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    await field.focus();
+    await agent.getByRole('button',{name:/Commands/}).click();
+    const selector='.agent-composer-send, .agent-composer-stop, .agent-composer-row > .icon-button, .agent-composer-row > textarea, .agent-composer-insert button, .agent-composer-palette button, .agent-composer-palette code';
+    // Buttons fade between fills; the ratio is read once they have settled.
+    const lowest=async(only=selector)=>Math.min(...(await agent.locator('.agent-composer').evaluate(controlContrast,{selector:only})).map(row=>row.ratio));
+    expect((await agent.locator('.agent-composer').evaluate(controlContrast,{selector})).length).toBeGreaterThan(6);
+    await expect.poll(()=>lowest()).toBeGreaterThanOrEqual(4.5);
+    await field.fill('Ship it');
+    await expect.poll(()=>lowest('.agent-composer-send')).toBeGreaterThanOrEqual(4.5);
+    expect(await agent.locator('.agent-composer').evaluate(designAudit)).toEqual({borderedControls:[],cyan:[]});
+  });
+
   // `LAZYSH_AGENT_VIEW_SHOTS=<directory> bunx playwright test e2e/agent-view-design.spec.ts -g screenshots` writes the review images of the
   // design brief (docs/reference/agent-view-design.md): the same conversations in two themes at 415 x 900. `LAZYSH_AGENT_VIEW_SHOT_TAG` names the set.
   test('writes the review screenshots when asked',async({page})=>{
@@ -179,6 +246,17 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
       await work.getByRole('button',{name:/1 of 3/}).click();
       await work.locator('.chat-messages').evaluate(list=>{list.scrollTop=list.scrollHeight;});
       await shot('work',theme,'plan');
+      const field=work.getByRole('textbox',{name:'Draft for this terminal'});
+      await work.locator('.chat-messages').evaluate(list=>{list.scrollTop=list.scrollHeight;});
+      await shot('composer',theme,'empty');
+      await field.fill('Run the whole suite again and tell me which tests sleep, then update the contributor guide with the new key.\nKeep it short.');
+      await shot('composer',theme,'typing');
+      await field.fill('');
+      await field.fill('/');
+      await shot('composer',theme,'commands');
+      await field.fill('');
+      await field.fill('Look at @');
+      await shot('composer',theme,'files');
       await page.reload();
     }
   });
