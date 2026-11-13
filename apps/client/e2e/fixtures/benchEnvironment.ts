@@ -53,6 +53,8 @@ const retry = async <T>(attempt: () => Promise<T>, times: number): Promise<T> =>
     try { return await attempt(); } catch (error) { if (left <= 1) throw error; await new Promise(resolve => setTimeout(resolve, 500)); }
   }
 };
+/** Whether the benchmark WebView host has the window focus. Another user of a shared guest bringing an app to the front pauses the page (no frames), which disturbs the run: rows are rejected, not recorded. */
+export const androidFocused = () => androidSerial === null || adb('shell', 'dumpsys window | grep mCurrentFocus').includes(`${WEBVIEW_APP}/`);
 /** The device the Android runs measured on, read when they finish: display, build and which window had the focus (a window of another app means the run was disturbed). */
 export const androidDevice = () => androidSerial === null ? null : {
   serial: androidSerial, release: adb('shell', 'getprop', 'ro.build.version.release'), model: adb('shell', 'getprop', 'ro.product.model'),

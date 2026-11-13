@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { androidDevice, androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
+import { androidDevice, androidFocused, androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
 import { summarize, type StyleFamily } from '../bench/workloads';
 
 // What the first appearance of a glyph in a style costs, with the xterm.js DOM renderer and the WebGL addon (#1323,
@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
 for (const renderer of renderers)
   for (const [family, styles, paced = false] of scale.rows)
     test(`${renderer}: ${family === 'w3' ? `the W3 workload, ${styles} MiB` : `${styles} ${family} styles`}${paced ? ', one frame per chunk' : ''}, cold pass against warm passes`, async ({ page, baseURL }, info) => {
-      test.setTimeout(full ? 10 * 60_000 : 60_000);
+      test.setTimeout(androidSerial ? 2 * 60_000 : full ? 10 * 60_000 : 60_000);
       await page.goto('about:blank');
       test.skip(renderer === 'webgl' && !(await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'))), 'The browser has no WebGL2.');
       await page.goto(benchUrl(baseURL, `renderer=${renderer}`));
@@ -54,6 +54,7 @@ for (const renderer of renderers)
         const cpus = Object.values(spent.processCpuMs), totalCpuMs = cpus.length ? cpus.reduce((a, b) => a + b, 0) : null;
         passes.push({ pass, renders: run.renders, wallMsPerRender: run.wallMs / Math.max(1, run.renders), wallMs: run.wallMs, throughputMiBs: run.throughputMiBs, totalCpuMs, mainThreadTaskMs: spent.mainThreadMs.task, rendererCpuMs: spent.processCpuMs.renderer ?? null, gpuCpuMs: spent.processCpuMs.GPU ?? null, droppedFrames: run.pacing.dropped, frameP99Ms: run.pacing.frameMs?.p99 ?? null, longTasks: run.longTasks, correct: run.correct });
         expect(run.correct, `pass ${pass} must end on the expected screen`).toBe(true);
+        expect(androidFocused(), 'the WebView host lost the window focus: the run is disturbed').toBe(true);
       }
       expect(await page.evaluate(() => window.terminalBench.contextLosses()), 'a lost WebGL context falls back to the DOM renderer and invalidates the run').toBe(0);
       const warm = passes.slice(1), warmWall = summarize(warm.map(p => p.wallMs))!.p50, warmCpu = passes[0].totalCpuMs === null ? null : summarize(warm.map(p => p.totalCpuMs!))!.p50;
