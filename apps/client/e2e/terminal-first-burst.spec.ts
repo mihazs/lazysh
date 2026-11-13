@@ -1,8 +1,8 @@
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { cost, git, installBenchBridge, read, require, root, snapshot } from './fixtures/benchEnvironment';
+import { androidSerial, benchUrl, cost, git, installBenchBridge, read, require, root, snapshot, test } from './fixtures/benchEnvironment';
 import { summarize, type StyleFamily } from '../bench/workloads';
 
 // What the first appearance of a glyph in a style costs, with the xterm.js DOM renderer and the WebGL addon (#1323,
@@ -31,46 +31,46 @@ test.beforeEach(async ({ page }) => {
 
 for (const renderer of renderers)
   for (const [family, styles, paced = false] of scale.rows)
-    test(`${renderer}: ${family === 'w3' ? `the W3 workload, ${styles} MiB` : `${styles} ${family} styles`}${paced ? ', one frame per chunk' : ''}, cold pass against warm passes`, async ({ page, browser }, info) => {
+    test(`${renderer}: ${family === 'w3' ? `the W3 workload, ${styles} MiB` : `${styles} ${family} styles`}${paced ? ', one frame per chunk' : ''}, cold pass against warm passes`, async ({ page, baseURL }, info) => {
       test.setTimeout(full ? 10 * 60_000 : 60_000);
       await page.goto('about:blank');
       test.skip(renderer === 'webgl' && !(await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'))), 'The browser has no WebGL2.');
-      await page.goto(`/bench/terminal-bench.html?renderer=${renderer}`);
+      await page.goto(benchUrl(baseURL, `renderer=${renderer}`));
       await page.waitForFunction(() => !!window.terminalBench);
-      const cdp = await page.context().newCDPSession(page), browserCdp = await browser.newBrowserCDPSession();
+      const cdp = await page.context().newCDPSession(page), browserCdp = androidSerial ? null : await page.context().browser()!.newBrowserCDPSession();
       await cdp.send('Performance.enable');
       const geometry = await page.evaluate(() => window.terminalBench.open());
       expect(geometry.canvases > 0, `renderer ${renderer} must be drawing`).toBe(renderer === 'webgl');
-      await page.evaluate(() => window.terminalBench.calibrate());
+      const refreshNominalMs = await page.evaluate(() => window.terminalBench.calibrate());
       const fixture = family === 'w3'
         ? { ...(await page.evaluate(size => window.terminalBench.prepare('ansi', size), styles * (1 << 20))), distinctGlyphs: null }
         : await page.evaluate(([name, n, bytes]) => window.terminalBench.prepareStyled(name, n, bytes), [family, styles, scale.bytes] as const);
 
-      const passes: Array<Record<string, unknown> & { wallMs: number; totalCpuMs: number }> = [];
+      const passes: Array<Record<string, unknown> & { wallMs: number; totalCpuMs: number | null }> = [];
       for (let pass = 1; pass <= scale.passes; pass++) {
         const before = await snapshot(cdp, browserCdp);
         const run = await page.evaluate(wait => window.terminalBench.stream(wait), paced);
         const spent = cost(before, await snapshot(cdp, browserCdp));
-        const totalCpuMs = Object.values(spent.processCpuMs).reduce((a, b) => a + b, 0);
+        const cpus = Object.values(spent.processCpuMs), totalCpuMs = cpus.length ? cpus.reduce((a, b) => a + b, 0) : null;
         passes.push({ pass, renders: run.renders, wallMsPerRender: run.wallMs / Math.max(1, run.renders), wallMs: run.wallMs, throughputMiBs: run.throughputMiBs, totalCpuMs, mainThreadTaskMs: spent.mainThreadMs.task, rendererCpuMs: spent.processCpuMs.renderer ?? null, gpuCpuMs: spent.processCpuMs.GPU ?? null, droppedFrames: run.pacing.dropped, frameP99Ms: run.pacing.frameMs?.p99 ?? null, longTasks: run.longTasks, correct: run.correct });
         expect(run.correct, `pass ${pass} must end on the expected screen`).toBe(true);
       }
       expect(await page.evaluate(() => window.terminalBench.contextLosses()), 'a lost WebGL context falls back to the DOM renderer and invalidates the run').toBe(0);
-      const warm = passes.slice(1), warmWall = summarize(warm.map(p => p.wallMs))!.p50, warmCpu = summarize(warm.map(p => p.totalCpuMs))!.p50;
-      const extraWallMs = passes[0].wallMs - warmWall, extraCpuMs = passes[0].totalCpuMs - warmCpu;
-      results.push({ renderer, family, styles, paced, bytes: fixture.bytes, distinctGlyphs: fixture.distinctGlyphs, sha256: fixture.sha256, passes, warmWallMs: warmWall, coldExtraWallMs: extraWallMs, coldExtraCpuMs: extraCpuMs, coldExtraWallMsPerGlyph: fixture.distinctGlyphs && extraWallMs / fixture.distinctGlyphs, coldExtraCpuMsPerGlyph: fixture.distinctGlyphs && extraCpuMs / fixture.distinctGlyphs, geometry: { cols: geometry.cols, rows: geometry.rows, gl: geometry.gl }, project: info.project.name });
+      const warm = passes.slice(1), warmWall = summarize(warm.map(p => p.wallMs))!.p50, warmCpu = passes[0].totalCpuMs === null ? null : summarize(warm.map(p => p.totalCpuMs!))!.p50;
+      const extraWallMs = passes[0].wallMs - warmWall, extraCpuMs = passes[0].totalCpuMs === null || warmCpu === null ? null : passes[0].totalCpuMs - warmCpu;
+      results.push({ renderer, family, styles, paced, bytes: fixture.bytes, distinctGlyphs: fixture.distinctGlyphs, sha256: fixture.sha256, passes, warmWallMs: warmWall, coldExtraWallMs: extraWallMs, coldExtraCpuMs: extraCpuMs, coldExtraWallMsPerGlyph: fixture.distinctGlyphs && extraWallMs / fixture.distinctGlyphs, coldExtraCpuMsPerGlyph: fixture.distinctGlyphs && extraCpuMs !== null ? extraCpuMs / fixture.distinctGlyphs : null, refreshNominalMs, geometry: { cols: geometry.cols, rows: geometry.rows, gl: geometry.gl, devicePixelRatio: geometry.devicePixelRatio, viewport: geometry.viewport, userAgent: geometry.userAgent }, project: info.project.name });
     });
 
 test.afterAll(async ({ browser }, info) => {
   if (results.length === 0) return;
-  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/terminal-first-burst-${full ? 'full' : 'smoke'}-${info.project.name}.json`);
+  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/terminal-first-burst-${full ? 'full' : 'smoke'}-${androidSerial ? 'android' : info.project.name}.json`);
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify({
     schema: 1, run: 'first burst', mode: full ? 'full' : 'smoke',
     host: { loadAverageAtEnd: os.loadavg(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, cpuGovernor: read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor') },
-    toolchain: { node: process.versions.node, chromium: browser.version(), xterm: JSON.parse(read(require.resolve('@xterm/xterm/package.json')) ?? '{}').version, webglAddon: JSON.parse(read(require.resolve('@xterm/addon-webgl/package.json')) ?? '{}').version },
+    toolchain: { node: process.versions.node, chromium: androidSerial ? null : browser.version(), androidSerial, xterm: JSON.parse(read(require.resolve('@xterm/xterm/package.json')) ?? '{}').version, webglAddon: JSON.parse(read(require.resolve('@xterm/addon-webgl/package.json')) ?? '{}').version },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
     launchArgs, results,
-    limits: 'Headless Chromium on a desktop host: not an Android WebView. A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached.',
+    limits: `${androidSerial ? 'The Android System WebView of the device with that adb serial, in a fresh process per row; no per-process CPU (the WebView has no process list).' : 'Headless Chromium on a desktop host: not an Android WebView.'} A fresh page per row; pass 1 is cold (nothing drawn yet), later passes replay the same bytes. Per-glyph figures divide the cold excess by the distinct (style, character) pairs of the stream, a count of what a glyph cache must draw, not of what the addon actually cached.`,
   }, null, 2) + '\n');
 });

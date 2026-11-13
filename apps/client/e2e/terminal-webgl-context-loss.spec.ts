@@ -1,8 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { git, installBenchBridge, require, root } from './fixtures/benchEnvironment';
+import { androidSerial, benchUrl, git, installBenchBridge, require, root, test } from './fixtures/benchEnvironment';
 
 // WebGL context-loss run of the renderer shootout (#1323, docs/architecture/terminal-benchmarks.md): the xterm.js WebGL addon
 // on the benchmark page, its context taken away with WEBGL_lose_context, and what the user would see afterwards. Correctness is
@@ -27,7 +27,7 @@ const gap = (log: Record<string, number>, from: string, to: string) => (log[to] 
 const screenshot = (page: Page) => page.locator('.terminal-canvas .xterm-screen').screenshot();
 
 async function open(page: Page, renderer: 'webgl' | 'dom', ...writes: string[]) {
-  await page.goto(`/bench/terminal-bench.html?renderer=${renderer}`);
+  await page.goto(benchUrl(baseUrl, `renderer=${renderer}`));
   await page.waitForFunction(() => !!window.terminalBench);
   const geometry = await page.evaluate(() => window.terminalBench.open());
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
@@ -52,8 +52,10 @@ async function pixelsEqualWithin(page: Page, expected: Buffer, timeout: number) 
 const results: Array<Record<string, unknown>> = [];
 let context: Record<string, unknown> = {};
 const pageErrors: string[] = [];
+let baseUrl: string | undefined;
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
+  baseUrl = baseURL;
   pageErrors.length = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
   await installBenchBridge(page);
@@ -64,10 +66,10 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(() => { expect(pageErrors, 'a lost or restored context must not throw in the page').toEqual([]); });
 
 for (const [name, restoreAfterMs] of [['restored quickly', 300], ['restored just inside the addon grace period', 2000]] as const) {
-  test(`lost and ${name}`, async ({ page, browser }) => {
+  test(`lost and ${name}`, async ({ page }) => {
     const wanted = await reference(page, 'webgl', FIRST);
     const geometry = await open(page, 'webgl', FIRST);
-    context = { geometry, chromium: browser.version() };
+    context = { geometry, chromium: page.context().browser()!.version() };
     expect(await page.evaluate(() => window.terminalBench.loseContext()), 'the terminal must have a WebGL context to lose').toBe(true);
     await page.waitForTimeout(restoreAfterMs);
     // Guard of the method: a lost context must be visible in the pixels, or "equal after restore" proves nothing.
@@ -125,14 +127,14 @@ test('never restored: the app falls back to the DOM renderer and can come back',
 
 test.afterAll(async () => {
   if (results.length === 0) return;
-  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, 'apps/client/bench-results/terminal-webgl-context-loss-desktop.json');
+  const out = process.env.LAZYSH_BENCH_OUT ?? path.resolve(root, `apps/client/bench-results/terminal-webgl-context-loss-${androidSerial ? 'android' : 'desktop'}.json`);
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify({
     schema: 1, candidate: 'xterm-webgl', run: 'context loss',
     host: { loadAverageAtEnd: os.loadavg(), cpu: os.cpus()[0]?.model, os: `${os.type()} ${os.release()}` },
     toolchain: { node: process.versions.node, xterm: version('@xterm/xterm'), webglAddon: version('@xterm/addon-webgl'), playwright: version('@playwright/test') },
     source: { commit: git('rev-parse', 'HEAD'), dirty: (git('status', '--porcelain') ?? '').length > 0 },
-    launchArgs, restoreWindowMs: RESTORE_WINDOW_MS, context, results,
-    limits: 'Headless Chromium on a desktop host: not an Android WebView, no backgrounding of an app, no GPU process crash; the context is taken away with WEBGL_lose_context. Pixel comparison against a terminal fed the same bytes; times are upper bounds with the resolution of one screenshot unless taken in the page.',
+    androidSerial, launchArgs, restoreWindowMs: RESTORE_WINDOW_MS, context, results,
+    limits: `${androidSerial ? 'The Android System WebView of the device with that adb serial' : 'Headless Chromium on a desktop host: not an Android WebView'}, no backgrounding of an app, no GPU process crash; the context is taken away with WEBGL_lose_context. Pixel comparison against a terminal fed the same bytes; times are upper bounds with the resolution of one screenshot unless taken in the page.`
   }, null, 2) + '\n');
 });
