@@ -11,9 +11,9 @@ mod support;
 
 use lazysh_terminal_runtime::layout::row_draws;
 use lazysh_terminal_runtime::{
-    Appearance, CursorVisualStyle, Frame, Image, Overlay, ReferenceRenderer, RenderError,
-    RendererCore, Resume, RgbColor, Screen, SelectionKind, TerminalRenderer, TerminalRuntime,
-    Theme,
+    Appearance, CellMetrics, CursorVisualStyle, Frame, Image, Overlay, ReferenceRenderer,
+    RenderError, RendererCore, Resume, RgbColor, Screen, SelectionKind, TerminalRenderer,
+    TerminalRuntime, Theme,
 };
 use support::*;
 
@@ -74,17 +74,14 @@ fn assert_golden(name: &str, image: &Image) {
 }
 
 #[test]
-fn goldens_for_each_content_class_cursor_shape_and_selection() {
+fn goldens_for_each_content_class_cursor_shape_selection_and_scale() {
     for g in golden::goldens() {
-        let (mut rt, mut r) = start(g.cols, g.rows, &g.bytes);
-        r.set_overlay(g.overlay).unwrap();
-        if g.hollow {
-            let mut frame = rt.snapshot().unwrap();
-            frame.cursor.visual_style = CursorVisualStyle::BlockHollow;
-            show(&mut r, &frame);
-        }
-        r.draw().unwrap();
-        r.present().unwrap();
+        let mut rt = runtime(g.cols, g.rows);
+        feed(&mut rt, &g.bytes);
+        let (width, height) = g.size();
+        let blank = Image::new(width, height, Theme::default().background).unwrap();
+        let mut r = ReferenceRenderer::create(blank, g.appearance()).unwrap();
+        g.show(&mut r, &mut rt);
         assert_golden(g.name, r.surface());
     }
 }
@@ -596,4 +593,63 @@ fn an_unsupported_backend_is_told_apart_from_a_lost_device() {
     let unsupported = RenderError::Unsupported("no adapter");
     assert_ne!(unsupported, RenderError::DeviceLost);
     assert_eq!(unsupported.to_string(), "renderer unsupported: no adapter");
+}
+
+#[test]
+fn scaled_metrics_round_to_whole_pixels_and_stay_valid() {
+    let m = CellMetrics::default();
+    assert_eq!(m.scaled(1, 1), Ok(m));
+    let double = m.scaled(2, 1).unwrap();
+    assert_eq!((double.cell_width, double.cell_height), (16, 32));
+    assert_eq!((double.underline_y, double.line_thickness), (24, 2));
+    let half_more = m.scaled(3, 2).unwrap();
+    assert_eq!((half_more.cell_width, half_more.cell_height), (12, 24));
+    assert_eq!(half_more.line_thickness, 2, "1.5 rounds to 2, never to 0");
+    let shrunk = m.scaled(1, 2).unwrap();
+    assert_eq!(
+        (shrunk.cell_width, shrunk.cell_height, shrunk.line_thickness),
+        (4, 8, 1)
+    );
+    assert!(
+        shrunk.underline_y + 3 <= shrunk.cell_height,
+        "the underline still fits the cell"
+    );
+    assert_eq!(
+        m.scaled(1, 8),
+        Err(RenderError::InvalidSize),
+        "a 1x2 pixel cell has no room for an underline"
+    );
+    for bad in [(0, 1), (1, 0), (65, 1)] {
+        assert_eq!(
+            m.scaled(bad.0, bad.1),
+            Err(RenderError::InvalidSize),
+            "{bad:?}"
+        );
+    }
+    let wide = CellMetrics {
+        cell_width: 200,
+        ..m
+    };
+    assert_eq!(
+        wide.scaled(2, 1),
+        Err(RenderError::InvalidSize),
+        "a cell over 256 pixels is refused"
+    );
+}
+
+#[test]
+fn a_blink_timer_is_wanted_only_for_a_visible_blinking_cursor() {
+    let (mut rt, mut r) = start(10, 2, b"ab\x1b[1 q");
+    assert!(r.wants_blink_timer(), "a blinking block");
+    feed(&mut rt, b"\x1b[2 q");
+    tick(&mut rt, &mut r);
+    assert!(!r.wants_blink_timer(), "a steady block");
+    feed(&mut rt, b"\x1b[1 q\x1b[?25l");
+    tick(&mut rt, &mut r);
+    assert!(!r.wants_blink_timer(), "a hidden cursor");
+    feed(&mut rt, b"\x1b[?25h");
+    tick(&mut rt, &mut r);
+    assert!(r.wants_blink_timer());
+    r.suspend();
+    assert!(!r.wants_blink_timer());
 }

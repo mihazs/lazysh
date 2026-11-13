@@ -77,6 +77,34 @@ impl Default for CellMetrics {
 }
 
 impl CellMetrics {
+    /// The metrics for a display scale of `numerator / denominator` times these (rounded to whole
+    /// pixels, never below one). A host that learns of a new scale factor (a window moved to
+    /// another display, a changed system setting) passes the scaled metrics as a new
+    /// [`Appearance`], which repaints every row; no frame is needed.
+    pub fn scaled(self, numerator: u32, denominator: u32) -> Result<Self, RenderError> {
+        if numerator == 0 || denominator == 0 || numerator > 64 * denominator {
+            return Err(RenderError::InvalidSize);
+        }
+        let by = |v: u32| {
+            ((u64::from(v) * u64::from(numerator) + u64::from(denominator) / 2)
+                / u64::from(denominator))
+            .max(1) as u32
+        };
+        let (cell_height, line_thickness) = (by(self.cell_height), by(self.line_thickness));
+        // Decoration offsets keep their place in the cell when it shrinks: never past its bottom.
+        let fit = |offset: u32, thickness_rows: u32| {
+            by(offset).min(cell_height.saturating_sub(thickness_rows * line_thickness))
+        };
+        Self {
+            cell_width: by(self.cell_width),
+            cell_height,
+            underline_y: fit(self.underline_y, 3),
+            strikethrough_y: fit(self.strikethrough_y, 1),
+            line_thickness,
+        }
+        .validate()
+    }
+
     pub fn validate(self) -> Result<Self, RenderError> {
         let ok = (1..=256).contains(&self.cell_width)
             && (1..=256).contains(&self.cell_height)
@@ -201,7 +229,7 @@ pub struct RenderStats {
 }
 
 /// The [`TerminalRenderer`] methods that only forward to the [`RendererCore`] held in field `$core`
-/// (`apply`, `set_overlay`, `needs_draw`, `suspend`, `stats`), for the `impl` block of a renderer that embeds one.
+/// (`apply`, `set_overlay`, `needs_draw`, `wants_blink_timer`, `suspend`, `stats`), for the `impl` block of a renderer that embeds one.
 /// A second implementation (the wgpu prototype of #1323) showed they are identical for every
 /// renderer; the rest (`create`, `resize`, `draw`, `present`, `resume`, `destroy`) is where
 /// implementations differ.
@@ -218,6 +246,10 @@ macro_rules! forward_to_core {
 
         fn needs_draw(&self) -> bool {
             self.$core.needs_draw()
+        }
+
+        fn wants_blink_timer(&self) -> bool {
+            self.$core.wants_blink_timer()
         }
 
         fn suspend(&mut self) {
@@ -239,6 +271,7 @@ macro_rules! forward_to_core {
 /// * `draw` repaints exactly the rows that changed since the last `draw` and returns how many.
 ///   Zero means the screen is unchanged and `present` has nothing to show.
 /// * `needs_draw` is true exactly when `draw` would paint at least one row, so an idle screen needs no frames.
+/// * `wants_blink_timer` is true only while a visible blinking cursor is on screen; see [`crate::BlinkClock`].
 /// * `present` shows what was drawn on the surface; without a preceding `draw` it does nothing.
 /// * `suspend`, `resume` and `destroy` are idempotent. While suspended `draw` and `present` do
 ///   nothing and return `Ok(0)`/`Ok(())`; `resume` repaints everything on the next `draw`.
@@ -258,6 +291,10 @@ pub trait TerminalRenderer: Sized {
     /// Whether `draw` would paint something now: the host asks for a display frame only when this
     /// is true and runs no frame loop while it is false (nothing changed, suspended, lost).
     fn needs_draw(&self) -> bool;
+    /// Whether the host's blink timer has anything to do for this renderer: it is active, shows a
+    /// visible blinking cursor and so redraws one row per phase change. False for a steady or
+    /// hidden cursor, a suspended, lost or destroyed renderer: the host then arms no timer.
+    fn wants_blink_timer(&self) -> bool;
     fn present(&mut self) -> Result<(), RenderError>;
     fn suspend(&mut self);
     fn resume(&mut self) -> Result<(), RenderError>;
@@ -369,6 +406,13 @@ impl RendererCore {
             && !self.lost.load(Ordering::SeqCst)
             && self.screen.has_content()
             && (self.repaint_all || self.screen.has_dirty())
+    }
+
+    /// Whether a visible blinking cursor is on screen on a live renderer.
+    pub fn wants_blink_timer(&self) -> bool {
+        self.phase == Phase::Active
+            && !self.lost.load(Ordering::SeqCst)
+            && self.screen.cursor_blinks()
     }
 
     /// The start of `draw`: `None` while suspended, before the first frame and when nothing
@@ -593,6 +637,16 @@ impl Screen {
             .collect();
         self.dirty.fill(false);
         rows
+    }
+
+    /// Whether the cursor is visible on the grid and blinking, so its phase changes the picture.
+    pub fn cursor_blinks(&self) -> bool {
+        self.cursor.is_some_and(|c| {
+            c.visible
+                && c.blinking
+                && c.viewport
+                    .is_some_and(|at| at.x < self.cols && at.y < self.rows)
+        })
     }
 
     /// The cursor as it should be painted now: `(column, row, style)`, `cells` wide. A cursor on

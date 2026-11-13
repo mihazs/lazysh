@@ -9,6 +9,7 @@
 //! Rendering is behind [`TerminalRenderer`] (#1322): [`Frame`]s in, pixels on an opaque surface out,
 //! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
+mod blink;
 mod frame;
 mod hub;
 mod ingress;
@@ -19,6 +20,7 @@ mod render;
 mod runtime;
 mod size;
 
+pub use blink::{BlinkClock, FramePacer, BLINK_HALF_PERIOD};
 pub use frame::{Cell, Frame, Row};
 pub use hub::{
     Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
