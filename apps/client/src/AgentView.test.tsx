@@ -7,6 +7,7 @@ import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
+import {dialogScreen,fakeTerminal,modelScreen} from './test/agentDialogScreens';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -797,6 +798,50 @@ describe('image previews in the user bubble',()=>{
     expect(calls('agent_transcript').at(-1)).toMatchObject({agent:'codex',view:'conversation',inlineImages:true});
     expect(screen.getByText(/This image cannot be previewed here/)).toBeTruthy();
     expect(screen.queryByRole('button',{name:/· View$/})).toBeNull();
+  });
+});
+
+describe('a list dialog open on the terminal',()=>{
+  async function open(rows:string[],state='working',agent='claude',label='Claude Code') {
+    host(agent,[row(label,'%3',state)],'available',[turn('Switch model','Done')]);
+    const screenOf=fakeTerminal(rows);
+    // The terminal answers the keys the composer's bound input delivers: arrows move the highlight, Enter closes the dialog.
+    const base=vi.mocked(invoke).getMockImplementation()!;let ahead=0;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
+      const input=command==='tmux_chat'?(args as {action:{kind:string;input?:{kind:string;rows?:number;enter?:boolean}}}).action.input:undefined;
+      if(input?.kind==='pick'){if(input.enter)screenOf.set(dialogScreen('model-closed'));else{ahead+=input.rows!;screenOf.set(modelScreen(5+ahead));}}
+      return base(command,args,options);
+    });
+    render(<AgentView sessionId="ssh" shown tmux terminal={screenOf.terminal} terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    await advance(0);await advance(0);await advance(400);
+    return screenOf;
+  }
+  const keys=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:object}}).action).filter(action=>action.kind==='input').map(action=>action.input);
+  const dialog=()=>screen.getByRole('region',{name:'Dialog in the terminal'});
+  it('answers the /model picker with the keys a person would press, through the pane the report names, once',async()=>{
+    await open(modelScreen(5));
+    expect(within(dialog()).getByRole('heading',{name:'Select model'})).toBeTruthy();
+    await act(async()=>{fireEvent.click(within(dialog()).getByRole('button',{name:/^Fable/}));await vi.advanceTimersByTimeAsync(2000);});
+    expect(keys()).toEqual([{kind:'pick',rows:-2,enter:false},{kind:'pick',rows:0,enter:true}]);
+    expect(screen.queryByRole('region',{name:'Dialog in the terminal'})).toBeNull();
+    // Every key was preceded by a fresh look at which pane the agent runs in.
+    expect(calls('tmux_chat').filter(args=>(args as {action:{kind:string}}).action.kind==='snapshot').length).toBeGreaterThan(2);
+  });
+  it('shows the dialog read-only for an agent whose keys are not verified against captured dialogs',async()=>{
+    await open(modelScreen(5),'working','codex','Codex');
+    expect(within(dialog()).getByRole('heading',{name:'Select model'})).toBeTruthy();
+    expect(within(dialog()).queryByRole('button',{name:/^Sonnet/})).toBeNull();
+    expect(within(dialog()).getByText('Answer this one in the terminal.')).toBeTruthy();
+    expect(keys()).toEqual([]);
+  });
+  it('shows the agent is waiting in the terminal for a dialog it cannot read, and sends nothing',async()=>{
+    await open(dialogScreen('permissions-tabs'));
+    expect(within(screen.getByRole('region',{name:'Dialog in the terminal'})).getByRole('status').textContent).toBe('The agent is waiting for you in the terminal.');
+    expect(keys()).toEqual([]);
+  });
+  it('leaves a permission prompt to the approval card, which the hook report names',async()=>{
+    await open(dialogScreen('permission'),'needs_attention');
+    expect(screen.queryByRole('region',{name:'Dialog in the terminal'})).toBeNull();
   });
 });
 

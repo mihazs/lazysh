@@ -1,0 +1,15 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Rewind
+
+  Confirm you want to restore to the point before you sent this message:
+
+  │ Reply with only the word ok
+  │ (22s ago)
+
+  This message and everything after it will be removed.
+  The code will be unchanged.
+
+  ❯ 1. Restore conversation
+    2. Summarize from here
+    3. Summarize up to here
+    4. Never mind
