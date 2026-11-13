@@ -2217,6 +2217,8 @@ const translations = {
   agentComposerInsert: ["Inserir", "Insertar"],
   agentComposerChipCommands: ["Comandos", "Comandos"],
   agentComposerChipFiles: ["Arquivos", "Archivos"],
+  agentEmptyTitle: ["Nenhuma mensagem ainda", "Aún no hay mensajes"],
+  agentEmptyHint: ["Quando o agente responder ou começar a trabalhar, aparece aqui assim que acontecer.", "Cuando el agente responda o empiece a trabajar, aparece aquí en cuanto ocurra."],
   agentComposerOpensPicker: ["Abre um seletor", "Abre un selector"],
   agentComposerPickerNote: ["{{command}} abre um diálogo. Envie-o e escolha no cartão do diálogo aqui ou no terminal.", "{{command}} abre un diálogo. Envíalo y elige en la tarjeta del diálogo aquí o en el terminal."],
   agentModeBash: ["Comando de shell", "Comando de shell"],

@@ -1,6 +1,6 @@
 # Agent view design
 
-Status: slices 1 (conversation), 2 (work rows) and 3 (composer) shipped; the rest is planned. Tracked by
+Status: all four slices shipped (conversation, work rows, composer, header and states). Tracked by
 [#1452](https://github.com/mihazs/lazysh/issues/1452) under the Agent view epic
 [#1277](https://github.com/mihazs/lazysh/issues/1277). Behaviour lives in [Agent view](../agent-view.md); the feature
 gaps against other clients live in [Agent view parity](agent-view-parity.md). This page is the visual and interaction
@@ -111,11 +111,50 @@ ring. It is the only place a person types, so its states are explicit.
 
 Nothing about sending changed: the same guarded input, receipts, drafts, history, mentions and attachments.
 
-## Planned slices
+## Header and states (slice 4)
 
-| Slice | Covers | Status |
+| Part | Value |
+| --- | --- |
+| Header | 44 px: the state ring, the agent and folder in 15 px semibold on the first line, then what it is doing (*Working*, *Waiting for you*, *Done*, in the state's colour) and the model, mode and context chips on the second, then two 44 px round buttons (options, terminal). A hairline, not a border, separates it |
+| Chips | tonal pills, 12 px; the model and branch drop out below 520 px of header width, the mode (*Plan mode*, *Accept edits*) and the context left (*58% left*, amber under 20%, red under 10%) stay |
+| Jump to latest | a 44 px round button with a down arrow, floating over the end of the timeline, centred. It lives in a row with no height, so it appears and goes without moving a line; **Jump to start** joins it only while earlier messages are not loaded. Its name is still *Jump to latest* |
+| Working line | three dots that rise in turn, then *Working · 0:42 · 3.1k tokens · Bash*. A wait for you is one steady dot in the accent colour; under reduced motion all dots are still |
+| Empty | a conversation with no message yet says **No messages yet** and what will happen, centred, instead of a blank page; the screens before a conversation (no agent found, a partial agent) use the same icon-over-text layout |
+| Error | a tinted card with the cause, not a red box |
+| Compact | a window under 620 px tall (a landscape phone, or a portrait phone with the keyboard up) keeps the conversation and the field: the header is 36 px and shows only the name, the facts line, the `/` and `@` chips and the extra padding go, controls are 40 px, rows 40 px |
+
+## Motion
+
+Every animation is behind `prefers-reduced-motion: no-preference` and is under 0.2 s except the repeating ones, which have a still
+form: the working dots (static), the spinner of a running call and of a sending message (a still arc), the chevron (turns
+instantly). Nothing animates layout; only opacity and transform change, so a running turn never moves the text being read.
+
+## Accessibility
+
+- A message is an article named by its role; a code block is a figure named *Code: ts* whose code is a focusable scroll region; a
+  table is a focusable *Table* region; the time of a message is in the page before it is tapped.
+- Every state has a word: a tool call's outcome (*Done*, *Failed · exit code 1*), a plan step (*Done*, *In progress*, *Pending*),
+  the working line (a status region). Colour and marks only repeat it.
+- Controls are 44 px (40 px in the compact layout); the focus ring of the composer is a 2 px accent ring and every other control
+  keeps the app's focus outline.
+- Contrast: `agent-view-design.spec.ts` measures text in the bundled Forest, Midnight and Paper themes (4.5:1) for the
+  conversation, code, rows, diff lines, composer, palette, header, chips, the jump button and the empty state, and asserts that no
+  control paints a border and nothing is cyan.
+
+## Review screenshots
+
+`docs/reference/agent-view-design/` holds the images the slices were reviewed with: the same synthetic conversation at
+415 x 900 in the Forest (dark) and Paper (light) themes, *before* and *after* each slice. They come from the same spec that checks
+the layout:
+
+```sh
+LAZYSH_AGENT_VIEW_SHOTS=/tmp/shots LAZYSH_AGENT_VIEW_SHOT_TAG=after \
+  bunx playwright test e2e/agent-view-design.spec.ts --project=desktop -g screenshots
+```
+
+| | Forest (dark) | Paper (light) |
 | --- | --- | --- |
-| 1. Conversation | Column, bubbles, typography, Markdown, code blocks, tables, quotes, time on tap | Shipped |
-| 2. Work rows | Tool, thinking, sub-agent, background-task and plan rows with status marks and a chevron | Shipped |
-| 3. Composer | Rounded growing field, attach, send and stop states, slash and mention affordances | Shipped |
-| 4. Header and states | Header chip, floating jump to latest, streaming indicator, empty and error states, compact mode | Planned |
+| Conversation | ![](agent-view-design/conversation-after-forest-code.png) | ![](agent-view-design/conversation-after-paper-code.png) |
+| Work rows | ![](agent-view-design/work-after-forest-plan.png) | ![](agent-view-design/work-after-paper-plan.png) |
+| Composer | ![](agent-view-design/composer-after-forest-typing.png) | ![](agent-view-design/composer-after-paper-typing.png) |
+| Header | ![](agent-view-design/frame-after-forest-header.png) | ![](agent-view-design/frame-after-paper-header.png) |

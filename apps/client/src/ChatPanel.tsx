@@ -1,7 +1,8 @@
 import AttachmentPanel from './AttachmentPanel';
-import {ArrowLeft,Info,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
+import {ArrowDown,ArrowLeft,Info,MessageSquare,Paperclip,RefreshCw,Terminal,Trash2,X} from 'lucide-react';
 import './AgentTokens.css';
 import './AgentRows.css';
+import './AgentChrome.css';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
 import {zellijPane} from './agentPaneIdentity';
@@ -855,7 +856,6 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
       {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
@@ -891,9 +891,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
+        {timeline && opened && !busy && !error && messages.length === 0 && <div className="agent-empty"><MessageSquare size={32} aria-hidden="true"/><strong>{t('agentEmptyTitle')}</strong><p>{t('agentEmptyHint')}</p></div>}
         {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
         {timeline && <AgentQueued queued={queued} />}
       </div>
+      {/* Over the end of the timeline, not in its flow: it appears and goes without moving a line. */}
+      {bound && (!atLatest || history.newer) && <div className="agent-jump"><div className="agent-jump-box">
+        <button type="button" className="agent-jump-latest" aria-label={t("chatJumpLatest")} title={t("chatJumpLatest")} onClick={jumpToLatest}><ArrowDown size={20} aria-hidden="true"/></button>
+      </div></div>}
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}

@@ -2,16 +2,6 @@
 .agent-view[hidden] { display: none; }
 .session-body[data-session-view="both"] > .agent-view { border-inline-start: 1px solid var(--theme-border, var(--border)); }
 .agent-view { position: relative; }
-/* One compact row: the chat's agent, its folder and state, then two icon buttons. */
-.agent-view-header { display: flex; align-items: center; gap: 8px; padding: 2px 8px 2px 12px; min-height: 40px; border-bottom: 1px solid var(--theme-border, var(--border)); flex-shrink: 0; min-width: 0; }
-.agent-view-header > :is(strong, span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-view-header > strong { flex: 0 1 auto; }
-.agent-view-header > span:not(.status-ring) { color: var(--muted); font-size: 12px; flex-shrink: 0; }
-.agent-view-header > .icon-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; padding: 0; flex-shrink: 0; }
-.agent-view-header > .icon-button:first-of-type { margin-inline-start: auto; }
-.agent-view-menu { position: absolute; z-index: 5; top: 42px; inset-inline-end: 8px; max-width: min(360px, calc(100% - 16px)); display: grid; gap: 6px; padding: 8px; border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; background: var(--theme-panel, var(--surface)); box-shadow: 0 8px 24px rgb(0 0 0 / 35%); }
-.agent-view-menu > :is(p, div) { margin: 4px 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.agent-view-menu > button { min-height: 40px; justify-content: flex-start; text-align: start; }
 .agent-view-fallback, .agent-view > :is(p, [role="status"]) { margin: 12px 18px; }
 /* A long list scrolls inside the view; it must never push the live agents out of reach. */
 .agent-view > :is(.agent-view-picker, .herdr-agents) { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
@@ -78,8 +68,6 @@
 .agent-view > .chat-panel[data-bound] .chat-composer .icon-button { order: -1; width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
 .agent-view > .chat-panel[data-bound] .chat-composer > :is(section, p) { order: 3; flex: 1 1 100%; margin: 0; }
 .agent-view > .chat-panel[data-bound] > .chat-messages { align-content: start; }
-.agent-view-header > .status-ring { width: 22px; height: 22px; flex-basis: 22px; }
-.agent-view-header > .status-ring > b { font-size: 11px; }
 /* A harness event is one muted line in the flow, not a bubble. */
 .agent-view .agent-event { border: 0; padding: 0; margin: 0; color: var(--muted); font-size: 13px; }
 .agent-view .agent-event > p { margin: 0; }

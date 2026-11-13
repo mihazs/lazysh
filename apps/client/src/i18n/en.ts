@@ -2214,6 +2214,8 @@ export const english = {
   agentComposerInsert: "Insert",
   agentComposerChipCommands: "Commands",
   agentComposerChipFiles: "Files",
+  agentEmptyTitle: "No messages yet",
+  agentEmptyHint: "When the agent answers or starts work, it appears here as it happens.",
   agentComposerOpensPicker: "Opens a picker",
   agentComposerPickerNote: "{{command}} opens a dialog. Send it, then choose in the dialog card here or in the terminal.",
   agentModeBash: "Shell command",

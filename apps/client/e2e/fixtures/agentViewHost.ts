@@ -17,7 +17,7 @@ export type AgentViewOptions={
   /** Messages the agent has not taken yet. */
   queued?:{text:string;timestamp?:string}[];
 };
-declare global {interface Window {agentViewDesign:{inputs:{kind:string}[]}}}
+declare global {interface Window {agentViewDesign:{inputs:{kind:string}[];/** Sends a frame down the open live stream, as the companion's watch would. */emit:(frame:unknown)=>void}}}
 const transcript='/home/owner/.claude/projects/-work/design.jsonl';
 
 /** The real app on a synthetic host: one tmux terminal whose pane a hook report ties to a recorded conversation, shown in the Agent view. */
@@ -25,7 +25,7 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
   await installNativeBridge(page);
   await page.addInitScript(({snapshot,bound,transcript,options})=>{
     const claude=(options.agent??'claude')==='claude';
-    window.agentViewDesign={inputs:[]};
+    window.agentViewDesign={inputs:[],emit:()=>{throw new Error('The live stream is not open yet');}};
     let connections=0;
     // Keep the top bar so the same header shows on a phone and on the desktop project.
     localStorage.setItem('lazysh.show-top-bar.v1','true');
@@ -59,6 +59,7 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
         case 'agent_watch_start':{
           // The companion's live stream: it opens, then carries the whole recorded conversation.
           const events=args.events as {onmessage:(event:unknown)=>void},emit=(frame:unknown)=>events.onmessage({type:'frame',frame});
+          window.agentViewDesign.emit=emit;
           setTimeout(()=>{emit({type:'hello',protocol:1,agent:claude?'claude':'codex'});emit({type:'snapshot',gen:1,seq:1,entries:options.messages.map(message=>({id:(message as {id:string}).id,rev:1,message})),...(options.work?{work:options.work}:{}),...(options.activity?{activity:options.activity}:{}),session:options.session});});
           return 'watch-1';
         }
@@ -74,6 +75,7 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
   await page.getByRole('tab',{name:'Fixture / work',exact:true}).click({timeout:2000}).catch(()=>undefined);
   await page.getByRole('group',{name:'Session view',exact:true}).getByRole('button',{name:'Agent',exact:true}).click();
   const agent=page.getByRole('region',{name:'Agent view',exact:true}).and(page.locator(':visible'));
-  await expect(agent.getByRole('region',{name:'Turn',exact:true}).first()).toBeVisible();
+  // A conversation with messages has turns; an empty one has its timeline and the composer.
+  await expect(options.messages.length?agent.getByRole('region',{name:'Turn',exact:true}).first():agent.getByRole('textbox',{name:'Draft for this terminal'})).toBeVisible();
   return agent;
 }

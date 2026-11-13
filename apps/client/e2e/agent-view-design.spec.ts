@@ -226,11 +226,135 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
     expect(await agent.locator('.agent-composer').evaluate(designAudit)).toEqual({borderedControls:[],cyan:[]});
   });
 
+  const richSession={model:'claude-sonnet-5',mode:'plan',folder:'lazysh',branch:'main',usage:{usedTokens:84000,limitTokens:200000}};
+
+  test('the header names the agent on one line and what it is doing on a second, in 44 px, with 44 px buttons',async({page})=>{
+    const agent=await openAgentView(page,{theme:'forest',messages:workMessages,state:'working',activity:'working',session:richSession});await settled(agent);
+    const header=agent.locator('header');
+    const title=header.locator('strong');
+    await expect(title).toHaveText('Claude Code · lazysh');
+    // The whole name shows: nothing is cut to make room for the chips.
+    expect(await title.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+    expect((await boxOf(header)).height).toBeLessThanOrEqual(44);
+    const facts=header.locator('.agent-view-facts');
+    await expect(facts).toContainText('Working');
+    await expect(facts.getByText('Plan mode',{exact:true})).toBeVisible();
+    await expect(facts.getByText('58% left',{exact:true})).toBeVisible();
+    // The title is above its facts, both left-aligned to the same edge.
+    const [t,f]=[await boxOf(title),await boxOf(facts)];
+    expect(f.y).toBeGreaterThanOrEqual(t.y+t.height-1);expect(Math.abs(f.x-t.x)).toBeLessThanOrEqual(1);
+    for(const button of await header.getByRole('button').all()) {const box=await boxOf(button);expect(box.width).toBe(44);expect(box.height).toBe(44);}
+    await expect(header.getByRole('button',{name:'Agent view options'})).toBeInViewport();
+  });
+
+  test('Jump to latest floats over the end of the timeline without moving a line, and takes you back',async({page})=>{
+    const agent=await openAgentView(page,{theme:'forest',messages:designMessages,state:'working',session:richSession});await settled(agent);
+    const list=agent.locator('.chat-messages');
+    await expect(agent.getByRole('button',{name:'Jump to latest'})).toHaveCount(0);
+    const height=await list.evaluate(node=>node.scrollHeight);
+    await list.evaluate(node=>{node.scrollTop=0;});
+    const jump=agent.getByRole('button',{name:'Jump to latest'});
+    await expect(jump).toBeVisible();
+    // It takes no room in the flow of the timeline, and it floats over the end of it, centred.
+    expect(await list.evaluate(node=>node.scrollHeight)).toBe(height);
+    const [button,area]=[await boxOf(jump),await boxOf(list)];
+    expect(button.width).toBe(44);expect(button.height).toBe(44);
+    expect(Math.abs(button.x+button.width/2-(area.x+area.width/2))).toBeLessThanOrEqual(2);
+    expect(button.y+button.height).toBeLessThanOrEqual(area.y+area.height);expect(button.y).toBeGreaterThan(area.y+area.height-80);
+    await jump.click();
+    await expect(jump).toHaveCount(0);
+    await settled(agent);
+  });
+
+  test('the working line shows three dots while the turn runs, still under reduced motion, and one steady dot when it waits for you',async({page})=>{
+    const running=await openAgentView(page,{theme:'forest',messages:workMessages,state:'working',activity:'working'});await settled(running);
+    const dots=running.locator('.agent-working-dots > i');
+    await expect(dots).toHaveCount(3);
+    expect(await dots.first().evaluate(node=>getComputedStyle(node).animationName)).not.toBe('none');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    for(const dot of await dots.all()) expect(await dot.evaluate(node=>getComputedStyle(node).animationName)).toBe('none');
+    await expect(running.getByRole('status').filter({hasText:'Working'})).toBeVisible();
+  });
+
+  test('a conversation with nothing in it says so instead of showing a blank page',async({page})=>{
+    const agent=await openAgentView(page,{theme:'forest',messages:[],state:'done'});
+    await expect(agent.getByText('No messages yet',{exact:true})).toBeVisible();
+    await expect(agent.getByText(/appears here as it happens/)).toBeVisible();
+    await expect(agent.getByRole('textbox',{name:'Draft for this terminal'})).toBeVisible();
+  });
+
+  test('a short window keeps the conversation and the field: the facts, the chips and the padding give way',async({page})=>{
+    await page.setViewportSize({width:415,height:560});
+    const agent=await openAgentView(page,{theme:'forest',messages:workMessages,state:'working',activity:'working',session:richSession});await settled(agent);
+    const header=agent.locator('header');
+    expect((await boxOf(header)).height).toBeLessThanOrEqual(40);
+    await expect(header.locator('.agent-view-facts')).toBeHidden();
+    await expect(header.locator('strong')).toHaveText('Claude Code · lazysh');
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    await field.focus();
+    await expect(agent.getByRole('group',{name:'Insert'})).toBeHidden();
+    const [list,composer]=[await boxOf(agent.locator('.chat-messages')),await boxOf(agent.locator('.agent-composer'))];
+    expect(list.height).toBeGreaterThan(150);
+    expect(composer.y+composer.height).toBeLessThanOrEqual(560);
+    expect(await field.evaluate(node=>getComputedStyle(node).fontSize)).toBe('16px');
+  });
+
+  for(const theme of ['forest','midnight','paper'] as const)test(`the header, the jump button and the empty state keep 4.5:1 in the ${theme} theme`,async({page})=>{
+    const agent=await openAgentView(page,{theme,messages:designMessages,state:'working',activity:'working',session:richSession});await settled(agent);
+    await agent.locator('.chat-messages').evaluate(node=>{node.scrollTop=0;});
+    await expect(agent.getByRole('button',{name:'Jump to latest'})).toBeVisible();
+    const selector='header strong, header .agent-view-state, header .agent-pill, header .icon-button, .agent-jump-box button, .agent-working-row > span:last-child';
+    await expect.poll(async()=>Math.min(...(await agent.evaluate(controlContrast,{selector})).map(row=>row.ratio))).toBeGreaterThanOrEqual(4.5);
+    expect((await agent.evaluate(controlContrast,{selector})).length).toBeGreaterThan(5);
+    expect(await agent.evaluate(designAudit)).toEqual({borderedControls:[],cyan:[]});
+    const empty=await openAgentView(page,{theme,messages:[],state:'done'});
+    await expect(empty.locator('.agent-empty')).toBeVisible();
+    for(const row of await empty.locator('.agent-empty').evaluate(controlContrast,{selector:'.agent-empty strong, .agent-empty p'}))expect(row.ratio).toBeGreaterThanOrEqual(4.5);
+  });
+
+
+  test('on a wide window the column stays 40 rem and what is under it lines up with the messages',async({page})=>{
+    await page.setViewportSize({width:1280,height:850});
+    const agent=await openAgentView(page,{theme:'forest',messages:workMessages,work:designWork,state:'working',activity:'working'});await settled(agent);
+    const turn=await boxOf(agent.locator('.agent-turn').first());
+    expect(turn.width).toBeLessThanOrEqual(640+1);
+    for(const part of [agent.locator('.agent-composer'),agent.locator('.agent-plan-chip'),agent.locator('.agent-working-row')]) {
+      const box=await boxOf(part);
+      expect(Math.abs(box.x-turn.x)).toBeLessThanOrEqual(12);
+      expect(Math.abs((box.x+box.width)-(turn.x+turn.width))).toBeLessThanOrEqual(12);
+    }
+  });
+
+
+  test('a reply that grows below the reader moves nothing above it, nor the composer, nor the working line',async({page})=>{
+    const agent=await openAgentView(page,{theme:'forest',messages:designMessages,state:'working',activity:'working'});await settled(agent);
+    const list=agent.locator('.chat-messages');
+    await list.evaluate(node=>{node.scrollTop=0;});
+    const anchors=[agent.locator('.agent-bubble-user').first(),agent.locator('.agent-composer'),agent.locator('.agent-working-row'),agent.getByRole('button',{name:'Jump to latest'})];
+    await expect(anchors[3]).toBeVisible();
+    // The button fades in once when it appears; the positions are read after that.
+    await anchors[3].evaluate(node=>Promise.all(node.getAnimations().map(animation=>animation.finished)));
+    const before=await Promise.all(anchors.map(boxOf));
+    // The agent writes on: the last answer grows by twenty lines, in three parts.
+    for(let part=1;part<=3;part++) {
+      await page.evaluate(({part})=>{
+        const last={id:'a-live',role:'assistant',blocks:[{type:'text',text:Array.from({length:part*7},(_,line)=>`Streaming line ${line+1} of the reply that keeps growing.`).join('\n\n')}]};
+        window.agentViewDesign.emit({type:'delta',gen:1,seq:part+1,upserts:[{id:'a-live',rev:part,message:last}],drops:[]});
+      },{part});
+      await expect(agent.getByText(`Streaming line ${part*7} of the reply`)).toBeAttached();
+      expect(await Promise.all(anchors.map(boxOf))).toEqual(before);
+    }
+    // Still reading above: the list was not dragged down to the new text, and the button is still there to go to it.
+    expect(await list.evaluate(node=>node.scrollTop)).toBe(0);
+    await expect(anchors[3]).toBeVisible();
+  });
+
   // `LAZYSH_AGENT_VIEW_SHOTS=<directory> bunx playwright test e2e/agent-view-design.spec.ts -g screenshots` writes the review images of the
   // design brief (docs/reference/agent-view-design.md): the same conversations in two themes at 415 x 900. `LAZYSH_AGENT_VIEW_SHOT_TAG` names the set.
   test('writes the review screenshots when asked',async({page})=>{
     const directory=process.env.LAZYSH_AGENT_VIEW_SHOTS;
     test.skip(!directory,'Only when LAZYSH_AGENT_VIEW_SHOTS names a directory.');
+    test.setTimeout(180_000);
     const shot=async(set:string,theme:Theme,name:string)=>{await page.waitForTimeout(400);await page.screenshot({path:`${directory}/${set}-${process.env.LAZYSH_AGENT_VIEW_SHOT_TAG??'after'}-${theme}-${name}.png`});};
     for(const theme of ['forest','paper'] as const) {
       const agent=await open(page,theme);await settled(agent);
@@ -257,6 +381,13 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
       await field.fill('');
       await field.fill('Look at @');
       await shot('composer',theme,'files');
+      // The frame: the header with its facts, the jump button while reading earlier text, and a conversation with nothing in it yet.
+      const frame=await openAgentView(page,{theme,messages:designMessages,state:'working',activity:'working',session:{model:'claude-sonnet-5',mode:'plan',folder:'lazysh',branch:'main',usage:{usedTokens:84000,limitTokens:200000}}});await settled(frame);
+      await frame.locator('.chat-messages').evaluate(list=>{list.scrollTop=0;});
+      await shot('frame',theme,'header');
+      const empty=await openAgentView(page,{theme,messages:[],state:'done'});
+      await expect(empty.getByRole('textbox',{name:'Draft for this terminal'})).toBeVisible();
+      await shot('frame',theme,'empty');
       await page.reload();
     }
   });
