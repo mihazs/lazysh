@@ -9,7 +9,7 @@ export default defineConfig({
   timeout: 30 * 60_000,
   workers: 1,
   reporter: 'list',
-  use: { baseURL: 'http://127.0.0.1:1421' },
+  use: { baseURL: 'http://127.0.0.1:1421', launchOptions: { args: (process.env.LAZYSH_BENCH_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean) } },
   webServer: { command: 'bunx vite build -c vite.bench.config.ts && bunx vite preview -c vite.bench.config.ts', url: 'http://127.0.0.1:1421/bench/terminal-bench.html', reuseExistingServer: false, timeout: 180_000 },
   projects: benchProjects,
 });

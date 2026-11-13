@@ -57,3 +57,35 @@ Negative or risky: a second terminal implementation to keep behaviourally aligne
 ## Validation gaps at the time of writing
 
 No physical Android device, no emulator, no Zig toolchain and no iOS, Windows or macOS host were available to the author. No claim about performance, energy, rendering, build success on other targets or device behaviour is made in this ADR.
+
+## Amendment 1 (2026-11-12): first renderer shootout results
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the part that can run on the available host. Evidence: [renderer shootout](terminal-benchmarks.md#renderer-shootout-xtermjs-renderers-1323), raw files `benchmarks/terminal-shootout-*.json`. The decision rule of [native rendering](native-rendering.md#renderer-candidates) and the [acceptance of a candidate](terminal-benchmarks.md#acceptance-of-a-candidate) apply unchanged. The status of this ADR stays **Proposed**.
+
+**What was measured.** xterm.js 5.5.0 with its DOM renderer, its canvas addon and its WebGL addon (software and hardware GL), the same workloads and fixtures, one desktop host, headless Chromium, one geometry, three invocations for DOM and WebGL on hardware GL. **What was not:** every device (no Android, iOS, Windows or macOS), energy, thermal and battery, the Linux and Apple WebViews, and every native candidate: wgpu, Skia or Android Canvas drawing and a WASM terminal were not built. Candidates that were not built are neither eliminated nor selected.
+
+Criteria, for the WebGL addon on hardware GL against the DOM renderer (this host only):
+
+| Criterion | Result |
+| --- | --- |
+| No correctness regression | Met: every workload ended on the expected screen in all runs. |
+| No input-latency regression under heavy output | Met: echo p50 14.3 to 14.6 ms against 14.7 to 15.3; p95 and p99 higher by 2 to 3 % (30.7 and 32.5 ms against 30.0 and 31.7), within one 16.7 ms frame. |
+| Near-zero idle activity | Met, better with a blinking cursor (no style recalculation against 640 to 675 per 10 s); equal with blink off. |
+| Stable memory across session churn | Met per session (6.5 to 6.8 MiB against 7.3 to 7.7); fixed cost higher (JS heap about 14 MiB, renderer resident set about 8 to 12 %). |
+| At least 25 % better in one key latency or CPU metric | Met on ANSI-heavy output (W3 total process CPU 0.8 to 1.0 s against 2.1 to 2.9 s) and on the ten-session echo p99 (16.2 against 25.4 ms). |
+| Without a material regression elsewhere | **Not cleared**: W3 frame interval p99 33 to 116 to 197 ms with 13 to 21 dropped frames against 2 to 5; W4 total process CPU about 10 % higher at the median (0.34 against 0.31 s). |
+| At least 20 % lower Android energy | **Not measurable here**: no Android device, no battery counters. |
+
+Decisions, recorded per candidate and platform:
+
+| Candidate or platform | Decision |
+| --- | --- |
+| xterm.js DOM renderer | Stays the default and the fallback everywhere. No default changes. |
+| xterm.js canvas addon | Does not proceed. It was 16 to 46 times slower than the DOM renderer on W2 and W4 and slower under sustained output, with and without GPU flags. |
+| xterm.js WebGL addon on a software rasterizer | Not a usable configuration (0.22 to 0.26 MiB/s). Any use of the WebGL addon must be gated on real hardware acceleration and must fall back to the DOM renderer, which is capability probing ([#1336](https://github.com/mihazs/lazysh/issues/1336)) before anything else. |
+| xterm.js WebGL addon on hardware GL | **Proceeds to the next gate as the leading measured candidate** and is the cheapest to adopt (no native composition risk). It does not ship: it needs device measurements on Android (energy, thermal, context loss and recovery, memory pressure, background and resume), a fix or mitigation for the W3 frame-pacing regression, a replacement for the custom bold color seam (`configureTerminalBold` was refused on the WebGL and canvas renderers in smoke runs of the harness), and a screen-reader decision. |
+| wgpu, native Skia or Android Canvas drawing | Not built, so no decision. They remain candidates for devices where the WebGL addon fails the criteria, which only device runs can show. The Renderer API and a CPU reference renderer ([#1322](https://github.com/mihazs/lazysh/issues/1322)) are the plug point and the correctness oracle. |
+| WASM terminal | Not built, so no decision. One existing implementation, ghostty-web 0.4.0 (MIT, libghostty-vt compiled to WebAssembly; its npm metadata and package contents were inspected, it was not installed in the repository or run), bundles its own prebuilt `ghostty-vt.wasm`; adding it would put a second Ghostty build, whose provenance was not verified, beside the vendored and hash-checked source ([#384](https://github.com/mihazs/lazysh/issues/384)). Building a WASM from the vendored source is the alternative; either needs a maintainer decision. |
+| Android, iOS, macOS, Windows, Linux | Undecided for every platform: no device measurement exists. Tauri's Linux WebView is WebKitGTK and the Apple ones WKWebView, so Chromium results do not apply to them; Android System WebView and WebView2 are Chromium, but their GPU paths were not measured. |
+
+Next measurements, in order: the Android manual procedure with the WebGL addon and the DOM renderer on a physical device ([#1340](https://github.com/mihazs/lazysh/issues/1340)); W3 frame pacing with the WebGL addon on the phone viewport; a WebGL context-loss run. A native candidate is built only if those show the WebGL addon missing the criteria on a device.
