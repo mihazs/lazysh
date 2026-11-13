@@ -132,7 +132,7 @@
     },
     "packages/companion-release": {
       "name": "@lazysh/companion-release",
-      "version": "1.60.0",
+      "version": "1.61.0",
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
