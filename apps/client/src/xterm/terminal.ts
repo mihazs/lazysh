@@ -4,6 +4,7 @@ import {observeTerminalIme} from './terminalIme';
 import {getPreferences, terminalOptions} from '../preferences';
 import {fontFamilyFor} from '../fonts';
 export {applyTerminalTheme} from './terminalBold';
+export type {Terminal};
 
 export function createTerminal() {
   return new Terminal({

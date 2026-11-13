@@ -1,5 +1,5 @@
 import type {Terminal} from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
+import './xterm/styles';
 import {version} from '@xterm/xterm/package.json';
 import {decodeClipboardRequest} from './preferences';
 import {installMoshResize} from './xterm/moshResize';

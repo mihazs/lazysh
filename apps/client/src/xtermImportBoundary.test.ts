@@ -45,13 +45,10 @@ function privateCoreUsers() {
 
 /** The xterm backend: its adapter, option mapping and the seams that patch xterm internals. */
 const isBackend = (file: string) => file.startsWith('src/xterm/') || /^src\/xterm(?:TerminalAdapter|Options)(?:\.test)?\.ts$/.test(file);
-/** Harnesses that exercise the xterm backend itself in a real browser (style sheet and `Terminal` type). */
-const backendHarnesses = ['e2e/fixtures/TerminalImeHarness.ts', 'e2e/fixtures/ThemeRenderingHarness.ts', 'e2e/mosh-resize.spec.ts'];
 
 describe('who imports xterm.js', () => {
-  it('is only the xterm backend and its harnesses, so no consumer can depend on xterm.js', () => {
-    const outside = [...xtermImporters().keys()].filter(file => !isBackend(file));
-    expect(outside.sort()).toEqual([...backendHarnesses].sort());
+  it('is only the xterm backend, harnesses included, so no consumer can depend on xterm.js', () => {
+    expect([...xtermImporters().keys()].filter(file => !isBackend(file))).toEqual([]);
   });
 
   it('keeps xterm internals (`_core`) inside the backend', () => {
@@ -61,7 +58,7 @@ describe('who imports xterm.js', () => {
 
   it('finds the backend through the same resolution, so the check cannot pass by finding nothing', () => {
     const inside = [...xtermImporters().keys()].filter(isBackend);
-    expect(inside).toEqual(expect.arrayContaining(['src/xtermTerminalAdapter.ts', 'src/xtermOptions.ts', 'src/xterm/moshResize.ts', 'src/xterm/terminal.ts']));
+    expect(inside).toEqual(expect.arrayContaining(['src/xtermTerminalAdapter.ts', 'src/xtermOptions.ts', 'src/xterm/moshResize.ts', 'src/xterm/terminal.ts', 'src/xterm/styles.ts']));
   });
 
   it('keeps the pane, the selection tools, the app shell and the preferences behind the adapter', () => {

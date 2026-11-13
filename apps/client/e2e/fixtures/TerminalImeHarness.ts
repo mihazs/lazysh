@@ -1,6 +1,6 @@
 import {createTerminal,observeTerminalInput} from '../../src/xterm/terminal';
 import type {UnappliedTerminalEdit} from '../../src/terminalAdapter';
-import '@xterm/xterm/css/xterm.css';
+import '../../src/xterm/styles';
 
 /** Synthetic text only. No native transport, host, input history or private keyboard data. */
 export function mountTerminalImeHarness(unsupportedShape = false, options: {macOptionIsMeta?:boolean;screenReaderMode?:boolean} = {}) {

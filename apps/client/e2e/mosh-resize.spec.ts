@@ -1,7 +1,7 @@
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {openMoshApp} from './fixtures/moshApp';
-import type {Terminal} from '@xterm/xterm';
+import type {Terminal} from '../src/xterm/terminal';
 import {readFileSync} from 'node:fs';
 import type {MoshResizeController} from '../src/xterm/moshResize';
 type Frame={cols:number;rows:number;state:number;bytesHex:string;expectedVisibleRows:number;expectedCursor:number[];expectedLongRow:string;expectedFirstRowBoldRed:boolean};
