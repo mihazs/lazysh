@@ -8,7 +8,7 @@ import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
-import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from './test/opencodeRecorded';
+import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -794,12 +794,12 @@ describe('session info sheet',()=>{
 describe('OpenCode pane',()=>{
   // The companion's own output for a real OpenCode session; the hook report names the same session id.
   const opencodeRow=(session=opencodeSession)=>({...row('OpenCode','%3'),sessionId:session});
-  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery)=>{
+  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery,page:unknown=opencodePage)=>{
     vi.mocked(invoke).mockImplementation(async(command,args)=>{
       if(command==='tmux_chat')return tmuxChatReply(command,args);
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
       if(command==='agent_transcripts')return discovered;
-      if(command==='agent_transcript')return opencodePage;
+      if(command==='agent_transcript')return page;
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       throw new Error(`Unexpected ${command}`);
     });
@@ -813,6 +813,16 @@ describe('OpenCode pane',()=>{
     expect(calls('agent_transcripts')[0]).toEqual({sessionId:'ssh',agent:'opencode'});
     expect(calls('agent_transcript')[0]).toMatchObject({agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'});
     expect(calls('agent_reported_history')).toEqual([]);
+  });
+
+  it('draws the shell command OpenCode ran as a tool card with its output, from a recorded session',async()=>{
+    const found={...opencodeDiscovery,sessions:[{...opencodeDiscovery.sessions[0],sessionId:opencodeToolSession}]};
+    await mount([opencodeRow(opencodeToolSession)],found,opencodeToolPage);
+    const card=screen.getByText('shell').closest('details')!;
+    expect(card.getAttribute('data-status')).toBe('ok');
+    expect(card.textContent).toContain('cat notes.txt');
+    expect(card.querySelector('[aria-label="Output"]')!.textContent).toBe('hello');
+    expect(screen.getAllByText('hello').length).toBeGreaterThan(1);
   });
 
   it('sends the prompt through the guarded input with its database session, and Stop is two Escapes a moment apart',async()=>{

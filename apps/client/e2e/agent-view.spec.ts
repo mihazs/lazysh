@@ -77,7 +77,7 @@ async function open(page:Page) {
       if(command==='upload_file'){fixture.uploads.push(String(args.path));return {path:`/tmp/lazysh-fixture/${String(args.path)}`};}
       // An OpenCode pane keeps its session in one database: the host lists it, and the report names no transcript file.
       const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??'codex-thread',agent:opencode?'OpenCode':(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
       if(command==='agent_reported_history' && !opencode)return {schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
       if(command==='agent_transcript' && opencode){
@@ -948,6 +948,19 @@ test('OpenCode: the pane\'s session is read from its database, and the prompt go
   expect(sent).toMatchObject({input:{kind:'send',text:'Run the tests'},source:{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'}});
   // No mode switch or file picker that only another agent has verified.
   await expect(agent.getByRole('button',{name:/mode/i})).toHaveCount(0);
+});
+
+test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{
+  await page.addInitScript(()=>{(window as unknown as {reportedAgent:string}).reportedAgent='Gemini CLI';});
+  await open(page);
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(agent.locator('header')).toContainText('Gemini CLI');
+  await expect(agent.getByRole('button',{name:'Show terminal',exact:true})).toBeVisible();
+  await expect(agent.getByRole('textbox',{name:'Draft for this terminal',exact:true})).toHaveCount(0);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);
+  await agent.getByRole('button',{name:'Show terminal',exact:true}).click();
+  await expect(switcher(page).getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-pressed','true');
 });
 
 test('Enter sends from a hardware keyboard and stays a line break on a touch keyboard; Stop reaches the terminal once',async({page},testInfo)=>{
