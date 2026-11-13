@@ -33,6 +33,7 @@ import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
 import {AgentSearch,CopyButton,messageMarkdown,type Reading} from './AgentReading';
+import {cachedConversation,conversationKey,rememberConversation} from './agentConversationCache';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -593,6 +594,19 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const readSlice = (slice: WindowRequest) => void read(false, false, false, slice);
   const loadOlder = () => {const first = messagesRef.current[0]; if (first) readSlice({kind: 'before', id: first.id});};
   const loadNewer = () => {const last = messagesRef.current.at(-1); if (last) readSlice({kind: 'after', id: last.id});};
+  // Coming back to a conversation read before shows what was last known at once; the host's answer replaces it.
+  const cacheKey=bound?conversationKey(sessionId,bound):undefined;
+  const [stale,setStale]=useState(false);
+  useEffect(()=>{
+    const cached=cacheKey?cachedConversation<Message,Activity,Queued[],WorkItem[],AgentSessionInfo>(cacheKey):undefined;
+    if(!cached || opened || !access.current() || messagesRef.current.length)return;
+    messagesRef.current=[...cached.messages];scrollTo.current='bottom';
+    setMessages(messagesRef.current);setHistory({paging:true,older:cached.older,newer:false});setSession(cached.session);setStale(true);
+  },[cacheKey,opened,access]);
+  useEffect(()=>{if(opened)setStale(false);},[opened]);
+  useEffect(()=>{
+    if(cacheKey && opened && messages.length && !history.newer)rememberConversation(cacheKey,{messages,older:history.older,queued,session});
+  },[cacheKey,opened,messages,history.older,history.newer,queued,session]);
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
   useEffect(() => {if (shown && bound && path===bound.path && !opened && !error) void read(true);}, [shown, bound, path, opened, error, completed]);
   // A conversation view shows what the harness wrote as compact events, not as the person's bubbles.
@@ -698,7 +712,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
-    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-watch={watchTarget && following ? watch.state : undefined} data-attachment-open={attachmentOpen || undefined} data-child-open={child ? "" : undefined} aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-stale={stale || undefined} data-watch={watchTarget && following ? watch.state : undefined} data-attachment-open={attachmentOpen || undefined} data-child-open={child ? "" : undefined} aria-label={t("chatTitle")}>
       {child && <div className="agent-child">
         <header><button type="button" className="subtle-button" onClick={() => setChild(undefined)}><ArrowLeft size={18} aria-hidden="true"/>{t('agentStatusBack')}</button><strong title={child.title}>{child.title}</strong></header>
         <ChatPanel sessionId={sessionId} bound={{agent: 'claude', path: child.path}} timeline allowStage={false} />

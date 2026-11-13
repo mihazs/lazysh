@@ -180,6 +180,26 @@ Tap to first content, median of 5 runs (`bun run bench:agent-view`), desktop Chr
 
 Each fix lands as its own change; this table is updated with the new numbers by the change that makes them.
 
+### Last known messages shown at once (coming back to a conversation)
+
+`agentConversationCache.ts` keeps the newest 100 messages of up to 8 read conversations in memory for the life of the page and
+`ChatPanel` paints them while the host is asked again (`data-stale` until the host answers). Memory only, never storage: a conversation
+can hold secrets, as the composer history does (`agentComposerHistory.ts` is also page-lifetime), and the cache is dropped when the app
+locks. A cold start, a new connection and another conversation are not helped. Tests: `ChatPanel.cache.test.tsx` (shown before the
+host answers and replaced by its answer, kept with the error when the host cannot answer, never shown for another conversation or
+session, gone after a lock). The benchmark opens the view once on a fast link, then measures opening it again with the modelled link and
+a warm connection (`revisit`); that remounts the whole Agent view, which has to bind the conversation again before it can show it, so it is
+a conservative case for switching between Herdr agents, where the binding is already known:
+
+| Scenario (revisit) | First open, no cache | Revisit |
+| --- | ---: | ---: |
+| tmux, LAN | 503 ms | **222 ms** |
+| Herdr, mobile | 1,009 ms | **212 ms** |
+| Herdr, mobile, 4x CPU | 1,194 ms | 313 ms |
+
+The revisit time is the bind step (the Agent view still checks that the conversation belongs to the pane) plus one render, so it grows
+with the link only by that step.
+
 ### Not measured
 
 - A real phone, the Android WebView, and the radio: needs a device number.

@@ -11,10 +11,12 @@ import heavyUrl from './fixtures/agent-page-heavy.json?url';
 
 /** SSH cost model. `execMs` is one host exec (a probe, a snapshot, a transcript read); `execs` is how many each native command runs. */
 export type Model = {execMs: number; controlMs: number; hostMs: number; page: 'typical' | 'heavy'; stream: boolean; mode: 'tmux' | 'herdr';
+  /** Open once first, as a person who has looked at this conversation before, then measure opening it again. */
+  revisit: boolean;
   /** Sequential execs per native command: the companion probe plus the command, the Herdr tree reads around a conversation read. */
   execs: Record<string, number>};
 const TMUX_EXECS = {agent_snapshot: 2, agent_reported_history: 2, agent_transcript: 2, agent_watch_start: 2, herdr_tree: 1, agent_herdr_conversation: 4};
-export const DEFAULT_MODEL: Model = {execMs: 8, controlMs: 4, hostMs: 90, page: 'typical', stream: true, mode: 'tmux', execs: TMUX_EXECS};
+export const DEFAULT_MODEL: Model = {execMs: 8, controlMs: 4, hostMs: 90, page: 'typical', stream: true, mode: 'tmux', revisit: false, execs: TMUX_EXECS};
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve));
@@ -117,7 +119,11 @@ function meter() {
   return {stop() { running = false; observer.takeRecords().forEach(entry => tasks.push({start: entry.startTime - started, duration: entry.duration})); observer.disconnect(); return {tasks, intervals}; }};
 }
 
-async function open(next: Partial<Model> = {}) {
+async function open(next: Partial<Model> = {}): ReturnType<typeof openOnce> {
+  if (next.revisit) { await openOnce({...next, revisit: false, execMs: 4, hostMs: 5}); await sleep(100); }
+  return openOnce(next);
+}
+async function openOnce(next: Partial<Model> = {}) {
   model = {...DEFAULT_MODEL, ...next, execs: {...DEFAULT_MODEL.execs, ...next.execs}};
   model.controlMs = Math.max(4, model.execMs / 2);
   dispose();

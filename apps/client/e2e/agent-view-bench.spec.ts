@@ -20,7 +20,7 @@ const metrics = async (cdp: CDPSession): Promise<Metrics> => Object.fromEntries(
 const ms = (after: Metrics, before: Metrics, name: string) => (after[name] - before[name]) * 1000;
 const percentile = (values: number[], p: number) => values.length ? [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))] : null;
 
-type Scenario = {name: string; link: keyof typeof links; throttle: keyof typeof throttles; page: 'typical' | 'heavy'; stream: boolean; mode?: 'tmux' | 'herdr'; hostMs?: number; execs?: Record<string, number>};
+type Scenario = {name: string; link: keyof typeof links; throttle: keyof typeof throttles; page: 'typical' | 'heavy'; stream: boolean; mode?: 'tmux' | 'herdr'; revisit?: boolean; hostMs?: number; execs?: Record<string, number>};
 const everyScenario: Scenario[] = [
   {name: 'tmux open, local link', link: 'local', throttle: 'x1', page: 'typical', stream: true},
   {name: 'tmux open, LAN (30 ms RTT)', link: 'lan', throttle: 'x1', page: 'typical', stream: true},
@@ -33,6 +33,9 @@ const everyScenario: Scenario[] = [
   {name: 'herdr open, LAN (30 ms RTT)', link: 'lan', throttle: 'x1', page: 'typical', stream: true, mode: 'herdr'},
   {name: 'herdr open, mobile (80 ms RTT)', link: 'mobile', throttle: 'x1', page: 'typical', stream: true, mode: 'herdr'},
   {name: 'herdr open, mobile, 4x CPU', link: 'mobile', throttle: 'x4', page: 'typical', stream: true, mode: 'herdr'},
+  {name: 'tmux revisit, LAN', link: 'lan', throttle: 'x1', page: 'typical', stream: true, revisit: true},
+  {name: 'herdr revisit, mobile', link: 'mobile', throttle: 'x1', page: 'typical', stream: true, mode: 'herdr', revisit: true},
+  {name: 'herdr revisit, mobile, 4x CPU', link: 'mobile', throttle: 'x4', page: 'typical', stream: true, mode: 'herdr', revisit: true},
 ];
 
 const scenarios = full ? everyScenario : everyScenario.slice(0, 1);
@@ -56,7 +59,7 @@ async function run(page: Page, scenario: Scenario) {
   const before = await metrics(cdp);
   const profile = process.env.LAZYSH_BENCH_PROFILE;
   if (profile) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', {interval: 200}); await cdp.send('Profiler.start'); }
-  const opened = await page.evaluate(model => window.agentBench.open(model), {execMs: links[scenario.link], page: scenario.page, stream: scenario.stream, mode: scenario.mode ?? 'tmux', ...(scenario.hostMs === undefined ? {} : {hostMs: scenario.hostMs})});
+  const opened = await page.evaluate(model => window.agentBench.open(model), {execMs: links[scenario.link], page: scenario.page, stream: scenario.stream, mode: scenario.mode ?? 'tmux', revisit: scenario.revisit === true, ...(scenario.hostMs === undefined ? {} : {hostMs: scenario.hostMs})});
   const after = await metrics(cdp);
   if (profile) {
     const {profile: cpu} = await cdp.send('Profiler.stop');
