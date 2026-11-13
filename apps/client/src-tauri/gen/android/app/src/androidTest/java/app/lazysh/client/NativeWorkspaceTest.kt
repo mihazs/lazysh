@@ -3718,6 +3718,8 @@ class NativeWorkspaceTest {
         if (evaluate(scenario, workspaceElementVisible(add, true)) == "true") return
         keepTopBar(scenario)
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+        // A live remote connection opens the drawer on Agents; the host list is the Connections tab.
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[data-workspace-mode='connections']")).perform(webClick())
         awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true))
     }
 
