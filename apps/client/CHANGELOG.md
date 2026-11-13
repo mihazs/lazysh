@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.58.0
+
+### Minor Changes
+
+- 3939ff7: Answer Codex's approval prompt and its list dialogs (/model, /permissions, /review) from the Agent view with the keys a person presses, after reading the highlight back.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.58.0
+  - @lazysh/common@1.58.0
+  - @lazysh/display-idle@1.58.0
+  - @lazysh/et-transport@1.58.0
+  - @lazysh/mosh-transport@1.58.0
+
 ## 1.57.0
 
 ### Minor Changes
