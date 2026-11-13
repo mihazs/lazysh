@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "bench:terminal": "playwright test -c playwright.bench.config.ts",
+    "bench:agent-view": "playwright test -c playwright.bench-agent.config.ts",
     "test:published-native-gui": "vitest run --config vitest.published-native.config.ts",
     "tauri": "tauri",
     "check": "tsc -b"
