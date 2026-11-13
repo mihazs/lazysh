@@ -45,7 +45,9 @@ and forwards their ports with `adb reverse`; `LAZYSH_E2E_HOSTS=ssh,herdr,tmux` s
 [README](../../apps/client/mobile-e2e/README.md)). The live `HERDR_*` and `TMUX*` variables are removed from the launcher while
 the fixtures run, so no child can reach a personal Herdr or tmux.
 
-The shared guest may be in use by another run. The suite takes an advisory lock per serial, records window size, density,
+The shared guest may be in use by another run. The suite takes an advisory lock per serial and waits for it for 10 minutes
+(`LAZYSH_E2E_LOCK_TIMEOUT_S`); if the holder is still there it ends the whole run at once, non-zero, naming the holder's pid and
+age, and starts no worker. It records window size, density,
 navigation mode, IME and animation scale before it starts, and restores them at the end, including after a failure. If you
 change any of them by hand while debugging, restore them (`wm size reset`, `wm density reset`) before the next run. The
 fixtures start their own SSH, Herdr and tmux servers on private sockets; never point a test at a personal Herdr or tmux, and
