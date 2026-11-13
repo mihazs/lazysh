@@ -13,6 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 fdroid = ["tauri-plugin-lazysh-push/fdroid"]
 # Optional interop test harness; independent of Linux x86_64 product availability.
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
+# The native terminal core (libghostty-vt, built with Zig 0.16.0): off by default so no build needs Zig.
+native-terminal = ["dep:lazysh-terminal-runtime"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -27,6 +29,7 @@ tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
 lazysh-common = { path = "../../../packages/common", features = ["url"] }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
+lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -303,6 +303,7 @@ impl AppState {
         })
     }
     pub(crate) async fn cancel_for_renderer_rebind(&self) {
+        crate::terminal_core::close_all();
         let sessions = {
             let mut active = self.sessions.lock().await;
             let mut retiring = self.retiring.lock().await;
@@ -779,6 +780,8 @@ pub(crate) struct Session {
     input: mpsc::Sender<Input>,
     output_credits: Semaphore,
     output_inflight: StdMutex<u32>,
+    /// Set when the native terminal core consumes this session's output instead of the WebView.
+    core: crate::terminal_core::CoreSlot,
     renderer_gone: watch::Sender<bool>,
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
@@ -824,6 +827,7 @@ impl Session {
             tmux_server: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
+            core: Default::default(),
             renderer_gone: watch::channel(false).0,
             finished: watch::channel(false).0,
             access: creation.state(),
@@ -834,6 +838,25 @@ impl Session {
     }
 }
 
+/// Register the terminal and, if the renderer offered a core for `events`, route its output there
+/// before the first byte is read; the core's credit returns into this session's output window.
+async fn register_with_core(
+    state: &AppState,
+    session: &Arc<Session>,
+    events: &Channel<SshEvent>,
+) -> Result<String> {
+    let core = crate::terminal_core::prepare(events)
+        .map_err(|message| SshError::new("native_terminal", message))?;
+    let id = register_terminal(state, session).await?;
+    if let Some(core) = core {
+        core.attach(
+            &id,
+            &session.core,
+            crate::terminal_core::credit_to(session, acknowledge),
+        );
+    }
+    Ok(id)
+}
 async fn register_terminal(state: &AppState, session: &Arc<Session>) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     {
@@ -972,6 +995,7 @@ impl Drop for PendingTerminal {
         if self.armed {
             self.session.cancel.send_replace(true);
             self.session.output_credits.close();
+            self.session.core.discard();
         }
     }
 }
@@ -1795,7 +1819,7 @@ pub(crate) async fn deliver_output(
     credits: &Semaphore,
     inflight: &StdMutex<u32>,
     cancellation: &mut watch::Receiver<bool>,
-    events: &Channel<SshEvent>,
+    events: &(impl crate::terminal_core::OutputSink + ?Sized),
     data: &[u8],
     owner: Option<(
         &AccessLease,
@@ -1846,12 +1870,7 @@ pub(crate) async fn deliver_output(
                 return Err("Renderer replaced".into());
             }
             *inflight.lock().map_err(|_| "Output accounting failed")? += data.len() as u32;
-            events
-                .send(SshEvent::Data {
-                    data: data.to_vec(),
-                })
-                .map_err(|_| "Terminal output closed")?;
-            Ok(())
+            events.data(data)
         };
         let sent = match owner {
             Some((creation, adopted, _)) => creation.with_transport_output(adopted, send),
@@ -1881,7 +1900,7 @@ pub(crate) async fn close_output(
         &std::sync::atomic::AtomicBool,
         &watch::Sender<bool>,
     )>,
-    events: &Channel<SshEvent>,
+    events: &(impl crate::terminal_core::OutputSink + ?Sized),
     message: String,
     lost: bool,
 ) {
@@ -1899,10 +1918,7 @@ pub(crate) async fn close_output(
             if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
                 return Ok(());
             }
-            events.send(SshEvent::Closed {
-                message: message.clone(),
-                lost,
-            })
+            events.closed(message.clone(), lost)
         };
         let sent = match owner {
             Some((creation, adopted, gone)) => {
@@ -1916,10 +1932,7 @@ pub(crate) async fn close_output(
                         if *gone.borrow() {
                             return Ok(());
                         }
-                        events.send(SshEvent::Closed {
-                            message: "Session cancelled before adoption".into(),
-                            lost: false,
-                        })
+                        events.closed("Session cancelled before adoption".into(), false)
                     })
                 } else {
                     creation.with_transport_output(adopted, send)
@@ -1941,7 +1954,7 @@ async fn send_output(session: &Session, events: &Channel<SshEvent>, data: &[u8])
             &session.output_credits,
             &session.output_inflight,
             &mut cancellation,
-            events,
+            &session.core.route(events),
             chunk,
             Some((&session.creation, &session.adopted, &session.renderer_gone)),
         )
@@ -1968,7 +1981,7 @@ async fn spawn_terminal(
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
-    let id = register_terminal(state, &session).await?;
+    let id = register_with_core(state, &session, &events).await?;
     let sessions = state.sessions.clone();
     let retiring = state.retiring.clone();
     let task_id = id.clone();
@@ -2174,7 +2187,7 @@ where
         session: session.clone(),
         armed: true,
     };
-    let id = register_terminal(state, &session).await?;
+    let id = register_with_core(state, &session, &events).await?;
     let (output, mut output_rx) = mpsc::channel(1);
     let (ready, response) = tokio::sync::oneshot::channel();
     let initial_cancel = parent.cancel.subscribe();
@@ -2315,6 +2328,12 @@ where
 #[tauri::command]
 pub async fn ack_output(state: State<'_, AppState>, session_id: String, bytes: u32) -> Result<()> {
     let session = state.session(&session_id).await?;
+    if session.core.is_attached() {
+        return Err(SshError::new(
+            "invalid_ack",
+            "The native terminal core acknowledges this output",
+        ));
+    }
     acknowledge(&session, bytes)
 }
 fn acknowledge(session: &Session, bytes: u32) -> Result<()> {
@@ -5038,14 +5057,22 @@ mod tests {
         task.abort();
     }
 
-    #[tokio::test]
-    async fn output_waits_for_consumption_and_rejects_forged_credit() {
+    /// An adopted session on a throwaway server, for tests that drive its output window directly.
+    async fn output_session() -> (Arc<Session>, tempfile::TempDir, tokio::task::JoinHandle<()>) {
         let (host, _, server_task) = server(false).await;
-        let (_dir, state) = fixture_state();
+        let (dir, state) = fixture_state();
         let handle = password_handle(&state, &host).await;
         let (input, _) = mpsc::channel(32);
         let (cancel, _) = watch::channel(false);
-        let session = Arc::new(adopted_fixture_session(handle, input, cancel));
+        (
+            Arc::new(adopted_fixture_session(handle, input, cancel)),
+            dir,
+            server_task,
+        )
+    }
+    #[tokio::test]
+    async fn output_waits_for_consumption_and_rejects_forged_credit() {
+        let (session, _dir, server_task) = output_session().await;
         let received = Arc::new(AtomicUsize::new(0));
         let observed = received.clone();
         let events = Channel::new(move |body| {
@@ -5084,6 +5111,129 @@ mod tests {
         server_task.abort();
     }
 
+    #[tokio::test]
+    async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
+        use crate::terminal_core::{
+            credit_to,
+            fake::{sha256, workload, ChecksumCore},
+        };
+        // SSH, ET and Mosh all deliver through `send_output`, so this covers their shared path.
+        let (session, _dir, server_task) = output_session().await;
+        let (core, prepared) = ChecksumCore::prepared();
+        prepared.attach(
+            "fixture-ssh-core",
+            &session.core,
+            credit_to(&session, acknowledge),
+        );
+        let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = counting_events(&ipc);
+        let payload = workload(3 * 1024 * 1024);
+        send_output(&session, &events, &payload).await.unwrap();
+        timeout(Duration::from_secs(10), async {
+            while core.seen.lock().unwrap().len() < payload.len() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(sha256(&core.seen.lock().unwrap()), sha256(&payload));
+        let peak = core.peak_queued.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            peak <= OUTPUT_WINDOW as usize,
+            "{peak} bytes queued over the {OUTPUT_WINDOW} window"
+        );
+        assert_eq!(
+            ipc.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no per-chunk IPC on the core path"
+        );
+        timeout(Duration::from_secs(3), async {
+            while *session.output_inflight.lock().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            session.output_credits.available_permits(),
+            OUTPUT_WINDOW as usize
+        );
+        assert!(session.core.is_attached());
+        crate::terminal_core::close("fixture-ssh-core");
+        assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(crate::terminal_core::live("fixture-ssh-core").is_err());
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn a_native_terminal_that_fails_to_start_frees_the_core_the_renderer_offered() {
+        use crate::terminal_core::{self, fake::ChecksumCore};
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        let (core, prepared) = ChecksumCore::prepared();
+        let events = Channel::new(|_| Ok(()));
+        terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+        let result = spawn_native_terminal(
+            &state,
+            access_lease(),
+            parent,
+            events,
+            NativeTerminalKind::Fixture,
+            None,
+            check_size,
+            |_access, input, _cancel, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _ = (input, output);
+                    let _ = ready.send(Err(SshError::new("fixture", "the worker could not start")));
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(state.sessions.lock().await.is_empty());
+        assert!(
+            core.closed.load(std::sync::atomic::Ordering::SeqCst),
+            "the renderer never learns this session's id, so only the failure path can free the core"
+        );
+        server_task.abort();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn core_output_respects_the_lock_and_background_gates_like_the_channel() {
+        use crate::terminal_core::fake::ChecksumCore;
+        let access = unlocked_access();
+        let credits = Semaphore::new(16);
+        let inflight = StdMutex::new(0);
+        let (_cancel, mut cancellation) = watch::channel(false);
+        let core = ChecksumCore::new(Arc::new(|_| {}));
+        let delivery = deliver_output(
+            &access,
+            &credits,
+            &inflight,
+            &mut cancellation,
+            &*core,
+            b"abc",
+            None,
+        );
+        tokio::pin!(delivery);
+        access.lock().unwrap();
+        assert_pending(delivery.as_mut()).await;
+        assert_eq!(
+            core.feeds.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a locked terminal reaches no core"
+        );
+        assert_eq!(*inflight.lock().unwrap(), 0);
+        access.authorize(access.generation().unwrap()).unwrap();
+        assert_pending(delivery.as_mut()).await;
+        access.ready(access.generation().unwrap()).unwrap();
+        delivery.await.unwrap();
+        assert_eq!(core.feeds.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            *inflight.lock().unwrap(),
+            3,
+            "credit stays outstanding until the core returns it"
+        );
+    }
     #[tokio::test]
     async fn tmux_attach_cancellation_closes_display_during_handshake() {
         cancelled_tmux_attach(AttachPause::Handshake).await;
