@@ -16,6 +16,7 @@ import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
 import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
 import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
 import type {AgentSessionInfo} from './agentSession';
+import type {LiveState} from './AgentWorkingRow';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -177,6 +178,11 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const queue = waitingFirst(sessions);
   const waitingCount = queue.filter(session=>waitingKind(session)).length;
   const now = useNow(30000, shown && (waitingCount>0 || !!waiting));
+  // Best source first: the live Herdr status, then a recent hook report. Otherwise the chat falls back to the recorded turn state.
+  const hookFresh = !!row && Date.now() - Date.parse(row.updatedAt) < 10 * 60_000;
+  const workState = selected?.status ? ({working: 'working', blocked: 'waiting', done: 'idle', idle: 'idle', unknown: undefined} as const)[selected.status]
+    : row && hookFresh ? ({working: 'working', needs_attention: 'waiting', done: 'idle'} as const)[row.state] : undefined;
+  const liveState: LiveState = {state: workState, label: workState === 'waiting' && waiting ? t(waitingKeys[waiting]) : undefined};
   const counts = usage && ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].some(key=>usage[key]!==undefined) ? (key:string)=>formatNumber(Number(usage[key] ?? 0)) : undefined;
   // The pane a hook report names, or the pane Herdr reports as focused, is the evidence the composer binds on. A conversation the person
   // picked has none, so its destination stays an explicit confirmation (tmux) or is not offered (Herdr).
@@ -249,7 +255,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {!selected && tmux && <AgentApprovalDock sessionId={sessionId} shown={shown} row={row} access={access} invoke={invoke} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} />}
     {kept && reader && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }

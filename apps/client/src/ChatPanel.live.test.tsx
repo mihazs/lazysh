@@ -115,9 +115,10 @@ describe('a bound conversation with a live watch',()=>{
   it('shows the recorded turn state as a working row that follows the stream',async()=>{
     render_();await advance(0);await send(hello);
     await send(snapshot(1,1,first.map(message=>entry(message)),'working'));
-    expect(screen.getByRole('status',{name:''}).textContent).toBe('Agent is working');
-    await send(delta(1,2,[],{activity:'waiting'}));expect(screen.getByText('Agent is waiting for your answer')).toBeTruthy();
-    await send(delta(1,3,[],{activity:null}));expect(screen.queryByText(/Agent is (working|waiting)/)).toBeNull();
+    const row=()=>document.querySelector('.agent-working-row')?.textContent;
+    expect(row()).toMatch(/^Working · /);
+    await send(delta(1,2,[],{activity:'waiting'}));expect(row()).toMatch(/^Waiting for you · /);
+    await send(delta(1,3,[],{activity:null}));expect(row()).toBeUndefined();
   });
   it('passes the session facts of the stream to the header and keeps them when a delta carries none',async()=>{
     const sessions:unknown[]=[];
