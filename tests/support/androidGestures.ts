@@ -1,16 +1,16 @@
-import {mkdirSync,statSync} from 'node:fs';
-import {open,readFile,rm,stat} from 'node:fs/promises';
-import {homedir} from 'node:os';
+import {writeFile} from 'node:fs/promises';
+import {homedir,tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
+import {acquireDevice,APP_PACKAGE,type DeviceSession} from '../../apps/client/mobile-e2e/support/device';
 
 /**
  * Driving a real Android device for the edge-gesture regressions (#1380, #1435): navigation overlays, injected touches, the system's own
- * gesture state from dumpsys and the app's state through its WebView (Chrome DevTools over `adb forward`). Everything the suite changes
- * on the device is recorded first and restored in `finally`, under the per-serial advisory lock that `apps/client/mobile-e2e` also takes
- * (same path and file format), because the local Waydroid guest is shared and UiAutomator sessions kill each other.
+ * gesture state from dumpsys and the app's state through its WebView (Chrome DevTools over `adb forward`). Device state is the business of
+ * the Appium suite's `support/device.ts` (`acquireDevice`): the per-serial advisory lock, the journal and the baseline it restores, because the
+ * local Waydroid guest is shared and UiAutomator sessions kill each other. This file adds only what that suite does not do.
  */
-export const appId='app.lazysh.client';
+export const appId=APP_PACKAGE;
 export const overlayCategory='com.android.internal.systemui.navbar.';
 export type Overlay='threebutton'|'gestural_wide_back'|'gestural_extra_wide_back';
 export const overlays:readonly Overlay[]=['threebutton','gestural_wide_back','gestural_extra_wide_back'];
@@ -30,21 +30,8 @@ async function run(args:string[],timeoutMs=60_000,input?:string) {
   return out;
 }
 
-/** The fixed, private lock directory `mobile-e2e/support/device.ts` uses, so both suites meet at one lock per serial. */
-function lockPath(serial:string) {
-  const directory=join('/tmp',`lazysh-mobile-e2e-${process.getuid?.()??'user'}`);
-  mkdirSync(directory,{recursive:true,mode:0o700});
-  const info=statSync(directory);
-  if((process.getuid&&info.uid!==process.getuid())||(info.mode&0o077)!==0)throw new Error(`${directory} must be private to this user`);
-  return join(directory,`lazysh-mobile-e2e-${serial.replace(/[^\w.-]/g,'_')}.lock`);
-}
-const alive=(pid:number)=>{try{process.kill(pid,0);return true;}catch(error){return (error as NodeJS.ErrnoException).code==='EPERM';}};
-
-export type Baseline={overlays:string[];size:string|null;density:string|null;rotation:string};
-
 export class Device {
-  private lock?:string;
-  baseline?:Baseline;
+  private session?:DeviceSession;
   readonly forwards=new Set<number>();
   readonly reverses=new Set<number>();
   constructor(readonly serial=defaultSerial) {}
@@ -60,52 +47,18 @@ export class Device {
   }
   shell(command:string,timeoutMs?:number) {return this.adb(['shell',command],timeoutMs);}
 
-  /** Waits for the advisory lock, then records the baseline. Always pair with {@link release}. */
-  async acquire(timeoutMs=600_000) {
-    const path=lockPath(this.serial),deadline=Date.now()+timeoutMs;
-    for(;;) {
-      try {
-        const file=await open(path,'wx',0o600);
-        await file.writeFile(JSON.stringify({pid:process.pid,started:new Date().toISOString()}));await file.close();break;
-      } catch(error) {if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
-      const owner=await readFile(path,'utf8').then(text=>JSON.parse(text) as {pid:number},()=>undefined);
-      const staleEmpty=!owner&&Date.now()-(await stat(path).then(info=>info.mtimeMs,()=>0))>5000;
-      if(owner?!alive(owner.pid):staleEmpty){await rm(path,{force:true});continue;}
-      if(Date.now()>=deadline)throw new Error(`Device ${this.serial} is busy: ${path} is held by pid ${owner?.pid??'unknown'}`);
-      await delay(2000);
-    }
-    this.lock=path;
-    this.baseline=await this.captureBaseline();
+  /** Queues for the advisory lock, then records the baseline. Always pair with {@link release}. LAZYSH_E2E_RECOVER=1 restores a journal a dead run left. */
+  async acquire(timeoutMs=600_000,stateDir?:string) {
+    this.session=await acquireDevice(this.serial,{stateDir,lockTimeoutMs:timeoutMs,recover:process.env.LAZYSH_E2E_RECOVER==='1',adb:(...args)=>this.adb(args),log:console.error});
   }
 
-  async captureBaseline():Promise<Baseline> {
-    const list=await this.shell('cmd overlay list --user 0 android');
-    const size=/Override size:\s*(\S+)/.exec(await this.shell('wm size'))?.[1]??null;
-    const density=/Override density:\s*(\S+)/.exec(await this.shell('wm density'))?.[1]??null;
-    return {
-      overlays:list.split('\n').filter(line=>line.trim().startsWith('[x]')&&line.includes(overlayCategory)).map(line=>line.trim().slice(line.indexOf(overlayCategory)+overlayCategory.length)),
-      size,density,rotation:(await this.shell('settings get system accelerometer_rotation')).trim(),
-    };
-  }
-
-  /** Puts everything this run changed back, removes its forwards and reverses, and releases the lock. */
+  /** Removes this run's forwards and reverses, then restores the baseline and releases the lock, each step even when another failed. */
   async release() {
     const failures:string[]=[];
     const attempt=async(what:string,work:()=>Promise<unknown>)=>{try{await work();}catch(error){failures.push(`${what}: ${(error as Error).message}`);}};
     for(const port of this.forwards)await attempt(`forward ${port}`,()=>this.adb(['forward','--remove',`tcp:${port}`]));
     for(const port of this.reverses)await attempt(`reverse ${port}`,()=>this.adb(['reverse','--remove',`tcp:${port}`]));
-    const baseline=this.baseline;
-    if(baseline) {
-      await attempt('navigation',async()=>{
-        const original=baseline.overlays[0]??'threebutton';
-        await this.shell(`cmd overlay enable-exclusive --user 0 --category ${overlayCategory}${original}`);
-      });
-      await attempt('size',()=>this.shell(baseline.size?`wm size ${baseline.size}`:'wm size reset'));
-      await attempt('density',()=>this.shell(baseline.density?`wm density ${baseline.density}`:'wm density reset'));
-      await attempt('rotation',()=>this.shell(`settings put system accelerometer_rotation ${baseline.rotation==='null'?0:baseline.rotation}`));
-    }
-    if(this.lock)await rm(this.lock,{force:true});
-    this.lock=undefined;
+    await attempt('baseline',async()=>{await this.session?.release();this.session=undefined;});
     if(failures.length)throw new Error(`Device restore incomplete: ${failures.join('; ')}`);
   }
 
@@ -133,6 +86,13 @@ export class Device {
       await this.back();await delay(600);
     }
     throw new Error('The soft keyboard did not close');
+  }
+  /** A PNG of the screen, for the failure message of a case that timed out. */
+  async screenshot(directory=tmpdir()) {
+    const path=join(directory,`lazysh-gesture-failure-${Date.now()}.png`);
+    const child=Bun.spawn([adbPath(),'-s',this.serial,'exec-out','screencap','-p'],{stdout:'pipe',stderr:'ignore'});
+    await writeFile(path,Buffer.from(await new Response(child.stdout).arrayBuffer())).catch(()=>{});
+    return path;
   }
   async foreground() {return /topResumedActivity=ActivityRecord\{\S+ \S+ ([^\s}]+)/.exec(await this.shell('dumpsys activity activities'))?.[1]??'';}
   async appPid() {return Number((await this.shell(`pidof ${appId}`).catch(()=>'')).trim().split(/\s+/)[0])||0;}
@@ -204,7 +164,8 @@ export class Page {
       if(await this.evaluate<boolean>(`Boolean(${expression})`).catch(()=>false))return;
       await delay(150);
     }
-    throw new Error(`Timed out waiting for ${what}`);
+    const text=await this.evaluate<string>(`document.body.innerText.replace(/\\s+/g,' ').slice(0,300)`).catch(()=>'(the page does not answer)');
+    throw new Error(`Timed out waiting for ${what}; the page shows: ${text}`);
   }
   close() {this.socket.close();}
 }
