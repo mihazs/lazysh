@@ -45,7 +45,7 @@ Stand-ins for services: the AWS CLI's OIDC registration endpoint was replaced wi
 | `vercel login` (*documented*) | Device flow (RFC 8628) since the 2026 change | none | none | not needed |
 | `fly auth login` and `stripe login` (*documented*) | Open a session or pairing URL and poll | none | none | `stripe login --interactive`, `--non-interactive` prints JSON |
 
-Counting only what was run: six tools start a localhost callback (`aws sso login`, `aws login`, `gcloud` with a display, `az` with a launcher, `codex`, `claude`), two do not (`gh`, `npm`).
+Of the eight commands that were run, six start a localhost callback (`aws sso login`, `aws login`, `gcloud` with a display, `az` with a launcher, `codex`, `claude`) and two do not (`gh`, `npm`).
 
 ## Which launcher each tool called
 
@@ -147,7 +147,7 @@ Press ENTER to open in the browser...
 
 ## Terminal multiplexers and Mosh
 
-Probe: each multiplexer ran in a pseudo-terminal that played the outer terminal; a pane printed five sequences and the harness counted which reached the outer terminal. The harness answered terminal queries and used private socket, configuration and `HOME` locations for tmux, Zellij and Herdr; Herdr's first-run dialogs were dismissed with keystrokes; each private server was stopped by its own process id afterwards.
+Probe: each multiplexer ran in a pseudo-terminal that played the outer terminal; a pane printed six sequences and the harness counted which reached the outer terminal. The harness answered terminal queries and used private socket, configuration and `HOME` locations for tmux, Zellij and Herdr; Herdr's first-run dialogs were dismissed with keystrokes; each private server was stopped by its own process id afterwards.
 
 | Sequence printed in the pane | tmux 3.8, `allow-passthrough` off | tmux 3.8, `on` or `all` | Zellij 0.46.0 | Herdr 0.9.5 |
 | --- | --- | --- | --- | --- |
