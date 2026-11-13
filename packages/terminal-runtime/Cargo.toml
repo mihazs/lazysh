@@ -15,5 +15,9 @@ rust-version = "1.96"
 [dependencies]
 ghostty-vt = { path = "../herdr-upstream/crates/ghostty-vt" }
 
+[dev-dependencies]
+# Goldens only: already in the lock through ghostty-vt.
+png = "0.17"
+
 [profile.release]
 debug = false

@@ -5,11 +5,17 @@
 //! [`Frame`] (dirty rows) for a renderer, and [`TerminalRuntime::take_replies`] back to the
 //! transport. UI size requests and transport-authoritative sizes are separate inputs
 //! ([`SizeAuthority`]); the runtime never invents one from the other.
+//!
+//! Rendering is behind [`TerminalRenderer`] (#1322): [`Frame`]s in, pixels on an opaque surface out,
+//! with a deterministic CPU [`ReferenceRenderer`] for golden-image tests.
 
 mod frame;
 mod hub;
 mod ingress;
 mod input;
+pub mod layout;
+mod reference;
+mod render;
 mod runtime;
 mod size;
 
@@ -19,6 +25,11 @@ pub use hub::{
 };
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
+pub use reference::{Image, ReferenceRenderer};
+pub use render::{
+    Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
+    Screen, Selection, SelectionKind, TerminalRenderer, Theme,
+};
 pub use runtime::{Config, Error, Events, Modes, TerminalRuntime};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 

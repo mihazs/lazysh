@@ -1,6 +1,6 @@
 # Native rendering
 
-Status: **proposed; nothing here is implemented or measured**. The repository contains no `MTKView`, `wgpu` or Skia code and, apart from the debug-only [Android composition PoC](android-surface-composition-poc.md), no `SurfaceView` or `TextureView` code (searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
+Status: **proposed; the Renderer API and a CPU reference renderer exist ([below](#terminal-renderer-api)), no real renderer is implemented and nothing is measured**. The repository contains no `MTKView`, `wgpu` or Skia code and, apart from the debug-only [Android composition PoC](android-surface-composition-poc.md), no `SurfaceView` or `TextureView` code (searched under `apps/` and `packages/`, excluding vendored sources). wgpu is a first candidate, not an assumed winner. Related: [runtime](terminal-runtime.md) · [platform integration](platform-integration.md) · [benchmarks](terminal-benchmarks.md) · [ADR 0001](adr-0001-terminal-runtime.md).
 
 ## What must be decided by evidence
 
@@ -10,12 +10,36 @@ Status: **proposed; nothing here is implemented or measured**. The repository co
 
 ## Terminal Renderer API
 
-A Rust trait, independent of any graphics library ([#1322](https://github.com/mihazs/lazysh/issues/1322)):
+Implemented in [`packages/terminal-runtime`](../../packages/terminal-runtime/README.md) ([#1322](https://github.com/mihazs/lazysh/issues/1322)): the `TerminalRenderer` trait, the shared `Screen` model and a deterministic CPU `ReferenceRenderer`. The trait names no graphics type; a renderer is generic over its own `Surface` (a window handle, an `ANativeWindow`, a `CAMetalLayer`, an image).
 
-- input: incremental updates from the core (dirty rows via libghostty-vt `RenderState`, cursor, colors, viewport), font metrics and fallback list, theme, selection overlay, scale factor;
-- output: a presentation to an opaque surface handle, plus a statistics record (rows drawn, bytes uploaded, frame time) for the benchmarks;
-- lifecycle: `create(surface)`, `resize`, `suspend`, `resume`, `destroy`, each idempotent; device loss is reported and recovered from core state;
-- a CPU reference implementation producing deterministic images, used for golden-image tests so correctness does not depend on a GPU.
+| Part | Contract |
+| --- | --- |
+| Input from the core | `apply(&Frame)`: a full frame or the dirty rows of libghostty-vt's `RenderState`, with the cursor. An incremental frame for a grid the renderer does not hold fails with `NeedsFullFrame`, and the host answers with `TerminalRuntime::snapshot`. |
+| Input from the host | `Appearance` (cell metrics in device pixels, font family and fallback list, theme) and `Overlay` (selection, cursor blink phase from one host timer). Changing `Appearance` repaints every row. |
+| Drawing and presentation | `draw()` repaints exactly the rows that changed since the last `draw` and returns how many; `present()` shows the result and does nothing when nothing was drawn. Any number of `apply` calls may precede one `draw` per display refresh. |
+| Lifecycle | `create(surface, appearance)`, `resize`, `suspend`, `resume`, `destroy`; all but `create` are idempotent. A suspended renderer drops its screen copy and does no work; `resume` is followed by a snapshot. `DeviceLost` has the same recovery. After `destroy` everything but `destroy` and `stats` fails with `Destroyed`. |
+| Statistics | `stats()` returns cumulative frames drawn and presented, rows and cells drawn, bytes uploaded to the surface, draw and present time, for the benchmarks. |
+
+`Screen` is the half every renderer shares: it applies frames, validates them (a malformed frame is refused and changes nothing), and answers which rows need repainting, including the rows a cursor left and entered, a blink phase change of a blinking cursor, and only the rows whose selected cells changed. GPU and platform renderers keep their own resources but reuse it, so "what changed" is decided once.
+
+`RendererCore` is the third: the lifecycle phases, device loss (including a loss reported from another thread by a GPU callback), the screen copy, "what to draw" (`begin_draw`) and the counters, so every implementation answers the contract the same way and only adds its surface, resources and rasterization.
+
+`layout::row_draws` is the other shared half: it turns a row of the `Screen`, the cursor, the selection and the `Appearance` into an ordered list of rectangles and glyph runs in device pixels (cell backgrounds, inverse, faint and hidden colors, underline styles, strike-through, overline, cursor shapes), so "what to paint" is decided once as well. The CPU reference renderer rasterizes the list; a GPU renderer turns it into instances and an atlas, a platform canvas into drawing calls. Renderers then differ only in rasterization, which is what the golden images compare.
+
+**Reference renderer.** It rasterizes the shared layout: cells, wide and combining clusters, default, inverse, faint and hidden colors, underline styles, strike-through, overline, the four cursor shapes and a linear or block selection, using integer arithmetic only, so every host produces the same bytes. It has no typography: each grapheme cluster becomes a 5x7 dot pattern derived from its text, so a wrong cell, width or cluster changes the image without any font. It is not a performance candidate and says nothing about shaping, font fallback, italic, text blink or sub-pixel positioning.
+
+**Golden images.** `packages/terminal-runtime/tests/golden/*.png` (ASCII, ANSI colors, attributes, wide, combining, emoji including a ZWJ family, flag and skin-tone sequence, each cursor shape, cursor on a wide character, linear and block selection) are rendered from real libghostty-vt output and compared pixel for pixel. Separate tests check pixels against the frame instead of a golden, and prove that a sequence of incremental updates ends in the same image as one full repaint.
+
+**Review against the shootout candidates** ([#1323](https://github.com/mihazs/lazysh/issues/1323)). A desk review of how each candidate would plug in; no candidate was built or measured for it.
+
+| Candidate | How it fits | Gap found |
+| --- | --- | --- |
+| wgpu | Implements the trait directly in Rust. `Surface` wraps a raw window handle, `draw` records instanced quads for the rows `Screen` reports, `present` presents the swapchain, a lost device maps to `DeviceLost`. | `Frame` cells carry an owned `String` each, so a glyph atlas keyed by cluster allocates per cell ([#1337](https://github.com/mihazs/lazysh/issues/1337) owns a compact cell format). |
+| Native drawing (Skia, Android Canvas) | A Rust implementation is a JNI bridge whose `Surface` is the Java surface; the Kotlin side draws. | Rows must cross JNI: the API has no wire format for a frame, which the compact cell format of #1337 should also define. |
+| Optimized xterm.js | Does not implement the trait: it parses and renders inside the WebView, so it is a `TerminalAdapter` backend. | None for the API. Its correctness comes from final screen text in the [harness](terminal-benchmarks.md), not from pixels. |
+| WASM terminal | The same when it owns parsing and rendering. If only rendering moved to the WebView, `Frame` would have to cross the JavaScript bridge. | The same wire-format gap. |
+
+The review changed the API in these ways: a statistics record with bytes uploaded, so GPU and surface-copy renderers can be compared on the same counter; a lifecycle in which loss, suspension and recreation recover from core state; and `Frame` now also reports cursor-only changes (see the runtime document). It found no reason to prefer one candidate.
 
 ## Renderer candidates
 
