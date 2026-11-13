@@ -97,7 +97,7 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
-import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTour";
+import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
