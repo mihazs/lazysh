@@ -8,7 +8,7 @@ import {preview} from './fixtures/recorded-images/browser';
 type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
-declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
+declare global {interface Window {approvals:{id:string;decisions:unknown[];gone:boolean};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
 
 /** The commands every synthetic host answers the same way; each fixture adds its own on top. */
@@ -217,31 +217,93 @@ async function asClaude(page:Page) {
   });
 }
 
-test('answers a Claude permission request from the Agent view through the approval hook and writes no key to the terminal',async({page})=>{
-  await open(page);
-  // The same pane now runs Claude Code, which has one pending permission request.
+/** The pane runs Claude Code, which has one pending permission request (`extra` adds fields, such as `options`). */
+async function claudeApproval(page:Page,extra:object={}) {
   await asClaude(page);
-  await page.evaluate(()=>{
+  await page.evaluate(extra=>{
     const base=window.nativeFixtureInvoke!;
-    window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[]};
+    window.approvals={id:'11111111-1111-4111-8111-111111111111',decisions:[],gone:false};
     window.nativeFixtureInvoke=async(command,args)=>{
-      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()}]};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:window.approvals.decisions.length||window.approvals.gone?[]:[{id:window.approvals.id,expectedHash:'a'.repeat(64),agent:'claude',sessionId:'claude-thread',project:'/work',paneId:'%3',toolName:'Bash',toolInput:{command:'git push'},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString(),...extra}]};
       if(command==='resolve_agent_approval'){window.approvals.decisions.push(args);return {schemaVersion:1,accepted:true};}
       return base(command,args);
     };
-  });
+  },extra);
   await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
   const dock=agentView(page).getByRole('region',{name:'Pending approvals',exact:true});
   await expect(dock).toContainText('git push',{timeout:8000});
+  return dock;
+}
+/** An approval is answered through the hook: no key or input reaches the terminal. */
+async function expectNoKeys(page:Page,before:Fixture) {
+  const after=await fixture(page);
+  expect(after.stdin).toEqual(before.stdin);expect(after.inputs.some(input=>input.kind==='input')).toBe(false);
+}
+const decided=(page:Page)=>page.evaluate(()=>window.approvals.decisions);
+const expected={id:'11111111-1111-4111-8111-111111111111',agentSessionId:'claude-thread',paneId:'%3'};
+
+test('answers a Claude permission request from the Agent view through the approval hook and writes no key to the terminal',async({page})=>{
+  await open(page);
+  const dock=await claudeApproval(page);
   const deny=dock.getByRole('button',{name:'Deny request',exact:true});
   await expect(deny).toBeEnabled();
   const box=await deny.boundingBox();expect(box!.height).toBeGreaterThanOrEqual(36);
   const before=await fixture(page);
   await deny.click();
   await expect(dock).toHaveCount(0);
-  expect(await page.evaluate(()=>window.approvals.decisions)).toEqual([expect.objectContaining({id:'11111111-1111-4111-8111-111111111111',agentSessionId:'claude-thread',paneId:'%3',decision:'deny'})]);
-  const after=await fixture(page);
-  expect(after.stdin).toEqual(before.stdin);expect(after.inputs.some(input=>input.kind==='input')).toBe(false);
+  expect(await decided(page)).toEqual([expect.objectContaining({...expected,decision:'deny'})]);
+  await expectNoKeys(page,before);
+});
+
+test('offers the permission updates Claude suggests behind a confirmation that shows the rule',async({page})=>{
+  await open(page);
+  const options=[
+    {type:'addRules',rules:[{toolName:'Bash',ruleContent:'git push:*'}],behavior:'allow',destination:'localSettings'},
+    {type:'setMode',mode:'acceptEdits',destination:'session'},
+    {type:'setMode',mode:'bypassPermissions',destination:'session'},
+  ];
+  const dock=await claudeApproval(page,{options});
+  const before=await fixture(page);
+  // The bypass suggestion is not offered; the others are one tap away from a confirmation, never a default.
+  await expect(dock.getByRole('button',{name:/Allow and remember Bash\(git push:\*\)/})).toBeVisible();
+  await expect(dock.getByRole('button',{name:/switch to acceptEdits mode/})).toBeVisible();
+  await expect(dock.getByRole('button',{name:/bypassPermissions/})).toHaveCount(0);
+  await dock.getByRole('button',{name:/Allow and remember Bash\(git push:\*\)/}).click();
+  const confirm=dock.getByRole('region',{name:/Allow and remember/});
+  await expect(confirm).toContainText('.claude/settings.local.json');
+  await expect(confirm.locator('code')).toHaveText('Bash(git push:*)');
+  const box=await confirm.boundingBox();expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await confirm.getByRole('button',{name:'Cancel',exact:true}).click();
+  expect(await decided(page)).toEqual([]);
+  await dock.getByRole('button',{name:/Allow and remember Bash\(git push:\*\)/}).click();
+  await dock.getByRole('button',{name:'Allow and apply',exact:true}).click();
+  await expect(dock).toHaveCount(0);
+  expect(await decided(page)).toEqual([expect.objectContaining({...expected,decision:'allow',option:0})]);
+  await expectNoKeys(page,before);
+});
+
+test('says a Claude permission request was answered in the terminal and sends nothing for the tap that came late',async({page})=>{
+  await open(page);
+  const dock=await claudeApproval(page);
+  const allow=dock.getByRole('button',{name:'Allow this request',exact:true});
+  await expect(allow).toBeEnabled();
+  await page.evaluate(()=>{window.approvals.gone=true;});
+  await allow.click();
+  await expect(dock).toContainText('already answered');
+  await expect(dock.getByRole('button',{name:'Allow this request',exact:true})).toHaveCount(0);
+  expect(await decided(page)).toEqual([]);
+});
+
+test('denies a Claude permission request with a message the agent reads',async({page})=>{
+  await open(page);
+  const dock=await claudeApproval(page);
+  await dock.getByRole('button',{name:'Deny with a message',exact:true}).click();
+  const send=dock.getByRole('button',{name:'Deny and send message',exact:true});
+  await expect(send).toBeDisabled();
+  await dock.getByLabel('Message the agent will read').fill('Push to a branch, not main');
+  await send.click();
+  await expect(dock).toHaveCount(0);
+  expect(await decided(page)).toEqual([expect.objectContaining({...expected,decision:'deny',message:'Push to a branch, not main'})]);
 });
 
 /** The same pane now runs Claude Code: the base fixture with the agent renamed, optionally already waiting, and its conversation replaced. */

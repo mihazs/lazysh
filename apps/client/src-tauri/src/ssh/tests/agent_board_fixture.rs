@@ -53,6 +53,18 @@ async fn decide(
     pane: Option<&str>,
     decision: &str,
 ) -> std::result::Result<Value, String> {
+    decide_with(app, id, request, hash, pane, (decision, None, None)).await
+}
+
+/// A decision with a suggested permission update (allow) or a message for the agent (deny).
+async fn decide_with(
+    app: &App,
+    id: &str,
+    request: &Value,
+    hash: &str,
+    pane: Option<&str>,
+    (decision, option, message): (&str, Option<u8>, Option<&str>),
+) -> std::result::Result<Value, String> {
     crate::approvals::resolve_agent_approval(
         app.state(),
         id.into(),
@@ -61,6 +73,8 @@ async fn decide(
         request["sessionId"].as_str().unwrap().into(),
         pane.map(str::to_owned),
         decision.into(),
+        option,
+        message.map(str::to_owned),
         access_lease(),
     )
     .await
@@ -373,6 +387,69 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     .await
     .unwrap();
     assert_eq!(hook_decision(denied).await["behavior"], "deny");
+
+    // Claude's suggested permission updates are listed as the request's options. An allow with
+    // one returns exactly that update to Claude; a deny with a message returns the message.
+    let suggestion = json!({"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"git push:*"}],"behavior":"allow","destination":"localSettings"});
+    let mut with_options = request("approval-option");
+    with_options["permission_suggestions"] = json!([suggestion]);
+    let optioned = waiting_hook(
+        session.clone(),
+        directory,
+        &companion,
+        "optioned",
+        "%12",
+        with_options.clone(),
+    );
+    let listed = pending(app, id, "approval-option").await;
+    assert_eq!(listed["options"], json!([suggestion]));
+    let hash = listed["expectedHash"].as_str().unwrap();
+    for refused_answer in [
+        ("allow", Some(1), None),
+        ("deny", Some(0), None),
+        ("allow", None, Some("no")),
+    ] {
+        decide_with(app, id, &listed, hash, Some("%12"), refused_answer)
+            .await
+            .unwrap_err();
+    }
+    decide_with(
+        app,
+        id,
+        &listed,
+        hash,
+        Some("%12"),
+        ("allow", Some(0), None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        hook_decision(optioned).await,
+        json!({"behavior":"allow","updatedPermissions":[suggestion]})
+    );
+    let messaged = waiting_hook(
+        session.clone(),
+        directory,
+        &companion,
+        "messaged",
+        "%13",
+        with_options,
+    );
+    let listed = pending(app, id, "approval-option").await;
+    decide_with(
+        app,
+        id,
+        &listed,
+        listed["expectedHash"].as_str().unwrap(),
+        Some("%13"),
+        ("deny", None, Some("Push to a branch, not with force")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        hook_decision(messaged).await,
+        json!({"behavior":"deny","message":"Push to a branch, not with force"})
+    );
 
     // Claude ends the hook when the prompt is answered at the host: the remote request
     // disappears and its identity can no longer be answered.

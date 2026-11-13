@@ -63,7 +63,7 @@ it("keeps rejected/stale decisions visible as an error instead of pretending suc
 });
 it("rejects malformed request hashes, ambiguous panes and unbounded payloads", () => {
   expect(parseApprovals({ schemaVersion: 1, requests: [request] })).toEqual([
-    request,
+    { ...request, options: [], canMessage: false },
   ]);
   for (const row of [
     { ...request, expectedHash: "a" },
@@ -148,4 +148,64 @@ it('counts down to expiry and then refuses a decision for the expired request',a
     fireEvent.click(allow);await act(async()=>{});
     expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(0);
   } finally {vi.useRealTimers();}
+});
+
+const suggestion={type:'addRules',rules:[{toolName:'Bash',ruleContent:'git status'}],behavior:'allow',destination:'localSettings'};
+it('offers only the permission updates it can read, each behind a confirmation that shows the exact rule',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'
+    ?{schemaVersion:1,requests:[{...request,options:[suggestion,{type:'setMode',mode:'bypassPermissions',destination:'session'},{type:'addRules',rules:[{toolName:'Bash'}],behavior:'deny',destination:'session'},{type:'setMode',mode:'acceptEdits',destination:'session'},'junk']}]}
+    :{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1"/>);
+  const rule=await screen.findByRole('button',{name:'Allow and remember Bash(git status)…'});
+  expect(screen.getAllByRole('button').map(button=>button.textContent)).toEqual(expect.arrayContaining(['Allow and switch to acceptEdits mode…','Deny with a message']));
+  expect(screen.queryByText(/bypassPermissions/)).toBeNull();
+  fireEvent.click(rule);
+  const confirm=screen.getByRole('region',{name:'Allow and remember Bash(git status)…'});
+  expect(confirm.textContent).toContain('.claude/settings.local.json');expect(confirm.querySelector('code')?.textContent).toBe('Bash(git status)');
+  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(0);
+  fireEvent.click(await screen.findByRole('button',{name:'Allow and remember Bash(git status)…'}));
+  fireEvent.click(screen.getByRole('button',{name:'Allow and apply'}));
+  await act(async()=>{});
+  expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',{sessionId:'ssh1',id:request.id,expectedHash:request.expectedHash,agentSessionId:'agent-session',paneId:'%7',decision:'allow',option:0},expect.anything());
+});
+it('offers no message form to an older companion that does not list options',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[request]}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1"/>);
+  await screen.findByRole('button',{name:'Deny request'});
+  expect(screen.queryByRole('button',{name:'Deny with a message'})).toBeNull();
+});
+it('denies with a trimmed message and sends nothing for a blank one',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[{...request,options:[]}]}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Deny with a message'}));
+  const send=screen.getByRole('button',{name:'Deny and send message'});
+  fireEvent.change(screen.getByLabelText('Message the agent will read'),{target:{value:'   '}});
+  expect(send).toHaveProperty('disabled',true);
+  fireEvent.change(screen.getByLabelText('Message the agent will read'),{target:{value:'  Use staging  '}});
+  fireEvent.click(send);await act(async()=>{});
+  expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',{sessionId:'ssh1',id:request.id,expectedHash:request.expectedHash,agentSessionId:'agent-session',paneId:'%7',decision:'deny',message:'Use staging'},expect.anything());
+});
+
+const mine = {agentSessionId: 'agent-session', paneId: '%7'};
+it('says a request was answered elsewhere and sends nothing when the host no longer lists it',async()=>{
+  let listed=[request];
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:listed}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1" match={mine} compactEmpty/>);
+  const allow=await screen.findByRole('button',{name:'Allow this request'});
+  // The terminal answers it first; the card on screen is still the old one.
+  listed=[];
+  fireEvent.click(allow);await act(async()=>{});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(0);
+  expect(screen.getByRole('status').textContent).toContain('already answered');
+  expect(screen.queryByRole('button',{name:'Allow this request'})).toBeNull();
+});
+it('says nothing about a request that the agent answered here or that expired',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[request]}:{schemaVersion:1,accepted:true});
+  render(<ApprovalPanel sessionId="ssh1" match={mine} compactEmpty/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Deny request'}));
+  vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:[]}:{schemaVersion:1,accepted:true});
+  await act(async()=>{});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval')).toHaveLength(1);
+  expect(screen.queryByRole('status')).toBeNull();
 });

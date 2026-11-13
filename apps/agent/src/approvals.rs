@@ -14,6 +14,16 @@ use std::{
 
 const MAX_TOOL_INPUT: usize = 16 * 1024;
 const MAX_PENDING: i64 = 32;
+const MAX_OPTIONS: usize = 8;
+const MAX_MESSAGE: usize = 500;
+const DESTINATIONS: [&str; 4] = [
+    "session",
+    "localSettings",
+    "projectSettings",
+    "userSettings",
+];
+/// `bypassPermissions` is never offered from a phone.
+const MODES: [&str; 5] = ["default", "auto", "acceptEdits", "dontAsk", "plan"];
 
 #[derive(Clone, Copy, ValueEnum)]
 pub enum ApprovalAgent {
@@ -32,6 +42,14 @@ impl Decision {
         }
     }
 }
+/// What a resolver answers: allow (optionally with one of the request's own `options`) or deny (optionally with a
+/// message the agent reads). The option is an index, never a client-supplied permission update.
+#[derive(Clone, Copy)]
+pub struct Answer<'a> {
+    pub decision: Decision,
+    pub option: Option<u8>,
+    pub message: Option<&'a str>,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +62,10 @@ pub struct Request {
     pub pane_id: Option<String>,
     pub tool_name: String,
     pub tool_input: Value,
+    /// The permission updates Claude suggested ("allow and remember"), validated and rebuilt field by field.
+    /// Part of the request hash; absent when Claude suggested none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Value>,
     pub created_at: String,
     pub expires_at: String,
 }
@@ -55,7 +77,7 @@ struct ApprovalStore {
 impl ApprovalStore {
     fn open(directory: &Path) -> Result<Self> {
         let directory = directory.join("approvals");
-        let store = Store::open(&directory)?;
+        let mut store = Store::open(&directory)?;
         store
             .connection
             .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 64 * 1024)?;
@@ -65,8 +87,25 @@ impl ApprovalStore {
                 id TEXT PRIMARY KEY, hash TEXT NOT NULL, session_id TEXT NOT NULL,
                 project TEXT NOT NULL, pane_id TEXT, tool_name TEXT NOT NULL,
                 tool_input TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL,
-                decision TEXT CHECK(decision IN ('allow','deny')));",
+                decision TEXT CHECK(decision IN ('allow','deny')),
+                options TEXT, option INTEGER, message TEXT);",
         )?;
+        // One immediate transaction, so a hook and a list opening the old store together add each column once.
+        let transaction = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for column in ["options TEXT", "option INTEGER", "message TEXT"] {
+            let name = column.split(' ').next().unwrap_or_default();
+            let present: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('approvals') WHERE name=?1",
+                [name],
+                |row| row.get(0),
+            )?;
+            if present == 0 {
+                transaction.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {column}"))?;
+            }
+        }
+        transaction.commit()?;
         Ok(Self { store, directory })
     }
     fn lease_path(&self, id: &str) -> PathBuf {
@@ -146,6 +185,56 @@ fn string(payload: &Value, key: &str, max: usize) -> Result<String> {
     crate::text(value, max)?;
     Ok(value.into())
 }
+fn rule(value: &Value) -> Option<Value> {
+    let name = value.get("toolName")?.as_str()?;
+    crate::text(name, 256).ok()?;
+    match value.get("ruleContent") {
+        None | Some(Value::Null) => Some(json!({"toolName":name})),
+        Some(content) => {
+            let content = content.as_str()?;
+            crate::text(content, 2048).ok()?;
+            Some(json!({"toolName":name,"ruleContent":content}))
+        }
+    }
+}
+/// One of Claude's `permission_suggestions`, rebuilt from fields we understand. Rules that allow, a mode other than
+/// bypass and added directories are offered; anything else (deny and ask rules, removals, unknown types) is dropped.
+fn suggestion(entry: &Value) -> Option<Value> {
+    let destination = entry.get("destination")?.as_str()?;
+    if !DESTINATIONS.contains(&destination) {
+        return None;
+    }
+    match entry.get("type")?.as_str()? {
+        "addRules" if entry.get("behavior")?.as_str()? == "allow" => {
+            let rules: Vec<Value> = entry
+                .get("rules")?
+                .as_array()?
+                .iter()
+                .map(rule)
+                .collect::<Option<_>>()?;
+            (1..=MAX_OPTIONS).contains(&rules.len()).then(|| json!({"type":"addRules","rules":rules,"behavior":"allow","destination":destination}))
+        }
+        "setMode" => {
+            let mode = entry.get("mode")?.as_str()?;
+            MODES
+                .contains(&mode)
+                .then(|| json!({"type":"setMode","mode":mode,"destination":destination}))
+        }
+        "addDirectories" => {
+            let directories: Vec<&str> = entry
+                .get("directories")?
+                .as_array()?
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<_>>()?;
+            (1..=MAX_OPTIONS).contains(&directories.len())
+                .then(|| directories.iter().all(|path| crate::text(path, 4096).is_ok()))
+                .filter(|valid| *valid)
+                .map(|_| json!({"type":"addDirectories","directories":directories,"destination":destination}))
+        }
+        _ => None,
+    }
+}
 fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Request> {
     if !(1..=600).contains(&timeout) {
         return Err(Error::InvalidArgument);
@@ -169,6 +258,17 @@ fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Re
     {
         return Err(Error::InvalidEvent);
     }
+    let options = payload
+        .get("permission_suggestions")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(suggestion)
+                .take(MAX_OPTIONS)
+                .collect()
+        })
+        .unwrap_or_default();
     let pane_id = pane.map(str::to_owned);
     if pane_id.as_ref().is_some_and(|pane| {
         !pane.starts_with('%')
@@ -188,6 +288,7 @@ fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Re
         pane_id,
         tool_name,
         tool_input,
+        options,
         created_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
         expires_at: (now + chrono::Duration::seconds(i64::from(timeout)))
             .to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -252,7 +353,7 @@ pub fn request(
         .map_err(|_| Error::InvalidEvent)?
         .timestamp_millis();
     transaction.execute(
-        "INSERT INTO approvals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL)",
+        "INSERT INTO approvals(id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             request.id,
             request.expected_hash,
@@ -262,7 +363,11 @@ pub fn request(
             request.tool_name,
             serde_json::to_string(&request.tool_input).map_err(|_| Error::InvalidEvent)?,
             created,
-            expires
+            expires,
+            (!request.options.is_empty())
+                .then(|| serde_json::to_string(&request.options))
+                .transpose()
+                .map_err(|_| Error::InvalidEvent)?
         ],
     )?;
     transaction.commit()?;
@@ -273,34 +378,43 @@ pub fn request(
         Store::open(directory)?.ingest(&event, Utc::now())?;
     }
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout));
-    let decision = loop {
+    let answer = loop {
         if Instant::now() >= deadline {
-            break "deny";
+            break None;
         }
-        let decision: Option<Option<String>> = pending
+        let row: Option<(Option<String>, Option<i64>, Option<String>)> = pending
             .store
             .store
             .connection
             .query_row(
-                "SELECT decision FROM approvals WHERE id=?1 AND hash=?2 AND expires>?3",
+                "SELECT decision,option,message FROM approvals WHERE id=?1 AND hash=?2 AND expires>?3",
                 params![
                     request.id,
                     request.expected_hash,
                     Utc::now().timestamp_millis()
                 ],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        match decision {
-            Some(Some(decision)) => break if decision == "allow" { "allow" } else { "deny" },
-            None => break "deny",
-            _ => std::thread::sleep(Duration::from_millis(100)),
+        match row {
+            Some((Some(decision), option, message)) => break Some((decision, option, message)),
+            None => break None,
+            Some(_) => std::thread::sleep(Duration::from_millis(100)),
         }
     };
-    let decision = if decision == "deny" {
-        json!({"behavior":"deny","message":"Permission denied or expired in lazysh."})
-    } else {
-        json!({"behavior":"allow"})
+    let decision = match answer {
+        Some((decision, option, _)) if decision == "allow" => {
+            // The index was bounds-checked against these same options when it was resolved.
+            let update = option
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| request.options.get(index));
+            match update {
+                Some(update) => json!({"behavior":"allow","updatedPermissions":[update]}),
+                None => json!({"behavior":"allow"}),
+            }
+        }
+        Some((_, _, Some(message))) => json!({"behavior":"deny","message":message}),
+        _ => json!({"behavior":"deny","message":"Permission denied or expired in lazysh."}),
     };
     Ok(json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":decision}}))
 }
@@ -311,11 +425,12 @@ pub fn list(directory: &Path, limit: u8) -> Result<Value> {
     }
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
-    let mut statement = store.store.connection.prepare("SELECT id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires FROM approvals WHERE decision IS NULL AND expires>?1 ORDER BY created,id LIMIT ?2")?;
+    let mut statement = store.store.connection.prepare("SELECT id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires,options FROM approvals WHERE decision IS NULL AND expires>?1 ORDER BY created,id LIMIT ?2")?;
     let rows = statement.query_map(params![Utc::now().timestamp_millis(), limit], |row| {
         let created: i64 = row.get(7)?;
         let expires: i64 = row.get(8)?;
         let tool_input: String = row.get(6)?;
+        let options: Option<String> = row.get(9)?;
         let request = Request {
             id: row.get(0)?,
             expected_hash: row.get(1)?,
@@ -326,6 +441,11 @@ pub fn list(directory: &Path, limit: u8) -> Result<Value> {
             tool_name: row.get(5)?,
             tool_input: serde_json::from_str(&tool_input)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            options: options
+                .map(|options| serde_json::from_str(&options))
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                .unwrap_or_default(),
             created_at: chrono::DateTime::from_timestamp_millis(created)
                 .ok_or(rusqlite::Error::InvalidQuery)?
                 .to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -341,6 +461,11 @@ pub fn list(directory: &Path, limit: u8) -> Result<Value> {
         Ok(request)
     })?;
     let requests: Vec<Request> = rows.collect::<std::result::Result<_, _>>()?;
+    let mut requests = serde_json::to_value(requests).map_err(|_| Error::InvalidEvent)?;
+    // An empty `options` is still listed: it tells the client this companion also takes `--message`.
+    for request in requests.as_array_mut().into_iter().flatten() {
+        request["options"] = request.get("options").cloned().unwrap_or_else(|| json!([]));
+    }
     Ok(json!({"schemaVersion":1,"requests":requests}))
 }
 
@@ -350,18 +475,47 @@ pub fn resolve(
     hash: &str,
     session_id: &str,
     pane_id: Option<&str>,
-    decision: Decision,
+    answer: Answer,
 ) -> Result<Value> {
     if !valid_id(id) || hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(Error::InvalidArgument);
     }
     crate::text(session_id, 256)?;
+    // An option belongs to an allow and a message to a deny; neither is ever both.
+    let allow = matches!(answer.decision, Decision::Allow);
+    if (answer.option.is_some() && !allow) || (answer.message.is_some() && allow) {
+        return Err(Error::InvalidArgument);
+    }
+    if let Some(message) = answer.message {
+        if crate::text(message, MAX_MESSAGE).is_err() {
+            return Err(Error::InvalidArgument);
+        }
+    }
     let mut store = ApprovalStore::open(directory)?;
     store.clean()?;
     if !waiting(&store.lease_path(id))? {
         return Err(Error::InvalidEvent);
     }
-    let changed = store.store.connection.execute("UPDATE approvals SET decision=?1 WHERE id=?2 AND hash=?3 AND session_id=?4 AND pane_id IS ?5 AND decision IS NULL AND expires>?6", params![decision.value(), id, hash, session_id, pane_id, Utc::now().timestamp_millis()])?;
+    if let Some(option) = answer.option {
+        // Options are immutable and covered by the hash, so checking them before the update is race-free.
+        let options: Option<String> = store
+            .store
+            .connection
+            .query_row(
+                "SELECT options FROM approvals WHERE id=?1 AND hash=?2 AND session_id=?3 AND pane_id IS ?4",
+                params![id, hash, session_id, pane_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        let count = options
+            .and_then(|options| serde_json::from_str::<Vec<Value>>(&options).ok())
+            .map_or(0, |options| options.len());
+        if usize::from(option) >= count {
+            return Err(Error::InvalidEvent);
+        }
+    }
+    let changed = store.store.connection.execute("UPDATE approvals SET decision=?1,option=?7,message=?8 WHERE id=?2 AND hash=?3 AND session_id=?4 AND pane_id IS ?5 AND decision IS NULL AND expires>?6", params![answer.decision.value(), id, hash, session_id, pane_id, Utc::now().timestamp_millis(), answer.option, answer.message])?;
     if changed != 1 {
         return Err(Error::InvalidEvent);
     }

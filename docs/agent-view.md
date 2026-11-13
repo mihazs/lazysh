@@ -57,7 +57,7 @@ The Agent view is built on these; it is not a parallel implementation.
 | Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes), `send_long` (tmux only, 4097 to 65,536 bytes as one bounded paste plus CR) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
 | Stage | `lazysh-prompt-draft` event, `TerminalComposer` | Puts a draft, with `[Image #n]`/`[File #n]` tokens, into the terminal composer sheet. |
 | Hooks and board | `apps/agent/src/hooks.rs`, `AgentPanel.tsx`, `AgentStatus.tsx`, `HerdrAgentsPanel` | Hook-reported state (needs attention, working, done) and Herdr live status (idle, working, blocked, done). |
-| Approvals | `ApprovalPanel.tsx`, `apps/agent/src/approvals.rs`, [Remote decisions](approvals.md) | Hash-bound allow/deny for Claude `PermissionRequest`. |
+| Approvals | `ApprovalPanel.tsx`, `apps/agent/src/approvals.rs`, [Remote decisions](approvals.md) | Hash-bound allow/deny for Claude `PermissionRequest`, plus the permission updates Claude suggests (each behind a confirmation showing the exact rule) and deny with a message. |
 | Mounting | `App.tsx` `View` union, `keptChat` | Every `TerminalPane` stays mounted; ChatPanel is kept alive behind other views. |
 
 ## Architecture

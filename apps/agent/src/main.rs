@@ -136,6 +136,12 @@ enum Command {
         pane_id: Option<String>,
         #[arg(long, value_enum)]
         decision: lazysh_agent::approvals::Decision,
+        /// Allow with this suggested permission update of the listed request (its `options` index).
+        #[arg(long, value_parser=clap::value_parser!(u8).range(0..8))]
+        option: Option<u8>,
+        /// Deny with this message, which the agent reads.
+        #[arg(long)]
+        message: Option<String>,
     },
     /// Print an opt-in configuration fragment; never changes Claude settings.
     ApprovalConfig,
@@ -410,13 +416,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             session_id,
             pane_id,
             decision,
+            option,
+            message,
         } => Some(lazysh_agent::approvals::resolve(
             &lazysh_agent::state_directory()?,
             &id,
             &expected_hash,
             &session_id,
             pane_id.as_deref(),
-            decision,
+            lazysh_agent::approvals::Answer {
+                decision,
+                option,
+                message: message.as_deref(),
+            },
         )?),
         Command::ClaudeConfig { reported_history } => Some(if reported_history {
             lazysh_agent::reported_history::claude_config()
