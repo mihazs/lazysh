@@ -32,7 +32,7 @@ const invalid=()=>new LocalUiError('herdrAgentsInvalid');
 function boundedText(value:unknown,limit:number):value is string {
   return typeof value==='string' && value.length>0 && new TextEncoder().encode(value).length<=limit && !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(value);
 }
-export function herdrServerNames(value:unknown):string[] {
+function servers(value:unknown):string[] {
   if(!Array.isArray(value) || value.length>1000)throw invalid();
   const names=value.map(row=>{if(!row || !boundedText(row.name,200))throw invalid();return row.name as string;});
   if(new Set(names).size!==names.length)throw invalid();
@@ -63,19 +63,17 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 /** The Herdr server picked for each terminal, shared by the Agents page and Settings; a closed session's id never comes back. */
 const picked=new Map<string,string>();
 const pickListeners=new Set<()=>void>();
-function pickServer(host:string,name:string) {picked.set(host,name);for(const listener of pickListeners)listener();}
+export function chooseHerdrServer(host:string,name:string) {picked.set(host,name);for(const listener of pickListeners)listener();}
 function subscribePicked(listener:()=>void) {
   pickListeners.add(listener);
   return()=>{pickListeners.delete(listener);if(!pickListeners.size)picked.clear();};
 }
-export const useHerdrServerChoice=(host:string)=>useSyncExternalStore(subscribePicked,()=>picked.get(host));
-export const chooseHerdrServer=pickServer;
 
 /** One visibility- and lease-owned reader for a terminal's selected Herdr server. */
 export function useHerdrNavigation({sessionId,herdrSession,visible,reports,intervalMs=5000}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;intervalMs?:number}) {
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
-  const choice=useHerdrServerChoice(sessionId);
+  const choice=useSyncExternalStore(subscribePicked,()=>picked.get(sessionId));
   const selected=choice??herdrSession??'';
   const [result,setResult]=useState<{host:string;servers:string[];server:string;rows:LiveAgent[];snapshot?:HerdrTree;loaded:boolean}|null>(null);
   const [failure,setFailure]=useState<{host:string;cause:UiErrorCause}|null>(null);
@@ -92,7 +90,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
       flight.current=true;setBusy(true);
       const owns=()=>current && visible && !document.hidden && lease.current();
       try {
-        const names=herdrServerNames(await invoke('multiplexer_sessions',{sessionId,kind:'herdr'}));
+        const names=servers(await invoke('multiplexer_sessions',{sessionId,kind:'herdr'}));
         if(!owns())return;
         // An attached target is a read hint, never input authority or permission to substitute another server.
         const server=names.includes(selected)?selected:!selected && names.length===1?names[0]:'';
