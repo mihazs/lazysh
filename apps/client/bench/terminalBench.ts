@@ -3,11 +3,9 @@
 // render callbacks, frame intervals and long tasks. Process CPU and heap come from CDP in the Playwright driver.
 // The renderer under test is the page's `?renderer=` query: the default DOM renderer (the baseline) or the
 // canvas or WebGL addon on the same terminal, for the renderer shootout (#1323).
-import { CanvasAddon } from '@xterm/addon-canvas';
-import { WebglAddon } from '@xterm/addon-webgl';
-import type { Terminal } from '@xterm/xterm';
 import { mountTerminalHistoryHarness } from '../e2e/fixtures/TerminalHistoryHarness';
 import { createTerminal } from '../src/xterm/terminal';
+import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/rendererCandidates';
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
 
@@ -18,20 +16,12 @@ const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const digest = async (data: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data as BufferSource)), b => b.toString(16).padStart(2, '0')).join('');
 
-type Candidate = 'dom' | 'canvas' | 'webgl';
 const requested = new URLSearchParams(location.search).get('renderer');
 if (requested !== null && !['dom', 'canvas', 'webgl'].includes(requested)) throw new Error(`Unknown renderer candidate: ${requested}`);
-const candidate = (requested ?? 'dom') as Candidate;
+const candidate = (requested ?? 'dom') as RendererCandidate;
 let contextLosses = 0;
 /** Loads the candidate's renderer addon on an opened terminal; a lost WebGL context falls back to DOM, which would invalidate the numbers, so it is counted. */
-function attach(terminal: Terminal) {
-  if (candidate === 'canvas') terminal.loadAddon(new CanvasAddon());
-  if (candidate === 'webgl') {
-    const addon = new WebglAddon();
-    addon.onContextLoss(() => { contextLosses++; addon.dispose(); });
-    terminal.loadAddon(addon);
-  }
-}
+const attach = (terminal: Harness['terminal']) => attachRendererCandidate(terminal, candidate, () => { contextLosses++; });
 /** The GPU the WebGL candidate really ran on (software rasterizer or hardware), from the page's own context. */
 function glInfo() {
   try {

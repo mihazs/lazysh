@@ -12,7 +12,7 @@ function sources(directory: string): string[] {
   return readdirSync(directory, {withFileTypes: true}).flatMap(entry => {
     if (skipped.has(entry.name)) return [];
     const path = join(directory, entry.name);
-    return entry.isDirectory() ? sources(path) : /\.(?:ts|tsx)$/.test(entry.name) && !entry.name.endsWith('.d.ts') ? [path] : [];
+    return entry.isDirectory() ? sources(path) : /\.(?:ts|tsx|mjs)$/.test(entry.name) && !entry.name.endsWith('.d.ts') ? [path] : [];
   });
 }
 
@@ -43,12 +43,15 @@ function privateCoreUsers() {
   });
 }
 
+/** Standalone Node scripts that compare xterm.js with a candidate (#1323). They run outside the app, so no app code can depend on them; remove them with the baseline in #1343. */
+const standaloneBenchmarks = new Set(['bench/wasmVt.mjs']);
+
 /** The xterm backend: its adapter, option mapping and the seams that patch xterm internals. */
 const isBackend = (file: string) => file.startsWith('src/xterm/') || /^src\/xterm(?:TerminalAdapter|Options)(?:\.test)?\.ts$/.test(file);
 
 describe('who imports xterm.js', () => {
   it('is only the xterm backend, harnesses included, so no consumer can depend on xterm.js', () => {
-    expect([...xtermImporters().keys()].filter(file => !isBackend(file))).toEqual([]);
+    expect([...xtermImporters().keys()].filter(file => !isBackend(file) && !standaloneBenchmarks.has(file))).toEqual([]);
   });
 
   it('keeps xterm internals (`_core`) inside the backend', () => {
