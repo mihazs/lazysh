@@ -12,7 +12,7 @@ import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access'
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {useDialogAnswerer} from './agentDialogAnswer';
-import {ChatActivity,ChatCard,ChatMarkdown,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
+import {ChatActivity,ChatCard,parseActivity,parseCard,type Activity,type Card} from './ChatInteraction';
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
 import {recordedImage,type RecordedImage} from './recordedImage';
@@ -21,6 +21,7 @@ import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from '.
 import {useTranscriptWatch,type WatchTarget} from './useTranscriptWatch';
 import {applyWatchOp} from './transcriptWatch';
 import {projectMessages,type InjectedEvent} from './chatInjected';
+import {ChatRich} from './ChatRich';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
 import ChatHistoryControls from './ChatHistoryControls';
@@ -643,7 +644,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
         return block.type === "text" ? (
-          <Fragment key={index}>{card ?? <ChatMarkdown text={block.text || ""} />}</Fragment>
+          <Fragment key={index}>{card ?? <ChatRich text={block.text || ""} />}</Fragment>
         ) : (
           <Fragment key={index}>{card}<details>
             <summary>
