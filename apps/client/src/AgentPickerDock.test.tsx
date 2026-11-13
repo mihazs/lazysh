@@ -229,3 +229,14 @@ it('does not read a Codex dialog as a Claude Code one: it says the agent waits i
   expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
   expect(answers).toEqual([]);
 });
+
+it('offers Cancel for a Codex approval, whose Esc declines it, but not for a question whose Esc interrupts the turn', async () => {
+  bindCodex();
+  mount(approval(), {agent: 'Codex'});
+  expect((await screen.findByRole('button', {name: t('agentPickerCancel')}))).toBeTruthy();
+  cleanup();
+  mount(fixture('codex-question'), {agent: 'Codex', waiting: 'question'});
+  await screen.findByRole('heading', {name: 'Question 1/1 (1 unanswered)'});
+  expect(screen.queryByRole('button', {name: t('agentPickerCancel')})).toBeNull();
+  expect(screen.getByRole('button', {name: t('agentViewShowTerminal')})).toBeTruthy();
+});

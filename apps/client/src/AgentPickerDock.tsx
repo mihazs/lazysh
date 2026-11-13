@@ -19,6 +19,8 @@ const readLift = (terminal: ScreenSource, lifter: Lifter): Lift => {
 };
 const same = (a: Lift, b: Lift) => a.kind === b.kind && (a.kind !== 'dialog' || b.kind !== 'dialog' || JSON.stringify(a.dialog) === JSON.stringify(b.dialog));
 const remembered = /don'?t ask again|never show again|\balways allow\b|\bfull access\b/i;
+// Escape on a dialog whose footer says it interrupts stops the agent's turn, which is the Stop button's job and not a way to leave the dialog.
+const interrupts = /\besc to interrupt\b/i;
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 /** The dialog the agent has open on the terminal screen, re-read about 150 ms after output while the view is shown. */
@@ -120,7 +122,7 @@ export default function AgentPickerDock({sessionId, agent, shown, terminal, answ
     {!live && <p role="note">{t('agentPickerTerminalOnly')}</p>}
     {phase !== 'idle' && phase !== 'sending' && <p role="alert">{phaseNote(phase)}</p>}
     <div className="button-row">
-      {live && <button type="button" disabled={busy} onClick={() => void answer()}>{t('agentPickerCancel')}</button>}
+      {live && !interrupts.test(dialog.hint.join(' ')) && <button type="button" disabled={busy} onClick={() => void answer()}>{t('agentPickerCancel')}</button>}
       <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
     </div>
   </section>;

@@ -342,7 +342,8 @@ transcript, so it works for dialogs no hook or transcript record describes.
   against screens captured from Codex CLI 0.167.0 (`codex-*.txt`): the command approval, a `request_user_input` question, `/model`,
   `/permissions` and the rate-limit reminder, also at phone width. Codex's own `/resume` screen (a search field above a table), like any screen whose footer names Enter and Esc but is not one of these lists, is
   not read: the card says the agent waits in the terminal. OpenCode, Grok and Gemini dialogs have no captured corpus yet and fall back to the banner.
-  The agent's name picks the profile, so a Codex screen is never read with Claude Code's rules or the other way round.
+  The agent's name picks the profile, so a Codex screen is never read with Claude Code's rules or the other way round. **Cancel the dialog**
+  is not offered where the footer says Esc interrupts (a Codex question): that is the Stop button's job.
 - **A choice that outlasts the answer asks twice.** An option whose text says it is remembered ("don't ask again", "never show again",
   "always allow", "Full Access") first shows a note that names the exact option and waits for **Confirm**; **Back** sends
   nothing. A digit on a desktop keyboard goes through the same note. The terminal's own `p` or digit is the person's choice there.
