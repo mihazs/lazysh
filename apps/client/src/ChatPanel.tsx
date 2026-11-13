@@ -23,7 +23,7 @@ import {applyWatchOp} from './transcriptWatch';
 import {projectMessages,type InjectedEvent} from './chatInjected';
 import AgentQueued,{parseQueued,type Queued} from './AgentQueued';
 import {placePage,windowArguments,WINDOW_CAP,type WindowRequest} from './historyWindow';
-import ChatHistoryControls from './ChatHistoryControls';
+import ChatHistoryEdge,{useSelectionIn} from './ChatHistoryEdge';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
@@ -207,7 +207,10 @@ export function activitySummary(turn: Turn): string {
   return parts.join(' · ');
 }
 
-const NO_HISTORY = {paging: false, older: false, newer: false};
+// `ended`: the window was read down to the newest message, so the bottom of the view says so.
+const NO_HISTORY = {paging: false, older: false, newer: false, ended: false};
+/** The page being read at each end of the window, and the failure that stops reading further there until Retry. */
+type Edges = {loading?: 'older' | 'newer'; older?: UiErrorCause; newer?: UiErrorCause};
 
 /** A conversation the Agent view found for its pane from hook reports. */
 export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
@@ -271,6 +274,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [history, setHistory] = useState(NO_HISTORY);
   const messagesRef = useRef(messages); messagesRef.current = messages;
   const historyRef = useRef(history); historyRef.current = history;
+  const [edges, setEdges] = useState<Edges>({});
+  const selecting = useSelectionIn(messageList);
   const [activity, setActivity] = useState<Activity>();
   const [queued, setQueued] = useState<Queued[]>([]);
   const [work, setWork] = useState<WorkItem[]>();
@@ -409,17 +414,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   /** Puts a page into the window of the session that is held, and keeps the turn at the top of the view where it is. */
   function place(request: WindowRequest, page: Message[], more = {older: false, newer: false}, fresh = false) {
     const next = placePage({messages: messagesRef.current, older: historyRef.current.older, newer: historyRef.current.newer}, request, {messages: page, ...more}, fresh);
-    if (!fresh) holdPosition();
+    // A page read at either end keeps the line being read where it is, also at the bottom of the list.
+    if (!fresh) holdPosition(request.kind === 'before' || request.kind === 'after');
+    // Content that arrives below the line being read does not make it the latest: following must not jump over it.
+    if (request.kind === 'after') {atLatestRef.current = false; setAtLatest(false);}
     if (request.kind === 'start') scrollTo.current = 'top';
-    setMessages(next.messages); setHistory({paging: true, older: next.older, newer: next.newer});
+    setMessages(next.messages); setHistory({paging: true, older: next.older, newer: next.newer, ended: !next.newer && (request.kind === 'after' || (request.kind === 'before' && historyRef.current.ended))});
   }
   const scrollTo = useRef<'top' | 'bottom' | undefined>(undefined);
   const watchLive=useRef(false);watchLive.current=watch.live;
   // Reading older turns: the turn at the top of the view stays where it is while updates land around it.
   const anchor=useRef<{key:string;top:number}|null>(null);
-  function holdPosition() {
+  function holdPosition(always = false) {
     const list=messageList.current;anchor.current=null;
-    if(!list || atLatestRef.current)return;
+    if(!list || (atLatestRef.current && !always))return;
     const top=list.getBoundingClientRect().top;
     // A message is the finest anchor: turns regroup when an older page completes the turn at the top.
     for(const child of [...Array.from(list.querySelectorAll('article[data-anchor]')),...Array.from(list.children)]) {
@@ -512,8 +520,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     flight.current = true;
     automaticRequest.current = automatic;
     const current = ++request.current;
+    // The end this read serves: its spinner shows there, and a failure stops reading further there until Retry.
+    const end = slice?.kind === 'before' ? 'older' : slice?.kind === 'after' ? 'newer' : undefined;
     setBusy(true);
     setError("");
+    if (end) setEdges(previous => ({...previous, loading: end, [end]: undefined}));
+    else if (reset) setEdges({});
     try {
       const replace = reset || source.view === "conversation";
       const cursor = replace ? 0 : offset;
@@ -559,7 +571,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
       if (replace && (!slice || slice.kind === 'tail')) {setActivity(page.activity);setQueued(page.queued ?? []);setWork(page.work);setSession(page.session);}
-      if (source.view === 'conversation') place(slice ?? {kind: 'tail'}, page.messages, {older: page.truncated === true, newer: page.hasNewer === true}, reset && !slice);
+      // A page that adds nothing ends that direction: a host that keeps claiming more would be asked for it again and again.
+      const exhausted = !!end && page.messages.length === 0;
+      if (source.view === 'conversation') place(slice ?? {kind: 'tail'}, page.messages, {older: !exhausted && page.truncated === true, newer: !exhausted && page.hasNewer === true}, reset && !slice);
       else setMessages((previous) => {
         const combined = replace
           ? page.messages
@@ -571,8 +585,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     } catch (e) {
       if (currentRequest(current)) {
         // A companion that predates whole-session reading rejects the window flags; what is loaded stays readable.
-        setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-          ? new LocalUiError('chatChanged') : slice && /unexpected argument|unrecognized/i.test(errorMessage(e)) ? new LocalUiError('chatUpdateCompanion') : captureUiError(e));
+        const cause = source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
+          ? new LocalUiError('chatChanged') : slice && /unexpected argument|unrecognized/i.test(errorMessage(e)) ? new LocalUiError('chatUpdateCompanion') : captureUiError(e);
+        if (end) {setEdges(previous => ({...previous, [end]: cause})); return;}
+        setError(cause);
         if (slice) return;
         // A bound conversation keeps trying through a dropped connection, since the stream or the next poll recovers it
         // and clears the error. A conversation that is no longer this pane's, or a host that cannot read it, stops.
@@ -582,10 +598,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     } finally {
       flight.current = false;
       automaticRequest.current = false;
-      if (mounted.current && access.current()) {if(reset)setInputOpen(value=>({...value,pending:false}));setBusy(false); setCompleted(value => value + 1);}
+      if (mounted.current && access.current()) {if(reset)setInputOpen(value=>({...value,pending:false}));setBusy(false); setCompleted(value => value + 1);if(end)setEdges(({loading,...rest})=>rest);}
     }
   }
   const readSlice = (slice: WindowRequest) => void read(false, false, false, slice);
+  // Next to Jump to latest, so it is within reach from any depth without covering the messages.
+  const jumpToStart = opened?.view === 'conversation' && history.older && <button type="button" disabled={busy} onClick={() => readSlice({kind: 'start'})}>{t('chatHistoryJumpStart')}</button>;
   const loadOlder = () => {const first = messagesRef.current[0]; if (first) readSlice({kind: 'before', id: first.id});};
   const loadNewer = () => {const last = messagesRef.current.at(-1); if (last) readSlice({kind: 'after', id: last.id});};
   // A bound conversation opens with this reader, also after a dropped first read; errors wait for Refresh.
@@ -804,7 +822,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
         {t('chatRecordedStart')}
       </button>}
-      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button></div>}
+      {bound && (!atLatest || history.newer) && <div className="chat-follow-controls"><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>{jumpToStart}</div>}
       {followable && !bound && <div className="chat-follow-controls">
         <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
@@ -814,19 +832,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
         {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
         {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}
-        {(!atLatest || history.newer) && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
+        {(!atLatest || history.newer) && <><button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>{jumpToStart}</>}
       </div>}
       {conversation && sourceMatches && !bound && <ChatActivity activity={activity} />}
       <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
-        // Scrolling to either end of the loaded window reads the next page there.
-        if (element && opened?.view === 'conversation' && !busy) {
-          if (history.older && element.scrollTop <= 80) loadOlder();
-          else if (history.newer && element.scrollHeight - element.clientHeight - element.scrollTop <= 80) loadNewer();
-        }
       }}>
-        {opened?.view === 'conversation' && <ChatHistoryControls edge="top" more={history.older} first={messages.length > 0} busy={busy} onMore={loadOlder} onJumpStart={() => readSlice({kind: 'start'})} />}
+        {opened?.view === 'conversation' && <ChatHistoryEdge edge="top" root={messageList} more={history.older} first={messages.length > 0} busy={busy} loading={edges.loading === 'older'} paused={selecting} error={edges.older} revision={completed} onMore={loadOlder} />}
         {timeline ? turns.map((turn, index) => <section key={turn.key} data-anchor={turn.key} data-running={turnRunning && index === turns.length - 1 || undefined} className="agent-turn" aria-label={t('agentViewTurn')}>
           {turn.event && renderMessage(turn.event)}
           {turn.prompt && renderMessage(turn.prompt)}
@@ -838,7 +851,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
-        {opened?.view === 'conversation' && <ChatHistoryControls edge="bottom" more={history.newer} busy={busy} onMore={loadNewer} />}
+        {opened?.view === 'conversation' && <ChatHistoryEdge edge="bottom" root={messageList} more={history.newer} end={history.ended} busy={busy} loading={edges.loading === 'newer'} paused={selecting} error={edges.newer} revision={completed} onMore={loadNewer} />}
         {timeline && <AgentQueued queued={queued} />}
       </div>
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}

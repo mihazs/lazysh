@@ -1,0 +1,10 @@
+/* The edge keeps its height whether it shows a spinner, a retry row or nothing, so a page arriving never shifts the lines being read. */
+.chat-history-edge { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 48px; padding: 6px 0; }
+.chat-history-marker { margin: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted, inherit); font-size: 0.85rem; }
+.chat-history-edge .subtle-button { min-height: 40px; }
+.chat-history-retry { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; max-width: 100%; font-size: 0.85rem; overflow-wrap: anywhere; }
+.chat-history-spinner { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--theme-border, var(--border)); border-top-color: var(--accent, currentColor); animation: chat-history-spin 0.8s linear infinite; }
+@keyframes chat-history-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .chat-history-spinner { animation: none; border-top-color: var(--theme-border, var(--border)); opacity: 0.7; } }
+/* With scrolling doing the work, the button leaves the layout until it is focused. */
+.chat-history-edge[data-observed] .chat-history-fallback:not(:focus-within) { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }

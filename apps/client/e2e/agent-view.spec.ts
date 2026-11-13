@@ -1018,8 +1018,8 @@ test('live: an older page loads above the reader while a live append arrives, an
   await expect(flow.getByText('Answer 12',{exact:true})).toBeVisible();
   const read=agent.getByText('Explain the build',{exact:true});
   const offset=()=>read.evaluate(node=>node.getBoundingClientRect().top-node.closest('.chat-messages')!.getBoundingClientRect().top);
-  // Scrolling to the top asks for the page before the first message; the host has not answered yet.
-  await flow.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
+  // Scrolling to the top (no tap) asks for the page before the first message; the host has not answered yet.
+  await flow.evaluate(node=>{node.scrollTop=0;});
   const before=await offset();
   await page.evaluate(()=>{window.agentView.turns.push({prompt:'Fresh question',answer:'Fresh answer'});const fixture=window.agentView;
     fixture.emit({type:'delta',gen:1,seq:2,upserts:fixture.messages().slice(-3).map(message=>({id:(message as {id:string}).id,rev:1,message})),drops:[]});});
@@ -1030,7 +1030,7 @@ test('live: an older page loads above the reader while a live append arrives, an
   await expect(read).toBeAttached();
   expect(Math.abs(await offset()-before)).toBeLessThan(1);
   // The next older page continues from the first message loaded, with no gap and no repeat.
-  await flow.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
+  await flow.evaluate(node=>{node.scrollTop=0;});
   await expect(flow.getByText('Earlier line 39',{exact:true})).toBeAttached();
   await expect(flow.getByText('Earlier line 40',{exact:true})).toHaveCount(1);
   await expect(flow.getByText('Earlier line 59',{exact:true})).toHaveCount(1);
