@@ -394,9 +394,11 @@ Tests assert behaviour, not source text.
   exactly once and in order (a replayed operation reaches the pane nowhere), that the
   mode read-back names the mode the pane drew, and that the real `lazysh-agent
   transcript` reads the same records back as messages, a question card and a
-  background command that goes from `running` to `done`. Still to add: permission
-  decisions through the approval hook, a sub-agent child conversation and a workflow
-  journal, guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
+  background command that goes from `running` to `done`. The agent also runs its
+  real `PermissionRequest` hook through `lazysh-agent approval-request`; the client lists
+  the request over the same SSH session, a decision naming another pane is refused, the
+  exact one releases the agent once and a second decision fails. Still to add: a sub-agent
+  child conversation and a workflow journal, guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
   `tauri-driver`) and the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.

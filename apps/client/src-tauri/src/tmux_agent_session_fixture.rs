@@ -67,7 +67,24 @@ async fn real_tmux_agent_session_runs_from_the_guarded_agent_view_inputs_only() 
 }
 
 async fn session() {
-    let f = Fixture::new().await;
+    // The host runs the real companion: on the remote PATH for the client's commands and as the hook the agent calls.
+    let host = tempfile::tempdir().unwrap();
+    let companion = std::env::var_os("LAZYSH_TEST_AGENT_BIN")
+        .map(std::path::PathBuf::from)
+        .expect("build lazysh-agent from this checkout and pass it as LAZYSH_TEST_AGENT_BIN");
+    fs::create_dir(host.path().join("bin")).unwrap();
+    std::os::unix::fs::symlink(&companion, host.path().join("bin/lazysh-agent")).unwrap();
+    let state_directory = host.path().join("state");
+    let f = Fixture::with_environment(
+        None,
+        false,
+        false,
+        vec![
+            ("PATH", host.path().join("bin").display().to_string()),
+            ("LAZYSH_STATE_DIR", state_directory.display().to_string()),
+        ],
+    )
+    .await;
     let servers = NamedServers {
         fixture: &f,
         names: vec!["chat-a".into()],
@@ -88,10 +105,12 @@ async fn session() {
                 "-F",
                 "#{pane_id}",
                 &format!(
-                    "exec bash {} {} {}",
+                    "exec bash {} {} {} {} {}",
                     quote(script.to_str().unwrap()),
                     quote(transcript.to_str().unwrap()),
-                    quote(log.to_str().unwrap())
+                    quote(log.to_str().unwrap()),
+                    quote(companion.to_str().unwrap()),
+                    quote(state_directory.to_str().unwrap())
                 )
             ]
         ),
@@ -138,6 +157,64 @@ async fn session() {
     // One Shift+Tab moves the permission mode, and the reply names the mode the pane showed afterwards.
     let moved = step!(json!({"kind":"cycle_mode"}), "MODE accept edits on");
     assert_eq!(moved["mode"], "acceptEdits");
+    // The agent asks to run a command: its permission hook blocks, the request is listed over the same SSH session with
+    // the pane that asked, a decision that names another pane is refused, and the exact one lets the agent go on, once.
+    step!(
+        json!({"kind":"send","text":"permission please"}),
+        "SUBMIT permission please",
+        "PERMISSION_ASKED"
+    );
+    let request = timeout(BOUND, async {
+        loop {
+            let listed =
+                crate::approvals::agent_approvals(app.state(), child.clone(), lease.clone())
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .unwrap();
+            if let Some(request) = listed["requests"].as_array().and_then(|rows| rows.first()) {
+                return request.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the waiting permission hook is listed for the client");
+    assert_eq!(request["paneId"], "%0");
+    assert_eq!(request["toolName"], "Bash");
+    assert_eq!(
+        request["toolInput"],
+        json!({"command":"git push --force-with-lease"})
+    );
+    let decide = |pane: &str, decision: &str| {
+        crate::approvals::resolve_agent_approval(
+            app.state(),
+            child.clone(),
+            request["id"].as_str().unwrap().into(),
+            request["expectedHash"].as_str().unwrap().into(),
+            request["sessionId"].as_str().unwrap().into(),
+            Some(pane.into()),
+            decision.into(),
+            lease.clone(),
+        )
+    };
+    assert!(decide("%7", "allow").await.is_err());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        lines(&log),
+        expected,
+        "a decision for another pane reaches the agent nowhere"
+    );
+    assert_eq!(
+        decide("%0", "allow").await.unwrap().into_inner().unwrap(),
+        json!({"schemaVersion":1,"accepted":true})
+    );
+    expected.push("PERMISSION allow".into());
+    assert_eq!(log_until(&log, expected.len()).await, expected);
+    assert!(
+        decide("%0", "deny").await.is_err(),
+        "a decided request cannot be decided again"
+    );
     // A background command starts, and the agent records its end by itself a moment later.
     step!(
         json!({"kind":"send","text":"background wait"}),
@@ -188,6 +265,7 @@ async fn session() {
         "hello agent",
         "Answered: hello agent",
         "Chose Nested.",
+        "Ran the command.",
         "Interrupted by the user.",
     ] {
         assert_eq!(

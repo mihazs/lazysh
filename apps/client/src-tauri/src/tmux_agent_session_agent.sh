@@ -2,7 +2,7 @@
 # Test-only stand-in for an agent TUI (tmux_agent_session_fixture.rs). It draws a prompt and a permission-mode line in
 # the pane it runs in, reads raw keys, appends Claude Code format records to a transcript and logs every submitted
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
-transcript=$1 log=$2
+transcript=$1 log=$2 companion=$3 state=$4
 modes=('manual mode on' 'accept edits on' 'plan mode on')
 mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0
 escape() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; printf '%s' "$s"; }
@@ -25,6 +25,11 @@ background() {
   record user '{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bg","content":[{"type":"text","text":"Command running in background with ID: bg1. Output is being written to: /tmp/bg1.output"}],"is_error":false}]}'
 }
 ended() { record user "{\"role\":\"user\",\"content\":\"$(escape $'<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>toolu_bg</tool-use-id>\n<status>completed</status>\n<summary>Background command "Wait" completed (exit code 0)</summary>\n</task-notification>')\"}"; }
+# The PermissionRequest hook Claude Code runs before a tool: it blocks until someone decides, and prints the decision.
+permission() {
+  local request='{"hook_event_name":"PermissionRequest","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","cwd":"/work/fixture","tool_name":"Bash","tool_input":{"command":"git push --force-with-lease"}}'
+  LAZYSH_STATE_DIR=$state "$companion" approval-request --agent claude --timeout-seconds 60 <<<"$request"
+}
 draw() { printf '\033[2J\033[H> \r\n\r\n  ⏸ %s · ? for shortcuts' "${modes[$mode]}"; }
 
 stty raw -echo
@@ -62,6 +67,11 @@ while true; do
     user "$buf"
     case $buf in
       ask*) asking=1; note ASKING; ask ;;
+      permission*) note PERMISSION_ASKED
+        case $(permission) in
+          *'"behavior":"allow"'*) note 'PERMISSION allow'; text 'Ran the command.' ;;
+          *) note 'PERMISSION deny'; text 'Not allowed.' ;;
+        esac ;;
       background*) note BACKGROUND; background; due=$((${EPOCHREALTIME/./} / 1000 + 1000)) ;;
       *) text "Answered: ${buf:0:40}" ;;
     esac
