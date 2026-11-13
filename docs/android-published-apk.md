@@ -236,6 +236,21 @@ The 45-second command and 240-second overall budgets remain unchanged. Refs #525
 and #555. This diagnostic does not establish the current timeout cause or close
 public-package qualification.
 
+Public v1.3.1 Google qualification ([run41157289301](https://github.com/mihazs/lazysh/actions/runs/41157289301))
+returned false from `WORKSPACE_READINESS` after two polls and 6,496ms; a later
+failure-only sample saw an Open-host control, which cannot reconstruct those
+polls. FOSS passed. The driver now also retains the last poll's selector count
+buckets, visibility buckets, query and poll timing, the sampled wait, the remaining
+original deadline and whether the device object was the same one. It reuses the
+existing Add/Open text and description queries and each retained node's existing
+visibility read; the predicate, OR short circuit, actions, five-second sampled
+wait and 45-second deadline are unchanged. `UiObject2` equality refreshes
+accessibility nodes, so the bookkeeping compares identity only, and a wrapper
+removed by the original distinct operation reports visibility unavailable. The
+host accepts only closed fields in fixed query order with bounded values, within
+the existing two-KiB frame, and retains no raw node, caption or exception. The
+trace is failure-only evidence: it grants no pass and claims no cause. Refs #576.
+
 ## Verified qualification: public v1.0.0
 
 Both Google and FOSS completed the actual gate at driver head
@@ -261,3 +276,32 @@ x86_64 guests using ARM64 translation. Physical Galaxy/Samsung behavior,
 cross-version migration, later releases and full feature parity remain separate.
 The successful result does not establish the causes of the historical failures
 or which conditional scroll/keyboard branches executed.
+
+## Verified qualification: public v1.3.2
+
+The failure-only last-poll trace shipped in public v1.3.2, released from
+`5a494110582d4b7f5bd9fa806c2f3f6642cce0ac`. Both flavors passed the actual gate
+in [run41166075830](https://github.com/mihazs/lazysh/actions/runs/41166075830),
+dispatched once at ref and input tag `v1.3.2`. The receipts bind to that source,
+the signing certificate `f59e1e1286ea6d9b5793e34239040e1c370fb2aaaada06021bba6e7d160c7d8c`
+and the published asset digests.
+
+| Variant / job | Artifact | APK SHA256 | Artifact archive SHA256 |
+| --- | --- | --- | --- |
+| [Google124433820856](https://github.com/mihazs/lazysh/actions/runs/41166075830/job/124433820856) | 13028717974 | `17d8109400103160deba765fa99aeba91724ea8a4b2697930c5ca018cd6b8ddf` | `9452350146ae29d5b112df67f2024a1d0ca8582000dea0bf655801548495ce29` |
+| [FOSS124433821023](https://github.com/mihazs/lazysh/actions/runs/41166075830/job/124433821023) | 13028894380 | `78980e3850cf8ebcfbcfd24bd0f59bb56c0df5e7b5489d0eaf0a13c476e5512a` | `8974495fba25f387a147479f1035b37defce79c980335e0c2ad60e33188472d7` |
+
+Both receipts report guest admission, UI host creation/readback, process relaunch,
+identical-byte reinstall and preserved fields as true, with cleanup passed and
+all failure, driver stage, observation and progress fields null. The driver
+commands completed in 11,962ms (Google) and 12,930ms (FOSS).
+
+This qualifies these public v1.3.2 APKs on API35 Google APIs x86_64 guests using
+ARM64 translation. It does not qualify a physical Galaxy/Samsung device, native
+ARM64, cross-version migration or full feature parity. Because no failure was
+emitted, the last-poll trace was not exercised at runtime; its closed format is
+covered by the owning automation tests. The original v1.3.1 Google readiness
+failure is not explained: the later changed-driver v1.3.1 run
+[41159963927](https://github.com/mihazs/lazysh/actions/runs/41159963927) and this
+run passed without it recurring, which is not a cause. If it recurs, the retained
+trace is the first evidence to read.
