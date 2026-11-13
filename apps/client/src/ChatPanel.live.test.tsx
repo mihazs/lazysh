@@ -99,6 +99,19 @@ describe('a bound conversation with a live watch',()=>{
     expect(order()).toEqual(['Replaced twice']);
     expect(document.querySelector('section.chat-panel')!.getAttribute('data-watch')).toBe('live');
   });
+  it('offers the messages the window pushed out of its head, and no longer claims the session starts at the top',async()=>{
+    render_();await advance(0);await send(hello);
+    const line=(index:number)=>entry(text(`m${index}`,index%2?'assistant':'user',`Line ${index}`));
+    // A frame carries at most 100 entries: 399 messages arrive as a snapshot and three deltas.
+    await send(snapshot(1,1,Array.from({length:100},(_,index)=>line(index))));
+    for(const [seq,from,to] of [[2,100,200],[3,200,300],[4,300,399]])await send(delta(1,seq,Array.from({length:to-from},(_,index)=>line(from+index))));
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    // Three live messages take the window past its 400-message bound: the oldest two leave it.
+    await send(delta(1,5,[399,400,401].map(line)));
+    expect(screen.queryByText('Line 0')).toBeNull();expect(screen.getByText('Line 401')).toBeTruthy();
+    expect(screen.queryByText('Start of the session')).toBeNull();
+    expect(screen.getByRole('button',{name:'Load earlier messages'})).toBeTruthy();
+  });
   it('shows the recorded turn state as a working row that follows the stream',async()=>{
     render_();await advance(0);await send(hello);
     await send(snapshot(1,1,first.map(message=>entry(message)),'working'));

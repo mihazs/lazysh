@@ -3,7 +3,7 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
-type Fixture={uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
+type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -39,7 +39,7 @@ async function open(page:Page) {
       {id:`t${index}`,role:'assistant',blocks:[{type:'tool_use',name:'shell',text:'ls'}]},
       {id:`a${index}`,role:'assistant',blocks:[{type:'text',text:turn.answer}]},
     ]);
-    const fixture:Fixture=window.agentView={turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],uploads:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
+    const fixture:Fixture=window.agentView={earlier:0,turns:[{prompt:'Explain the build',answer:'The build uses Vite.'}],typed:'',stdin:[],inputs:[],attachments:0,state:'working',channels:{},listed:[],uploads:[],watchTargets:[],polls:0,watchMode:'off',watchStops:0,
       emit:frame=>fixture.watch?.onmessage({type:'frame',frame}),messages};
     const encoder=new TextEncoder();
     const echo=(session:string,text:string)=>fixture.channels[session]?.onmessage({type:'data',data:[...encoder.encode(text)]});
@@ -76,8 +76,15 @@ async function open(page:Page) {
       if(command==='agent_transcript'){
         if(args.path!==transcript || args.agent!=='codex' || args.view!=='conversation')throw new Error('Unexpected transcript');
         fixture.polls++;
-        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,session:fixture.session,...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages()};
-        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:messages(args.inlineImages===true)};
+        // Earlier history: `earlier` messages `e0`..`e{n-1}` sit before the newest page, served 20 at a time by `window.before`.
+        const before=(args.window as {before?:string}|undefined)?.before;
+        if(before){
+          await fixture.holdEarlier;
+          const end=before.startsWith('e')?Number(before.slice(1)):fixture.earlier,start=Math.max(0,end-20);
+          return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,truncated:start>0,hasNewer:true,
+            messages:Array.from({length:end-start},(_,index)=>({id:`e${start+index}`,role:index%2?'assistant':'user',blocks:[{type:'text',text:`Earlier line ${start+index}`}]}))};
+        }
+        return {schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,session:fixture.session,...(fixture.earlier?{truncated:true}:{}),...(fixture.queued?.length?{queued:fixture.queued}:{}),messages:messages(args.inlineImages===true)};
       }
       // The synthetic host's `transcript-watch`: off (cannot open), an old companion, or a stream the test drives.
       if(command==='agent_watch_start'){
@@ -116,7 +123,7 @@ async function showAgent(page:Page) {
   await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
   return agent;
 }
-const fixture=(page:Page)=>page.evaluate(()=>({...window.agentView,channels:undefined,watch:undefined,emit:undefined,messages:undefined}));
+const fixture=(page:Page)=>page.evaluate(()=>({...window.agentView,channels:undefined,watch:undefined,emit:undefined,messages:undefined,holdEarlier:undefined}));
 
 test('switches the same tmux session between Terminal and Agent mid-turn without touching the terminal, and both inputs reach both views',async({page})=>{
   await open(page);
@@ -856,4 +863,37 @@ test('shows model, plan mode and context left in one header row without taking c
   await expect(sheet.getByText('app',{exact:true})).toBeVisible();
   // Wide panes also draw the branch in the header; a narrow phone leaves it to the sheet so the row does not grow.
   await expect(header.getByTitle('Git branch')).toBeVisible({visible:(page.viewportSize()?.width??0)>=520});
+});
+
+test('live: an older page loads above the reader while a live append arrives, and the line being read does not move',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{
+    const fixture=window.agentView;fixture.watchMode='stream';fixture.earlier=60;
+    // Enough turns that the newest page overflows the screen and the reader can be above its tail.
+    for(let index=1;index<=12;index++)fixture.turns.push({prompt:`Question ${index}`,answer:`Answer ${index}`});
+    // The older page is held until the live append has landed, so the two overlap.
+    fixture.holdEarlier=new Promise<void>(resolve=>{(window as unknown as {releaseEarlier:()=>void}).releaseEarlier=resolve;});
+  });
+  const agent=await showAgent(page);
+  const flow=flowOf(agent);
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  await expect(flow.getByText('Answer 12',{exact:true})).toBeVisible();
+  const read=agent.getByText('Explain the build',{exact:true});
+  const offset=()=>read.evaluate(node=>node.getBoundingClientRect().top-node.closest('.chat-messages')!.getBoundingClientRect().top);
+  // Scrolling to the top asks for the page before the first message; the host has not answered yet.
+  await flow.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
+  const before=await offset();
+  await page.evaluate(()=>{window.agentView.turns.push({prompt:'Fresh question',answer:'Fresh answer'});const fixture=window.agentView;
+    fixture.emit({type:'delta',gen:1,seq:2,upserts:fixture.messages().slice(-3).map(message=>({id:(message as {id:string}).id,rev:1,message})),drops:[]});});
+  await expect(flow.getByText('Fresh answer',{exact:true})).toBeAttached();
+  expect(Math.abs(await offset()-before)).toBeLessThan(1);
+  await page.evaluate(()=>(window as unknown as {releaseEarlier:()=>void}).releaseEarlier());
+  await expect(flow.getByText('Earlier line 59',{exact:true})).toBeAttached();
+  await expect(read).toBeAttached();
+  expect(Math.abs(await offset()-before)).toBeLessThan(1);
+  // The next older page continues from the first message loaded, with no gap and no repeat.
+  await flow.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'));});
+  await expect(flow.getByText('Earlier line 39',{exact:true})).toBeAttached();
+  await expect(flow.getByText('Earlier line 40',{exact:true})).toHaveCount(1);
+  await expect(flow.getByText('Earlier line 59',{exact:true})).toHaveCount(1);
 });
