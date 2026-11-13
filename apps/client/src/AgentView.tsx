@@ -8,7 +8,7 @@ import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
-import {publishAnswerGuard, publishTaskGuard} from './agentDialogAnswer';
+import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {conversationAgents, conversationSource} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
@@ -184,6 +184,11 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   // A request to stop a task is typed text and Enter: it needs the same pane still showing the same reported session, and no
   // dialog open, because Enter would answer one.
   const taskGuard = useCallback(async () => {const state = await reportedState(); return state !== undefined && state !== 'needs_attention';}, [reportedState]);
+  // `/model` from the options: the agent opens its own model list, which the view shows as a card (or the terminal does).
+  const composerControl = useComposerControl(sessionId);
+  const [modelAsked, setModelAsked] = useState(false);
+  useEffect(() => {if (!modelAsked) return; const timer = setTimeout(() => setModelAsked(false), 8000); return () => clearTimeout(timer);}, [modelAsked]);
+  const askModel = () => {setMenu(false); setModelAsked(false); void composerControl?.answer({kind: 'send', text: '/model'}).then(setModelAsked);};
   const answerable = tmux && !selected && row?.state === 'needs_attention';
   useEffect(() => {publishAnswerGuard(sessionId, answerable ? answerGuard : undefined); return () => publishAnswerGuard(sessionId, undefined);}, [sessionId, answerable, answerGuard]);
   const taskable = tmux && !selected && !!row && row.state !== 'needs_attention';
@@ -263,6 +268,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
       {reader && info?.info && <button type="button" aria-expanded={infoOpen} onClick={()=>{setInfoOpen(true);setMenu(false);}}>{t('agentInfoOpen')}</button>}
+      {tmux && !selected && kept?.agent === 'claude' && composerControl?.ready && <button type="button" disabled={composerControl.busy} onClick={askModel}>{t('agentModelSwitch')}</button>}
       {reader && <AgentSessionDetails session={info}/>}
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
@@ -298,6 +304,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     {reader && !selected && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
       bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
+    {modelAsked && <p role="status" className="agent-composer-note">{t('agentModelAsked')}</p>}
     {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }

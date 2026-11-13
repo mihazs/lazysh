@@ -2206,6 +2206,8 @@ const translations = {
   agentModeBash: ["Comando de shell", "Comando de shell"],
   agentModeMemory: ["Nota de memória", "Nota de memoria"],
   agentModeSwitch: ["Trocar o modo de permissão (Shift+Tab)", "Cambiar el modo de permisos (Shift+Tab)"],
+  agentModelSwitch: ["Trocar o modelo (/model)", "Cambiar el modelo (/model)"],
+  agentModelAsked: ["Pedi ao agente a lista de modelos. Escolha na lista que abriu: acima da caixa de mensagem ou no terminal.", "Se pidió al agente su lista de modelos. Elige en la lista que se abrió: sobre el cuadro de mensaje o en el terminal."],
   agentModeNow: ["Modo de permissão: {{mode}}", "Modo de permisos: {{mode}}"],
   agentModeUnconfirmed: ["Trocou uma vez, mas a linha de modo do terminal não foi reconhecida. Confira o terminal.", "Cambió una vez, pero no se reconoció la línea de modo del terminal. Revisa el terminal."],
   agentReceiptSending: ["Enviando…", "Enviando…"],
