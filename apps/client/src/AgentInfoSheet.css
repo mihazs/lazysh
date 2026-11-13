@@ -1,0 +1,14 @@
+/* A sheet over the chat, opened from the options menu; nothing of it takes chat space while closed. */
+.agent-info-sheet { position: absolute; z-index: 6; inset: 41px 0 0 0; overflow: auto; overscroll-behavior: contain; padding: 4px 16px 16px; background: var(--theme-panel, var(--surface)); display: grid; gap: 4px; align-content: start; }
+.agent-info-sheet > header { display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: inherit; padding: 4px 0; }
+.agent-info-sheet h4 { margin: 8px 0 4px; font-size: 12px; font-weight: 600; text-transform: none; color: var(--muted); }
+.agent-info-sheet ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.agent-info-sheet li { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; font-size: 13px; min-height: 28px; }
+.agent-info-sheet li > span { min-width: 0; overflow-wrap: anywhere; }
+.agent-info-sheet li > small { color: var(--muted); flex-shrink: 0; }
+.agent-info-sheet li[data-state="failed"] > small { color: var(--danger); }
+.agent-info-sheet li[data-state="pending"] > small { color: var(--warning, var(--accent)); }
+.agent-info-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
+.agent-info-chips > code { padding: 1px 6px; border-radius: 6px; font-size: 12px; background: var(--ui-fill-selected, var(--surface)); overflow-wrap: anywhere; }
+.agent-info-note { margin: 12px 0 0; font-size: 12px; color: var(--muted); }
+@media (min-width: 700px) { .agent-info-sheet { inset: 41px 8px auto auto; width: min(420px, calc(100% - 16px)); max-height: calc(100% - 52px); border: 1px solid var(--theme-border, var(--border)); border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 35%); } }

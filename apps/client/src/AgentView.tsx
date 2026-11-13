@@ -17,6 +17,7 @@ import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
 import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
 import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
+import AgentInfoSheet from './AgentInfoSheet';
 import type {AgentSessionInfo} from './agentSession';
 import type {LiveState} from './AgentWorkingRow';
 import {noReading, type Reading} from './AgentReading';
@@ -94,6 +95,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const fullKey=`lazysh.agentView.full.${sessionId}`;
   const [reading,setReading]=useState<Reading>(()=>{try{return {...noReading,full:localStorage.getItem(fullKey)!=='0'};}catch{return noReading;}});
   const changeReading=useCallback((next:Reading)=>{setReading(next);try{localStorage.setItem(fullKey,next.full?'1':'0');}catch{/* The choice then lasts until the view closes. */}},[fullKey]);
+  const [infoOpen,setInfoOpen] = useState(false);
   const request=useRef(0);
   const active=useRef({sessionId,shown});active.current={sessionId,shown};
   const retained = useRef<{id:string;conversation:BoundConversation} | undefined>(undefined);
@@ -249,12 +251,14 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {selected?.history && selected.resume && paneHasAgent && <p>{t('agentHistoryResumeBusy')}</p>}
       {selected && !selected.linked && selected.conversation.herdr && <p>{t('agentsHerdrSessionNotice')}</p>}
       {reader && !selected && !terminalInput && <p>{t('agentViewStageOnly')}</p>}
+      {reader && info?.info && <button type="button" aria-expanded={infoOpen} onClick={()=>{setInfoOpen(true);setMenu(false);}}>{t('agentInfoOpen')}</button>}
       {reader && <AgentSessionDetails session={info}/>}
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
     {history && <AgentHistory sessionId={sessionId} folder={history} invoke={invoke} onClose={()=>setHistory(undefined)}
       onOpen={item=>{request.current++;setHistory(undefined);setPicked({history:true,cwd:history,focusKey:lastFocus.current,resume:/^[A-Za-z0-9-]{8,64}$/.test(item.sessionId)?`${item.agent==='claude'?'claude --resume':'codex resume'} ${item.sessionId}`:undefined,title:[agentNames[item.agent],item.title ?? item.sessionId.slice(0,8)].join(' · '),conversation:Object.freeze({agent:item.agent,path:item.path})});}}/>}
+    {infoOpen && reader && info?.info && <AgentInfoSheet info={info.info} onClose={()=>setInfoOpen(false)} onShowTerminal={onShowTerminal}/>}
     {(herdrSession ? !fresh && !manual && navigation.busy && !navigation.data?.loaded : binding.kind === 'finding') && !selected && <p role="status">{t('agentViewFinding')}</p>}
     {!reader && !herdrSession && binding.kind !== 'finding' && <div className="agent-view-fallback">
       <p>{binding.kind === 'partial' ? t('agentViewPartial', {agent: binding.row.agent}) : t('agentViewNoConversation')}</p>

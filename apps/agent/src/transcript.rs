@@ -41,6 +41,7 @@ pub use opencode_conversation::{
 #[cfg(test)]
 mod mutation_observer;
 mod session_info;
+mod session_roster;
 mod snapshot;
 mod source_snapshot;
 pub mod watch;

@@ -754,6 +754,43 @@ it('shows how long the agent has waited from the recorded start of the wait, not
   await advance(0);
   expect(screen.getByRole('region',{name:'Agent view'}).querySelector('header')!.textContent).toContain('Waiting for your answer · 12 min. ago');
 });
+describe('session info sheet',()=>{
+  const withInfo=async(info:unknown,onShowTerminal=()=>{})=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('Plan the work','Here is the plan.')]);
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{if(command==='agent_approvals')return {schemaVersion:1,requests:[]};const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),session:{model:'claude-opus-5-5',info}}:reply;});
+    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={onShowTerminal}/>);await advance(0);
+  };
+
+  it('lists MCP servers with their state, skills, agents and instruction files, read-only, and sends the reader to the terminal for the rest',async()=>{
+    const showTerminal=vi.fn();
+    await withInfo({mcp:[{name:'ai-memory',state:'connected',toolCount:20},{name:'codegraph',state:'failed'}],skills:['handoff','retrieval'],agents:['Explore'],
+      instructionFiles:[{name:'.claude/CLAUDE.md',kind:'User'},{name:'app/CLAUDE.md',kind:'Project'}]},showTerminal);
+    expect(screen.queryByRole('dialog',{name:'Session info'})).toBeNull();
+    fireEvent.click(within(options()).getByRole('button',{name:'Session info'}));
+    const sheet=within(screen.getByRole('dialog',{name:'Session info'}));
+    expect(sheet.getByText('ai-memory').closest('li')!.textContent).toBe('ai-memoryConnected · 20 tools');
+    expect(sheet.getByText('codegraph').closest('li')!.textContent).toBe('codegraphFailed to connect');
+    expect(sheet.getByText('MCP servers').textContent).toBe('MCP servers · 2');
+    expect(sheet.getAllByRole('code').map(node=>node.textContent)).toEqual(['handoff','retrieval','Explore']);
+    expect(sheet.getByText('.claude/CLAUDE.md').closest('li')!.textContent).toBe('.claude/CLAUDE.mdUser');
+    expect(sheet.getByText(/Read-only/)).toBeTruthy();
+    fireEvent.click(sheet.getByRole('button',{name:'Terminal'}));
+    expect(showTerminal).toHaveBeenCalledOnce();expect(screen.queryByRole('dialog',{name:'Session info'})).toBeNull();
+  });
+
+  it('closes with Escape and offers nothing when the companion recorded no roster or sent a malformed one',async()=>{
+    await withInfo({mcp:[{name:'ai-memory',state:'connected'}]});
+    fireEvent.click(within(options()).getByRole('button',{name:'Session info'}));
+    fireEvent.keyDown(screen.getByRole('dialog',{name:'Session info'}),{key:'Escape'});
+    expect(screen.queryByRole('dialog',{name:'Session info'})).toBeNull();
+    cleanup();
+    await withInfo({mcp:[{name:'x',state:'exploded'},{state:'connected'}],skills:[42,'bad\u001bname'],instructionFiles:'nope'});
+    expect(within(options()).queryByRole('button',{name:'Session info'})).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Here is the plan.')).toBeTruthy();
+  });
+});
+
 describe('permission requests of the agent in this pane',()=>{
   const approval=(id:string,paneId:string,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
   function approvals(requests:unknown[],pane=()=>'%3') {

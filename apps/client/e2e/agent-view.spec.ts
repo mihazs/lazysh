@@ -825,6 +825,31 @@ test('an old host companion: the view says what to update, offers the installati
   await expect(agent.getByRole('button',{name:'Host companion installation',exact:true})).toBeVisible();
 });
 
+test('the session info sheet lists MCP servers, skills and instruction files inside the screen on a phone and a desktop',async({page})=>{
+  await open(page);
+  await page.evaluate(()=>{window.agentView.session={model:'claude-opus-5-5',info:{
+    mcp:[{name:'ai-memory',state:'connected',toolCount:20},{name:'claude.ai Claude Docs',state:'connected',toolCount:4},{name:'codegraph',state:'failed'}],
+    skills:Array.from({length:64},(_,index)=>`skill-number-${index}`),agents:['Explore','Plan'],
+    instructionFiles:[{name:'.claude/CLAUDE.md',kind:'User'},{name:'app/CLAUDE.md',kind:'Project'}]}};});
+  const agent=await showAgent(page);
+  const header=agent.locator('header');
+  expect((await header.boundingBox())!.height).toBeLessThanOrEqual(44);
+  await header.getByRole('button',{name:'Agent view options',exact:true}).click();
+  await agent.getByRole('group',{name:'Agent view options',exact:true}).getByRole('button',{name:'Session info',exact:true}).click();
+  const sheet=agent.getByRole('dialog',{name:'Session info',exact:true});
+  await expect(sheet.getByText('codegraph',{exact:true})).toBeVisible();
+  await expect(sheet.getByText('Failed to connect',{exact:true})).toBeVisible();
+  await expect(sheet.getByText('app/CLAUDE.md',{exact:true})).toBeVisible();
+  const box=(await sheet.boundingBox())!, view=page.viewportSize()!;
+  expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(view.width);expect(box.y+box.height).toBeLessThanOrEqual(view.height);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  // 64 skills do not grow the sheet past the screen: it scrolls inside itself.
+  expect(await sheet.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(agent.getByText('The build uses Vite.',{exact:true})).toBeVisible();
+});
+
 test('leaving the Agent view closes the channel and coming back opens a new one',async({page})=>{
   const agent=await openLive(page,'stream');
   await expect(watchState(agent)).toHaveAttribute('data-watch','live');
