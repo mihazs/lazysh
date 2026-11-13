@@ -4,8 +4,8 @@
 mod support;
 
 use lazysh_terminal_runtime::{
-    ffi, ActiveScreen, CellWide, CursorVisualStyle, KeyInput, MouseInput, Offer, RgbColor, Size,
-    SizeAuthority, SizeOutcome, TerminalRuntime,
+    ffi, ActiveScreen, CellWide, CursorVisualStyle, KeyInput, MouseInput, Offer, RenderCursor,
+    RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime,
 };
 use support::*;
 
@@ -299,6 +299,40 @@ fn an_unchanged_screen_yields_no_frame_and_a_write_yields_only_its_rows() {
     assert_eq!(ys, [0, 7]);
     assert_eq!(lines(&frame), ["hello", "xyz"]);
     assert!(rt.take_frame().unwrap().is_none());
+}
+
+#[test]
+fn cursor_only_changes_yield_a_frame_without_rows() {
+    // libghostty-vt marks no row dirty for these; a renderer fed only by take_frame kept a stale cursor.
+    type Check = fn(&RenderCursor) -> bool;
+    let steps: [(&str, &[u8], Check); 4] = [
+        ("a move inside the row", b"\x1b[1;1H", |c| {
+            c.viewport.unwrap().x == 0
+        }),
+        ("the cursor style", b"\x1b[4 q", |c| {
+            c.visual_style == CursorVisualStyle::Underline
+        }),
+        ("visibility", b"\x1b[?25l", |c| !c.visible),
+        ("blinking", b"\x1b[?25h\x1b[?12h", |c| {
+            c.visible && c.blinking
+        }),
+    ];
+    let mut rt = runtime(10, 3);
+    feed(&mut rt, b"abc");
+    rt.take_frame().unwrap();
+    for (what, bytes, check) in steps {
+        feed(&mut rt, bytes);
+        let frame = rt
+            .take_frame()
+            .unwrap()
+            .unwrap_or_else(|| panic!("no frame for {what}"));
+        assert!(!frame.full && frame.dirty.is_empty(), "{what}");
+        assert!(check(&frame.cursor), "{what}: {:?}", frame.cursor);
+        assert!(
+            rt.take_frame().unwrap().is_none(),
+            "{what} is reported once"
+        );
+    }
 }
 
 #[test]

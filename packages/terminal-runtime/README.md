@@ -6,8 +6,7 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size, terminal
-replies, key/mouse/paste encoding, and text inspection. A `TerminalRuntime` has no transport, renderer or
-thread; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, and text inspection. A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
 [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
@@ -15,6 +14,15 @@ are the transport-independent service on top: a fixed pool of VT worker threads 
 transports call `Session::feed` and get credit back after VT processing, replies and encoded input leave through
 one `PtyWriter` that applies the host's access policy, and a registry enforces a global scrollback budget with
 attach/detach/close. See the "Session service" section of the design document.
+
+## Renderer API
+
+`TerminalRenderer` ([#1322](https://github.com/mihazs/lazysh/issues/1322), contract in
+[native rendering](../../docs/architecture/native-rendering.md#terminal-renderer-api)) is what a renderer implements:
+frames in, pixels on an opaque surface out, no graphics type. `Screen` is the shared dirty-row model and
+`layout` decides what to paint for a row and `ReferenceRenderer` is a deterministic CPU implementation that rasterizes it. Its golden images live in `tests/golden/` and are rendered from real
+libghostty-vt output; after an intended rendering change run `UPDATE_GOLDEN=1 cargo test --test renderer` and review the
+PNGs as images (the test writes `<name>.actual.png` into the target directory when a golden differs).
 
 ## One Ghostty dependency
 

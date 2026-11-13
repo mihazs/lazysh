@@ -22,7 +22,8 @@ pub struct Row {
 }
 
 /// Incremental screen update. `dirty` holds only changed rows unless `full`, which carries every
-/// row (first frame, resize, screen switch, or an explicit snapshot).
+/// row (first frame, resize, screen switch, or an explicit snapshot). A frame without rows is a
+/// cursor-only update (a move inside a row, DECSCUSR, visibility or blink).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub full: bool,
@@ -37,6 +38,9 @@ pub(crate) struct Renderer {
     state: RenderState,
     row_iter: RowIterator,
     row_cells: RowCells,
+    /// Cursor and screen of the last frame handed out: libghostty-vt does not mark any row dirty
+    /// when only these change, so they are compared here.
+    last: Option<(RenderCursor, ActiveScreen)>,
 }
 
 impl Renderer {
@@ -45,6 +49,7 @@ impl Renderer {
             state: RenderState::new()?,
             row_iter: RowIterator::new()?,
             row_cells: RowCells::new()?,
+            last: None,
         })
     }
 
@@ -56,7 +61,8 @@ impl Renderer {
     ) -> Result<Option<Frame>, Error> {
         self.state.update(terminal)?;
         let dirty = self.state.dirty()?;
-        if dirty == Dirty::Clean && !force {
+        let chrome = (self.state.cursor()?, terminal.active_screen()?);
+        if dirty == Dirty::Clean && !force && self.last == Some(chrome) {
             return Ok(None);
         }
         let full = force || dirty == Dirty::Full;
@@ -85,12 +91,13 @@ impl Renderer {
             }
         }
         self.state.set_dirty(Dirty::Clean)?;
+        self.last = Some(chrome);
         Ok(Some(Frame {
             full,
             cols: self.state.cols()?,
             rows: self.state.rows()?,
-            cursor: self.state.cursor()?,
-            active_screen: terminal.active_screen()?,
+            cursor: chrome.0,
+            active_screen: chrome.1,
             dirty: rows,
         }))
     }
