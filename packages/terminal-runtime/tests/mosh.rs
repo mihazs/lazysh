@@ -540,3 +540,27 @@ fn a_reader_scrolled_into_history_keeps_their_place() {
     feed(&mut rt, &frame(1, 30, 6, ""));
     assert_eq!(rt.viewport_text().unwrap(), before);
 }
+
+#[test]
+fn origin_mode_and_margins_do_not_misplace_the_resize_moves() {
+    let mut rt = mosh(40, 12);
+    // Origin mode with a scroll region: CUP is margin-relative, so a naive "go to the first cell"
+    // or "go to row N" would land inside the region instead of the grid.
+    feed(&mut rt, b"\x1b[3;8r\x1b[?6h\x1b[2;5Hxy");
+    let before = rt.snapshot().unwrap().cursor.viewport.unwrap();
+    assert_eq!((before.x, before.y), (6, 3));
+    feed(&mut rt, &frame(1, 40, 10, ""));
+    let after = rt.snapshot().unwrap().cursor.viewport.unwrap();
+    assert_eq!(
+        (after.x, after.y),
+        (6, 3),
+        "the cursor is where the program left it"
+    );
+    // Origin mode must have been restored: under it row 2 of a 3..8 region is screen row 4.
+    feed(&mut rt, b"\x1b[3;8r\x1b[2;1HQ");
+    assert_eq!(
+        screen(&mut rt)[3],
+        "Q   xy",
+        "Q is row 2 of the region, beside the earlier text"
+    );
+}

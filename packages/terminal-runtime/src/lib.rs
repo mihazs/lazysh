@@ -14,8 +14,8 @@ mod hub;
 mod ingress;
 mod input;
 pub mod layout;
-mod reference;
 mod mosh;
+mod reference;
 mod render;
 mod runtime;
 mod size;
@@ -26,12 +26,12 @@ pub use hub::{
 };
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
+pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{
     Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
     Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
-pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use runtime::{Config, Error, Events, Geometry, Modes, TerminalRuntime};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};
 
