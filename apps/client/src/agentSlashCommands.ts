@@ -17,6 +17,12 @@ export const slashCommands: Record<Agent, readonly SlashCommand[]> = {
     {name: 'compact'}, {name: 'diff'}, {name: 'init'}, {name: 'new'}, {name: 'review'}, {name: 'status'},
     {name: 'model', picker: true}, {name: 'approvals', picker: true}, {name: 'resume', picker: true}, {name: 'mcp'}, {name: 'mention', picker: true},
   ],
+  gemini: [
+    {name: 'about'}, {name: 'clear'}, {name: 'compress'}, {name: 'copy'}, {name: 'help'}, {name: 'init'}, {name: 'mcp'}, {name: 'plan'},
+    {name: 'stats'}, {name: 'tools'}, {name: 'auth', picker: true}, {name: 'memory', picker: true}, {name: 'model', picker: true},
+    {name: 'permissions', picker: true}, {name: 'resume', picker: true}, {name: 'rewind', picker: true}, {name: 'settings', picker: true},
+    {name: 'theme', picker: true},
+  ],
 };
 
 /** The commands a draft is asking for: only while the first word is being typed, never inside a longer prompt. */

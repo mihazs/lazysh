@@ -17,6 +17,14 @@ describe('describeTool', () => {
     expect(describeTool(use('WebSearch', {query: 'tauri acl'}))).toMatchObject({kind: 'fetch', summary: 'tauri acl'});
     expect(describeTool(use('Edit', {file_path: '/repo/a.ts', old_string: 'a', new_string: 'b'}))).toMatchObject({kind: 'edit', summary: '/repo/a.ts'});
   });
+  it('maps the Gemini CLI tool names to the same kinds, with its own input names', () => {
+    expect(describeTool(use('run_shell_command', {command: 'npm test', description: 'Run the tests'}))).toMatchObject({kind: 'execute', summary: 'npm test'});
+    expect(describeTool(use('read_file', {file_path: '/repo/a.ts'}))).toMatchObject({kind: 'read', summary: '/repo/a.ts'});
+    expect(describeTool(use('grep_search', {pattern: 'TODO'}))).toMatchObject({kind: 'search', summary: 'TODO'});
+    expect(describeTool(use('google_web_search', {query: 'tauri acl'}))).toMatchObject({kind: 'fetch', summary: 'tauri acl'});
+    expect(fileChanges(describeTool(use('replace', {file_path: '/repo/a.ts', instruction: 'rename', old_string: 'a', new_string: 'b'})))).toMatchObject([{path: '/repo/a.ts', added: 1, removed: 1}]);
+    expect(fileChanges(describeTool(use('write_file', {file_path: '/repo/b.ts', content: 'one\ntwo\n'})))).toMatchObject([{path: '/repo/b.ts', added: 2, removed: 0}]);
+  });
   it('keeps an unknown or MCP tool as other with its name and its first value', () => {
     const call = describeTool(use('mcp__github__create_issue', {title: 'Fix the thing', body: 'x'}));
     expect([call.kind, call.name, call.summary]).toEqual(['other', 'mcp__github__create_issue', 'Fix the thing']);

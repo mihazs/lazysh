@@ -1,5 +1,5 @@
 /** What a recorded tool call is, for the Agent view's cards: its kind, a one-line summary, whether it ran, failed or was
- * refused, and the result's output. Pure. One name table covers every agent whose conversation the companion projects as
+ * refused, and the result's output. Pure. One name table (Claude Code, Codex, OpenCode and Gemini CLI names) covers every agent whose conversation the companion projects as
  * `tool_use` and `tool_result` blocks; a tool this table does not know stays `other` and keeps its name and raw input. */
 export type ToolKind = 'execute' | 'read' | 'search' | 'fetch' | 'edit' | 'other';
 export type ToolStatus = 'running' | 'ok' | 'error' | 'denied';
@@ -8,11 +8,11 @@ export type ToolResult = {text?: string; isError?: boolean};
 export type ToolCall = {kind: ToolKind; name: string; summary: string; status: ToolStatus; input: Record<string, unknown>; exitCode?: number; output?: string};
 
 const kinds: Record<string, ToolKind> = {
-  bash: 'execute', command: 'execute', shell: 'execute', exec_command: 'execute', local_shell: 'execute', run_terminal_cmd: 'execute',
-  read: 'read', read_file: 'read', view: 'read', notebookread: 'read',
-  grep: 'search', glob: 'search', ls: 'search', search: 'search', find: 'search',
-  webfetch: 'fetch', websearch: 'fetch',
-  edit: 'edit', multiedit: 'edit', write: 'edit', notebookedit: 'edit', apply_patch: 'edit', str_replace_based_edit_tool: 'edit',
+  bash: 'execute', command: 'execute', shell: 'execute', exec_command: 'execute', local_shell: 'execute', run_terminal_cmd: 'execute', run_shell_command: 'execute',
+  read: 'read', read_file: 'read', view: 'read', notebookread: 'read', read_many_files: 'read',
+  grep: 'search', glob: 'search', ls: 'search', search: 'search', find: 'search', grep_search: 'search', list_directory: 'search',
+  webfetch: 'fetch', websearch: 'fetch', web_fetch: 'fetch', google_web_search: 'fetch',
+  edit: 'edit', multiedit: 'edit', write: 'edit', notebookedit: 'edit', apply_patch: 'edit', str_replace_based_edit_tool: 'edit', replace: 'edit', write_file: 'edit',
 };
 export const toolKind = (name = ''): ToolKind => kinds[name.toLowerCase()] ?? 'other';
 

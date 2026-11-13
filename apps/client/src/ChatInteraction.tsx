@@ -7,7 +7,7 @@ import {t} from './i18n/core';
 import {LocalUiError} from './i18n/localError';
 import './ChatInteraction.css';
 
-export type PlanStatus='pending'|'in_progress'|'completed'|'cancelled';
+export type PlanStatus='pending'|'in_progress'|'completed'|'cancelled'|'blocked';
 type Option=Readonly<{label:string;description?:string}>;
 type Question=Readonly<{question:string;header?:string;options:readonly Option[];multiple:boolean}>;
 export type Card=Readonly<
@@ -20,7 +20,7 @@ export type ErrorCause='rate_limit'|'server_error'|'invalid_request'|'unknown';
 const errorCauses:readonly string[]=['rate_limit','server_error','invalid_request','unknown'];
 export type Activity='working'|'waiting'|'idle'|'stopped';
 
-const cardAgents=['claude','codex','opencode'];
+const cardAgents=['claude','codex','opencode','gemini'];
 const maxText=16*1024;
 const invalid=()=>new LocalUiError('chatInvalidCard');
 function exact(value:unknown,required:readonly string[],optional:readonly string[]=[]):Record<string,unknown> {
@@ -54,7 +54,7 @@ export function parseCard(value:unknown,context:{agent:string;view?:string;type:
   if(!textBlock && context.type!=='tool_use')throw invalid();
   if(kind==='plan') {
     const card=exact(value,['kind','entries'],['explanation']);
-    const statuses=context.agent==='opencode'?['pending','in_progress','completed','cancelled']:['pending','in_progress','completed'];
+    const statuses=context.agent==='gemini'?['pending','in_progress','completed','cancelled','blocked']:context.agent==='opencode'?['pending','in_progress','completed','cancelled']:['pending','in_progress','completed'];
     return {kind,explanation:text(card.explanation,true),entries:list(card.entries,100).map(entry=>{
       const row=exact(entry,['text','status']);
       if(!statuses.includes(row.status as string))throw invalid();
@@ -92,7 +92,7 @@ export const ChatMarkdown=memo(function ChatMarkdown({text,image}:{text:string;i
   return <Markdown components={{img:()=> <span>{image ?? t('chatImagePlaceholder')}</span>,a:({children})=> <span>{children}</span>}}>{text}</Markdown>;
 });
 
-const planStatus={pending:'chatPlanPending',in_progress:'chatPlanInProgress',completed:'chatPlanCompleted',cancelled:'chatPlanCancelled'} as const;
+const planStatus={pending:'chatPlanPending',in_progress:'chatPlanInProgress',completed:'chatPlanCompleted',cancelled:'chatPlanCancelled',blocked:'chatPlanBlocked'} as const;
 const activityText={working:'chatActivityWorking',waiting:'chatActivityWaiting',idle:'chatActivityIdle',stopped:'chatActivityStopped'} as const;
 
 export function ChatActivity({activity}:{activity?:Activity}) {

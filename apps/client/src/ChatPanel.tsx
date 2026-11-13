@@ -149,7 +149,7 @@ export function parseTranscript(value: unknown): Page {
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new LocalUiError('chatInvalidToolStatus');
-      if (block.isError !== undefined && ((page.agent !== 'claude' && page.agent !== 'opencode' && !(page.agent==='codex' && page.view==='active_branch')
+      if (block.isError !== undefined && ((page.agent !== 'claude' && page.agent !== 'opencode' && page.agent !== 'gemini' && !(page.agent==='codex' && page.view==='active_branch')
         && !(page.agent === 'pi' && page.view === 'record_stream' && message.role === 'tool'))
         || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
         throw new LocalUiError('chatInvalidToolError');
@@ -212,7 +212,7 @@ export function activitySummary(turn: Turn): string {
 const NO_HISTORY = {paging: false, older: false, newer: false};
 
 /** A conversation the Agent view found for its pane from hook reports. */
-export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
+export type BoundConversation = Readonly<{agent: 'claude' | 'codex' | 'gemini'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
@@ -336,7 +336,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
-  const conversation = ['claude','opencode','codex'].includes(opened?.agent??'') && opened?.view === 'conversation';
+  const conversation = ['claude','opencode','codex','gemini'].includes(opened?.agent??'') && opened?.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
@@ -505,7 +505,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
-          ...(view === "conversation" && ["claude", "grok-acp", "opencode", "codex"].includes(agent) ? { view } : {}),
+          ...(view === "conversation" && ["claude", "grok-acp", "opencode", "codex", "gemini"].includes(agent) ? { view } : {}),
         }
       : opened;
     if (!source) return;
@@ -718,6 +718,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             onChange={(event) => {
               setAgent(event.target.value);setInlineImages(false);
               if (["grok-acp","codex"].includes(event.target.value)) setView("records");
+              // A Gemini CLI session has no raw record view, only the conversation.
+              if (event.target.value === "gemini") setView("conversation");
               setDiscovered([]);
               setTranscriptSessionId("");
             }}

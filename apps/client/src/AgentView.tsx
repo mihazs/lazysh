@@ -24,8 +24,8 @@ import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
 import './AgentView.css';
 
-const conversationAgents: Record<string, BoundConversation['agent']> = {'Claude Code': 'claude', Codex: 'codex'};
-const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex'};
+const conversationAgents: Record<string, BoundConversation['agent']> = {'Claude Code': 'claude', Codex: 'codex', 'Gemini CLI': 'gemini'};
+const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
 type Selection = {row?:AgentSession;history?:boolean;resume?:string;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
@@ -39,7 +39,7 @@ function StartButtons({sessionId}:{sessionId:string}) {
   return <>{(['claude','codex'] as const).map(agent=><button type="button" key={agent} onClick={()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:agent}}))}>{t('agentViewStartNamed',{agent:agentNames[agent]})}</button>)}</>;
 }
 /** Image previews cost bytes on a mobile link: on by default for Claude Code, opt-in for Codex whose companion support is newer. Kept per viewer. */
-const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false};
+const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false, gemini: false};
 function storedImages() {
   try {return {...imageDefaults, ...JSON.parse(localStorage.getItem('lazysh.agentImages') ?? '{}')} as Record<BoundConversation['agent'], boolean>;} catch {return imageDefaults;}
 }

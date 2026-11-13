@@ -1287,6 +1287,7 @@ export const english = {
   chatPlanInProgress: "In progress",
   chatPlanCompleted: "Done",
   chatPlanCancelled: "Cancelled",
+  chatPlanBlocked: "Blocked",
   chatErrorTitle: "The agent could not continue",
   chatErrorRateLimit: "A usage limit was reached. Wait for it to reset, or switch account or model in the terminal.",
   chatErrorServer: "The agent could not reach the API. Check the host's network, then send the prompt again.",
