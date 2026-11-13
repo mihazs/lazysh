@@ -458,6 +458,54 @@ What this says, and does not say:
 - **The CPU reference renderer** adds a further factor of 1.1 to 4.7 over `Screen::apply` and uploads (copies) whole pixel rows: with a frame per chunk each of the 1024 frames redraws every row of a scrolling screen, 720 MiB copied for 16 MiB of text at 80x24. It is not a performance candidate and no GPU or font cost is represented.
 - Nothing here says which renderer wins on any device.
 
+### wgpu prototype against the CPU reference renderer (host GPU, not a device)
+
+Measured with `cargo run --release --example wgpu_bench` in `packages/terminal-runtime/prototypes/wgpu` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): the wgpu candidate, prototype quality, implementing the same `TerminalRenderer` trait as the CPU reference renderer and fed the same `Frame` stream from the real libghostty-vt core. It consumes the shared layout (`layout::row_draws`): each draw becomes one instance of an instanced quad (a solid rectangle, or a glyph mask taken from an atlas), the dirty rows' instances are uploaded once per frame and drawn in one pass into an offscreen `Rgba8Unorm` texture. It is **offscreen and headless**: no window, swapchain or compositor, so `present` waits for the GPU to finish what `draw` submitted (the latest moment a swapchain image could be shown), and what the table calls a frame is draw (instance build, upload, encode, submit) plus that wait. It draws the reference renderer's dot-pattern glyphs, not text: no fonts, shaping, fallback or atlas eviction.
+
+**Correctness against the oracle.** `tests/vs_reference.rs` feeds the same frames to both renderers and requires identical pixels: ASCII, bold, faint, inverse, hidden, every underline style with a colored underline, strike-through, overline, wide, combining and emoji clusters, the four cursor shapes (including on a wide character), linear and block selection, 40 incremental frames against the CPU renderer after each one, and recovery from a destroyed device (`DeviceLost` on every call, `resume`, snapshot). All four pass; the test fails if one color channel is swapped in the shader (checked by hand), and refuses to compare against a blank oracle image. This is the golden-image check of [#1322](https://github.com/mihazs/lazysh/issues/1322) applied to a GPU implementation; it does not show anything about text.
+
+Environment: AMD Radeon RX 5500 XT (RADV NAVI14), Vulkan 1.4, Mesa 26.2.6, wgpu 30.0.2 on the Vulkan backend, discrete GPU; the CPU is the Ryzen 9 5900X host of the other measurements, shared with other builds and agents (load average at start 8.23); Linux 7.3.3, rustc 1.96.1 release profile. 16 MiB per workload, 5 runs, 80x24 and 152x38 grids of 8x16 pixel cells, a frame after every 16 KiB chunk or every 256 KiB. The pipeline column is MiB/s through VT, `take_frame` and the renderer; frame ms is draw plus present per frame, p50 / p99 over all runs.
+
+The table is the first run ([raw output](benchmarks/terminal-wgpu-bench-1.txt)). A second run of the same code on a later `main` (host load average 4.1, a quieter machine) is committed as [raw output](benchmarks/terminal-wgpu-bench-2.txt). It gives the same picture: the wgpu frame was 1.6 to 3.5 times cheaper at the median (0.24 to 0.71 ms against 0.44 to 1.84 ms), the whole pipeline 0.74 to 2.2 times faster (one row was slower than the reference, within the spread of its 5 runs) and the wgpu p99 was higher than the reference's in 6 of the 16 rows. A run taken in between at load 15.8 agreed within the same ranges (frame 1.5 to 4.5 times, p99 higher in 6 rows) and was not kept.
+
+Startup and memory (one run): the first renderer took 271 ms to create (instance, adapter, device, pipeline; 33 ms in an earlier run of the same code before the lifecycle refactor, so one run says little about startup) and added 62,288 KiB to the resident set of the process (the Vulkan driver and shader compiler), four more added 12,804 KiB together (about 3.2 MiB each, 80x24).
+
+| grid | workload | frame cadence | reference MiB/s | reference frame ms | wgpu MiB/s | wgpu frame ms | frames | rows drawn | reference MiB copied | wgpu MiB uploaded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | per chunk | 14.7 (14.4 to 14.8) | 0.815 / 1.305 | 27.7 (26.4 to 28.1) | 0.306 / 0.588 | 1024 | 24576 | 720.0 | 109.96 |
+| 80x24 | plain text | per window | 176.7 (170.5 to 177.6) | 0.816 / 1.373 | 266.6 (260.9 to 269.1) | 0.303 / 1.919 | 64 | 1536 | 45.0 | 6.88 |
+| 80x24 | ANSI + truecolor | per chunk | 18.6 (17.5 to 19.0) | 0.448 / 0.835 | 22.3 (22.1 to 23.0) | 0.258 / 0.508 | 1024 | 24576 | 720.0 | 74.43 |
+| 80x24 | ANSI + truecolor | per window | 59.3 (53.9 to 60.5) | 0.472 / 0.866 | 62.4 (59.0 to 63.1) | 0.289 / 1.747 | 64 | 1536 | 45.0 | 4.65 |
+| 80x24 | full-screen redraw | per chunk | 21.3 (20.9 to 21.3) | 0.461 / 0.669 | 29.2 (28.3 to 29.4) | 0.250 / 0.359 | 1024 | 24576 | 720.0 | 76.97 |
+| 80x24 | full-screen redraw | per window | 180.4 (174.6 to 182.6) | 0.464 / 0.757 | 201.5 (187.5 to 209.5) | 0.288 / 1.731 | 64 | 1536 | 45.0 | 4.81 |
+| 80x24 | CJK/emoji/combining | per chunk | 15.7 (15.4 to 15.8) | 0.584 / 0.898 | 22.7 (22.7 to 23.1) | 0.260 / 0.373 | 1024 | 24576 | 720.0 | 67.27 |
+| 80x24 | CJK/emoji/combining | per window | 59.5 (58.9 to 59.8) | 0.590 / 0.706 | 62.0 (59.2 to 63.1) | 0.298 / 2.041 | 64 | 1536 | 45.0 | 4.21 |
+| 152x38 | plain text | per chunk | 6.9 (6.9 to 6.9) | 1.720 / 2.126 | 15.2 (15.1 to 15.5) | 0.485 / 0.674 | 1024 | 38912 | 2166.0 | 260.21 |
+| 152x38 | plain text | per window | 91.8 (82.8 to 95.1) | 1.723 / 2.880 | 166.6 (161.3 to 170.2) | 0.510 / 2.173 | 64 | 2432 | 135.4 | 16.27 |
+| 152x38 | ANSI + truecolor | per chunk | 8.3 (8.2 to 8.3) | 1.135 / 1.716 | 13.4 (13.2 to 13.5) | 0.403 / 0.551 | 1024 | 38912 | 2166.0 | 203.47 |
+| 152x38 | ANSI + truecolor | per window | 37.0 (36.4 to 38.0) | 1.148 / 1.518 | 42.3 (41.2 to 42.3) | 0.437 / 2.111 | 64 | 2432 | 135.4 | 12.72 |
+| 152x38 | full-screen redraw | per chunk | 14.1 (13.9 to 14.1) | 0.729 / 0.964 | 22.9 (22.8 to 23.2) | 0.295 / 0.392 | 1024 | 24590 | 1368.8 | 131.04 |
+| 152x38 | full-screen redraw | per window | 136.5 (134.5 to 143.7) | 0.732 / 1.429 | 172.6 (164.5 to 178.4) | 0.328 / 1.951 | 64 | 1550 | 86.3 | 8.25 |
+| 152x38 | CJK/emoji/combining | per chunk | 7.2 (7.1 to 7.2) | 1.352 / 1.697 | 12.6 (12.4 to 12.6) | 0.426 / 0.640 | 1024 | 38912 | 2166.0 | 192.15 |
+| 152x38 | CJK/emoji/combining | per window | 32.1 (31.0 to 32.3) | 1.374 / 1.725 | 36.1 (36.0 to 36.6) | 0.451 / 1.963 | 64 | 2432 | 135.4 | 12.01 |
+
+**Full repaint.** The stream table draws the dirty rows of a live stream. Showing instead the 64 screens of each workload (80x24, 8x16 pixel cells, taken after every 256 KiB of its first 16 MiB) as full frames, so that every row is repainted every frame, with 20 passes after a warm-up pass (the glyph atlas), draw plus present in milliseconds, p50 / p99, from the second run:
+
+| workload | CPU reference | wgpu prototype |
+|---|---|---|
+| plain text | 0.812 / 1.373 | 0.312 / 0.580 |
+| ANSI + truecolor | 0.446 / 0.832 | 0.259 / 0.573 |
+| full-screen redraw | 0.466 / 0.913 | 0.241 / 0.548 |
+| CJK/emoji/combining | 0.581 / 1.052 | 0.245 / 0.561 |
+
+What this says, and does not say:
+
+- **The wgpu frame was 1.6 to 3.6 times cheaper at the median** (0.25 to 0.51 ms against 0.45 to 1.72 ms for draw plus present), and the whole pipeline ran 1.0 to 2.2 times faster. The pipeline gain is small because most of a frame's cost is upstream of any renderer ([renderer pipeline cost](#renderer-pipeline-cost-host-microbenchmark-not-a-candidate)): at one frame per 256 KiB the style-heavy and Unicode workloads gained 4 to 14 % and plain text and redraws 12 to 82 %.
+- **The tail was not better.** The wgpu p99 was higher than the reference's in 7 of the 16 rows, all at one frame per 256 KiB (1.7 to 2.1 ms against 0.7 to 1.7 ms), the cost of waiting on the GPU; over all rows it ranged from 0.36 to 2.17 ms against 0.67 to 2.88 ms. At 60 Hz a 16.7 ms frame budget holds all of these; a 120 Hz device has 8.3 ms and a phone GPU is slower than this one by an unknown factor.
+- **Instances are much smaller than pixels**: the reference copies 6.5 to 11.3 times more bytes per run than the wgpu prototype uploads. Both counters are bytes handed to the presentation target, but they mean different things (pixel rows against instance data), so they say little about energy.
+- **Memory is the cost to look at.** The first GPU context added 63 MiB resident on this driver, against 7 to 8 MiB of renderer resident memory per background xterm.js session in the [renderer shootout](#renderer-shootout-xtermjs-renderers-1323); the 63 MiB is a Mesa driver on a desktop and is not an Android number. Four more renderers added 3.2 MiB each (80x24).
+- Not shown: any Android or mobile GPU (driver quality, Vulkan on Android, surface loss in practice), a window surface and compositor, presentation timing and tearing, idle wake-ups and energy, text (glyph rasterization, shaping, font fallback, atlas growth and eviction), selection and cursor behaviour with real fonts, binary size, and Metal or Direct3D 12. CI keeps this crate compiling (`cargo fmt --check` and `cargo clippy` in the `herdr-native` job) but has no GPU to run it, so the parity tests were run locally.
+
 ## Acceptance of a candidate
 
 A candidate may replace the fallback on a device only if, on that device, all of the following hold with the recorded environment: provisional targets from the [PRD](terminal-performance-prd.md#provisional-targets-not-measurements) are met or the improvement is otherwise justified in the ADR; no input-latency regression under heavy output; no correctness regression on the conformance fixtures; near-zero idle activity; stable memory across session churn.

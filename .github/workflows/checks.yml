@@ -345,6 +345,13 @@ jobs:
           cargo +1.96.1 clippy --locked --all-targets -- -D warnings
           cargo +1.96.1 test --locked
 
+      # The shootout prototype has its own lock file and needs a GPU to run, so CI only keeps it compiling.
+      - name: Check that the wgpu renderer prototype still builds against the runtime
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime/prototypes/wgpu
+        run: |
+          cargo +1.96.1 fmt --check
+          cargo +1.96.1 clippy --locked --all-targets -- -D warnings
+
       - name: Retain the exact guarded binary for native SSH interoperability
         id: guarded-artifact
         env:
