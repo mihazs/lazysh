@@ -20,8 +20,11 @@ const requested = new URLSearchParams(location.search).get('renderer');
 if (requested !== null && !['dom', 'canvas', 'webgl'].includes(requested)) throw new Error(`Unknown renderer candidate: ${requested}`);
 const candidate = (requested ?? 'dom') as RendererCandidate;
 let contextLosses = 0;
+/** Timestamped events of the context-loss run: the forced loss and restore, the canvas events, the addon giving up. */
+const lossLog: { type: string; at: number }[] = [];
+const note = (type: string) => lossLog.push({ type, at: performance.now() });
 /** Loads the candidate's renderer addon on an opened terminal; a lost WebGL context falls back to DOM, which would invalidate the numbers, so it is counted. */
-const attach = (terminal: Harness['terminal']) => attachRendererCandidate(terminal, candidate, () => { contextLosses++; });
+const attach = (terminal: Harness['terminal']) => attachRendererCandidate(terminal, candidate, () => { contextLosses++; note('fallback'); });
 /** The GPU the WebGL candidate really ran on (software rasterizer or hardware), from the page's own context. */
 function glInfo() {
   try {
@@ -122,6 +125,14 @@ async function drain(json: string[], until?: () => boolean) {
 async function settle() { await new Promise<void>(resolve => harness!.terminal.write('', () => resolve())); await frame(); await frame(); }
 async function reset() { harness!.terminal.reset(); await settle(); echoColumn = 0; }
 
+/** The terminal's WebGL canvas: the one that has a webgl2 context (the addon's link layer is a 2D canvas, for which getContext('webgl2') is null). */
+function webglContext() {
+  for (const canvas of harness!.terminal.element?.querySelectorAll('canvas') ?? []) { const gl = canvas.getContext('webgl2'); if (gl) return { canvas, gl }; }
+  return null;
+}
+/** The extension object is kept: getExtension() returns null once the context is lost. */
+let loser: WEBGL_lose_context | null = null;
+
 const api = {
   open() {
     const { terminal } = open();
@@ -134,6 +145,26 @@ const api = {
   },
   /** A lost WebGL context silently reverts to the DOM renderer; the driver rejects a run that saw one. */
   contextLosses() { return contextLosses; },
+  /** Context-loss run: fixed pixels (no blinking cursor, not focused), text written and parsed, and the canvas count. */
+  quiet() { harness!.terminal.options.cursorBlink = false; harness!.terminal.blur(); },
+  async write(text: string) { await new Promise<void>(resolve => harness!.terminal.write(text, resolve)); await settle(); },
+  canvases() { return harness!.terminal.element?.querySelectorAll('canvas').length ?? 0; },
+  /** Forces the loss of the WebGL context (WEBGL_lose_context); false if the terminal has none. */
+  loseContext() {
+    const lost = webglContext();
+    if (!lost) return false;
+    const { canvas } = lost;
+    loser = lost.gl.getExtension('WEBGL_lose_context');
+    canvas.addEventListener('webglcontextlost', () => note('canvas-lost'));
+    canvas.addEventListener('webglcontextrestored', () => note('canvas-restored'));
+    note('lose'); loser!.loseContext();
+    return true;
+  },
+  restoreContext() { note('restore'); loser!.restoreContext(); },
+  /** After the addon gave up and was disposed: what a production integration does on resume. */
+  reattach() { note('reattach'); attach(harness!.terminal); },
+  contextEvents() { return lossLog.slice(); },
+  screenLines() { return screenText(); },
   mismatch() { return lastMismatch; },
   async calibrate() { return calibrate(); },
   async prepare(kind: 'plain' | 'ansi' | 'redraw', size: number) {
