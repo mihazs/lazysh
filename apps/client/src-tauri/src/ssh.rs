@@ -4009,6 +4009,9 @@ mod tests {
     #[path = "agent_board_fixture.rs"]
     mod agent_board_fixture;
     #[cfg(unix)]
+    #[path = "auth_listeners_fixture.rs"]
+    mod auth_listeners_fixture;
+    #[cfg(unix)]
     #[path = "auth_tunnel_fixture.rs"]
     mod auth_tunnel_fixture;
     #[cfg(unix)]
@@ -7369,6 +7372,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH and a current-source companion binary with listeners"]
+    async fn openssh_auth_listener_check_uses_the_companion_then_falls_back_to_ss() {
+        openssh_interoperability(OpenSshCheck::AuthListeners).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
     async fn openssh_companion_install_and_managed_path() {
         openssh_interoperability(OpenSshCheck::CompanionInstall).await;
@@ -7418,6 +7428,7 @@ mod tests {
         Clipboard,
         TranscriptImages,
         TranscriptWatch,
+        AuthListeners,
         TemporaryAttachments,
         CompanionInstall,
         #[cfg(target_os = "linux")]
@@ -7504,7 +7515,9 @@ mod tests {
             companion_fixture::environment(dir.path())
         } else if matches!(
             check,
-            OpenSshCheck::TranscriptImages | OpenSshCheck::TranscriptWatch
+            OpenSshCheck::TranscriptImages
+                | OpenSshCheck::TranscriptWatch
+                | OpenSshCheck::AuthListeners
         ) {
             transcript_image_fixture::companion_path(dir.path())
         } else {
@@ -7573,6 +7586,11 @@ mod tests {
         #[cfg(target_os = "linux")]
         if matches!(check, OpenSshCheck::AgentBoard) {
             agent_board_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::AuthListeners) {
+            // Boxed: awaiting it inline grows this function's debug frame past a test thread's stack.
+            Box::pin(auth_listeners_fixture::verify(&app, &id, dir.path())).await;
             return;
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {

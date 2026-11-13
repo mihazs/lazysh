@@ -74,6 +74,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Host device Android SDK acceptance | [Device acceptance](reference/devices-acceptance.md) |
 | Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
 | Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |
+| Confirming a sign-in callback against the host's listeners: states, age rule and fallback | [Sign-in listener check](reference/auth-listeners.md) |
 | Sharing service HTTP contract and verification boundary | [Sharing service](reference/sharing-service.md) |
 | Transcription API, quotas and resource bounds | [Transcription relay](reference/cloud-transcription.md) |
 | Theme rendering and QR processing bounds | [Theme rendering](reference/theme-rendering.md) · [Theme QR processing](reference/theme-qr.md) |
