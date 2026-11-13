@@ -1,5 +1,11 @@
 # @lazysh/notification-client
 
+## 1.56.1
+
+### Patch Changes
+
+- @lazysh/common@1.56.1
+
 ## 1.56.0
 
 ### Patch Changes
