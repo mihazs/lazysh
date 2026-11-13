@@ -91,6 +91,14 @@ fn same_file(left: &Path, right: &Path) -> bool {
         _ => false,
     }
 }
+/// Is this process the managed copy: the one the app, the hooks and the timers run, and the only one
+/// that updates itself in the background. A development build or a copy on `PATH` is not.
+pub fn running_managed() -> bool {
+    let (Ok(running), Ok(directory)) = (std::env::current_exe(), managed_directory()) else {
+        return false;
+    };
+    same_file(&directory.join(NAME), &running)
+}
 pub fn detect() -> Result<Current, Fault> {
     let running = std::env::current_exe()?;
     let managed = managed_directory()?.join(NAME);

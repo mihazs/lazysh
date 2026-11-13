@@ -1,6 +1,7 @@
 //! `update-state.json`: what the last update operations left behind. Readers ignore unknown fields,
 //! because a rollback can run an older companion over a newer file; a damaged file reads as empty.
 use crate::private_json;
+use lazysh_companion_release::version;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
@@ -53,9 +54,38 @@ pub enum Retained {
 /// rollback can run an older companion over a newer file. Best effort: the binary is already
 /// replaced when this runs, so a state file that cannot be written must not fail the update.
 pub fn record(directory: &Path, retained: Retained, operation: Value) {
-    let _ = try_record(directory, retained, operation);
+    let _ = modify(directory, |value| {
+        match retained {
+            Retained::Keep => {}
+            Retained::Set(previous) => {
+                value["previous"] =
+                    serde_json::json!({"version":previous.version,"sha256":previous.sha256})
+            }
+            Retained::Clear => {
+                value.as_object_mut().unwrap().remove("previous");
+            }
+        }
+        // A scheduled check that found this release (or an older one) has nothing left to report.
+        let installed = (operation["outcome"] == "updated")
+            .then(|| operation["to"].as_str().and_then(version))
+            .flatten();
+        if let (Some(installed), Some(check)) = (
+            installed,
+            value.get_mut("lastCheck").filter(|check| check.is_object()),
+        ) {
+            if check["latest"].as_str().and_then(version) <= Some(installed) {
+                check["available"] = false.into();
+            }
+        }
+        value["lastOperation"] = operation;
+    });
 }
-fn try_record(directory: &Path, retained: Retained, operation: Value) -> crate::Result<()> {
+/// Write what a scheduled check found. Unlike `record` this one reports failure: a check that
+/// cannot be recorded cannot be rate limited, so the caller must not go on to use the network.
+pub fn record_check(directory: &Path, check: Value) -> crate::Result<()> {
+    modify(directory, |value| value["lastCheck"] = check)
+}
+fn modify(directory: &Path, change: impl FnOnce(&mut Value)) -> crate::Result<()> {
     let _lock =
         private_json::lock(directory, "update-state.lock")?.ok_or(crate::Error::InvalidArgument)?;
     let mut value = private_json::read(directory, NAME)
@@ -65,17 +95,7 @@ fn try_record(directory: &Path, retained: Retained, operation: Value) -> crate::
         .filter(Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
     value["schemaVersion"] = 1.into();
-    match retained {
-        Retained::Keep => {}
-        Retained::Set(previous) => {
-            value["previous"] =
-                serde_json::json!({"version":previous.version,"sha256":previous.sha256})
-        }
-        Retained::Clear => {
-            value.as_object_mut().unwrap().remove("previous");
-        }
-    }
-    value["lastOperation"] = operation;
+    change(&mut value);
     let bytes = serde_json::to_vec(&value).map_err(|_| crate::Error::InvalidArgument)?;
     if bytes.len() as u64 >= private_json::MAX_CONFIG {
         return Err(crate::Error::InvalidArgument);

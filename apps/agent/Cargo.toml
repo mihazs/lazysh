@@ -27,6 +27,10 @@ required-features = ["update-test-endpoint"]
 name = "app_update"
 required-features = ["update-test-endpoint"]
 
+[[test]]
+name = "auto_update"
+required-features = ["update-test-endpoint"]
+
 [dependencies]
 lazysh-account-usage = { path = "../../packages/account-usage", features = ["collector"] }
 lazysh-companion-release = { path = "../../packages/companion-release" }

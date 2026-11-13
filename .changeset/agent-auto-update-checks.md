@@ -1,0 +1,5 @@
+---
+"@lazysh/agent": minor
+---
+
+Make the host companion look for a newer release by itself. The managed companion, when the app reads the snapshot and a check is due (about once a day), starts one detached `lazysh-agent auto-update run`: it asks the release metadata over HTTPS from the host, records `lastCheck` for `lazysh-agent update --status` (now also carrying the settings as `autoUpdate`) and `auto-update status`, and under the default policy `install` installs a newer verified release with the same guards as an app-driven update (never during an agent turn, never over a release rolled back from or one that failed verification, never to an older version, only inside the optional window). `auto-update set` gains `--channel stable|prerelease`, `--interval-hours 1..720` and `--window HH:MM-HH:MM|none`. A host that is offline records the failed check and waits an hour, doubling to a day. Changed default: the companion now makes one check of four small requests a day on its own and installs what it finds; `auto-update set --policy off` stops it.
