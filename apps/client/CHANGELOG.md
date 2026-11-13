@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.50.0
+
+### Minor Changes
+
+- 9d7fb30: Show a failed Claude Code API call (usage limit, unreachable API, refused request) as an error card that says what to do next, from the recorded `isApiErrorMessage` assistant record.
+
+### Patch Changes
+
+- 54776ce: On phones, the side menu is now the one full-screen navigation page (hosts, Workspaces, Agents) instead of a separate partial-width Menu drawer; its tabs read Agents, Workspaces, Connections and a connected remote session opens on Agents instead of Connections.
+- b7e63b5: Fix the client build after two merged Agent view changes both defined the permission-mode strings.
+- a594aa6: Keep **Load earlier messages** available in the Agent view when live updates push the oldest loaded messages out of its 400-message window, instead of showing a false **Start of the session** marker, and prove that loading an older page keeps the line being read in place while a live update arrives.
+- @lazysh/account-usage@1.50.0
+  - @lazysh/common@1.50.0
+  - @lazysh/display-idle@1.50.0
+  - @lazysh/et-transport@1.50.0
+  - @lazysh/mosh-transport@1.50.0
+
 ## 1.49.0
 
 ### Minor Changes
