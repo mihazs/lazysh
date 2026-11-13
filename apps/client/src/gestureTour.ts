@@ -46,12 +46,12 @@ export type TourNote = "gestureTourOff" | "gestureTourTopBar" | "gestureTourScre
 export type TourNotes = Readonly<Record<TourGesture, TourNote | null>>;
 const preferenceOf: Record<TourGesture, EdgeGestureId> = {side: "leftMenu", bottom: "bottomMenu", view: "viewSwitch"};
 
-/** What the device does with each gesture right now: screen-reader mode and Preferences switch them off; "Show the top bar" leaves no side menu to open. */
+/** What the device does with each gesture right now: screen-reader mode, the per-gesture switches and "Gesture style: Off" switch them off; "Show the top bar" leaves no side menu to open. */
 export function gestureTourNotes(preferences: Preferences, topBar: boolean): TourNotes {
   const settings = edgeGestureSettings(preferences);
   const note = (gesture: TourGesture): TourNote | null =>
     preferences.screenReader ? "gestureTourScreenReader"
-      : !settings[preferenceOf[gesture]] ? "gestureTourOff"
+      : !settings[preferenceOf[gesture]] || settings.mode === "off" ? "gestureTourOff"
         : gesture === "side" && topBar ? "gestureTourTopBar" : null;
   return {side: note("side"), bottom: note("bottom"), view: note("view")};
 }
