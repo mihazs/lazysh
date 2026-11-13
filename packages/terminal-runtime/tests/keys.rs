@@ -6,7 +6,7 @@
 
 mod support;
 
-use lazysh_terminal_runtime::{ffi, KeyInput};
+use lazysh_terminal_runtime::{ffi, DomKey, KeyInput};
 use support::{feed, runtime};
 
 const SHIFT: u16 = ffi::GHOSTTY_MODS_SHIFT as u16;
@@ -148,8 +148,13 @@ const DIFFERENT: &[Different] = &[
 fn core_sends(code: &str, key: &str, mods: u16, setup: &[u8]) -> Vec<u8> {
     let mut rt = runtime(20, 4);
     feed(&mut rt, setup);
-    rt.encode_key(&KeyInput::from_dom(code, key, mods, false, false))
-        .unwrap()
+    let event = DomKey {
+        code,
+        key,
+        mods,
+        ..DomKey::default()
+    };
+    rt.encode_key(&KeyInput::from_dom(event)).unwrap()
 }
 
 #[test]
@@ -180,7 +185,13 @@ fn every_difference_from_xterm_js_is_listed_with_its_reason() {
 
 #[test]
 fn letters_digits_numpad_and_function_keys_map_to_their_physical_keys() {
-    let key = |code: &str| KeyInput::from_dom(code, "", 0, false, false).key;
+    let key = |code| {
+        KeyInput::from_dom(DomKey {
+            code,
+            ..DomKey::default()
+        })
+        .key
+    };
     for (code, expected) in [
         ("KeyA", ffi::GhosttyKey_GHOSTTY_KEY_A),
         ("KeyZ", ffi::GhosttyKey_GHOSTTY_KEY_Z),
@@ -224,8 +235,12 @@ fn letters_digits_numpad_and_function_keys_map_to_their_physical_keys() {
 fn soft_keyboards_without_a_code_still_type_and_press_named_keys() {
     let mut rt = runtime(20, 4);
     let mut send = |code: &str, key: &str| {
-        rt.encode_key(&KeyInput::from_dom(code, key, 0, false, false))
-            .unwrap()
+        let event = DomKey {
+            code,
+            key,
+            ..DomKey::default()
+        };
+        rt.encode_key(&KeyInput::from_dom(event)).unwrap()
     };
     assert_eq!(send("", "a"), b"a");
     assert_eq!(send("Unidentified", "é"), "é".as_bytes());
@@ -241,7 +256,12 @@ fn soft_keyboards_without_a_code_still_type_and_press_named_keys() {
     ] {
         assert!(send(code, key).is_empty(), "{code:?} {key:?}");
     }
-    let composing = KeyInput::from_dom("KeyA", "a", 0, false, true);
+    let composing = KeyInput::from_dom(DomKey {
+        code: "KeyA",
+        key: "a",
+        composing: true,
+        ..DomKey::default()
+    });
     assert!(rt.encode_key(&composing).unwrap().is_empty());
 }
 
@@ -262,5 +282,39 @@ fn dom_modifier_flags_become_the_encoders_bits() {
     assert_eq!(
         lazysh_terminal_runtime::dom_mods(false, true, false, true),
         CTRL | SUPER
+    );
+}
+
+/// A held key is a press for a program that never asked about event types, and a repeat (`:2`) for one that
+/// enabled Kitty flag 2; a release is only reported to such a program.
+#[test]
+fn held_keys_repeat_only_for_programs_that_ask_for_event_types() {
+    let event = |repeat, release| {
+        KeyInput::from_dom(DomKey {
+            code: "ArrowUp",
+            key: "ArrowUp",
+            repeat,
+            release,
+            ..DomKey::default()
+        })
+    };
+    let mut legacy = runtime(20, 4);
+    assert_eq!(legacy.encode_key(&event(false, false)).unwrap(), b"\x1b[A");
+    assert_eq!(legacy.encode_key(&event(true, false)).unwrap(), b"\x1b[A");
+    assert!(legacy.encode_key(&event(false, true)).unwrap().is_empty());
+
+    let mut kitty = runtime(20, 4);
+    feed(&mut kitty, b"\x1b[>3u");
+    assert_eq!(
+        kitty.encode_key(&event(false, false)).unwrap(),
+        b"\x1b[1;1:1A"
+    );
+    assert_eq!(
+        kitty.encode_key(&event(true, false)).unwrap(),
+        b"\x1b[1;1:2A"
+    );
+    assert_eq!(
+        kitty.encode_key(&event(false, true)).unwrap(),
+        b"\x1b[1;1:3A"
     );
 }

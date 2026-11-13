@@ -106,29 +106,41 @@ fn key_from_code(code: &str) -> Option<ffi::GhosttyKey> {
     })
 }
 
+/// A DOM `keydown` or `keyup`. `code` names the physical key and `key` is what it produced; `mods` come from
+/// [`dom_mods`], `repeat` and `composing` are `repeat` and `isComposing`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DomKey<'a> {
+    pub code: &'a str,
+    pub key: &'a str,
+    pub mods: u16,
+    pub repeat: bool,
+    pub release: bool,
+    pub composing: bool,
+}
+
 impl KeyInput {
-    /// A DOM `keydown` or `keyup` as the encoder takes it. `code` names the physical key and `key` is what
-    /// it produced. Soft keyboards that report no `code` (Android IMEs send an empty one or
-    /// "Unidentified") still work: a named key (`Enter`, `Backspace`, `ArrowUp`) is found by `key`, and a
-    /// single printable character becomes text that names no key. Dead keys, `Process` and modifier-only
-    /// presses on such keyboards encode to nothing. `composing` is `isComposing`.
+    /// The encoder's input for a DOM key event. Soft keyboards that report no `code` (Android IMEs send an
+    /// empty one or "Unidentified") still work: a named key (`Enter`, `Backspace`, `ArrowUp`) is found by
+    /// `key`, and a single printable character becomes text that names no key. Dead keys, `Process` and
+    /// modifier-only presses on such keyboards encode to nothing.
     ///
     /// shortcut: a `key` of several characters is not text here, because IME commits arrive as composition
     /// results built by the IME bridge (#1328) rather than as key events.
-    pub fn from_dom(code: &str, key: &str, mods: u16, release: bool, composing: bool) -> Self {
-        let mut chars = key.chars();
+    pub fn from_dom(event: DomKey) -> Self {
+        let mut chars = event.key.chars();
         let text = chars
             .next()
             .filter(|c| !c.is_control() && chars.next().is_none())
             .map(String::from);
         Self {
-            key: key_from_code(code)
-                .or_else(|| key_from_code(key))
+            key: key_from_code(event.code)
+                .or_else(|| key_from_code(event.key))
                 .unwrap_or(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED),
-            mods,
+            mods: event.mods,
             text,
-            composing,
-            release,
+            composing: event.composing,
+            repeat: event.repeat,
+            release: event.release,
         }
     }
 }

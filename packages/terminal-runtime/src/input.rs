@@ -12,6 +12,8 @@ pub struct KeyInput {
     pub text: Option<String>,
     /// Pre-edit text still being composed: encodes to nothing so it can never be committed twice.
     pub composing: bool,
+    /// A held key repeating: a press to a legacy program, a repeat event to one that enabled Kitty flag 2.
+    pub repeat: bool,
     pub release: bool,
 }
 
@@ -69,6 +71,8 @@ impl Encoders {
         let mut event = KeyEvent::new()?;
         event.set_action(if input.release {
             ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE
+        } else if input.repeat {
+            ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT
         } else {
             ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS
         });

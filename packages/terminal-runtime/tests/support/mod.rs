@@ -67,6 +67,7 @@ pub fn key(key: ffi::GhosttyKey, mods: u16, text: Option<&str>) -> KeyInput {
         mods,
         text: text.map(str::to_string),
         composing: false,
+        repeat: false,
         release: false,
     }
 }
