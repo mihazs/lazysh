@@ -39,7 +39,7 @@ What will change, and what stays the same:
   ```
 
   Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
-- **Automatic updates.** A companion setting chooses `off`, `notify` (the planned default: the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (replaces only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` can add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
+- **Automatic updates.** A companion setting chooses `off`, `notify` (the host checks for a newer release at most once per interval, the app shows an update-available badge, nothing is replaced) or `install` (the planned default, on since 2026-11-13: replaces when a newer release is out or a newer lazysh app connects, only when no agent turn is active and that version has not already failed). `lazysh-agent auto-update enable` can add a user-level timer (systemd user timer, launchd agent or Scheduled Task); it never uses `sudo`. See [host settings](../companion-settings.md#companion-updates-planned).
 
 ## Enable reporting deliberately
 

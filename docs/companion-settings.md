@@ -30,12 +30,12 @@ Replace `0` with the revision actually returned by `show`; review all three valu
 
 | Setting | Values | Default |
 | --- | --- | --- |
-| Policy | `off`, `notify`, `install` | `notify` |
+| Policy | `off`, `notify`, `install` | `install` |
 | Channel | `stable`, `prerelease` | `stable` |
 | Check interval | 1 to 720 hours | 24 |
 | Update window | `HH:MM-HH:MM` in the host's local time, or none | none |
 
-`notify` is the planned default and **changes what a companion does on its own**: when the app reads its snapshot, or an optional timer fires, it makes one conditional HTTPS request to GitHub per interval and records whether a newer release exists; the Agent view and this panel then show the companion version and an update-available badge. It sends no host identifier and replaces nothing. Choose `off` for no request at all (`lazysh-agent auto-update set --expected-revision R --policy off`). `install` replaces the managed companion only when the target is newer, inside the window, no session reported a working state in the last 10 minutes, and that version has not already failed on this host. Hooks never start a check. A metered connection is not detected: use `notify` or `off` on one.
+`install` is the planned default (user decision 2026-11-13) and **changes what a companion does on its own**: it replaces the managed companion when every guard passes: the target is newer, inside the window, no session reported a working state in the last 10 minutes and that version has not already failed on this host. It also does so when a newer lazysh app connects, with the app's version as the target (the app sends it in `LAZYSH_APP_VERSION`; never a downgrade, never a prerelease). It sends no host identifier; the only traffic is the conditional release check per interval and one download when it updates. `notify` checks and records whether a newer release exists, shows the version and an update-available badge in the Agent view and this panel, and replaces nothing. Choose `off` for no request at all and no change (`lazysh-agent auto-update set --expected-revision R --policy off`). Hooks never start a check or an update. A metered connection is not detected: use `notify` or `off` on one.
 
 `lazysh-agent auto-update enable` installs a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` removes it; `status` shows whether it is present or has drifted. If the host has no user service manager, `enable` reports that and changes nothing.
 

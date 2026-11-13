@@ -1,6 +1,6 @@
 # ADR 0003: host-side companion update, `lazysh-agent update` and auto-update
 
-- Status: **Accepted** as the design. The behavior below is not implemented yet: [#1444](https://github.com/mihazs/lazysh/issues/1444) (CLI), [#1445](https://github.com/mihazs/lazysh/issues/1445) (app) and [#1446](https://github.com/mihazs/lazysh/issues/1446) (auto-update) deliver it. Date: 2026-11-13.
+- Status: **Accepted** as the design, amended 2026-11-13 (default policy `install`, app-driven update). The behavior below is not implemented yet: [#1444](https://github.com/mihazs/lazysh/issues/1444) (CLI), [#1445](https://github.com/mihazs/lazysh/issues/1445) (app) and [#1446](https://github.com/mihazs/lazysh/issues/1446) (auto-update) deliver it. Date: 2026-11-13.
 - Decision makers: repository maintainer. Tracking: [epic #1441](https://github.com/mihazs/lazysh/issues/1441), design issue [#1443](https://github.com/mihazs/lazysh/issues/1443).
 - Related: [configure the companion](../how-to/configure-companion.md) · [companion](../companion.md) · [host settings](../companion-settings.md) · [settings reference](../reference/companion-settings.md) · [install and update](../install-and-update.md) · [release artifacts](../release-artifacts.md).
 
@@ -27,7 +27,7 @@ What the client verifies today before it downloads (`Publisher::select`): `relea
 3. **`lazysh-agent update`** (and `auto-update`) is added to the companion with the contract in [CLI contract](#cli-contract). The CLI only ever writes the user's *managed* companion.
 4. **Companions without `update` (including none at all) are updated by a small fixed bootstrap** run over SSH exec: POSIX `sh` using `curl` or GNU `wget` on Linux and macOS, Windows PowerShell on Windows.
 5. **The phone-download path survives only as an explicit, labelled offline fallback** behind its own command, offered only when the host cannot reach GitHub.
-6. **Auto-update policy is `off | notify | install`, default `notify`.** Nothing is replaced unless the user chose `install`. Settings live in their own strict file so older companions keep reading `settings.json`.
+6. **Auto-update policy is `off | notify | install`, default `install`** (amendment 2026-11-13, see [Amendment: on by default and app-driven](#amendment-on-by-default-and-app-driven)). Every guard below always applies, and `notify` and `off` stay one setting away. Settings live in their own strict file so older companions keep reading `settings.json`.
 7. **Rollback and downgrade protection are part of every replace**: the staged binary is self-tested before the replace, the installed one after it, the previous version is kept, and a lower version is installed only when the user names it.
 
 ## Trust model
@@ -183,8 +183,8 @@ Tracked by [#1446](https://github.com/mihazs/lazysh/issues/1446).
 | Policy | Behavior |
 | --- | --- |
 | `off` | No scheduled or opportunistic check, no network. Manual `update` still works. |
-| `notify` (**default**) | Checks at most once per interval and records the result for `update --status`. Never modifies the executable. |
-| `install` | As `notify`, then installs through the same code as `update --yes` when every guard passes: target strictly newer, inside the optional update window (local host time, `HH:MM-HH:MM`), no session in the event store reported in a `working` state in the last 10 minutes (deferred otherwise, recorded as `deferred`), and the version has not failed before. A version that failed with 22, 24 or 25 is not retried automatically until a newer one exists. |
+| `notify` | Checks at most once per interval and records the result for `update --status`. Never modifies the executable. |
+| `install` (**default**, amendment) | As `notify`, then installs through the same code as `update --yes` when every guard passes: target strictly newer, inside the optional update window (local host time, `HH:MM-HH:MM`), no session in the event store reported in a `working` state in the last 10 minutes (deferred otherwise, recorded as `deferred`), and the version has not failed before. A version that failed with 22, 24 or 25 is not retried automatically until a newer one exists. |
 
 Settings: `policy`, `channel` (`stable` | `prerelease`), `intervalHours` (default 24, 1 to 720), `window` (default none). They live in **`auto-update.json`** in the state directory, mode 0600, at most 4 KiB, strict schema with a `revision` and the same lock and atomic-replace discipline as `settings.json`; absent means defaults and creates nothing. They are not added to `settings.json`: that file is read with `deny_unknown_fields` and its `settings update` takes exactly three booleans, so a new field would make older companions that share the state directory fail with `InvalidArgument`. The settings page in the app composes both.
 
@@ -195,9 +195,9 @@ Triggers:
 - **Opportunistic.** `snapshot`, the read the app already issues, starts a detached, null-stdio, new-session `auto-update run` when a check is due. It never blocks the snapshot, and a detached child must not keep the SSH exec channel open (hence null stdio and a new session; on Windows `DETACHED_PROCESS`). **Hooks (`ingest`) never touch the network or spawn anything**: they run inside the agent's turns and are latency-critical.
 - **Optional OS timer**, installed only by `auto-update enable`, from fixed templates with no user text, running the absolute managed path: a systemd **user** timer and service on Linux (`~/.config/systemd/user/lazysh-agent-update.*`, `systemctl --user enable --now`), a launchd agent on macOS (`~/Library/LaunchAgents/app.lazysh.agent-update.plist`), a Scheduled Task without elevation on Windows (`schtasks`). The timer fires at least daily; `run` enforces the interval itself. If the user manager, launchd domain or Task Scheduler is unavailable (a headless SSH-only account without lingering, for instance) `enable` exits 41 and changes nothing. `disable` removes only files carrying the lazysh marker; `status` reads the real OS state and reports `drift` when it differs from the expected unit. No `sudo`.
 
-Offline and metered hosts: a failed check is not an error for a timer run (exit 0, recorded) and backs off 1 h, doubling to 24 h. Metered-link detection is **not implemented**; a host on a metered link should use `notify` or `off`. An update downloads under 12 MB.
+Offline and metered hosts: a failed check is not an error for a timer run (exit 0, recorded) and backs off 1 h, doubling to 24 h. Metered-link detection is **not implemented**; a host on a metered link should use `notify` or `off`, because the default installs. An update downloads under 12 MB.
 
-**Changed default, called out.** `notify` is the default for new and updated companions, so a companion makes one conditional HTTPS request to GitHub per day when something drives it. No host identifier is sent: the request carries the user agent `lazysh-agent/<version>` and the platform target only, and GitHub sees the host's IP address as for any download. `lazysh-agent auto-update set --policy off` (or the same switch in Host settings) stops it. Companions older than this change are unaffected.
+**Changed default, called out.** `install` is the default for new and updated companions (user decision 2026-11-13; the first draft of this ADR chose `notify`), so a companion makes one conditional HTTPS request to GitHub per day when something drives it and installs a newer release when every guard passes, or when a newer lazysh app connects ([amendment](#amendment-on-by-default-and-app-driven)). No host identifier is sent: the request carries the user agent `lazysh-agent/<version>` and the platform target only, and GitHub sees the host's IP address as for any download. `lazysh-agent auto-update set --policy off` (or the same switch in Host settings) stops it. Companions older than this change are unaffected.
 
 ## Notification to the app
 
@@ -245,6 +245,23 @@ Each slice is complete and shippable on its own, merged to `main` independently,
 
 Order: A, then B1 and C1 in parallel; C2 after B2 is on `main`; D after B2. Every user-facing slice carries a `CHANGELOG.md` `[Unreleased]` entry and a minor changeset (`@lazysh/agent` and `@lazysh/client`) and ships through the normal release policy; changed defaults (the phone no longer downloads; `notify`) are called out.
 
+## Amendment: on by default and app-driven
+
+Date 2026-11-13, tracked by [#1495](https://github.com/mihazs/lazysh/issues/1495). The user asked: *"Improve the companion to auto update when a lazysh app with a higher version connects."* Two decisions follow, and they supersede the `notify` default above.
+
+1. **The default policy is `install`.** A fresh or updated companion with no `auto-update.json` behaves as `install`; reading it still creates nothing. The guards never change: digest pinned from the release metadata, size cap, no execution before verification, atomic replace, rollback, no downgrade, not during an active agent turn, single-flight lock, backoff, no `sudo`. The setting stays visible and switchable on the host (`lazysh-agent auto-update set --policy notify|off`) and in the app's Host settings. The CHANGELOG states the changed default and the new network egress.
+2. **A newer app triggers the update, and it is part of `install`.** No separate `app` policy value exists (it would only have been a second name for the default). The app is the trust anchor: the target is **exactly the app's version**, so the app's release is the cap, a downgrade and a prerelease are unreachable, and a version string that is not a strict `X.Y.Z` is refused.
+
+**Handshake.** An app sends its version in the environment variable `LAZYSH_APP_VERSION` on every command it runs on a host it can set an environment for (Linux and macOS today). An environment variable, not a flag: a companion that predates the handshake ignores it, whereas an unknown flag is a usage error (exit 2) that the app already reads as "companion too old". Hooks (`ingest`, `approval-request`) run inside agent turns and neither read it nor start anything.
+
+**Decision, made offline in the command in hand** (no network, no sqlite unless a runner starts): the app version must be strictly greater than the running companion's, a policy of `install` must be readable (an unreadable file blocks the update; it is not replaced by the default), the version must not be one the user rolled back from, and no earlier attempt for the same app version may be blocked (exits 22 to 25, 27, 29) or waiting out its backoff (one hour, doubling to a day). Otherwise it starts **one detached runner**, `lazysh-agent auto-update run --app-version X.Y.Z`, in its own process group with null stdio (so it neither holds the SSH exec channel open nor dies with it) and replies to the request as asked. The runner holds an advisory lock that dies with its process (stale recovery needs no PID liveness test), records `app-update.json` (private, 4 KiB), defers two minutes while a session in the event store reported `working` in the last ten minutes, and runs **`lazysh-agent update --yes --version X.Y.Z`** with a ten-minute limit. It reimplements nothing: the host resolves that release and verifies it as the CLI always does (the digest pin of the metadata chain), self-tests, replaces atomically and rolls back.
+
+**Reply.** `snapshot` carries `update: {"state": "started|running|done|failed|skipped", "from", "to", "reason"?}` only when an app newer than the companion asked, or one finished within ten minutes. `reason` is a fixed word, never remote text. The app shows a non-blocking "Updating the host companion to X" row and asks again (clearing its "companion lacks this command" memos) when it reads `done`.
+
+**Consent.** A host whose companion supports `update` gets no prompt: its policy is the consent, it is visible, and the user can turn it off. The first-time per-host prompt (**Always / Not now / Never**, remembered per host) applies only to a companion that cannot update itself and that the app would change through the host-side bootstrap of [#1445](https://github.com/mihazs/lazysh/issues/1445): that is software the host never had a policy for.
+
+**Not decided here, stated plainly.** Windows hosts get no handshake until the app has a way to set an environment for a positively identified Windows shell. The scheduled checks, channels and OS timers remain [#1446](https://github.com/mihazs/lazysh/issues/1446), which extends the same `auto-update.json` and command.
+
 ## Alternatives considered
 
 | Alternative | Why not chosen |
@@ -256,7 +273,7 @@ Order: A, then B1 and C1 in parallel; C2 after B2 is on `main`; D after B2. Ever
 | Sigstore attestation or a signing key in v1 | No signature exists; key custody and a verifier are separate release engineering. Left as a follow-up. |
 | Update a PATH installation in place | Needs write access outside the user's namespace, often root. The managed binary is the one the app already prefers. |
 | Windows replace on reboot | Needs administrator rights. |
-| Auto-update default `install` or `off` | `install` replaces without opt-in; `off` would contradict the epic. `notify` was chosen with its egress called out. |
+| Auto-update default `notify` or `off` | The first draft chose `notify` so that nothing was replaced without opt-in. Superseded 2026-11-13: the user asked for the companion to update itself when a newer app connects, so `install` is the default, its egress is called out and `notify` and `off` stay visible and switchable. |
 | Settings in `settings.json` | `deny_unknown_fields` plus a three-boolean `update` would break older companions sharing the state directory. |
 | A resident updater daemon | The companion has no resident server and the design keeps it that way. |
 | Hooks trigger the check | Hooks run inside agent turns and must stay offline and instant. |
@@ -269,7 +286,7 @@ Order: A, then B1 and C1 in parallel; C2 after B2 is on `main`; D after B2. Ever
 - The release asset naming (`lazysh-<v>-<os>-agent-<arch>.bin|.exe`), the 14-asset set and the `release.json` schema 1 become an updater contract; [release artifacts](../release-artifacts.md) records that changing them is a breaking change for every installed `lazysh-agent update`.
 - Companions can become newer than their app, so every reader of companion JSON must ignore unknown fields.
 - New code: a shared crate, the `update` and `auto-update` modules, a bootstrap script pair, an exec primitive, a Windows probe. Removed from the default path: the device download, SFTP staging and two stages.
-- Hosts that do not enable a user service manager keep `notify` driven by app activity only.
+- Hosts that do not enable a user service manager have no timer; they are driven by app activity only (the opportunistic check and the app-driven update).
 
 ## What was and was not verified
 
