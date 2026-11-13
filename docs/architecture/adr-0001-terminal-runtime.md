@@ -106,3 +106,29 @@ Decisions, recorded per candidate:
 | xterm.js DOM renderer, WebGL addon, canvas addon, software GL, every platform | **Unchanged from Amendment 1.** The DOM renderer stays the default and the fallback everywhere; no platform, rollout stage or default changes. |
 
 Next measurements, in order: the xterm.js WebGL addon and the DOM renderer on a physical Android device ([#1340](https://github.com/mihazs/lazysh/issues/1340)); only if the WebGL addon fails a criterion there, a wgpu text path and a Vulkan surface on the same device.
+
+## Amendment 3 (2026-11-13): the WebGL addon at the phone viewport and under context loss
+
+Scope: [#1323](https://github.com/mihazs/lazysh/issues/1323), the two measurements Amendment 1 named as next that do not need a device. Evidence: [WebGL at the phone viewport](terminal-benchmarks.md#webgl-at-the-phone-viewport-and-its-first-ansi-heavy-burst-1323) and [WebGL context loss and recovery](terminal-benchmarks.md#webgl-context-loss-and-recovery-1323), raw files `benchmarks/terminal-shootout-*-phone.json` and `benchmarks/terminal-context-loss-*.json`. The status of this ADR stays **Proposed**.
+
+**What was measured.** The harness of Amendment 1 at the `phone` viewport (390 by 844 CSS px at 3x, 46 by 37 cells) for the DOM renderer and the WebGL addon on hardware GL, two invocations each, and a scripted WebGL context loss and restore of the addon (hardware GL twice, software GL once). **What was not:** a phone, an Android WebView, a mobile GPU, energy, a real GPU-process crash or app backgrounding, many terminals losing contexts at once, and the cause of the first-burst stall below.
+
+What changed in the evidence on the WebGL addon:
+
+| Amendment 1 item | Now |
+| --- | --- |
+| "W3 frame-pacing regression" (p99 116 to 197 ms on the desktop grid) | **Reframed, not fixed.** At the phone grid the steady state paces like the DOM renderer (frame interval p99 16.7 to 16.8 ms and no dropped frames in runs 2 to 5 of both invocations). The first W3 run of each page was a stall: 0.26 to 0.30 MiB/s, 6.7 to 7.7 s of wall time, 12.7 to 15.1 s of CPU, 285 to 343 dropped frames, against 66 to 82 ms for the same bytes afterwards. The harness's median of five runs hid it. The desktop runs have the same state-dependence (per-run W3 throughput 2.5 to 28 MiB/s). The first ANSI-heavy output a user sees with the addon is therefore the case to fix or avoid, and a mitigation must be shown by a run, not assumed. |
+| CPU on streaming output | **Not a general win.** On the phone grid the addon's total process CPU was 1.5 to 2.1 times the DOM renderer's on W3 and W4 (0.14 to 0.23 s more per workload); on the desktop grid it was lower on W3. Idle with a blinking cursor (27 to 29 against 134 to 165 ms of main-thread time per 10 s, no style recalculations) and echo latency with five or ten streaming sessions (p50 8.4 to 8.7 and 7.4 against 12.0 to 12.3 and 11.1 ms) are better with the addon on both viewports. The "at least 25 % better in one key metric" criterion is met at the phone grid by those two; the "no material regression elsewhere" criterion is still **not cleared** because of the first-burst stall. |
+| Context loss and recovery (was unmeasured) | **Met on the host for what a script can do.** Restored inside the 3 s grace period, the addon repairs itself and the terminal is pixel-identical to one that never lost its context, including output written while lost. Never restored, `onContextLoss` fires after 3.0 s; disposing the addon leaves a DOM terminal with identical pixels and an intact buffer, and a new addon draws identical pixels again. The app has none of this code (it does not load the addon), so adopting the addon includes writing that handler and a test like `e2e/terminal-webgl-context-loss.spec.ts`. An Android WebView's real loss modes (GPU process kill, memory pressure, backgrounding) are unmeasured. |
+| Bold-color seam | Unchanged: refused by the addon in all four phone invocations. |
+
+Decisions, recorded per candidate and platform:
+
+| Candidate or platform | Decision |
+| --- | --- |
+| xterm.js WebGL addon on hardware GL | **Stays the leading measured candidate; still does not ship and is not cleared.** Open gates, in order: the first-burst stall (isolate it, then mitigate and re-measure at both grids), a context-loss handler in the app with its test, a replacement for the custom bold color seam, a screen-reader decision, and the device runs of [#1340](https://github.com/mihazs/lazysh/issues/1340) (energy, thermal, a real WebView's context-loss modes, memory pressure, background and resume). |
+| xterm.js DOM renderer | Unchanged: the default and the fallback everywhere. |
+| xterm.js canvas addon, WebGL on a software rasterizer, wgpu, Android Canvas, WASM terminal | Unchanged from Amendments 1 and 2. |
+| Every platform, rollout stage and default | Unchanged. No fallback is removed. |
+
+Next measurements, in order: isolate the first-burst stall (a profile of the first W3 run: glyph atlas population, texture uploads, GPU-process time) and test a mitigation; then the device runs of [#1340](https://github.com/mihazs/lazysh/issues/1340).
