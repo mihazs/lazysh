@@ -125,8 +125,10 @@ impl Encoders {
 /// for one. While neither Kitty keyboard flags nor modifyOtherKeys is enabled the caller sends what
 /// xterm.js sends for the keys below, with one deliberate exception, Shift+Enter: xterm.js sends CR, so
 /// an agent TUI would submit instead of inserting a newline (#805), and lazysh has always sent
-/// `CSI 13;2u` for it (Codex, OpenCode and Claude Code read that form). Printable keys with the Super key send nothing and other chords the
-/// encoder answers with a protocol form are dropped by [`is_protocol_form`]. `None` leaves the key to the encoder.
+/// `CSI 13;2u` for it (Codex, OpenCode and Claude Code read that form).
+///
+/// A printable key with Super sends nothing (Cmd+C must not type a "c"). Any other chord the encoder
+/// answers with a protocol form is dropped by [`is_protocol_form`]. `None` leaves the key to the encoder.
 fn legacy_bytes(input: &KeyInput) -> Option<&'static [u8]> {
     if input.release || input.composing {
         return None;
