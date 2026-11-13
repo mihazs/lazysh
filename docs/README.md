@@ -92,7 +92,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Why Appium and WebdriverIO drive the Android app, and where the suite sits in the test pyramid | [ADR 0002](architecture/adr-0002-appium-webdriverio-android-e2e.md) |
 | Why and how the companion updates on the host: trust model, `lazysh-agent update` contract, bootstrap, rollback and auto-update (planned) | [ADR 0003](architecture/adr-0003-host-side-companion-update.md) |
 | How a sign-in's `localhost` callback reaches the device, why the redirect is never rewritten, and how host browser requests open on the device (planned) | [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) |
-| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
+| Why and how might the terminal move from xterm.js to a native runtime? | [Terminal performance PRD](architecture/terminal-performance-prd.md) · [Runtime](architecture/terminal-runtime.md) · [Native rendering](architecture/native-rendering.md) · [Android surface composition PoC](architecture/android-surface-composition-poc.md) · [Android native surface host](architecture/android-native-surface-host.md) · [Migration plan](architecture/terminal-migration-plan.md) · [ADR 0001](architecture/adr-0001-terminal-runtime.md) |
 
 ## Evidence and delivery
 
