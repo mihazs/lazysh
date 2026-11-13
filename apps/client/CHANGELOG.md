@@ -1,5 +1,22 @@
 # @lazysh/client
 
+## 1.51.0
+
+### Minor Changes
+
+- 7374c3b: Fix the phone gestures colliding with Android and Samsung One UI navigation gestures. On Android gesture navigation each gesture now starts from a visible handle placed from the live system gesture zones instead of the screen edge, edge swipes remain as an optional Gesture style (and as the default with three-button navigation), and a Test gestures page shows the zones. A swipe also starts in a band just beyond the system's Back and Home zones (inset + 4 dp up to inset + the zone width), so it does not compete with the system's edge gestures. Changed defaults: handles and bands instead of edge swipes on gesture navigation, and the edge zone width defaults to 40 dp (was 24) with a 96 dp maximum (was 48).
+- 78ae7c6: Show the working state, elapsed time, turn tokens and running tool on one line above the Agent view composer.
+- 587b2c7: Send from the Agent view to an agent that runs in a Zellij pane. The updated companion reports the Zellij session and pane of an agent's hooks, the Agent view of a terminal attached to that session follows (or lists) the agents that name one of its panes, and Send and Stop write to that exact pane through Zellij's own commands, only while it still runs the agent. Needs Zellij 0.45.1 or newer.
+
+### Patch Changes
+
+- 03c8b6d: Changed default: the toolbar page indicator is hidden until you change page, then fades in as three dots for two seconds inside the toolbar's bottom padding.
+- @lazysh/account-usage@1.51.0
+  - @lazysh/common@1.51.0
+  - @lazysh/display-idle@1.51.0
+  - @lazysh/et-transport@1.51.0
+  - @lazysh/mosh-transport@1.51.0
+
 ## 1.50.0
 
 ### Minor Changes
