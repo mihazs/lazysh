@@ -43,10 +43,10 @@ entry in `divergences.json` with a reason.
 
 ## Divergences
 
-`divergences.json` has 30 entries (14 accepted, 16 open). Open ones are questions for the migration
+`divergences.json` has 28 entries (15 accepted, 13 open). Open ones are questions for the migration
 gates, not approvals: the fixtures keep failing loudly if the core's behaviour moves, but nobody has
 signed off the user-visible ones (Unicode widths and the grapheme and colour-scheme modes that go with them, explicit zero counts and parameterless tab clears (libghostty-vt deviates from the standard),
-Alt+arrow and modified-Enter encodings, Ctrl+[, bracketed-paste newline handling, the Kitty keyboard
+Alt+arrow encodings, the Kitty keyboard
 protocol, theme colour queries, DA identity, the OSC 52 selection filter, DECXCPR, scrollback units, resize reflow). They are
 tracked on #1314, #1316 and #1305.
 
@@ -66,9 +66,9 @@ have flooded the pty under any-event tracking); `tests/conformance.rs` pins the 
   instead of a report, wheel to arrow keys in the alternate screen when no mouse mode is on): jsdom has no
   layout. The mouse fixtures drive `CoreMouseService`, the encoder `bindMouse` feeds, directly. The native
   adapter owns those host decisions.
-- Key encodings under Kitty keyboard flags beyond Escape, Enter, a plain letter and an arrow key: xterm.js
-  does not implement the protocol, so there is nothing to compare, and the core's golden encodings for Ctrl
-  and Alt chords, release and repeat events and the alternate-key and text flags belong to #1316.
+- Key encodings under Kitty keyboard flags: xterm.js does not implement the protocol, so there is nothing to compare.
+  The core's own golden encodings (Ctrl and Alt chords, release and repeat events, the alternate-key and text flags)
+  are in `tests/conformance.rs` and `tests/keys.rs` (#1316).
 - The canonical (non-reflowing, host-applied) Mosh resize of #1317: `vt/mosh-frames.json` replays three of the six
   captured frames (2, 3 and 6; 4, 5 and 7 redraw the same screens after different resize sequences, and the e2e
   spec covers them) after a plain resize, which both engines render identically.

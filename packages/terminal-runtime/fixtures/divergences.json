@@ -39,11 +39,6 @@
     "rationale": "Extra answers are harmless to well-behaved programs and the writer gate drops them while input is gated. The version string identifies libghostty rather than xterm.js.",
     "status": "accepted: replies stay subject to the input gate"
   },
-  "bracketed-paste-keeps-lf": {
-    "summary": "In bracketed mode xterm.js converts LF to CR inside the markers; the core keeps LF.",
-    "rationale": "Changes what a program sees for multi-line pastes (Enter versus a literal newline). Kept from #1385's design, which a test pins; xterm.js's conversion is what users experience today.",
-    "status": "open: decide in #1316 whether the core must convert to match xterm.js; pasting into agent TUIs is the case to test"
-  },
   "bracketed-paste-end-marker-stripped": {
     "summary": "xterm.js passes an embedded ESC[201~ through, letting pasted text end its own bracket; the core removes it.",
     "rationale": "Closing the bracket from inside the paste lets clipboard text run as typed input. The core is stricter on purpose.",
@@ -73,16 +68,6 @@
     "summary": "xterm.js rewrites Alt+Up to the Ctrl form (CSI 1;5A) and drops Alt on PageUp (CSI 5~); the core sends the standard CSI 1;3A and CSI 5;3~.",
     "rationale": "xterm.js carries a word-motion hack for Alt+Left/Right and a few siblings. The core follows the standard modifier encoding; programs that decode Alt+arrow see a different sequence than today.",
     "status": "open: check shells, vim, tmux and the agent TUIs (Alt+arrow word motion) before the Android default stage"
-  },
-  "modified-enter-tab-encoding": {
-    "summary": "Shift+Enter and Ctrl+Enter send CR and Ctrl+Tab sends HT in xterm.js; the core sends the modifyOtherKeys form CSI 27;<mods>;<code>~.",
-    "rationale": "A shell or TUI that does not parse that form would print junk for Shift+Enter, which lazysh already special-cases for agents (#805, #1043).",
-    "status": "open: the native adapter must keep lazysh's explicit Shift+Enter and toolbar-Enter handling, or the core's key flags must be set per program; decide in #1316 with an agent-TUI test"
-  },
-  "ctrl-left-bracket-csi-u": {
-    "summary": "Ctrl+[ sends ESC (0x1b) in xterm.js and CSI 91;5u in the core.",
-    "rationale": "Vim and shell users rely on Ctrl+[ as Escape. The core's encoder separates it from the Escape key.",
-    "status": "open: likely needs the legacy-compatible encoding; confirm in #1316 before any default switch"
   },
   "ctrl-chords-xterm-ignores": {
     "summary": "xterm.js sends nothing for Ctrl+/ and Ctrl+2; the core sends 0x1f and NUL.",
@@ -148,5 +133,10 @@
     "summary": "Narrowing the screen: xterm.js cuts a line that is longer than the new width unless it autowrapped, clamps a cursor past the new width to the last column, and keeps a continuation row apart when the screen widens again; the core reflows every line (the overflow lands on a new row, the cursor wraps with its text, a continuation row is joined back).",
     "rationale": "libghostty-vt reflows by default (ADR 0001); the shipped behaviour loses the text beyond the new width. Visible whenever a window narrows or widens with a long prompt or unwrapped output on screen. Mosh sessions are unaffected by either, since #1317 gives the host the framebuffer and the size.",
     "status": "open: approve the core as the intended behaviour, or have the adapter ask the runtime not to reflow; decide in #1317 and #1319"
+  },
+  "shift-enter-csi-u": {
+    "summary": "Shift+Enter sends CR in xterm.js and CSI 13;2u in the core.",
+    "rationale": "A plain CR submits an agent TUI's prompt instead of inserting a newline (#805). lazysh has always sent CSI 13;2u for Shift+Enter, which Codex, OpenCode and Claude Code read, and the core's legacy encoding keeps that on purpose (#1471). Ctrl+Enter and Ctrl+Tab now send CR and HT like xterm.js.",
+    "status": "accepted: by design for #805, the encoding lazysh already ships for Shift+Enter"
   }
 }

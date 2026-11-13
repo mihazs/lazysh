@@ -53,14 +53,6 @@
         "bracketedPaste": true
       },
       "data": "\u001b[200~hi\rthere\u001b[201~"
-    },
-    "core": {
-      "divergence": [
-        "bracketed-paste-keeps-lf"
-      ],
-      "expect": {
-        "data": "\u001b[200~hi\nthere\u001b[201~"
-      }
     }
   },
   {
