@@ -6,7 +6,7 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 
 type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
->>>>>>> 90dbfd54 (feat(agents): answer the list dialogs Claude Code opens from the Agent view)
+  channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[]};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
 const transcript='/home/owner/.codex/sessions/rollout 世界.jsonl';
