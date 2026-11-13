@@ -127,6 +127,14 @@ request. `main-verdict` detects the same class of break within minutes and gates
 queue stays an option to revisit if post-merge breaks recur; it would then run only the fast verdict
 set on `merge_group`.
 
+## Bug fixes
+
+A `fix(...)` pull request adds a regression test that fails on the parent commit, adds or updates its row in
+[`docs/regression-tests.md`](docs/regression-tests.md), and ticks "Added" under "Regression test" in the pull request
+template, or ticks "Not applicable" with the reason. The `regression-test` check of the `conventional-commits` workflow fails a fix
+without one (`sh .githooks/regression-check pr '<title>' '<body>'` runs it locally). The lowest layer that can fail on the
+bug owns the test; see [Write and run Appium tests](docs/how-to/write-and-run-appium-tests.md#add-a-regression-test-for-a-bug).
+
 ## Conventional Commits
 
 Every commit and PR title must follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)

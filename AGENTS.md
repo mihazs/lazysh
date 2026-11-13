@@ -67,6 +67,10 @@ explicitly requested. A recap-only or planning-only request remains read-only.
 
 Use the issue and PR templates in `.github/`, adapted from `akitaonrails/ai-memory`. Keep every required section, state checks accurately, and mark inapplicable checks with a reason. User-facing changes require a `CHANGELOG.md` entry under `[Unreleased]`; call out changed defaults. The templates do not override the trunk-based workflow above.
 
+# Bug fixes
+
+Every bug fix adds a regression test at the lowest layer that reproduces the bug (Vitest or `cargo test`, Playwright, an instrumented test, then Appium; an Appium test too when the bug only exists on a device), shows it failing on the parent commit, and adds or updates its row in `docs/regression-tests.md`. A `fix(...)` PR ticks one box of "Regression test" in the PR template: "Added" with the test, or "Not applicable" with the reason (an existing test already covers it, or no layer can reproduce it and a follow-up issue is linked); the `regression-test` check reads it. Never weaken or delete an existing test to land a fix. Steps: `docs/how-to/write-and-run-appium-tests.md#add-a-regression-test-for-a-bug`.
+
 # Zero duplication
 
 If jscpd detects any duplicates, the pre-commit hook must fail. Refactor duplicated

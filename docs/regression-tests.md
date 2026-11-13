@@ -41,8 +41,12 @@ a follow-up issue is linked. A quarantined test keeps its row with `quarantined`
 
 ## Rules the index enforces
 
-- A `fix(...)` pull request without a row, or without a ticked regression box in the template, is not ready to merge (the
-  process issue [#1413](https://github.com/mihazs/lazysh/issues/1413) adds the template box and the check).
+- A `fix(...)` pull request ticks one box of "Regression test" in the template: **Added** (`Test:` names it, and the pull
+  request changes this file) or **Not applicable** (`Reason:` names the existing test that covers the bug, or why no layer can
+  reproduce it). The `regression-test` check of the `conventional-commits` workflow runs `sh .githooks/regression-check pr`, so a fix without
+  either is not ready to merge (it becomes a required check when the maintainer adds it to the ruleset).
+- Every Appium regression spec is named `<issue>-<behaviour>.e2e.ts` and its issue is linked from a row above.
+  `sh .githooks/regression-check index` lists the specs by issue and fails on a spec without a row; the same check runs it.
 - The test fails on the parent commit. Put the failing output in the pull request, or the reason it cannot be shown.
 - Regression tests assert observable behaviour, never source text ([AGENTS.md](../AGENTS.md)).
 - Do not weaken or delete an existing regression test to make a change pass; change the row and explain why.

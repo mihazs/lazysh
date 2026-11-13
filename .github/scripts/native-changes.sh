@@ -65,11 +65,12 @@ classify() {
     # native-desktop runs release consistency and the Windows installer cases.
     tests/release-consistency.test.ts | tests/release-artifacts.test.ts) add client ;;
     # Checked only by the always-running client and agent jobs, or by fdroid.yml. main-verdict.yml
-    # runs on pushes to main alone, and tests/main-verdict.test.ts is part of test:ci.
+    # runs on pushes to main alone, and tests/main-verdict.test.ts is part of test:ci. conventional-commits.yml is its own
+    # workflow and tests/regression-check.test.ts runs in test:hooks.
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
-      tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/native-changes.test.ts | \
+      tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/regression-check.test.ts | tests/native-changes.test.ts | \
       tests/pinned-download.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
-      .github/workflows/main-verdict.yml | tests/main-verdict.test.ts) add none ;;
+      .github/workflows/main-verdict.yml | .github/workflows/conventional-commits.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;
     *) add all ;;
