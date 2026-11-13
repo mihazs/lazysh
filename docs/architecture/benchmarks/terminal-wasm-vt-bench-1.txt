@@ -1,0 +1,9 @@
+node v26.6.0 (V8 14.6.202.34-node.26), AMD Ryzen 9 5900X 12-Core Processor, Linux 7.3.3-1-cachyos, load average at start 4.84 5.50 5.87
+xterm.js @xterm/headless 5.5.0, scrollback 5000 lines; libghostty-vt wasm32 4.5 MiB, scrollback 4 MiB; 80x24; 16 MiB per workload in 16 KiB chunks, 5 runs, MiB/s median (min to max)
+
+| workload | xterm.js write() | xterm.js writeSync (private, no scheduling) | libghostty-vt wasm | cursor after (xterm / wasm) | wasm memory MiB |
+|---|---|---|---|---|---|
+| plain text | 84.2 (74.3 to 88.6) | 94.1 (93.2 to 95.7) | 488.3 (477.5 to 499.0) | 10,23 / 10,23 | 5 |
+| ANSI + truecolor | 61.0 (59.6 to 62.1) | 66.8 (63.6 to 67.1) | 81.9 (81.4 to 82.0) | 21,23 / 21,23 | 9 |
+| full-screen redraw | 101.9 (101.1 to 104.1) | 113.3 (112.5 to 113.7) | 281.8 (277.9 to 284.9) | 52,11 / 52,11 | 1 |
+| CJK/emoji/combining | 67.7 (57.5 to 68.9) | 73.2 (72.6 to 74.6) | 118.3 (117.7 to 118.9) | 0,23 / 0,23 | 8 |
