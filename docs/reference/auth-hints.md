@@ -1,6 +1,6 @@
 # Sign-in hints: what the terminal scanner reports
 
-Status: implemented for SSH, Mosh and Eternal Terminal sessions (not local terminals), as the detection step of [epic #1504](https://github.com/mihazs/lazysh/issues/1504) and [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) (#1510). **A hint only tells the app that a sign-in is waiting for a callback on the host's `localhost`. Nothing is tunnelled, forwarded or opened because of one.** The tunnel, the consent banner and opening the page on the device are separate changes.
+Status: implemented for SSH, Mosh and Eternal Terminal sessions (not local terminals), as the detection step of [epic #1504](https://github.com/mihazs/lazysh/issues/1504) and ADR 0004 (`docs/architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md`) (#1510). **A hint only tells the app that a sign-in is waiting for a callback on the host's `localhost`. Nothing is tunnelled, forwarded or opened because of one.** The tunnel, the consent banner and opening the page on the device are separate changes.
 
 ## Why
 
