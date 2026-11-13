@@ -4,13 +4,16 @@
 //! against the frame, not against a golden, so a wrong golden cannot hide a bug.
 //! `UPDATE_GOLDEN=1 cargo test --test renderer` rewrites the goldens; review them as images.
 
+#[path = "support/golden.rs"]
+mod golden;
+use golden::select;
 mod support;
 
 use lazysh_terminal_runtime::layout::row_draws;
 use lazysh_terminal_runtime::{
     Appearance, CursorVisualStyle, Frame, Image, Overlay, ReferenceRenderer, RenderError,
-    RendererCore, Resume, RgbColor, Screen, Selection, SelectionKind, TerminalRenderer,
-    TerminalRuntime, Theme,
+    RendererCore, Resume, RgbColor, Screen, SelectionKind, TerminalRenderer, TerminalRuntime,
+    Theme,
 };
 use support::*;
 
@@ -60,132 +63,30 @@ fn count(r: &ReferenceRenderer, cols: std::ops::Range<u32>, row: u32, color: Rgb
         .count()
 }
 
-fn select(kind: SelectionKind, anchor: (u16, u16), head: (u16, u16)) -> Overlay {
-    Overlay {
-        selection: Some(Selection { kind, anchor, head }),
-        ..Overlay::default()
-    }
-}
-
 fn assert_golden(name: &str, image: &Image) {
-    let path = format!("{}/tests/golden/{name}.png", env!("CARGO_MANIFEST_DIR"));
-    let encode = |path: &str, image: &Image| {
-        let mut encoder = png::Encoder::new(
-            std::fs::File::create(path).unwrap(),
-            image.width,
-            image.height,
-        );
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder
-            .write_header()
-            .unwrap()
-            .write_image_data(&image.rgb)
-            .unwrap();
-    };
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        return encode(&path, image);
-    }
-    let decoded = std::fs::File::open(&path).map(|file| {
-        let mut reader = png::Decoder::new(file).read_info().unwrap();
-        let mut rgb = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut rgb).unwrap();
-        (info.width, info.height, rgb)
-    });
-    if decoded
-        .as_ref()
-        .is_ok_and(|(w, h, rgb)| (*w, *h, rgb) == (image.width, image.height, &image.rgb))
-    {
-        return;
-    }
-    let actual = format!("{}/{name}.actual.png", env!("CARGO_TARGET_TMPDIR"));
-    encode(&actual, image);
-    panic!(
-        "golden {name} differs ({}); actual image: {actual}",
-        if decoded.is_ok() { "pixels" } else { "missing" }
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
+    golden::assert_golden(
+        dir,
+        name,
+        image,
+        std::env::var_os("UPDATE_GOLDEN").is_some(),
     );
 }
 
 #[test]
-fn goldens_for_each_content_class() {
-    let attributes = b"\x1b[1mbold\x1b[0m \x1b[2mfaint\x1b[0m \x1b[7minverse\x1b[0m \x1b[8mhidden\x1b[0m\r\n\
-        \x1b[4msingle\x1b[0m \x1b[4:2mdouble\x1b[0m \x1b[4:3mcurly\x1b[0m \x1b[4:4mdotted\x1b[0m \x1b[4:5mdashed\x1b[0m\r\n\
-        \x1b[9mstrike\x1b[0m \x1b[53moverline\x1b[0m \x1b[4;58;2;255;0;0mred line\x1b[0m";
-    let colors = "\x1b[30mA\x1b[31mB\x1b[32mC\x1b[33mD\x1b[34mE\x1b[35mF\x1b[36mG\x1b[37mH\x1b[0m \x1b[90mI\x1b[91mJ\x1b[92mK\x1b[93mL\x1b[94mM\x1b[95mN\x1b[96mO\x1b[97mP\x1b[0m\r\n\
-        \x1b[41m \x1b[42m \x1b[43m \x1b[44m \x1b[45m \x1b[46m \x1b[47m \x1b[100m \x1b[101m \x1b[102m \x1b[103m \x1b[104m \x1b[0m\r\n\
-        \x1b[38;5;196mred256\x1b[0m \x1b[48;5;21m\x1b[38;5;226myellow on blue\x1b[0m\r\n\
-        \x1b[38;2;255;128;0mtruecolor\x1b[0m \x1b[48;2;0;128;64m  \x1b[48;2;128;0;128m  \x1b[0m";
-    let cases: [(&str, u16, u16, &[u8]); 6] = [
-        (
-            "ascii",
-            24,
-            3,
-            b"Hello, lazysh!\r\n0123456789 ~!@#$%\r\nThe quick brown fox",
-        ),
-        ("ansi_colors", 24, 4, colors.as_bytes()),
-        ("attributes", 36, 3, attributes),
-        (
-            "wide",
-            16,
-            3,
-            "日本語 한국어 AB\r\nA日B本C語\r\n123456789012345語X".as_bytes(),
-        ),
-        (
-            "combining",
-            16,
-            2,
-            "e\u{301} a\u{308}\u{323} n\u{303}x\r\nplain eee".as_bytes(),
-        ),
-        (
-            "emoji",
-            16,
-            3,
-            "😀 👨\u{200d}👩\u{200d}👧 🇧🇷 👍🏽\r\nA😀B\u{2764}\u{fe0f}C".as_bytes(),
-        ),
-    ];
-    for (name, cols, rows, bytes) in cases {
-        let (_, r) = start(cols, rows, bytes);
-        assert_golden(name, r.surface());
-    }
-}
-
-#[test]
-fn goldens_for_the_cursor_and_the_selection() {
-    let text = "ab日c\r\nline two\r\nthird line".as_bytes();
-    let overlays: [(&str, &[u8], Option<Overlay>); 7] = [
-        ("cursor_block", b"\x1b[2 q\x1b[2;3H", None),
-        ("cursor_bar", b"\x1b[6 q\x1b[2;3H", None),
-        ("cursor_underline", b"\x1b[4 q\x1b[2;3H", None),
-        ("cursor_on_wide_head", b"\x1b[2 q\x1b[1;3H", None),
-        (
-            "selection_linear",
-            b"\x1b[?25l",
-            Some(select(SelectionKind::Linear, (3, 0), (4, 2))),
-        ),
-        (
-            "selection_block",
-            b"\x1b[?25l",
-            Some(select(SelectionKind::Block, (1, 0), (4, 2))),
-        ),
-        (
-            "selection_over_wide",
-            b"\x1b[?25l",
-            Some(select(SelectionKind::Linear, (3, 0), (3, 0))),
-        ),
-    ];
-    for (name, setup, overlay) in overlays {
-        let (rt, mut r) = start(10, 3, &[text, setup].concat());
-        drop(rt);
-        r.set_overlay(overlay.unwrap_or_default()).unwrap();
+fn goldens_for_each_content_class_cursor_shape_and_selection() {
+    for g in golden::goldens() {
+        let (mut rt, mut r) = start(g.cols, g.rows, &g.bytes);
+        r.set_overlay(g.overlay).unwrap();
+        if g.hollow {
+            let mut frame = rt.snapshot().unwrap();
+            frame.cursor.visual_style = CursorVisualStyle::BlockHollow;
+            show(&mut r, &frame);
+        }
         r.draw().unwrap();
         r.present().unwrap();
-        assert_golden(name, r.surface());
+        assert_golden(g.name, r.surface());
     }
-    let (mut rt, mut r) = start(10, 3, &[text, b"\x1b[2 q\x1b[1;4H"].concat());
-    let mut hollow = rt.snapshot().unwrap();
-    hollow.cursor.visual_style = CursorVisualStyle::BlockHollow;
-    show(&mut r, &hollow);
-    assert_golden("cursor_hollow_on_wide_tail", r.surface());
 }
 
 #[test]
@@ -647,4 +548,52 @@ fn a_device_loss_reported_from_another_thread_is_recovered_by_resume() {
     core.destroy();
     assert_eq!(core.resume(), Err(RenderError::Destroyed));
     assert_eq!(core.live(), Err(RenderError::Destroyed));
+}
+
+#[test]
+fn needs_draw_is_true_exactly_when_draw_would_paint() {
+    let mut rt = runtime(10, 3);
+    feed(&mut rt, b"abc");
+    let mut r = renderer(10, 3);
+    assert!(!r.needs_draw(), "no frame yet");
+    r.apply(&rt.snapshot().unwrap()).unwrap();
+    assert!(r.needs_draw());
+    assert_eq!(r.draw().unwrap(), 3);
+    assert!(!r.needs_draw(), "everything drawn");
+    r.suspend();
+    r.set_overlay(select(SelectionKind::Linear, (0, 0), (2, 0)))
+        .unwrap();
+    assert!(!r.needs_draw(), "a suspended renderer asks for nothing");
+    r.resume().unwrap();
+    assert!(r.needs_draw(), "resume repaints");
+    assert_eq!(r.draw().unwrap(), 3);
+    r.lose_device();
+    assert!(!r.needs_draw(), "a lost device asks for nothing");
+    r.resume().unwrap();
+    assert!(!r.needs_draw(), "and nothing until a snapshot arrives");
+    r.apply(&rt.snapshot().unwrap()).unwrap();
+    assert!(r.needs_draw());
+    r.destroy();
+    assert!(!r.needs_draw());
+}
+
+#[test]
+fn rewriting_a_row_with_the_same_cells_marks_nothing_dirty() {
+    let (mut rt, mut r) = start(12, 3, b"\x1b[1;1Hsame text");
+    feed(&mut rt, b"\x1b[1;1Hsame text");
+    assert_eq!(
+        tick(&mut rt, &mut r),
+        0,
+        "the cells and the cursor are the same"
+    );
+    assert!(!r.needs_draw());
+    feed(&mut rt, b"\x1b[1;1Hsame test");
+    assert_eq!(tick(&mut rt, &mut r), 1, "one letter changed");
+}
+
+#[test]
+fn an_unsupported_backend_is_told_apart_from_a_lost_device() {
+    let unsupported = RenderError::Unsupported("no adapter");
+    assert_ne!(unsupported, RenderError::DeviceLost);
+    assert_eq!(unsupported.to_string(), "renderer unsupported: no adapter");
 }

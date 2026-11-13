@@ -31,6 +31,10 @@ pub enum RenderError {
     DeviceLost,
     /// `destroy` was called; nothing but `destroy` and `stats` work any more.
     Destroyed,
+    /// This device has no usable graphics backend for the renderer (no adapter the platform policy
+    /// allows, or none that could create a device). Not a loss: `resume` does not help, the host
+    /// keeps its fallback renderer.
+    Unsupported(&'static str),
 }
 
 impl fmt::Display for RenderError {
@@ -41,6 +45,7 @@ impl fmt::Display for RenderError {
             Self::NeedsFullFrame => write!(f, "renderer needs a full frame"),
             Self::DeviceLost => write!(f, "render device lost"),
             Self::Destroyed => write!(f, "renderer destroyed"),
+            Self::Unsupported(why) => write!(f, "renderer unsupported: {why}"),
         }
     }
 }
@@ -196,7 +201,7 @@ pub struct RenderStats {
 }
 
 /// The [`TerminalRenderer`] methods that only forward to the [`RendererCore`] held in field `$core`
-/// (`apply`, `set_overlay`, `suspend`, `stats`), for the `impl` block of a renderer that embeds one.
+/// (`apply`, `set_overlay`, `needs_draw`, `suspend`, `stats`), for the `impl` block of a renderer that embeds one.
 /// A second implementation (the wgpu prototype of #1323) showed they are identical for every
 /// renderer; the rest (`create`, `resize`, `draw`, `present`, `resume`, `destroy`) is where
 /// implementations differ.
@@ -209,6 +214,10 @@ macro_rules! forward_to_core {
 
         fn set_overlay(&mut self, overlay: $crate::Overlay) -> Result<(), $crate::RenderError> {
             self.$core.set_overlay(overlay)
+        }
+
+        fn needs_draw(&self) -> bool {
+            self.$core.needs_draw()
         }
 
         fn suspend(&mut self) {
@@ -229,6 +238,7 @@ macro_rules! forward_to_core {
 ///   size; otherwise it fails with [`RenderError::NeedsFullFrame`] and changes nothing.
 /// * `draw` repaints exactly the rows that changed since the last `draw` and returns how many.
 ///   Zero means the screen is unchanged and `present` has nothing to show.
+/// * `needs_draw` is true exactly when `draw` would paint at least one row, so an idle screen needs no frames.
 /// * `present` shows what was drawn on the surface; without a preceding `draw` it does nothing.
 /// * `suspend`, `resume` and `destroy` are idempotent. While suspended `draw` and `present` do
 ///   nothing and return `Ok(0)`/`Ok(())`; `resume` repaints everything on the next `draw`.
@@ -245,6 +255,9 @@ pub trait TerminalRenderer: Sized {
     fn apply(&mut self, frame: &Frame) -> Result<(), RenderError>;
     fn set_overlay(&mut self, overlay: Overlay) -> Result<(), RenderError>;
     fn draw(&mut self) -> Result<u32, RenderError>;
+    /// Whether `draw` would paint something now: the host asks for a display frame only when this
+    /// is true and runs no frame loop while it is false (nothing changed, suspended, lost).
+    fn needs_draw(&self) -> bool;
     fn present(&mut self) -> Result<(), RenderError>;
     fn suspend(&mut self);
     fn resume(&mut self) -> Result<(), RenderError>;
@@ -348,6 +361,14 @@ impl RendererCore {
         self.live()?;
         self.screen.set_overlay(overlay);
         Ok(())
+    }
+
+    /// Whether `begin_draw` would return rows: active, holding a screen, and something stale.
+    pub fn needs_draw(&self) -> bool {
+        self.phase == Phase::Active
+            && !self.lost.load(Ordering::SeqCst)
+            && self.screen.has_content()
+            && (self.repaint_all || self.screen.has_dirty())
     }
 
     /// The start of `draw`: `None` while suspended, before the first frame and when nothing
@@ -459,6 +480,11 @@ impl Screen {
         self.cols > 0
     }
 
+    /// Whether any row is marked for redrawing.
+    pub fn has_dirty(&self) -> bool {
+        self.dirty.iter().any(|&stale| stale)
+    }
+
     pub fn cols(&self) -> u16 {
         self.cols
     }
@@ -475,8 +501,9 @@ impl Screen {
             .unwrap_or(&[])
     }
 
-    /// Take over a frame. Incremental frames replace only their rows and mark them dirty, plus the
-    /// rows the cursor left and entered.
+    /// Take over a frame. Incremental frames replace only their rows and mark those dirty whose
+    /// cells differ (an application that rewrites the same text costs no redraw), plus the rows
+    /// the cursor left and entered.
     pub fn apply(&mut self, frame: &Frame) -> Result<(), RenderError> {
         let (cols, rows) = (frame.cols, frame.rows);
         if cols == 0 || rows == 0 || u32::from(cols) * u32::from(rows) > MAX_CELLS {
@@ -510,8 +537,11 @@ impl Screen {
         }
         for row in &frame.dirty {
             let start = usize::from(row.y) * usize::from(cols);
-            self.cells[start..start + usize::from(cols)].clone_from_slice(&row.cells);
-            self.dirty[usize::from(row.y)] = true;
+            let held = &mut self.cells[start..start + usize::from(cols)];
+            if *held != row.cells[..] {
+                held.clone_from_slice(&row.cells);
+                self.dirty[usize::from(row.y)] = true;
+            }
         }
         if self.cursor != Some(frame.cursor) {
             self.mark_cursor_row();

@@ -1,11 +1,12 @@
-//! The same Frame stream through the CPU reference renderer and the wgpu prototype, on this
-//! machine's GPU (#1323). Per workload, grid and frame cadence it prints throughput of the whole
+//! The same Frame stream through the CPU reference renderer and the wgpu renderer, on this
+//! machine's GPU (#1323, #1324). Per workload, grid and frame cadence it prints throughput of the whole
 //! pipeline (VT, take_frame, renderer) and the per-frame cost of draw plus present, where present
 //! waits for the GPU to finish, so the figure is submit-to-done latency, not a CPU-only submit
-//! cost. Offscreen and headless: no compositor, no display refresh, no fonts, not Android.
+//! cost. Offscreen and headless: no compositor, no display refresh, no fonts, not Android. A last
+//! table counts what the GPU side did (submissions, instances against layout draws, atlas hits).
 //! Run in release: `cargo run --release --example wgpu_bench`; the caller records the environment.
 
-#[path = "../../../tests/support/mod.rs"]
+#[path = "../../terminal-runtime/tests/support/mod.rs"]
 mod support;
 
 use lazysh_terminal_renderer_wgpu::{Target, WgpuRenderer};
@@ -79,12 +80,20 @@ fn screens(data: &[u8]) -> Vec<Frame> {
 }
 
 /// Draw plus present of each screen as a full repaint, `REPAINT_PASSES` times over; the first pass
-/// (glyph atlas, caches) is not counted. Milliseconds per frame, sorted.
-fn repaint<R: TerminalRenderer>(frames: &[Frame], mut renderer: R) -> Vec<f64> {
+/// (glyph atlas, caches) is not counted. Milliseconds per frame, sorted. A renderer only redraws
+/// rows whose cells changed, so every frame sets the appearance again, which marks every row stale.
+fn repaint<R: TerminalRenderer>(
+    frames: &[Frame],
+    mut renderer: R,
+    appearance: &Appearance,
+) -> Vec<f64> {
     let mut frame_ms = Vec::new();
     for pass in 0..=REPAINT_PASSES {
         for frame in frames {
             renderer.apply(frame).expect("apply");
+            renderer
+                .set_appearance(appearance.clone())
+                .expect("appearance");
             let begun = Instant::now();
             renderer.draw().expect("draw");
             renderer.present().expect("present");
@@ -111,18 +120,15 @@ fn cell(samples: &[Sample]) -> String {
 /// Time to create the first renderer (instance, adapter, device, pipeline) and the resident memory
 /// it and four more add, measured before any workload buffers exist.
 fn startup(appearance: &Appearance) -> WgpuRenderer {
-    let target = Target {
-        width: 80 * CELL.0,
-        height: 24 * CELL.1,
-    };
+    let target = Target::new(80 * CELL.0, 24 * CELL.1);
     let rss = rss_kib();
     let started = Instant::now();
-    let first =
-        WgpuRenderer::create(target, appearance.clone()).expect("a GPU adapter is required");
+    let first = WgpuRenderer::create(target.clone(), appearance.clone())
+        .expect("a GPU adapter is required");
     let created = started.elapsed();
     let after_first = rss_kib();
     let more: Vec<WgpuRenderer> = (0..4)
-        .map(|_| WgpuRenderer::create(target, appearance.clone()).unwrap())
+        .map(|_| WgpuRenderer::create(target.clone(), appearance.clone()).unwrap())
         .collect();
     println!("adapter: {:?}", first.adapter());
     println!(
@@ -164,7 +170,7 @@ fn main() {
                 let gpu: Vec<Sample> = (0..RUNS)
                     .map(|_| {
                         let renderer =
-                            WgpuRenderer::create(Target { width, height }, appearance.clone())
+                            WgpuRenderer::create(Target::new(width, height), appearance.clone())
                                 .unwrap();
                         run(data, size, every, renderer)
                     })
@@ -194,10 +200,12 @@ fn main() {
         let cpu = repaint(
             &frames,
             ReferenceRenderer::create(blank, appearance.clone()).unwrap(),
+            &appearance,
         );
         let gpu = repaint(
             &frames,
-            WgpuRenderer::create(Target { width, height }, appearance.clone()).unwrap(),
+            WgpuRenderer::create(Target::new(width, height), appearance.clone()).unwrap(),
+            &appearance,
         );
         let p = |v: &[f64]| format!("{:.3} / {:.3}", percentile(v, 0.5), percentile(v, 0.99));
         println!("| {name} | {} | {} |", p(&cpu), p(&gpu));

@@ -10,7 +10,7 @@ const roots = gitFixtureRoots('lazysh-native-changes-test-');
 afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
-const jobOutputs = ['companion', 'herdr', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
+const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
   'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
@@ -156,7 +156,8 @@ test.each([
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
   ['Herdr', ['packages/herdr-guard/client.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
     'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-appium': 1 }],
-  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1 }],
+  ...(['packages/terminal-runtime/src/lib.rs', 'packages/terminal-renderer-wgpu/src/lib.rs'] as const).map(path => [
+    `the terminal runtime and renderer (${path})`, [path], { ...alwaysRun, 'herdr-native': 1 }] as const),
   ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
