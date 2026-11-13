@@ -195,6 +195,32 @@ pub struct RenderStats {
     pub present_time: Duration,
 }
 
+/// The [`TerminalRenderer`] methods that only forward to the [`RendererCore`] held in field `$core`
+/// (`apply`, `set_overlay`, `suspend`, `stats`), for the `impl` block of a renderer that embeds one.
+/// A second implementation (the wgpu prototype of #1323) showed they are identical for every
+/// renderer; the rest (`create`, `resize`, `draw`, `present`, `resume`, `destroy`) is where
+/// implementations differ.
+#[macro_export]
+macro_rules! forward_to_core {
+    ($core:ident) => {
+        fn apply(&mut self, frame: &$crate::Frame) -> Result<(), $crate::RenderError> {
+            self.$core.apply(frame)
+        }
+
+        fn set_overlay(&mut self, overlay: $crate::Overlay) -> Result<(), $crate::RenderError> {
+            self.$core.set_overlay(overlay)
+        }
+
+        fn suspend(&mut self) {
+            self.$core.suspend();
+        }
+
+        fn stats(&self) -> $crate::RenderStats {
+            self.$core.stats
+        }
+    };
+}
+
 /// A renderer for one session and one surface. Implementations: the CPU
 /// [`crate::ReferenceRenderer`] (golden images), then whatever the shootout (#1323) selects.
 ///
@@ -252,6 +278,8 @@ pub struct DrawPlan {
     pub rows: Vec<u16>,
     /// Everything is stale (first draw, resize, new appearance, resume): clear the whole surface.
     pub repaint_all: bool,
+    /// When `begin_draw` ran, for the draw time that `finish_draw` counts.
+    pub started: Instant,
 }
 
 /// The contract of [`TerminalRenderer`] that does not depend on how pixels are made: lifecycle
@@ -325,6 +353,7 @@ impl RendererCore {
     /// The start of `draw`: `None` while suspended, before the first frame and when nothing
     /// changed; otherwise the rows to paint (the stale marks are consumed).
     pub fn begin_draw(&mut self) -> Result<Option<DrawPlan>, RenderError> {
+        let started = Instant::now();
         if self.phase == Phase::Suspended && !self.lost.load(Ordering::SeqCst) {
             return Ok(None);
         }
@@ -337,16 +366,20 @@ impl RendererCore {
             return Ok(None);
         }
         let repaint_all = std::mem::take(&mut self.repaint_all);
-        Ok(Some(DrawPlan { rows, repaint_all }))
+        Ok(Some(DrawPlan {
+            rows,
+            repaint_all,
+            started,
+        }))
     }
 
     /// The end of `draw`: counts the frame.
-    pub fn finish_draw(&mut self, plan: &DrawPlan, started: Instant) -> u32 {
+    pub fn finish_draw(&mut self, plan: &DrawPlan) -> u32 {
         let rows = plan.rows.len() as u64;
         self.stats.frames_drawn += 1;
         self.stats.rows_drawn += rows;
         self.stats.cells_drawn += rows * u64::from(self.screen.cols());
-        self.stats.draw_time += started.elapsed();
+        self.stats.draw_time += plan.started.elapsed();
         plan.rows.len() as u32
     }
 

@@ -9,11 +9,8 @@
 //! ([`crate::layout::glyph_pixels`]), so a wrong cluster, cell or width changes the image without
 //! any font being involved. Bold double-strikes the pattern; italic and blink are not drawn.
 
-use crate::frame::Frame;
 use crate::layout::{glyph_pixels, row_draws, Draw, Rect};
-use crate::render::{
-    Appearance, Overlay, RenderError, RenderStats, RendererCore, TerminalRenderer,
-};
+use crate::render::{Appearance, RenderError, RendererCore, TerminalRenderer};
 use ghostty_vt::RgbColor;
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -123,16 +120,9 @@ impl TerminalRenderer for ReferenceRenderer {
         Ok(())
     }
 
-    fn apply(&mut self, frame: &Frame) -> Result<(), RenderError> {
-        self.core.apply(frame)
-    }
-
-    fn set_overlay(&mut self, overlay: Overlay) -> Result<(), RenderError> {
-        self.core.set_overlay(overlay)
-    }
+    crate::forward_to_core!(core);
 
     fn draw(&mut self) -> Result<u32, RenderError> {
-        let started = Instant::now();
         let Some(plan) = self.core.begin_draw()? else {
             return Ok(0);
         };
@@ -156,7 +146,7 @@ impl TerminalRenderer for ReferenceRenderer {
             self.draw_row(y);
             self.undelivered.insert(y);
         }
-        Ok(self.core.finish_draw(&plan, started))
+        Ok(self.core.finish_draw(&plan))
     }
 
     fn present(&mut self) -> Result<(), RenderError> {
@@ -182,10 +172,6 @@ impl TerminalRenderer for ReferenceRenderer {
         Ok(())
     }
 
-    fn suspend(&mut self) {
-        self.core.suspend();
-    }
-
     fn resume(&mut self) -> Result<(), RenderError> {
         self.core.resume().map(drop)
     }
@@ -199,10 +185,6 @@ impl TerminalRenderer for ReferenceRenderer {
                 rgb: Vec::new(),
             };
         }
-    }
-
-    fn stats(&self) -> RenderStats {
-        self.core.stats
     }
 }
 
