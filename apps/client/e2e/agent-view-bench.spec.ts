@@ -35,7 +35,8 @@ const everyScenario: Scenario[] = [
   {name: 'herdr open, mobile, 4x CPU', link: 'mobile', throttle: 'x4', page: 'typical', stream: true, mode: 'herdr'},
 ];
 
-const scenarios = full ? everyScenario : everyScenario.slice(0, 1);
+// The smoke run opens the LAN scenario, where a call that waits for another is 70 ms apart from one that starts with it.
+const scenarios = full ? everyScenario : everyScenario.slice(1, 2);
 const results: unknown[] = [];
 test.afterAll(() => {
   const out = process.env.LAZYSH_BENCH_OUT;
@@ -43,6 +44,16 @@ test.afterAll(() => {
   mkdirSync(path.dirname(out), {recursive: true});
   writeFileSync(out, JSON.stringify({schema: 1, host: {cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, ramGiB: Math.round(os.totalmem() / 2 ** 30), os: `${os.type()} ${os.release()}`}, results}, null, 2));
 });
+
+/** How many native calls had to wait for an earlier one before the first message: calls that start together are one stage. */
+function stagesBefore(calls: {start: number; end: number}[], until: number) {
+  let stages = 0, stageEnd = -1;
+  for (const call of [...calls].filter(call => call.end <= until).sort((a, b) => a.start - b.start)) {
+    if (call.start >= stageEnd) stages++;
+    stageEnd = Math.max(stageEnd, call.end);
+  }
+  return stages;
+}
 
 async function run(page: Page, scenario: Scenario) {
   await page.goto('/bench/agent-view-bench.html');
@@ -68,7 +79,7 @@ async function run(page: Page, scenario: Scenario) {
   await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
   const tasks = opened.longTasks.map(task => task.duration);
   return {
-    firstContentMs: opened.firstContentMs, bubbles: opened.bubbles, domNodes: opened.domNodes, domAtFirst: opened.domAtFirst,
+    firstContentMs: opened.firstContentMs, stages: stagesBefore(opened.calls, opened.firstContentMs), bubbles: opened.bubbles, domNodes: opened.domNodes, domAtFirst: opened.domAtFirst,
     calls: opened.calls.map(call => `${call.command}@${call.start.toFixed(0)}-${call.end.toFixed(0)}`),
     callCounts: opened.calls.reduce<Record<string, number>>((all, call) => ({...all, [call.command]: (all[call.command] ?? 0) + 1}), {}),
     loadLongTasks: {n: tasks.length, maxMs: Math.max(0, ...tasks), totalMs: tasks.reduce((a, b) => a + b, 0)},
@@ -85,6 +96,8 @@ for (const scenario of scenarios) {
     test.skip(browserName !== 'chromium', 'CDP throttling needs Chromium.');
     const all = [];
     for (let index = 0; index < runs; index++) all.push(await run(page, scenario));
+    // Budget, in smoke and full runs alike: the bind (reports and pane together), the history, the transcript and the check after it.
+    if (scenario.mode !== 'herdr' && scenario.link === 'lan' && !scenario.revisit) for (const item of all) expect(item.stages, `native calls in a row before the first message: ${item.calls.join(' ')}`).toBeLessThanOrEqual(5);
     const median = medianOf(all.map(item => item.firstContentMs)) as number;
     const result = {scenario: scenario.name, project: info.project.name, medianFirstContentMs: median, runs: all};
     console.log(JSON.stringify({scenario: scenario.name, project: info.project.name, medianFirstContentMs: Math.round(median), run0: {...all[0], calls: undefined}}));
