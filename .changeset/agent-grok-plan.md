@@ -3,4 +3,4 @@
 "@lazysh/client": minor
 ---
 
-Show a Grok Build plan as the shared plan card and chip in the Agent view.
+Show a Grok Build plan as the shared plan card in its conversation view.
