@@ -1,5 +1,18 @@
 # @lazysh/agent
 
+## 1.57.0
+
+### Minor Changes
+
+- 5dfb34f: List OpenCode sub-agents in the Agent view's background-work panel, and read the OpenCode 2.2 conversation database that keeps parts inline.
+- 5dfb34f: Report Codex sub-agents as background work so the Agent view lists them.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.57.0
+  - @lazysh/common@1.57.0
+  - @lazysh/notification-client@1.57.0
+
 ## 1.56.1
 
 ### Patch Changes

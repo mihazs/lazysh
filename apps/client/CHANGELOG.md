@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.57.0
+
+### Minor Changes
+
+- 5dfb34f: List OpenCode sub-agents in the Agent view's background-work panel, and read the OpenCode 2.2 conversation database that keeps parts inline.
+- 5dfb34f: Report Codex sub-agents as background work so the Agent view lists them.
+
+### Patch Changes
+
+- 31be2b1: Add the Appium and WebdriverIO device regression suite scaffold for the Android app: pinned runner and driver, a device lock that restores window size, density, navigation mode, IME, animations, rotation and permissions, WebView context helpers, failure artifacts and a first smoke spec that reaches the empty home.
+- @lazysh/account-usage@1.57.0
+  - @lazysh/common@1.57.0
+  - @lazysh/display-idle@1.57.0
+  - @lazysh/et-transport@1.57.0
+  - @lazysh/mosh-transport@1.57.0
+
 ## 1.56.1
 
 ### Patch Changes
