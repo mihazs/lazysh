@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.54.1
+
+### Patch Changes
+
+- cfdff22: Render the HTML that agents write and people paste in the Agent view through a strict sanitized allow-list instead of showing it as escaped text.
+- 2740b7b: Add the Agent view load benchmark: a seeded Claude Code transcript generator, pages recorded from the real companion, a production-bundle benchmark page with a modelled SSH host and CPU throttling, and `docs/reference/agent-view-performance.md` with the measured baseline. No behaviour of the app changes.
+- @lazysh/account-usage@1.54.1
+  - @lazysh/common@1.54.1
+  - @lazysh/display-idle@1.54.1
+  - @lazysh/et-transport@1.54.1
+  - @lazysh/mosh-transport@1.54.1
+
 ## 1.54.0
 
 ### Minor Changes
