@@ -7,7 +7,7 @@ import { mountTerminalHistoryHarness } from '../e2e/fixtures/TerminalHistoryHarn
 import { createTerminal } from '../src/xterm/terminal';
 import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/rendererCandidates';
 import { configureTerminalBold } from '../src/xterm/terminalBold';
-import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
+import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, styledText, summarize, type StyleFamily, type Workload } from './workloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
 const WINDOW = 256 * 1024;
@@ -105,7 +105,7 @@ const sameScreen = (expected: string[]) => {
 };
 
 /** Applies chunks through the same credit window and ack-after-write contract as App.tsx. */
-async function drain(json: string[], until?: () => boolean) {
+async function drain(json: string[], until?: () => boolean, paced = false) {
   const { terminal } = harness!, ack: number[] = [];
   let inflight = 0, waiter: (() => void) | undefined, decodeMs = 0, bytes = 0;
   for (let i = 0; (until ? !until() : i < json.length); i++) {
@@ -116,7 +116,7 @@ async function drain(json: string[], until?: () => boolean) {
     inflight += data.length; bytes += data.length;
     const written = performance.now();
     terminal.write(data, () => { inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
-    await yieldTask();
+    await (paced ? frame() : yieldTask());
   }
   while (inflight > 0) await new Promise<void>(resolve => { waiter = resolve; });
   return { bytes, decodeMs, ackMs: ack };
@@ -172,15 +172,24 @@ const api = {
     await prepare(kind === 'plain' ? plainText({ bytes: size, cols, rows, seed: 20 }) : kind === 'ansi' ? ansiColor({ bytes: size, cols, rows, seed: 30 }) : fullScreenRedraw({ frames: size, cols, rows, seed: 40 }));
     return { bytes: prepared!.bytes, chunks: prepared!.chunks.length, sha256: prepared!.sha256, description: prepared!.description };
   },
-  /** W2, W3, W4: stream the prepared bytes and check the final screen. */
-  async stream() {
+  /** Words in `styles` distinct styles of one family (first-burst cost, #1323): returns how many glyph-style pairs a glyph cache has to draw once. */
+  async prepareStyled(family: StyleFamily, styles: number, size: number) {
+    const { cols, rows } = open().terminal, workload = styledText({ bytes: size, cols, rows, seed: 50, styles, family });
+    await prepare(workload);
+    return { bytes: prepared!.bytes, chunks: prepared!.chunks.length, sha256: prepared!.sha256, description: prepared!.description, distinctGlyphs: workload.distinctGlyphs };
+  },
+  /** W2, W3, W4: stream the prepared bytes and check the final screen. `paced` waits for a frame after every chunk, so each chunk is rendered, as output that arrives over time is. */
+  async stream(paced = false) {
     await reset();
+    let renders = 0;
+    const counting = harness!.terminal.onRender(() => { renders++; });
     const meter = meterFrames(), started = performance.now();
-    const { bytes, decodeMs, ackMs } = await drain(prepared!.json);
+    const { bytes, decodeMs, ackMs } = await drain(prepared!.json, undefined, paced);
     const wallMs = performance.now() - started;
     await settle();
     const frames = meter.stop();
-    return { bytes, wallMs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
+    counting.dispose();
+    return { renders, bytes, wallMs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
   },
   /** W1: one remote burst at a time; write to apply, and write to the render that shows it. */
   async shell(interactions: number) {

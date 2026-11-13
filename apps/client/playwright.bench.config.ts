@@ -5,7 +5,7 @@ import { benchProjects } from './playwright.bench-projects';
 process.env.LAZYSH_BENCH = 'full';
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['terminal-bench.spec.ts', 'terminal-webgl-context-loss.spec.ts'],
+  testMatch: ['terminal-bench.spec.ts', 'terminal-webgl-context-loss.spec.ts', 'terminal-first-burst.spec.ts'],
   timeout: 30 * 60_000,
   workers: 1,
   reporter: 'list',
