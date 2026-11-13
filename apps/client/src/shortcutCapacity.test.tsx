@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {cleanup, fireEvent, render, screen} from '@testing-library/react';
-import PreferencesPanel from './PreferencesPanel';
+import {cleanup, fireEvent, screen} from '@testing-library/react';
+import {mountPreferences} from './test/preferencesPanel';
+import {budgetStyleLookups} from './test/styleBudget';
 import {defaults, getPreferences, parsePreferences, savePreferences} from './preferences';
 
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
+budgetStyleLookups(200);
 const collection = (count:number)=>({
   chords:Array.from({length:count},(_,i)=>({label:`Chord ${i}`,keys:`text: value ${i} `})),
   snippets:Array.from({length:count},(_,i)=>({label:`Snippet ${i}`,text:` 你好 ${i} `})),
@@ -23,31 +25,27 @@ describe('non-tiered shortcut collections',()=>{
   });
   it.each(['chords','snippets'] as const)('adds and retains a thirteenth %s entry through the real Preferences controls',kind=>{
     savePreferences({...defaults,...collection(12)});
-    render(<PreferencesPanel/>);
-    fireEvent.click(screen.getByText('Keyboard and gestures'));
     const chord=kind==='chords';
-    fireEvent.click(screen.getByText(chord?'Keyboard chords':'Text snippets',{exact:true}));
-    const name=screen.getByLabelText(chord?'Chord name':'Snippet name');
-    const input=screen.getByLabelText(chord?'Key sequence':'Snippet text');
+    const page=mountPreferences('Keyboard and gestures',chord?'Keyboard chords':'Text snippets');
+    const name=page.getByLabelText(chord?'Chord name':'Snippet name');
+    const input=page.getByLabelText(chord?'Key sequence':'Snippet text');
     fireEvent.change(name,{target:{value:'Thirteenth'}});
     fireEvent.change(input,{target:{value:chord?'text: literal tail ':' literal tail '}});
-    fireEvent.click(screen.getByRole('button',{name:chord?'Add chord':'Add snippet'}));
+    fireEvent.click(page.getByRole('button',{name:chord?'Add chord':'Add snippet'}));
     expect(getPreferences()[kind]).toHaveLength(13);
     expect(getPreferences()[kind][12]).toEqual(chord?{label:'Thirteenth',keys:'text: literal tail '}:{label:'Thirteenth',text:' literal tail '});
-    expect(screen.getByRole('button',{name:`Remove ${chord?'chord':'snippet'} Thirteenth`})).toBeTruthy();
+    expect(page.getByRole('button',{name:`Remove ${chord?'chord':'snippet'} Thirteenth`})).toBeTruthy();
   });
   it('keeps the saved collection and snippet draft when device storage refuses a write',()=>{
     savePreferences({...defaults,...collection(12)});
-    render(<PreferencesPanel/>);
-    fireEvent.click(screen.getByText('Keyboard and gestures'));
-    fireEvent.click(screen.getByText('Text snippets',{exact:true}));
-    fireEvent.change(screen.getByLabelText('Snippet name'),{target:{value:'Unsaved'}});
-    fireEvent.change(screen.getByLabelText('Snippet text'),{target:{value:' retained draft '}});
+    const page=mountPreferences('Keyboard and gestures','Text snippets');
+    fireEvent.change(page.getByLabelText('Snippet name'),{target:{value:'Unsaved'}});
+    fireEvent.change(page.getByLabelText('Snippet text'),{target:{value:' retained draft '}});
     vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new DOMException('full','QuotaExceededError');});
-    fireEvent.click(screen.getByRole('button',{name:'Add snippet'}));
+    fireEvent.click(page.getByRole('button',{name:'Add snippet'}));
     expect(getPreferences().snippets).toEqual(collection(12).snippets);
     expect(screen.getByRole('alert')).toBeTruthy();
-    expect((screen.getByLabelText('Snippet name') as HTMLInputElement).value).toBe('Unsaved');
-    expect((screen.getByLabelText('Snippet text') as HTMLTextAreaElement).value).toBe(' retained draft ');
+    expect((page.getByLabelText('Snippet name') as HTMLInputElement).value).toBe('Unsaved');
+    expect((page.getByLabelText('Snippet text') as HTMLTextAreaElement).value).toBe(' retained draft ');
   });
 });

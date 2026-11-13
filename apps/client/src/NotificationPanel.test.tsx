@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import NotificationPanel, { NotificationMonitor } from './NotificationPanel';
 import PreferencesPanel from './PreferencesPanel';
+import { openSettingsPages } from './test/preferencesPanel';
 import { getInbox, updateInbox } from './notificationStore';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
@@ -113,7 +114,6 @@ it('offers Android notification recovery in application settings', async () => {
   vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Android');
   vi.mocked(invoke).mockResolvedValue(undefined);
   render(<PreferencesPanel />);
-  fireEvent.click(screen.getByRole('button', { name: 'Android notifications' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Open Android notification settings' }));
+  fireEvent.click(openSettingsPages('Android notifications').getByRole('button', { name: 'Open Android notification settings' }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_notification_settings', undefined, expect.anything()));
 });

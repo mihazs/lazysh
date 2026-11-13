@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { invoke } from "@tauri-apps/api/core";
 import { isAndroidApp } from "./isAndroidApp";
 import PreferencesPanel from "./PreferencesPanel";
+import { openSettingsPages } from "./test/preferencesPanel";
 import { usePrivateKeyboard } from "./privateKeyboard";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import { t, uiI18n } from "./i18n/core";
@@ -22,13 +23,13 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); });
 
 function mountSetting() {
   render(<PreferencesPanel />);
-  fireEvent.click(screen.getByRole("button", { name: t("preferencesCategoryInput") }));
+  return openSettingsPages(t("preferencesCategoryInput"));
 }
 
 describe("the Private keyboard setting", () => {
   it("is offered on Android with its trade-off, persists on this device and is cleared by Reset preferences", async () => {
-    mountSetting();
-    const toggle = screen.getByRole("checkbox", { name: "Private keyboard in the terminal" });
+    let input = mountSetting();
+    const toggle = input.getByRole("checkbox", { name: "Private keyboard in the terminal" });
     expect(toggle).toHaveProperty("checked", false);
     expect(toggle.getAttribute("aria-describedby")).toBe("private-keyboard-help");
     expect(document.getElementById("private-keyboard-help")!.textContent)
@@ -38,16 +39,16 @@ describe("the Private keyboard setting", () => {
     expect(getPreferences().privateKeyboard).toBe(true);
     expect(JSON.parse(localStorage.getItem("lazysh.preferences.v1")!).privateKeyboard).toBe(true);
     cleanup();
-    mountSetting();
-    expect(screen.getByRole("checkbox", { name: "Private keyboard in the terminal" })).toHaveProperty("checked", true);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Private keyboard in the terminal" }));
+    input = mountSetting();
+    expect(input.getByRole("checkbox", { name: "Private keyboard in the terminal" })).toHaveProperty("checked", true);
+    fireEvent.click(input.getByRole("checkbox", { name: "Private keyboard in the terminal" }));
     expect(Object.hasOwn(getPreferences(), "privateKeyboard")).toBe(false);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Private keyboard in the terminal" }));
+    fireEvent.click(input.getByRole("checkbox", { name: "Private keyboard in the terminal" }));
     cleanup();
     render(<PreferencesPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
+    const reset = openSettingsPages("Reset settings");
     expect(getPreferences().privateKeyboard).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Reset preferences" }));
+    fireEvent.click(reset.getByRole("button", { name: "Reset preferences" }));
     await waitFor(() => expect(getPreferences()).toEqual(defaults));
   });
 
@@ -59,15 +60,13 @@ describe("the Private keyboard setting", () => {
 
   it("is not offered off Android", () => {
     vi.mocked(isAndroidApp).mockReturnValue(false);
-    mountSetting();
-    expect(screen.queryByRole("checkbox", { name: "Private keyboard in the terminal" })).toBeNull();
+    expect(mountSetting().queryByRole("checkbox", { name: "Private keyboard in the terminal" })).toBeNull();
   });
 
   it.each([["pt-BR", "Teclado privado no terminal", /Texto preditivo, autocorreção e digitação por deslize deixam de funcionar no terminal/], ["es", "Teclado privado en el terminal", /El texto predictivo, la autocorrección y la escritura por deslizamiento dejan de funcionar en el terminal/]])("is translated in %s", async (language, label, trade) => {
     await act(async () => { await uiI18n.changeLanguage(language); });
     try {
-      mountSetting();
-      expect(screen.getByRole("checkbox", { name: label })).toBeTruthy();
+      expect(mountSetting().getByRole("checkbox", { name: label })).toBeTruthy();
       expect(document.getElementById("private-keyboard-help")!.textContent).toMatch(trade);
     } finally { cleanup(); await act(async () => { await uiI18n.changeLanguage("en"); }); }
   });

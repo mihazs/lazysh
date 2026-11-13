@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {cleanup,fireEvent,render,waitFor,within} from '@testing-library/react';
 import PreferencesPanel from '../PreferencesPanel';
 import {defaults,getPreferences,parsePreferences,savePreferences} from '../preferences';
 import {t,uiI18n} from './core';
 import {useClientLocale} from './useClientLocale';
+import {openSettingsPages} from '../test/preferencesPanel';
 function Settings() {useClientLocale();return <PreferencesPanel/>;}
 beforeEach(async()=>{savePreferences({...defaults});await uiI18n.changeLanguage('en');});
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
@@ -18,30 +19,29 @@ it('migrates absent or invalid language values without altering saved custom tex
 });
 it('persists the actual language selector and reacts to system changes only in system mode',async()=>{
   const languages=vi.spyOn(navigator,'languages','get').mockReturnValue(['en-GB']);
-  const view=render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
+  const view=render(<Settings/>);let language=openSettingsPages(t('preferencesCategoryLanguage'));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en-GB'));
-  fireEvent.click(screen.getByRole('radio',{name:'English'}));
+  fireEvent.click(language.getByRole('radio',{name:'English'}));
   expect(getPreferences().uiLanguage).toBe('en');
   await waitFor(()=>expect(document.documentElement.lang).toBe('en'));
   languages.mockReturnValue(['en-AU']);window.dispatchEvent(new Event('languagechange'));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en'));
-  view.unmount();render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  expect(screen.getByRole('radio',{name:'English'})).toHaveProperty('checked',true);
-  fireEvent.click(screen.getByRole('radio',{name:'System'}));
+  view.unmount();render(<Settings/>);language=openSettingsPages(t('preferencesCategoryLanguage'));
+  expect(language.getByRole('radio',{name:'English'})).toHaveProperty('checked',true);
+  fireEvent.click(language.getByRole('radio',{name:'System'}));
   await waitFor(()=>expect(document.documentElement.lang).toBe('en-AU'));
-  fireEvent.click(screen.getByText(t('preferencesCategoryReset')));
-  fireEvent.click(screen.getByRole('button',{name:'Reset preferences'}));
+  fireEvent.click(openSettingsPages(t('preferencesCategoryReset')).getByRole('button',{name:'Reset preferences'}));
   expect(getPreferences().uiLanguage).toBe('system');
 });
 
 it.each([['pt-BR','Idioma do aplicativo','Preferências do terminal'],['es','Idioma de la aplicación','Preferencias del terminal']] as const)('persists explicit %s while a different system language changes',async(locale,label,title)=>{
   vi.spyOn(navigator,'languages','get').mockReturnValue(['en-GB']);
-  const view=render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  fireEvent.click(screen.getByRole('group',{name:'App language'}).querySelector(`input[value="${locale}"]`)!);
+  const view=render(<Settings/>);let language=openSettingsPages(t('preferencesCategoryLanguage'));
+  fireEvent.click(language.getByRole('group',{name:'App language'}).querySelector(`input[value="${locale}"]`)!);
   await waitFor(()=>expect(document.documentElement.lang).toBe(locale));
-  expect(screen.getByRole('region',{name:title})).toBeTruthy();
+  expect(within(view.container).getByRole('region',{name:title})).toBeTruthy();
   window.dispatchEvent(new Event('languagechange'));
-  view.unmount();render(<Settings/>);fireEvent.click(screen.getByText(t('preferencesCategoryLanguage')));
-  await waitFor(()=>expect(screen.getByRole('group',{name:label}).querySelector(`input[value="${locale}"]`)).toHaveProperty('checked',true));
+  view.unmount();render(<Settings/>);language=openSettingsPages(t('preferencesCategoryLanguage'));
+  await waitFor(()=>expect(language.getByRole('group',{name:label}).querySelector(`input[value="${locale}"]`)).toHaveProperty('checked',true));
   expect(getPreferences().uiLanguage).toBe(locale);
 });
