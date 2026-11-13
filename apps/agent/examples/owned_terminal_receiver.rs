@@ -12,11 +12,13 @@ mod receiver {
     /// What the packaged IME fixture's transactions leave on the wire before the Shift+Enter keys: a
     /// correction, an extension, an ASCII erase and a repeat, then a predictive word, a gesture word,
     /// Backspace inside a composing word, an erase-and-commit autocorrect, Esc followed by a Backspace, and a
-    /// word typed as letter commits then rewritten through a composing region.
+    /// word typed as letter commits then rewritten through a composing region, and a composing word erased
+    /// whole before the keyboard types on.
     const IME_TRANSACTIONS: &str = concat!(
         "there\x7f\x7fthe",
         "owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f",
-        "web "
+        "web ",
+        "ls. "
     );
 
     struct RawMode {

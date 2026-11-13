@@ -6472,11 +6472,12 @@ class NativeWorkspaceTest {
             finishImeOrder()
             val first = ime.awaitIme("Actual packaged terminal remote editor required") { it.getBoolean("connected") && it.getBoolean("normalText") }
             ime.editor(first); ime.call("capture")
-            // The last six are SwiftKey-shaped (predictive word, gesture word, Backspace inside the composing
-            // region, autocorrect by erase-and-commit, Backspace after a toolbar key ended ownership, and the
-            // letters-as-commits word with a composing-region rewrite that SwiftKey uses for a Chromium editor).
+            // The last seven are SwiftKey-shaped (predictive word, gesture word, Backspace inside the composing
+            // region, autocorrect by erase-and-commit, Backspace after a toolbar key ended ownership, the
+            // letters-as-commits word with a composing-region rewrite that SwiftKey uses for a Chromium editor, and a
+            // composing word erased whole, after which Chromium sends no compositionend).
             for (operation in listOf("composeCorrection", "extendTail", "restoreTail", "eraseTail", "repeatWord",
-                    "predictWord", "swipeWord", "composingBackspace", "replacePrevious", "eraseOne", "webWord")) {
+                    "predictWord", "swipeWord", "composingBackspace", "replacePrevious", "eraseOne", "webWord", "dropWord")) {
                 if (operation == "eraseOne") tapToolbar("esc")
                 terminalEditor()
                 val result = ime.call(operation)

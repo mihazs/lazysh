@@ -1640,7 +1640,7 @@ test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits, a d
   expect(()=>verifyImeReceiverBytes(undefined as never,'private-invalid')).toThrow('Owned IME nonce invalid');
   // Escape is a key, not text: the line a shell holds after these bytes is what the user typed, once and in order.
   let visible='';for(const byte of Buffer.from(IME_TRANSACTION_WIRE))visible=byte===127?visible.slice(0,-1):byte===27?visible:visible+String.fromCharCode(byte);
-  expect(visible).toBe('thetheowned swipe tanweb ');
+  expect(visible).toBe('thetheowned swipe tanweb ls. ');
 });
 
 test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{

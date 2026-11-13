@@ -338,7 +338,7 @@ reported no failure; the aborted SSH native finally remains unconfirmed. Manual
 Android upload remains unexecuted; the next packaged case must qualify image reads.
 
 
-The existing `test:android-ssh` owner also selects `ownedSshImeTransactionsThroughRealUi` through `LAZYSH_ANDROID_UI_IME=1`, with separate `ssh-ime-ui` reports. This opt-in case uses the current packaged app, ordinary hostkey/authentication UI, a source-bound raw receiver, and the test APK's fixed-operation InputMethodService. It never navigates to the separate Vite IME harness. In the closed `--ime-transactions NONCE` mode, the receiver emits a nonce-bound READY only after raw-mode/pid setup. After that genuine banner, native composing correction, tail extension, two ASCII deletions and an intentional repeat must produce exactly `there\x7f\x7fthe`, followed by six SwiftKey-shaped transactions (a predictive word typed letter by letter, a gesture word committed whole, Backspace inside the composing region, autocorrect by erasing the previous word and committing its replacement, a Backspace after the toolbar Esc key, and a word typed as letter commits and rewritten through a composing region, which is how SwiftKey edits a Chromium editor) that must add exactly `owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7fweb `; a later current-connection marker must arrive once and a retained old connection must add nothing. Native waits for a distinct nonce-bound DELIVERED banner before the line-break steps; the receiver emits it only after writing and flushing the exact fixed wire stream. An earlier acknowledgement cannot hide later unexpected bytes. Commit return values and remote editor readbacks are not host-delivery acknowledgements: the host independently checks exact receiver bytes and the observed receiver PID/birth/executable hash.
+The existing `test:android-ssh` owner also selects `ownedSshImeTransactionsThroughRealUi` through `LAZYSH_ANDROID_UI_IME=1`, with separate `ssh-ime-ui` reports. This opt-in case uses the current packaged app, ordinary hostkey/authentication UI, a source-bound raw receiver, and the test APK's fixed-operation InputMethodService. It never navigates to the separate Vite IME harness. In the closed `--ime-transactions NONCE` mode, the receiver emits a nonce-bound READY only after raw-mode/pid setup. After that genuine banner, native composing correction, tail extension, two ASCII deletions and an intentional repeat must produce exactly `there\x7f\x7fthe`, followed by seven SwiftKey-shaped transactions (a predictive word typed letter by letter, a gesture word committed whole, Backspace inside the composing region, autocorrect by erasing the previous word and committing its replacement, a Backspace after the toolbar Esc key, a word typed as letter commits and rewritten through a composing region, which is how SwiftKey edits a Chromium editor, and a composing word the keyboard erases whole before it types on, after which Chromium sends no `compositionend`) that must add exactly `owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7fweb ls. `; a later current-connection marker must arrive once and a retained old connection must add nothing. Native waits for a distinct nonce-bound DELIVERED banner before the line-break steps; the receiver emits it only after writing and flushing the exact fixed wire stream. An earlier acknowledgement cannot hide later unexpected bytes. Commit return values and remote editor readbacks are not host-delivery acknowledgements: the host independently checks exact receiver bytes and the observed receiver PID/birth/executable hash.
 
 This case requires the owned API36 AOSP emulator and the existing explicit receiver binary admission. It checks normal text/non-password EditorInfo and the absence of `NO_PERSONALIZED_LEARNING`, retaining existing suggestion/autocorrect hints, and logs the exact numeric `inputType` and `imeOptions` the framework gave the editor (`lazysh-ime-editor`) with Private keyboard off and on.
 
@@ -559,3 +559,45 @@ made green by retrying an assertion.
 export ANDROID_HOME=<sdk> JAVA_HOME=<jdk 21> ANDROID_SERIAL=<serial>
 LAZYSH_E2E_APK=<x86_64 debug apk> LAZYSH_E2E_TIERS=smoke,regression,journeys LAZYSH_E2E_FLAKY=exclude bun run test:mobile-e2e:ci
 ```
+
+## Typing stops until Backspace (#1505): InputConnection catalogue
+
+Typing in the terminal with SwiftKey stopped producing output until Backspace was pressed, and a dot triggered it. The cause
+was found on a real Android 13 WebView (Waydroid, x86_64), not in Chromium on a desktop: Blink **ends a composition without
+a `compositionend`** when `deleteSurroundingText` removes all of the composing text. The terminal bridge
+(`apps/client/src/terminalIme.ts`) stays in its composing state until `compositionend`, and while it is composing it holds back
+every `input` event, so each later key went nowhere (the editor kept the text, the terminal got none of it). Backspace as a key
+event (`keydown` 8, which SwiftKey sends when it believes the editor is empty) flushed the held text, and the next
+`compositionstart` cleared the editor, which is the "Backspace deletes what the terminal never received" the report describes.
+The bridge now treats a key 229 or a plain `insertText` with `isComposing === false` while it is composing as the missing end,
+finishes the composition from the editor's text and goes on.
+
+Recorded on the guest with a scripted `InputMethodService` that replays fixed `InputConnection` calls against the real
+`TerminalPane` loaded from the dev server (`adb reverse`), through the WebView's DevTools socket (raw CDP): what each call
+becomes in the DOM.
+
+| InputConnection call | DOM events (Android 13 WebView) |
+|---|---|
+| `commitText(ch, 1)` | `keydown` 229, `beforeinput`/`input` `insertText`, `keyup` 229 |
+| `setComposingRegion(a, b)` | `compositionstart` (empty data) and `compositionupdate` with the text, no key bracket, no input |
+| `setComposingText(t, 1)` | `keydown` 229 (`isComposing`), `compositionupdate`, `beforeinput`/`input` `insertCompositionText` |
+| `finishComposingText()` | `compositionend` only |
+| `commitText(t, 1)` over a composing region | the `insertCompositionText` pair, then `compositionend` |
+| `deleteSurroundingText(n, 0)` | `keydown` 229, `beforeinput`/`input` `deleteContentBackward` (`isComposing` false even while the composition lives) |
+| `deleteSurroundingText` over **all** of the composing text | as above, and **no `compositionend`**; the next `keydown` 229 and `insertText` have `isComposing` false |
+| `getTextBeforeCursor`, `getExtractedText` | always the textarea's text and caret, equal to the editor at every step recorded |
+
+Replay and fuzz coverage: `apps/client/e2e/terminal-swiftkey.spec.ts` replays three recorded event traces
+(`e2e/fixtures/swiftkeyTraces.ts`) and drives Chromium through CDP with the same transactions;
+`e2e/terminal-swiftkey-fuzz.spec.ts` runs 1000 seeded sessions (letters, word ends with dots and punctuation, autospace,
+autocorrect, Backspace, erased composing words, swipes) and requires the terminal line, the editor and the keyboard's model to be
+equal; the emulator case adds a `dropWord` transaction to `OwnedImeService`. Without the fix 4 of the 14 swiftkey specs and the
+fuzz fail with a terminal line that stays behind the editor.
+
+Run the same probe on a local guest: a scratch IME that executes a fixed script of `InputConnection` calls and logs
+`getTextBeforeCursor`/`getExtractedText` (not part of the repository), the Vite dev server for `apps/client` forwarded with
+`adb reverse tcp:PORT tcp:PORT`, and a debuggable WebView host driven through its DevTools socket.
+
+Real-phone check, which only the owner can make: install the build with this fix, open a terminal session on a phone whose
+keyboard is SwiftKey, type words with spaces and a dot, erase words with Backspace, type again, and confirm that every key
+reaches the shell and that the first Backspace after a dot erases exactly one character.
