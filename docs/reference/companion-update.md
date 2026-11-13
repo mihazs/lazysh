@@ -90,6 +90,19 @@ The managed directory `<user data>/lazysh/companion` (`$XDG_DATA_HOME` or `~/.lo
 
 `update-state.json` in the companion state directory (`LAZYSH_STATE_DIR` overrides it; mode 0600, at most 4 KiB) records `previous {version, sha256}` and `lastOperation {action, outcome, from, to, at, error}` for the installs and rollbacks that took the lock. It is read by `--status` (`previous` is reported only while `lazysh-agent.previous` exists). Unknown fields are kept and ignored, so an older companion rolled back over a newer file does not lose them; an unreadable or oversized file reads as empty. Failing to write it never fails an update that already replaced the binary, but a rollback then reports 28. `settings.json`, hooks and the event store are never touched.
 
+## Started by a newer app
+
+The app is the trust anchor of an app-driven update. Every command an app runs on a Linux or macOS host sets `LAZYSH_APP_VERSION=X.Y.Z` (an app on a Windows host does not send it yet); a companion that predates this ignores it, and `ingest` and `approval-request`, the commands agents' hooks run, never act on it. A companion that is older than that version, with the [auto-update policy](../companion-settings.md#companion-updates) `install` (the default; `off` and `notify` change nothing), then:
+
+1. **Decides offline.** A value that is not a strict `X.Y.Z` is `skipped` (`invalidAppVersion`, not echoed back), an app that is not newer does nothing, and so does a release the user rolled back from (`skipped`, `rolledBack`). A release that failed with exit 22, 23, 24, 25, 27 or 29 for this app version is `failed` and not tried again until a newer app connects, and one that failed otherwise waits one hour, doubling to a day (`notBefore` in `app-update.json`).
+2. **Starts one runner.** `lazysh-agent auto-update run --app-version X.Y.Z` is started detached (own process group, no inherited descriptors, so it neither holds an SSH exec channel open nor dies with it), unless another runner holds `app-update.lock` (an advisory lock that dies with its process, so a crashed runner never blocks the next). The reply to the request in hand is not delayed.
+3. **Waits for no agent turn.** A session the event store reports as `working` in the last ten minutes defers the run for two minutes (`skipped`, `activeTurn`).
+4. **Runs `lazysh-agent update --yes --json --version X.Y.Z`**, nothing else, with a ten-minute limit. The target is the app's version; the host resolves that release and verifies it exactly as above, so a downgrade (exit 23), a prerelease and a version the app does not carry are not reachable. Exit 0 is `done`, 26 is `busy` (looked at again in a minute), 20 is a quiet `skipped` (`networkUnavailable`) and the other exits are `failed` with the `error.kind` as `reason`.
+
+`snapshot` carries the outcome as `update: {"state","from","to","reason"?}`, only when an app newer than the companion asked (or one finished within ten minutes): `state` is `started` (this request started it), `running`, `done`, `failed` or `skipped`. `reason` is a fixed word: `policyOff`, `policyNotify`, `policyUnreadable`, `invalidAppVersion`, `rolledBack`, `activeTurn`, `busy`, `interrupted`, `internal` or an `error.kind` above.
+
+`lazysh-agent auto-update status|set` read and write the policy (`auto-update.json`: `schemaVersion`, `revision`, `policy`); `auto-update run` is internal and not meant to be run by hand.
+
 ## Not yet available
 
-The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and auto-update (`lazysh-agent auto-update`).
+The app's **Update companion** (it still downloads on the device), the shell bootstrap for companions without `update`, and the scheduled auto-update checks (channel, interval, window, OS timers) of [#1446](https://github.com/mihazs/lazysh/issues/1446).

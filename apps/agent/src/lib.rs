@@ -1,6 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
+pub mod auto_update;
 pub mod browser;
 pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -234,6 +235,9 @@ pub struct SessionSummary {
 pub struct Snapshot {
     pub schema_version: u8,
     pub sessions: Vec<SessionSummary>,
+    /// Present only when an app newer than this companion asked: what happens to this companion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<auto_update::Update>,
 }
 
 fn text(value: &str, maximum: usize) -> Result<()> {
@@ -985,6 +989,7 @@ impl Store {
         Ok(Snapshot {
             schema_version: 1,
             sessions,
+            update: None,
         })
     }
 }

@@ -35,20 +35,27 @@ lazysh-agent settings host-browser update --expected-revision 0 --host-browser-e
 
 While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
 
-## Companion updates (planned)
+## Companion updates
 
-**Not released yet** ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)). The three switches above do not change. Update behavior is a separate setting with its own revision, kept in `auto-update.json` in the same state directory so that an older companion that shares the directory keeps reading `settings.json`.
+A companion that is older than the lazysh app talking to it updates itself to the app's version, in the background, unless you turn that off. This is on by default (`install`) and the only network traffic it causes is one HTTPS download of the release from GitHub when an update happens. Show the policy and the last update with `lazysh-agent auto-update status`, and change it with the revision it returned:
+
+```sh
+lazysh-agent auto-update set --expected-revision 0 --policy off
+```
+
+`off` never updates and uses no network, `notify` never changes the executable, `install` updates when a newer app connects, never during an agent turn and never to a version older than the installed one. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
+
+### Still planned
+
+These parts of [#1446](https://github.com/mihazs/lazysh/issues/1446) (design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)) are **not released yet**; the policy above is. Until they ship the companion never asks GitHub on its own: it updates only when a newer app connects.
 
 | Setting | Values | Default |
 | --- | --- | --- |
-| Policy | `off`, `notify`, `install` | `install` |
 | Channel | `stable`, `prerelease` | `stable` |
 | Check interval | 1 to 720 hours | 24 |
 | Update window | `HH:MM-HH:MM` in the host's local time, or none | none |
 
-`install` is the planned default (user decision 2026-11-13) and **changes what a companion does on its own**: it replaces the managed companion when every guard passes: the target is newer, inside the window, no session reported a working state in the last 10 minutes and that version has not already failed on this host. It also does so when a newer lazysh app connects, with the app's version as the target (the app sends it in `LAZYSH_APP_VERSION`; never a downgrade, never a prerelease). It sends no host identifier; the only traffic is the conditional release check per interval and one download when it updates. `notify` checks and records whether a newer release exists, shows the version and an update-available badge in the Agent view and this panel, and replaces nothing. Choose `off` for no request at all and no change (`lazysh-agent auto-update set --expected-revision R --policy off`). Hooks never start a check or an update. A metered connection is not detected: use `notify` or `off` on one.
-
-`lazysh-agent auto-update enable` installs a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` removes it; `status` shows whether it is present or has drifted. If the host has no user service manager, `enable` reports that and changes nothing.
+A scheduled check will also install a newer release when every guard passes (newer, inside the window, no session reported a working state in the last 10 minutes, that version has not already failed on this host), will send no host identifier and will ask once per interval. `notify` will then record what it found, and the Agent view and this panel will show the version and an update-available badge. `lazysh-agent auto-update enable` will install a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` will remove it; `status` will show whether it is present or has drifted. If the host has no user service manager, `enable` will report that and change nothing.
 
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.
 
