@@ -55,6 +55,13 @@ implements (`mouse-extended-encodings-honoured`). Finding that comparison also f
 sent a motion report for every pointer event in a cell where xterm.js sends one (a resting pointer would
 have flooded the pty under any-event tracking); `tests/conformance.rs` pins the fix.
 
+## Replay time (by-product measurement)
+
+Measured on the Linux x86_64 development host (not a device, not the baseline of `terminal-benchmarks.md`): the xterm.js suite
+(186 tests, jsdom included) took 1.62 to 1.81 s wall in two `vitest run` invocations; the core suite (90 screens, 75 key presses,
+130 mouse events, in a debug build) reported 0.03 to 0.04 s in three `cargo test --test vt_fixtures` runs. The two numbers measure
+different things (jsdom start-up and a DOM-mounted terminal versus the bare core), so they are not a speed comparison of the engines.
+
 ## What is not here
 
 - Signed-in sessions of Claude Code, Codex and OpenCode doing work (streamed replies, tool cards, diffs).
