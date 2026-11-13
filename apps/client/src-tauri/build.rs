@@ -194,6 +194,8 @@ fn main() {
         "agent_reported_history",
         "install_companion",
         "install_companion_from_device",
+        "rollback_companion",
+        "check_companion_update",
         "companion_hooks",
         "companion_hook_discovery",
         "get_companion_settings",
