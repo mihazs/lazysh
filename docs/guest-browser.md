@@ -10,7 +10,7 @@ When a command on a host starts a browser sign-in (`aws sso login`, `codex login
 | iOS | An in-app tab (`SFSafariViewController`); the Safari app when the choice is `system` | iOS suspends an app that is not in front and lazysh declares no background mode |
 | Linux, macOS, Windows | The system default browser | The browser runs on the same machine, so the callback reaches the same loopback |
 
-The opener is `tauri-plugin-opener`'s `inAppBrowser` mode on iOS, and a small Android plugin (`AuthBrowserPlugin`) on Android, because the opener plugin keeps the activity it was built with and that activity is gone after Android recreates the window ([#1462](https://github.com/mihazs/lazysh/issues/1462)).
+The opener is `tauri-plugin-opener`'s `inAppBrowser` mode on iOS, and a small Android plugin (`AuthBrowserPlugin`) on Android: the opener plugin keeps the activity it was built with, which Android replaces when it recreates the window ([#1462](https://github.com/mihazs/lazysh/issues/1462)), and it cannot tell whether lazysh is in front.
 
 ## Android with another app in front
 
@@ -32,5 +32,5 @@ Neither command logs or stores a URL, and an error never repeats one: the query 
 
 - The in-app tab is not dismissed when the sign-in ends. Android offers no way to close another app's tab, and the opener plugin on iOS does not return the view controller to dismiss. The app shows the outcome of the sign-in itself.
 - iOS is compile-checked by the CI build only. Whether the app stays active while the tab is shown, whether the tab loads `http://127.0.0.1:PORT`, and how it treats cookies and password managers are unverified; they need a real iPhone. `ASWebAuthenticationSession` is the documented alternative if the tab blocks sign-in.
-- Android was run on Waydroid (Android 13, x86_64) only; vendor background killers on real phones are unverified.
-- The tap on the notification opens the page in a new task of the browser, so Back from the tab does not return to lazysh; switch apps instead.
+- Android was run on Waydroid (Android 13, x86_64, LineageOS `org.lineageos.jelly` as the only browser) with the `AuthBrowserTest` instrumented class: a fake identity provider and its callback listener on the device loopback, the page opened through the plugin with lazysh in front and with lazysh stopped (notification, tapped through the notification shade, with the session foreground service running), and in both cases the browser followed the redirect to the loopback listener. Waydroid has no Custom Tabs provider, so `launchUrl` fell back to a plain `VIEW` of the same URL into Jelly, with the Custom Tab extras in the intent; how a Chrome Custom Tab renders it is unverified, and so are vendor background killers on real phones. The test process outlives the app being in the background anyway, so the run shows the combination works, not that the foreground service is what keeps a listener alive; that is the existing session service's job.
+- The tap on the notification starts the browser as its own task (`FLAG_ACTIVITY_NEW_TASK`, observed on Waydroid), so after signing in switch back to lazysh from the app switcher.

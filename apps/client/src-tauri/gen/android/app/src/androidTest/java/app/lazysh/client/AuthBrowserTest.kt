@@ -45,11 +45,19 @@ class AuthBrowserTest {
     @Before fun grantNotificationsAndClear() {
         if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, "android.permission.POST_NOTIFICATIONS")
         notifications.cancel(AuthBrowserPlugin.NOTIFICATION)
-        scenario.moveToState(Lifecycle.State.RESUMED)
+        bringLazyshBack()
     }
 
     @After fun restore() {
         notifications.cancel(AuthBrowserPlugin.NOTIFICATION)
+        bringLazyshBack()
+    }
+
+    /** A real browser may be in front after a live case: ask for the existing task, then wait for the Activity. */
+    private fun bringLazyshBack() {
+        if (scenario.state != Lifecycle.State.RESUMED) {
+            context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
         scenario.moveToState(Lifecycle.State.RESUMED)
     }
 
@@ -151,7 +159,8 @@ class AuthBrowserTest {
             while (!server.isClosed) try {
                 server.accept().use { socket ->
                     val line = socket.getInputStream().bufferedReader().readLine().orEmpty()
-                    if (line.startsWith("GET /")) requests.add(line.substringBefore('?').removeSuffix(" HTTP/1.1"))
+                    // A browser also asks for the icon of the page, at a time that varies; it is not part of the sign-in.
+                    if (line.startsWith("GET /") && !line.startsWith("GET /favicon.ico")) requests.add(line.substringBefore('?').removeSuffix(" HTTP/1.1"))
                     socket.getOutputStream().apply { write(answer(line).toByteArray()); flush() }
                 }
             } catch (_: Exception) {}
