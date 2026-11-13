@@ -5116,7 +5116,7 @@ mod tests {
     async fn core_fed_output_is_byte_exact_ordered_bounded_and_credited_after_processing() {
         use crate::terminal_core::{
             credit_to,
-            fake::{sha256, workload, ChecksumCore},
+            fake::{workload, ChecksumCore},
         };
         // SSH, ET and Mosh all deliver through `send_output`, so this covers their shared path.
         let (session, _dir, server_task) = output_session().await;
@@ -5130,24 +5130,7 @@ mod tests {
         let events = counting_events(&ipc);
         let payload = workload(3 * 1024 * 1024);
         send_output(&session, &events, &payload).await.unwrap();
-        timeout(Duration::from_secs(10), async {
-            while core.seen.lock().unwrap().len() < payload.len() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(sha256(&core.seen.lock().unwrap()), sha256(&payload));
-        let peak = core.peak_queued.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(
-            peak <= OUTPUT_WINDOW as usize,
-            "{peak} bytes queued over the {OUTPUT_WINDOW} window"
-        );
-        assert_eq!(
-            ipc.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "no per-chunk IPC on the core path"
-        );
+        core.assert_received(&payload, &ipc).await;
         timeout(Duration::from_secs(3), async {
             while *session.output_inflight.lock().unwrap() != 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -5196,6 +5179,91 @@ mod tests {
             core.closed.load(std::sync::atomic::Ordering::SeqCst),
             "the renderer never learns this session's id, so only the failure path can free the core"
         );
+        server_task.abort();
+    }
+    /// A Channel that counts what crosses it, with a core offered for it (taken by the next terminal
+    /// started with that Channel).
+    fn counted_events_with_core() -> (
+        Arc<crate::terminal_core::fake::ChecksumCore>,
+        Channel<SshEvent>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let (core, prepared) = crate::terminal_core::fake::ChecksumCore::prepared();
+        let ipc = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = counting_events(&ipc);
+        crate::terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+        (core, events, ipc)
+    }
+    #[tokio::test]
+    async fn a_russh_terminal_delivers_its_channel_data_to_the_core_byte_exact_and_in_order() {
+        use crate::terminal_core::{self, fake::workload};
+        let (host, _, server_task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let (core, events, ipc) = counted_events_with_core();
+        let creation = access_lease();
+        let connected = spawn_terminal(&state, creation.clone(), handle, channel, initial, events)
+            .await
+            .unwrap();
+        let session = state.session(&connected.session_id).await.unwrap();
+        // The test server echoes what it is sent: 1 MiB of printable pseudo-random text in 32 KiB
+        // writes, so the stream crosses a real russh channel in both directions.
+        let text: String = workload(1024 * 1024)
+            .iter()
+            .map(|byte| (b'!' + byte % 90) as char)
+            .collect();
+        for piece in text.as_bytes().chunks(32 * 1024) {
+            let piece = String::from_utf8(piece.to_vec()).unwrap();
+            session
+                .input
+                .send(Input::Data(piece.into(), creation.clone()))
+                .await
+                .unwrap();
+        }
+        let expected = [b"ready\r\n".as_slice(), text.as_bytes()].concat();
+        core.assert_received(&expected, &ipc).await;
+        terminal_core::close(&connected.session_id);
+        let _ = session.cancel.send(true);
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn native_terminal_driver_output_the_mosh_and_et_shape_reaches_the_core_byte_exact() {
+        use crate::terminal_core::{self, fake::workload};
+        let (parent, _dir, server_task) = output_session().await;
+        let (_state_dir, state) = fixture_state();
+        let (core, events, ipc) = counted_events_with_core();
+        let payload = workload(2 * 1024 * 1024);
+        let produced = payload.clone();
+        // Mosh and ET drivers hand 16 KiB-bounded chunks to `output`; this one only plays that part.
+        let connected = spawn_native_terminal(
+            &state,
+            access_lease(),
+            parent,
+            events,
+            NativeTerminalKind::Fixture,
+            None,
+            check_size,
+            move |_access, input, mut cancellation, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    ready.send(Ok(())).unwrap();
+                    for chunk in produced.chunks(16 * 1024) {
+                        output
+                            .send(chunk.to_vec())
+                            .await
+                            .map_err(|_| SshError::new("fixture", "output closed"))?;
+                    }
+                    // Stay open: a finished driver would add the Closed notice to the Channel count.
+                    let _ = cancellation.changed().await;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        core.assert_received(&payload, &ipc).await;
+        terminal_core::close(&connected.session_id);
         server_task.abort();
     }
     #[tokio::test(start_paused = true)]

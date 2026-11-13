@@ -410,6 +410,27 @@ pub(crate) mod fake {
         }
     }
 
+    impl ChecksumCore {
+        /// Waits for `expected.len()` parsed bytes, then checks the stream's checksum, that at most one
+        /// transport window was ever queued unreturned, and that nothing crossed the Channel (`ipc`).
+        pub(crate) async fn assert_received(&self, expected: &[u8], ipc: &AtomicUsize) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while self.seen.lock().unwrap().len() < expected.len() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the core parsed the whole stream");
+            assert_eq!(sha256(&self.seen.lock().unwrap()), sha256(expected));
+            let (peak, window) = (self.peak_queued.load(SeqCst), crate::ssh::OUTPUT_WINDOW);
+            assert!(
+                peak <= window as usize,
+                "{peak} bytes queued over the {window} window"
+            );
+            assert_eq!(ipc.load(SeqCst), 0, "no per-chunk IPC on the core path");
+        }
+    }
+
     impl Core for ChecksumCore {
         fn feed(&self, chunk: Vec<u8>) -> Result<(), String> {
             self.feeds.fetch_add(1, SeqCst);
