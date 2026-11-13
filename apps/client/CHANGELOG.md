@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 1.61.0
+
+### Minor Changes
+
+- d729225: Add a native tab strip above the terminal for Herdr, Zellij and tmux tabs, with a Herdr workspace switcher, agent state dots, a **+** for new tabs, long-press rename for Herdr tabs and workspaces and tmux windows, and a Show tab strip setting (Auto, Always, Never). On phones it is on by default for a multiplexer session with more than one tab.
+
+### Patch Changes
+
+- 8c374b7: Fix the Agent view prompt bubble covering the reply under it while the agent works, and show pasted text as a compact block instead of raw `pasted_content` tags.
+- @lazysh/account-usage@1.61.0
+  - @lazysh/common@1.61.0
+  - @lazysh/display-idle@1.61.0
+  - @lazysh/et-transport@1.61.0
+  - @lazysh/mosh-transport@1.61.0
+
 ## 1.60.0
 
 ### Minor Changes
