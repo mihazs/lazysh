@@ -81,7 +81,6 @@ import {
 } from "./bridge";
 import type { LiveSession } from "./terminal";
 import { carryKeyboard } from "./softKeyboard";
-import {installMoshResize} from "./moshResize";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
@@ -130,7 +129,7 @@ const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
 
 function disposeTerminal(session?: LiveSession) {
   if (!session || session.disposed) return;
-  session.disposed = true; session.connected = false; forgetSession(session.id); session.moshResize?.dispose(); session.terminal.dispose();
+  session.disposed = true; session.connected = false; forgetSession(session.id); void session.adapter.dispose();
 }
 
 async function prepareSession(
@@ -139,14 +138,16 @@ async function prepareSession(
   destination: string,
   lease: AccessLease,
 ) {
-  const { createTerminal } = await import("./terminal");
+  const { createTerminalAdapter, xtermView } = await import("./terminalBackends");
+  const { adapter } = await createTerminalAdapter();
   lease.assert();
   const session: LiveSession = {
     id: "",
     hostId,
     name,
     destination,
-    terminal: createTerminal(),
+    adapter,
+    terminal: xtermView(adapter),
     connected: true,
   };
   let pendingBytes = 0;
@@ -181,10 +182,10 @@ async function prepareSession(
   const onEvent = (event: SshEvent) => {
     if (session.disposed) return;
     if (event.type === "data")
-      session.terminal.write(new Uint8Array(event.data), () => {
+      session.adapter.write!(new Uint8Array(event.data), () => {
         acknowledge(event.data.length);
         if (session.moshResize?.failure) failDisplay();
-      });
+      }).catch(() => { if (!session.disposed) failDisplay(); });
     else {
       transportClosed = true;
       session.connected = false;
@@ -241,7 +242,7 @@ async function selectTransport(
     try {
       ensureAlive();
       if (kind === 'mosh') {
-        try { child.session.moshResize = installMoshResize(child.session.terminal); }
+        try { child.session.moshResize = child.session.adapter.enableCanonicalResize!(); }
         catch { throw {kind: 'mosh_unsupported', message: t('appUnavailableInThisAppBuild')}; }
       }
       const result = kind==='ssh' && entry
@@ -1347,7 +1348,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!mounted.current||!lease.current()||!live||live!==active||currentView.current.activeId!==request.sessionId
       ||currentView.current.view!=='attachments'||document.visibilityState!=='visible'||closingSessions.current.has(request.sessionId))
       return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
-    const data=attachmentTerminalInput(request.path,live.terminal.modes.bracketedPasteMode,live.terminal.options.ignoreBracketedPasteMode);
+    const data=attachmentTerminalInput(request.path,live.adapter.modes().bracketedPaste);
     if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
     return api.write(live.id,data);
   }
