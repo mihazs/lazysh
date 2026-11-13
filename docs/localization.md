@@ -102,8 +102,9 @@ interface language. Language changes preserve the original icon request, selecte
 icon, read-after-failure behavior and request generation without rereading or
 reapplying it. Native reasons and errors, including empty strings, remain literal;
 renderer fixtures do not establish actual iOS Home Screen behavior.
-This is a partial milestone under issue #79. Other feature panels still require
-their own localization and acceptance.
+Every component that renders app-owned text uses these catalogs; raw output and
+native diagnostics stay literal, and product names stay unchanged. A new component
+that renders app-owned text must be added to the file list in `coverage.test.ts`.
 Native lock-cover/biometric-reason resources on
 Android, iOS and macOS use the [native language authority](native-ui-locale.md).
 Apple permission purposes have separate bundled resources below;
@@ -237,7 +238,10 @@ literal resource paths, purpose keys, fallback values and Foundation lookups. It
 does not display a permission prompt or verify physical-device OS language
 behavior. The macOS hosted gate runs Tauri's app bundler and Apple's `plutil` on
 the three packaged tables; compilation without bundling does not verify resources.
-Native lock-cover and biometric-reason localization remain separate issue #79 work.
+Native lock-cover and biometric-reason text follows the [native language authority](native-ui-locale.md).
+On macOS the hosted job runs the Rust tests of the locale store and lints the
+bundled tables; the real lock cover and biometric prompt are not exercised on
+Apple hardware.
 
 ## Verification
 
@@ -326,10 +330,10 @@ Run the existing project tasks from `apps/client`:
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
 persisted preference. Browser tests load it explicitly to expand labels while
-preserving interpolation. The coverage test audits static text in the covered
-workflow; it does not claim all application strings are localized. Synthetic
-browser tests do not establish physical-device permission or system-language
-behavior.
+preserving interpolation. The coverage test audits JSX text and the `aria-label`,
+`title`, `placeholder` and `alt` literals of the components in its file list; it
+does not see strings assembled elsewhere. Synthetic browser tests do not establish
+physical-device permission or system-language behavior.
 
 `bun run test src/i18n/accessLocales.test.tsx src/AccessShell.test.tsx` checks
 that a retained App Lock authentication failure follows English, Brazilian
