@@ -29,23 +29,24 @@ pub fn run(command: Command) -> Result<Value> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use unix::{
+    destination, file_hash, lock, namespace, Existing, Lock, Temporary, MAXIMUM, NAME,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix {
     use super::*;
     use lazysh_common::{fs as private, storage_filesystem, storage_namespace};
     use serde::Serialize;
     use sha2::{Digest, Sha256};
     use std::{
-        ffi::CString,
         fs::{self, File},
         io::{Read, Write},
-        os::{
-            fd::AsRawFd,
-            unix::fs::{MetadataExt, PermissionsExt},
-        },
-        path::PathBuf,
+        os::unix::fs::{MetadataExt, PermissionsExt},
+        path::{Path, PathBuf},
     };
-    const MAXIMUM: u64 = 64 * 1024 * 1024;
-    const NAME: &str = "lazysh-agent";
+    pub(crate) const MAXIMUM: u64 = 64 * 1024 * 1024;
+    pub(crate) const NAME: &str = "lazysh-agent";
     fn rejected(code: &'static str) -> Error {
         Error::Installation(code)
     }
@@ -56,9 +57,9 @@ mod unix {
         sha256: String,
         bytes: u64,
     }
-    #[derive(PartialEq, Eq, Serialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize)]
     #[serde(tag = "state", rename_all = "camelCase")]
-    enum Existing {
+    pub(crate) enum Existing {
         Missing,
         Present { sha256: String, bytes: u64 },
     }
@@ -78,7 +79,7 @@ mod unix {
             &serde_json::to_vec(plan).map_err(|_| Error::InvalidArgument)?,
         ))
     }
-    fn file_hash(file: &mut File, private_file: bool) -> Result<(String, u64)> {
+    pub(crate) fn file_hash(file: &mut File, private_file: bool) -> Result<(String, u64)> {
         let before = file.metadata()?;
         if !before.is_file()
             || before.len() == 0
@@ -116,7 +117,7 @@ mod unix {
             },
         ))
     }
-    fn destination() -> Result<PathBuf> {
+    pub(crate) fn destination() -> Result<PathBuf> {
         let root = dirs::data_local_dir().ok_or_else(|| rejected("InstallNoUserData"))?;
         if !root.is_absolute() {
             return Err(rejected("InstallUnsafeNamespace"));
@@ -133,7 +134,7 @@ mod unix {
     }
     use crate::managed_directory::Directory;
     impl Directory {
-        fn existing(&self) -> Result<Existing> {
+        pub(crate) fn existing(&self) -> Result<Existing> {
             match self.open_file(NAME, libc::O_RDONLY) {
                 Ok(mut file) => {
                     if file.metadata()?.mode() & 0o777 != 0o700 {
@@ -147,26 +148,62 @@ mod unix {
             }
         }
     }
-    struct Lock(File);
+    pub(crate) struct Lock(File);
     impl Drop for Lock {
         fn drop(&mut self) {
             let _ = self.0.unlock();
         }
     }
-    struct Temporary<'a> {
+    /// A name in the managed directory that is removed unless it was committed (renamed away).
+    pub(crate) struct Temporary<'a> {
         directory: &'a Directory,
-        name: CString,
-        committed: bool,
+        pub(crate) name: String,
+        pub(crate) committed: bool,
+    }
+    impl<'a> Temporary<'a> {
+        pub(crate) fn new(directory: &'a Directory, name: String) -> Self {
+            Self {
+                directory,
+                name,
+                committed: false,
+            }
+        }
     }
     impl Drop for Temporary<'_> {
         fn drop(&mut self) {
             if !self.committed {
-                // SAFETY: descriptor remains owned by Directory; name belongs only to this operation.
-                unsafe {
-                    libc::unlinkat(self.directory.file.as_raw_fd(), self.name.as_ptr(), 0);
-                }
+                let _ = self.directory.remove(&self.name, false);
             }
         }
+    }
+    /// The kernel lock that makes `install` and `update` exclude each other.
+    pub(crate) fn lock(directory: &Directory) -> Result<Lock> {
+        let lock = directory.open_file("installation.lock", libc::O_RDWR | libc::O_CREAT)?;
+        if !private::owner_only(&lock.metadata()?, false) {
+            return Err(rejected("InstallUnsafeLock"));
+        }
+        lock.try_lock().map_err(|_| rejected("InstallBusy"))?;
+        Ok(Lock(lock))
+    }
+    /// Create the managed namespace when absent and persist the new entries.
+    pub(crate) fn namespace(parent: &Path) -> Result<Directory> {
+        let mut missing = Vec::new();
+        let mut ancestor = parent;
+        while !ancestor.try_exists()? {
+            let previous = ancestor
+                .parent()
+                .ok_or_else(|| rejected("InstallUnsafeNamespace"))?;
+            missing.push(previous.to_owned());
+            ancestor = previous;
+        }
+        storage_namespace::create(parent)?;
+        let directory = Directory::open(parent)?;
+        // Persist newly created namespace entries before a later executable commit.
+        directory.file.sync_all()?;
+        for ancestor in missing {
+            File::open(ancestor)?.sync_all()?;
+        }
+        Ok(directory)
     }
     fn inspect(source: Identity, destination: PathBuf) -> Result<Plan> {
         let parent = destination.parent().unwrap();
@@ -222,29 +259,8 @@ mod unix {
         if plan_hash(&plan)? != expected_plan {
             return Err(rejected("InstallStalePlan"));
         }
-        let parent = plan.destination.parent().unwrap();
-        let mut missing = Vec::new();
-        let mut ancestor = parent;
-        while !ancestor.try_exists()? {
-            let previous = ancestor
-                .parent()
-                .ok_or_else(|| rejected("InstallUnsafeNamespace"))?;
-            missing.push(previous.to_owned());
-            ancestor = previous;
-        }
-        storage_namespace::create(parent)?;
-        let directory = Directory::open(parent)?;
-        // Persist newly created namespace entries before a later executable commit.
-        directory.file.sync_all()?;
-        for ancestor in missing {
-            File::open(ancestor)?.sync_all()?;
-        }
-        let lock = directory.open_file("installation.lock", libc::O_RDWR | libc::O_CREAT)?;
-        if !private::owner_only(&lock.metadata()?, false) {
-            return Err(rejected("InstallUnsafeLock"));
-        }
-        lock.try_lock().map_err(|_| rejected("InstallBusy"))?;
-        let _lock = Lock(lock);
+        let directory = namespace(plan.destination.parent().unwrap())?;
+        let _lock = lock(&directory)?;
         directory.check()?;
         let plan = Plan {
             existing: directory.existing()?,
@@ -266,11 +282,7 @@ mod unix {
         let temporary_name = format!(".install-{}", uuid::Uuid::new_v4());
         let mut temporary_file =
             directory.open_file(&temporary_name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
-        let mut temporary = Temporary {
-            directory: &directory,
-            name: CString::new(temporary_name).unwrap(),
-            committed: false,
-        };
+        let mut temporary = Temporary::new(&directory, temporary_name);
         use std::io::{Seek, SeekFrom};
         source_file.seek(SeekFrom::Start(0))?;
         let copied = std::io::copy(
@@ -291,7 +303,7 @@ mod unix {
         if directory.existing()? != plan.existing {
             return Err(rejected("InstallStalePlan"));
         }
-        directory.rename(temporary.name.to_str().unwrap(), NAME, false)?;
+        directory.rename(&temporary.name, NAME, false)?;
         temporary.committed = true;
         let durable = directory.file.sync_all().is_ok()
             && fault(2).is_ok()

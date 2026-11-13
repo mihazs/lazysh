@@ -10,9 +10,13 @@ storage-observation = []
 # Lets `update` talk to a local HTTPS release server named by LAZYSH_UPDATE_TEST_ENDPOINT. Tests only.
 update-test-endpoint = ["lazysh-companion-release/test-endpoint"]
 
+# These drive the real binary built with the local endpoint seam: `cargo test --features update-test-endpoint`.
 [[test]]
 name = "update"
-# Drives the real binary built with the local endpoint seam: `cargo test --features update-test-endpoint`.
+required-features = ["update-test-endpoint"]
+
+[[test]]
+name = "update_install"
 required-features = ["update-test-endpoint"]
 
 [dependencies]

@@ -8,43 +8,71 @@ use std::io::Write;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
     Internal,
+    Usage,
     NetworkUnavailable,
     ReleaseUnavailable,
     VerificationFailed,
     DowngradeRefused,
+    SelfTestFailed,
+    RolledBack,
+    Busy,
     UnsafeInstallLocation,
+    NoPreviousVersion,
+    Uncertain,
 }
 impl Failure {
     pub fn code(self) -> u8 {
         match self {
             Self::Internal => 1,
+            Self::Usage => 2,
             Self::NetworkUnavailable => 20,
             Self::ReleaseUnavailable => 21,
             Self::VerificationFailed => 22,
             Self::DowngradeRefused => 23,
+            Self::SelfTestFailed => 24,
+            Self::RolledBack => 25,
+            Self::Busy => 26,
             Self::UnsafeInstallLocation => 27,
+            Self::NoPreviousVersion => 28,
+            Self::Uncertain => 29,
         }
     }
-    fn kind(self) -> &'static str {
+    pub fn kind(self) -> &'static str {
         match self {
             Self::Internal => "internal",
+            Self::Usage => "usage",
             Self::NetworkUnavailable => "networkUnavailable",
             Self::ReleaseUnavailable => "releaseUnavailable",
             Self::VerificationFailed => "verificationFailed",
             Self::DowngradeRefused => "downgradeRefused",
+            Self::SelfTestFailed => "selfTestFailed",
+            Self::RolledBack => "rolledBack",
+            Self::Busy => "busy",
             Self::UnsafeInstallLocation => "unsafeInstallLocation",
+            Self::NoPreviousVersion => "noPreviousVersion",
+            Self::Uncertain => "uncertain",
         }
     }
     fn message(self) -> &'static str {
         match self {
             Self::Internal => "Unexpected failure",
+            Self::Usage => "The change was not confirmed",
             Self::NetworkUnavailable => "The release server is unreachable or rate limited",
             Self::ReleaseUnavailable => "No compatible verified release is published",
             Self::VerificationFailed => {
                 "The release did not match its published digest, size or origin"
             }
             Self::DowngradeRefused => "The requested version is older than the installed one",
+            Self::SelfTestFailed => "The new companion failed its self-test; nothing was replaced",
+            Self::RolledBack => {
+                "The new companion failed after the replace; the previous one was restored"
+            }
+            Self::Busy => "Another update or installation is running",
             Self::UnsafeInstallLocation => "Unsupported platform or unsafe install location",
+            Self::NoPreviousVersion => "There is no previous companion to restore",
+            Self::Uncertain => {
+                "The replace may have completed but could not be confirmed; run update --status"
+            }
         }
     }
 }
@@ -78,9 +106,24 @@ impl From<Failure> for Fault {
         }
     }
 }
+impl Fault {
+    pub fn detail(failure: Failure, detail: &'static str) -> Self {
+        Self {
+            detail: Some(detail),
+            ..Self::from(failure)
+        }
+    }
+}
 impl From<crate::Error> for Fault {
-    fn from(_: crate::Error) -> Self {
-        Failure::Internal.into()
+    fn from(error: crate::Error) -> Self {
+        match error {
+            crate::Error::Installation("InstallBusy") => Failure::Busy,
+            crate::Error::Installation(_) | crate::Error::UnsupportedStateFilesystem => {
+                Failure::UnsafeInstallLocation
+            }
+            _ => Failure::Internal,
+        }
+        .into()
     }
 }
 impl From<std::io::Error> for Fault {
@@ -123,13 +166,20 @@ pub struct Report {
     pub history: Option<(Value, Value)>,
 }
 impl Report {
-    pub fn failed(action: &'static str, fault: Fault) -> Self {
+    pub fn new(action: &'static str) -> Self {
         Self {
             action,
-            outcome: "failed",
-            fault: Some(fault),
             ..Self::default()
         }
+    }
+    /// End the run as a failure; what was learned before it (current, latest) stays in the report.
+    pub fn fail(&mut self, fault: Fault) {
+        self.outcome = if fault.failure == Failure::Uncertain {
+            "uncertain"
+        } else {
+            "failed"
+        };
+        self.fault = Some(fault);
     }
     pub fn exit_code(&self, available: bool) -> u8 {
         match (&self.fault, available) {
@@ -190,6 +240,12 @@ impl Report {
         lines.push(match (self.outcome, self.fault) {
             ("available", _) => "An update is available.".into(),
             ("upToDate", _) => "Already up to date.".into(),
+            ("updated", _) => {
+                "Updated. The previous version is kept; `lazysh-agent update --rollback` restores it."
+                    .into()
+            }
+            ("dryRunOk", _) => "Dry run passed. Nothing was changed.".into(),
+            ("rolledBack", _) => "Restored the previous version.".into(),
             (_, Some(fault)) => format!("failed: {}", fault.failure.message()),
             _ => String::new(),
         });
@@ -201,10 +257,30 @@ impl Report {
 /// Writes the run's output; a closed stdout is not a failure of the update itself.
 pub struct Output {
     json: bool,
+    last_progress: std::cell::Cell<Option<std::time::Instant>>,
 }
 impl Output {
     pub fn new(json: bool) -> Self {
-        Self { json }
+        Self {
+            json,
+            last_progress: std::cell::Cell::new(None),
+        }
+    }
+    /// `downloading` events, at most four per second; the last one (all bytes) is always sent.
+    pub fn progress(&self, bytes: u64, total: u64) {
+        let now = std::time::Instant::now();
+        let due = self
+            .last_progress
+            .get()
+            .is_none_or(|last| now.duration_since(last) >= std::time::Duration::from_millis(250));
+        if self.json && (due || bytes == total) {
+            self.last_progress.set(Some(now));
+            let _ = writeln!(
+                std::io::stdout().lock(),
+                "{}",
+                json!({"schemaVersion":1,"event":"stage","stage":"downloading","bytes":bytes,"total":total})
+            );
+        }
     }
     pub fn stage(&self, stage: &str) {
         if self.json {
