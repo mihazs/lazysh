@@ -15,8 +15,9 @@ env:
   MOON_BASE: HEAD
   MOON_HEAD: HEAD
 
-# A newer pull request push supersedes its older checks; main runs always finish so every
-# merged commit gets a complete native verification (GitHub still keeps one pending run).
+# A newer pull request push supersedes its older checks. A running main run is never cancelled,
+# but GitHub keeps one pending run per group and cancels older pending ones, so a busy trunk does
+# not get a complete run per commit here: main-verdict.yml gives every main commit a verdict.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
