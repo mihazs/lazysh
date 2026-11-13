@@ -381,6 +381,9 @@ Tests assert behaviour, not source text.
   pending items; watch-stream ordering, upserts and `gen` rebuilds; path containment.
 - **Client Vitest**: model reducers (upserts, folding, source ranking, receipts,
   stale revisions) and rendering of every part and card.
+  `AgentParity.test.tsx` is the card checklist: every kind of the `Card` schema needs a
+  row, a card in the companion-generated fixtures and a component that draws it with its
+  title, so a new kind fails the type check and then the tests until all three exist.
 - **Playwright, phone (390×844) and desktop (1280×800)**: switch, remember, Both
   layout, timeline, dock, composer and fallbacks against a mocked companion.
 - **Native Linux** (`native-e2e`, real OpenSSH, tmux and guarded Herdr): a fixture
