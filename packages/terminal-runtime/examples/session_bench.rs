@@ -126,6 +126,7 @@ fn input_latency() {
         mods: 0,
         text: None,
         composing: false,
+        repeat: false,
         release: false,
     };
     let measure = |probe: &Fixture| {

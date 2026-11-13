@@ -13,6 +13,7 @@ mod frame;
 mod hub;
 mod ingress;
 mod input;
+mod keymap;
 pub mod layout;
 mod reference;
 mod render;
@@ -25,6 +26,7 @@ pub use hub::{
 };
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
+pub use keymap::{dom_mods, DomKey};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{
     Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,

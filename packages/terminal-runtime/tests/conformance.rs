@@ -116,9 +116,10 @@ fn bracketed_paste_follows_the_mode_and_cannot_close_its_own_bracket() {
     assert_eq!(rt.encode_paste("a\nb\r\nc").unwrap(), b"a\rb\rc");
     feed(&mut rt, b"\x1b[?2004h");
     assert!(rt.modes().unwrap().bracketed_paste);
+    // Line breaks are CR inside the brackets too, as xterm.js sends them (Enter in a TUI, not a literal LF).
     assert_eq!(
-        rt.encode_paste("hi\nthere").unwrap(),
-        b"\x1b[200~hi\nthere\x1b[201~"
+        rt.encode_paste("hi\nthere\r\nx").unwrap(),
+        b"\x1b[200~hi\rthere\rx\x1b[201~"
     );
     assert_eq!(
         rt.encode_paste("x\x1b[201~rm -rf /").unwrap(),
@@ -151,6 +152,103 @@ fn mouse_reports_follow_tracking_mode_and_sgr_format() {
     assert_eq!(rt.encode_mouse(release).unwrap(), b"\x1b[<0;6;2m");
 }
 
+/// Golden mouse reports written from XTerm's control sequence documentation (ctlseqs, "Mouse Tracking"):
+/// xterm.js is not driven here because its mouse path needs a rendered DOM, so these pin the spec, not xterm.js.
+/// Cells are 10x20 px, so the pointer at x = 55 px is column 6 and y = 30 px is row 2.
+#[test]
+fn mouse_reports_match_the_xterm_encodings_for_buttons_wheel_motion_and_modifiers() {
+    use ffi::*;
+    let (left, middle, right, up, down) = (
+        GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_LEFT,
+        GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_MIDDLE,
+        GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_RIGHT,
+        GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FOUR,
+        GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FIVE,
+    );
+    let (press, release, motion) = (
+        GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS,
+        GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_RELEASE,
+        GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+    );
+    let (shift, ctrl, alt) = (1u16, 1u16 << 1, 1u16 << 2);
+    let report = |modes: &[u8], action, button, mods, x: f32| {
+        let mut rt = runtime(240, 10);
+        feed(&mut rt, modes);
+        rt.encode_mouse(MouseInput {
+            action,
+            button,
+            mods,
+            x,
+            y: 30.0,
+        })
+        .unwrap()
+    };
+    // Default (X10) encoding: ESC [ M, then button, column and row, each plus 32.
+    let x10 = |button: u8, column: u8| vec![0x1b, b'[', b'M', button + 32, column + 32, 2 + 32];
+    let normal: &[u8] = b"\x1b[?1000h";
+    assert_eq!(report(normal, press, Some(left), 0, 55.0), x10(0, 6));
+    assert_eq!(report(normal, press, Some(middle), 0, 55.0), x10(1, 6));
+    assert_eq!(report(normal, press, Some(right), 0, 55.0), x10(2, 6));
+    assert_eq!(
+        report(normal, release, Some(left), 0, 55.0),
+        x10(3, 6),
+        "a release carries no button"
+    );
+    assert_eq!(
+        report(normal, press, Some(up), 0, 55.0),
+        x10(64, 6),
+        "wheel up"
+    );
+    assert_eq!(
+        report(normal, press, Some(down), 0, 55.0),
+        x10(65, 6),
+        "wheel down"
+    );
+    assert_eq!(report(normal, press, Some(left), shift, 55.0), x10(4, 6));
+    assert_eq!(report(normal, press, Some(left), alt, 55.0), x10(8, 6));
+    assert_eq!(report(normal, press, Some(left), ctrl, 55.0), x10(16, 6));
+    assert_eq!(
+        report(normal, press, Some(left), 0, 2205.0),
+        x10(0, 221),
+        "the last column X10 can name is 223"
+    );
+    assert!(
+        report(normal, press, Some(left), 0, 2305.0).is_empty(),
+        "column 231 does not fit: no report"
+    );
+    assert!(
+        report(normal, motion, Some(left), 0, 55.0).is_empty(),
+        "plain tracking has no motion"
+    );
+    // SGR (1006): decimal fields, `M` press and `m` release, the real button on release.
+    let sgr: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+    assert_eq!(report(sgr, press, Some(left), 0, 55.0), b"\x1b[<0;6;2M");
+    assert_eq!(report(sgr, release, Some(right), 0, 55.0), b"\x1b[<2;6;2m");
+    assert_eq!(report(sgr, press, Some(up), 0, 55.0), b"\x1b[<64;6;2M");
+    assert_eq!(
+        report(sgr, press, Some(left), shift | ctrl, 55.0),
+        b"\x1b[<20;6;2M"
+    );
+    assert_eq!(
+        report(sgr, press, Some(left), 0, 2305.0),
+        b"\x1b[<0;231;2M",
+        "SGR has no column limit"
+    );
+    // Button-event tracking (1002) reports motion only while a button is down, plus 32; any-event (1003) always.
+    let drag: &[u8] = b"\x1b[?1002h\x1b[?1006h";
+    assert_eq!(report(drag, motion, Some(left), 0, 55.0), b"\x1b[<32;6;2M");
+    assert!(
+        report(drag, motion, None, 0, 55.0).is_empty(),
+        "hover is not reported in 1002"
+    );
+    let any: &[u8] = b"\x1b[?1003h\x1b[?1006h";
+    assert_eq!(
+        report(any, motion, None, 0, 55.0),
+        b"\x1b[<35;6;2M",
+        "motion with no button is 3 plus 32"
+    );
+}
+
 #[test]
 fn keys_depend_on_terminal_modes() {
     let mut rt = runtime(20, 3);
@@ -165,6 +263,124 @@ fn keys_depend_on_terminal_modes() {
     );
     let ctrl_c = key(ffi::GhosttyKey_GHOSTTY_KEY_C, 1 << 1, Some("c"));
     assert_eq!(rt.encode_key(&ctrl_c).unwrap(), [0x03]);
+}
+
+#[test]
+fn application_keypad_mode_does_not_change_what_a_shell_receives_from_the_numpad() {
+    // DECKPAM (ESC =): xterm.js keeps sending CR and the digit, fixtures/keys.json numpad-*-application.
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b=");
+    let numpad_enter = key(ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER, 0, None);
+    assert_eq!(rt.encode_key(&numpad_enter).unwrap(), b"\r");
+    let numpad_5 = key(ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_5, 0, Some("5"));
+    assert_eq!(rt.encode_key(&numpad_5).unwrap(), b"5");
+}
+
+/// #1043: the toolbar's Enter (a named key) and the soft keyboard's Enter (committed text) must reach the
+/// agent as the same single CR in every mode a TUI menu might have switched on, or a menu never confirms.
+#[test]
+fn toolbar_enter_and_soft_keyboard_enter_send_one_cr_in_every_mode() {
+    let toolbar = key(ffi::GhosttyKey_GHOSTTY_KEY_ENTER, 0, None);
+    let soft_keyboard = key(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED, 0, Some("\r"));
+    for (name, setup) in [
+        ("plain", &b""[..]),
+        ("application cursor", b"\x1b[?1h"),
+        ("focus reporting", b"\x1b[?1004h"),
+        ("bracketed paste", b"\x1b[?2004h"),
+        ("mouse tracking", b"\x1b[?1000h\x1b[?1006h"),
+        ("alternate screen", b"\x1b[?1049h"),
+        ("kitty disambiguate", b"\x1b[>1u"),
+        ("modifyOtherKeys", b"\x1b[>4;2m"),
+    ] {
+        let mut rt = runtime(20, 3);
+        feed(&mut rt, setup);
+        assert_eq!(
+            rt.encode_key(&toolbar).unwrap(),
+            b"\r",
+            "toolbar Enter, {name}"
+        );
+        assert_eq!(
+            rt.encode_key(&soft_keyboard).unwrap(),
+            b"\r",
+            "soft keyboard Enter, {name}"
+        );
+    }
+}
+
+#[test]
+fn modified_enter_tab_and_ctrl_bracket_stay_legacy_until_the_program_asks_for_a_protocol() {
+    use lazysh_terminal_runtime::KeyInput as K;
+    let (shift, ctrl) = (1, 1 << 1);
+    let enter = |mods| key(ffi::GhosttyKey_GHOSTTY_KEY_ENTER, mods, None);
+    let ctrl_tab = key(ffi::GhosttyKey_GHOSTTY_KEY_TAB, ctrl, None);
+    let ctrl_bracket = key(ffi::GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, ctrl, Some("["));
+    let mut rt = runtime(20, 3);
+    for mods in [ctrl, shift | ctrl] {
+        assert_eq!(rt.encode_key(&enter(mods)).unwrap(), b"\r", "mods {mods}");
+    }
+    // #805: Shift+Enter must stay distinct from Enter for agent TUIs (xterm.js would send CR and submit);
+    // this is the `CSI 13;2u` lazysh sends today, so the native path does not change what Codex receives.
+    assert_eq!(rt.encode_key(&enter(shift)).unwrap(), b"\x1b[13;2u");
+    assert_eq!(rt.encode_key(&enter(0)).unwrap(), b"\r");
+    assert_eq!(rt.encode_key(&ctrl_tab).unwrap(), b"\t");
+    assert_eq!(rt.encode_key(&ctrl_bracket).unwrap(), b"\x1b");
+    // Alt+Enter keeps its ESC prefix, a release is not turned into a press, and composition sends nothing.
+    assert_eq!(rt.encode_key(&enter(1 << 2)).unwrap(), b"\x1b\r");
+    assert!(rt
+        .encode_key(&K {
+            release: true,
+            ..enter(shift)
+        })
+        .unwrap()
+        .is_empty());
+
+    // modifyOtherKeys (CSI > 4 ; 2 m): the program asked, so the encoder's own form is sent.
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>4;2m");
+    assert_eq!(rt.encode_key(&enter(shift)).unwrap(), b"\x1b[27;2;13~");
+    assert_eq!(rt.encode_key(&ctrl_tab).unwrap(), b"\x1b[27;5;9~");
+    // Kitty keyboard flags (CSI > 1 u, disambiguate): Shift+Enter is distinct from Enter.
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>1u");
+    assert_eq!(rt.encode_key(&enter(shift)).unwrap(), b"\x1b[13;2u");
+    assert_eq!(rt.encode_key(&enter(0)).unwrap(), b"\r");
+    assert_eq!(rt.encode_key(&ctrl_bracket).unwrap(), b"\x1b[91;5u");
+    // Regression: without the key's unshifted codepoint the encoder sent Ctrl+C as a plain "c".
+    let ctrl_c = key(ffi::GhosttyKey_GHOSTTY_KEY_C, ctrl, Some("c"));
+    assert_eq!(rt.encode_key(&ctrl_c).unwrap(), b"\x1b[99;5u");
+    let shifted_a = key(ffi::GhosttyKey_GHOSTTY_KEY_A, shift, Some("A"));
+    assert_eq!(
+        rt.encode_key(&shifted_a).unwrap(),
+        b"A",
+        "Shift made the text, the report is plain"
+    );
+}
+
+/// A program that never enabled a keyboard protocol cannot read `CSI 59;5u`: a shell printed it as junk
+/// where xterm.js sends nothing, and Cmd+C typed a "c". Once the program asks, the chords are reported.
+#[test]
+fn chords_only_a_keyboard_protocol_can_express_send_nothing_until_a_program_enables_one() {
+    let (ctrl, alt, shift, sup) = (1 << 1, 1 << 2, 1, 1 << 3);
+    let ctrl_semicolon = key(ffi::GhosttyKey_GHOSTTY_KEY_SEMICOLON, ctrl, Some(";"));
+    let cmd_c = key(ffi::GhosttyKey_GHOSTTY_KEY_C, sup, Some("c"));
+    let ctrl_alt_shift_a = key(ffi::GhosttyKey_GHOSTTY_KEY_A, ctrl | alt | shift, Some("A"));
+    let escape = key(ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE, ctrl, None);
+    let mut rt = runtime(20, 3);
+    for chord in [&ctrl_semicolon, &cmd_c, &ctrl_alt_shift_a] {
+        assert!(rt.encode_key(chord).unwrap().is_empty(), "{chord:?}");
+    }
+    // Chords xterm.js does send keep their legacy bytes: Ctrl+Esc, Shift+Alt+Tab (back tab).
+    assert_eq!(rt.encode_key(&escape).unwrap(), b"\x1b");
+    let shift_alt_tab = key(ffi::GhosttyKey_GHOSTTY_KEY_TAB, shift | alt, None);
+    assert_eq!(rt.encode_key(&shift_alt_tab).unwrap(), b"\x1b[Z");
+
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>1u");
+    assert_eq!(rt.encode_key(&ctrl_semicolon).unwrap(), b"\x1b[59;5u");
+    assert_eq!(rt.encode_key(&cmd_c).unwrap(), b"\x1b[99;9u");
+    let mut rt = runtime(20, 3);
+    feed(&mut rt, b"\x1b[>4;2m");
+    assert_eq!(rt.encode_key(&ctrl_semicolon).unwrap(), b"\x1b[27;5;59~");
 }
 
 #[test]
