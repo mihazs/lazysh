@@ -31,6 +31,7 @@ Choose a guided lesson when learning, a how-to guide when completing a task, ref
 | Create an explicitly public, expiring share link | [Sharing](sharing.md) |
 | Configure terminal appearance and imports | [Themes](themes.md) · [Theme QR](theme-qr.md) · [Fonts](font-downloads.md) |
 | Use terminal shortcuts and chords | [Shortcuts](shortcuts.md) |
+| Open a host sign-in page on your phone or desktop (device side, not wired to the app yet) | [Open a sign-in page on your device](guest-browser.md) |
 | Dictate editable text or import a local speech model | [Voice](voice.md) · [Parakeet](voice-parakeet.md) |
 | Configure an optional cloud transcription service | [Cloud transcription](cloud-transcription.md) |
 | Keep a supported active mobile screen awake | [Keep awake](keep-awake.md) |

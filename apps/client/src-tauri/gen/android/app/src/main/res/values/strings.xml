@@ -7,4 +7,7 @@
         <item quantity="one">%d active session</item>
         <item quantity="other">%d active sessions</item>
     </plurals>
+    <string name="auth_notification_channel">Sign-in requests</string>
+    <string name="auth_notification_title">Sign-in is waiting</string>
+    <string name="auth_notification_text">Open the %1$s sign-in page on this device</string>
 </resources>
