@@ -195,6 +195,8 @@ async fn session() {
             request["sessionId"].as_str().unwrap().into(),
             Some(pane.into()),
             decision.into(),
+            None,
+            None,
             lease.clone(),
         )
     };
