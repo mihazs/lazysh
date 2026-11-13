@@ -2370,6 +2370,33 @@ async fn chat_input_probe() {
         expected.extend_from_slice(format!("{literal}\r\u{1b}").as_bytes());
         chat_fixture_bytes(&outputs[0], &expected).await;
     }
+    // OpenCode drops a short prompt written as a burst of keys, so its prompt arrives as one bracketed paste and Enter;
+    // every other agent keeps getting the keys. The pane asks for bracketed paste the way an agent TUI does.
+    eprintln!("tmux chat stage: OpenCode prompt as a paste");
+    let paste_tty = servers.direct(
+        "chat-a",
+        &["display-message", "-p", "-t", "%0", "#{pane_tty}"],
+    );
+    std::fs::write(&paste_tty, "\x1b[?2004h").unwrap();
+    for (agent, text, arrives) in [
+        (
+            "opencode",
+            "hello opencode",
+            "\x1b[200~hello opencode\x1b[201~\r",
+        ),
+        ("claude", "hello claude", "hello claude\r"),
+    ] {
+        let mut context = json!({"agent":agent,"path":"/owned/shared.db","view":"conversation","inlineImages":false});
+        if agent == "opencode" {
+            context["transcriptSessionId"] = "literal-session-A".into();
+        }
+        let current = chat_fixture_bind(&app, &lease, &child, &context).await;
+        let delivered = chat_fixture_call(&app, &lease, &child, json!({"kind":"input","receipt":current["receipt"],"source":context,"operation":1,"input":{"kind":"send","text":text}})).await.unwrap();
+        assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+        expected.extend_from_slice(arrives.as_bytes());
+        chat_fixture_bytes(&outputs[0], &expected).await;
+    }
+    std::fs::write(&paste_tty, "\x1b[?2004l").unwrap();
     // A prompt past `send`'s 4 KiB arrives intact as one paste and one Enter, assembled over several tmux commands;
     // one past the bound, or too short for this kind, reaches nothing.
     eprintln!("tmux chat stage: long prompt");

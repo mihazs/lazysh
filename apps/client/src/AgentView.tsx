@@ -9,7 +9,8 @@ import AgentApprovalDock from './AgentApprovalDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
 import {publishAnswerGuard} from './agentDialogAnswer';
-import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
+import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
+import {conversationAgents, conversationSource} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
 import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
@@ -26,8 +27,7 @@ import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber, t, useUi} from './i18n/core';
 import './AgentView.css';
 
-const conversationAgents: Record<string, BoundConversation['agent']> = {'Claude Code': 'claude', Codex: 'codex'};
-const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex'};
+const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
 type Selection = {row?:AgentSession;history?:boolean;resume?:string;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
@@ -41,7 +41,7 @@ function StartButtons({sessionId}:{sessionId:string}) {
   return <>{(['claude','codex'] as const).map(agent=><button type="button" key={agent} onClick={()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:agent}}))}>{t('agentViewStartNamed',{agent:agentNames[agent]})}</button>)}</>;
 }
 /** Image previews cost bytes on a mobile link: on by default for Claude Code, opt-in for Codex whose companion support is newer. Kept per viewer. */
-const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false};
+const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false, opencode: false};
 function storedImages() {
   try {return {...imageDefaults, ...JSON.parse(localStorage.getItem('lazysh.agentImages') ?? '{}')} as Record<BoundConversation['agent'], boolean>;} catch {return imageDefaults;}
 }
@@ -112,18 +112,19 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
         const [snapshot, terminal] = await Promise.all([invoke('agent_snapshot', {sessionId}), tmux ? invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}}) : undefined]);
         const reports = parseSnapshot(snapshot);
         if (!alive || !access.current()) return;
-        setSessions(reports.filter(row=>!!conversationAgents[row.agent] && reports.filter(other=>other.sessionId===row.sessionId).length===1));
+        setSessions(reports.filter(row=>row.agent in conversationAgents && reports.filter(other=>other.sessionId===row.sessionId).length===1));
         // Pane identity is the evidence: TMUX_PANE ties a hook report to this tmux terminal; in a Zellij session, the one report that names a pane of it.
         const own = zellijSession ? reports.filter(row => zellijPane(row.paneId)?.session === zellijSession) : [];
         const pane = tmux ? parseTerminalSnapshot(terminal).destination.paneId : own.length === 1 ? own[0].paneId ?? undefined : undefined;
         const matching = pane === undefined ? [] : reports.filter(row => row.paneId === pane);
         const row = matching.length===1 ? matching[0] : undefined;
-        const agent = row && conversationAgents[row.agent];
+        const agent = row && conversationAgents[row.agent as keyof typeof conversationAgents];
         let conversation:BoundConversation | undefined;
         if (row && agent) {
           try {
-            const history = parseReportedHistory(await invoke('agent_reported_history', {sessionId, agentSessionId: row.sessionId}), row.sessionId);
-            if (history.status === 'available' && history.paneId === pane) conversation=Object.freeze({agent, path: history.path,report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
+            const found = await conversationSource(invoke, sessionId, agent, row.sessionId);
+            // The report's own pane is the evidence for OpenCode; Claude Code and Codex also name it in the reported history.
+            if (found && (found.paneId === undefined || found.paneId === pane)) conversation=Object.freeze({agent, path: found.path,...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}});
           } catch { /* A detected agent remains visible when its history is unavailable. */ }
         }
         if (alive && access.current()) setBinding(previous => !row ? {kind: 'none'} : !conversation ? {kind: 'partial', row}
@@ -148,13 +149,14 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     const id=++request.current;setSelecting(true);setUnavailable(false);
     const owns=()=>request.current===id && active.current.shown && active.current.sessionId===sessionId && access.current();
     try {
-      const history=parseReportedHistory(await invoke('agent_reported_history',{sessionId,agentSessionId:chosen.sessionId}),chosen.sessionId);
+      const agent=conversationAgents[chosen.agent as keyof typeof conversationAgents];
+      const source=await conversationSource(invoke,sessionId,agent,chosen.sessionId);
       if(!owns())return;
       const reports=parseSnapshot(await invoke('agent_snapshot',{sessionId}));
       const matches=reports.filter(row=>row.sessionId===chosen.sessionId);
       if(!owns())return;
-      if(history.status!=='available' || matches.length!==1 || matches[0].agent!==chosen.agent) {setUnavailable(true);return;}
-      setPicked({row:matches[0],conversation:Object.freeze({agent:conversationAgents[chosen.agent],path:history.path,report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
+      if(!source || matches.length!==1 || matches[0].agent!==chosen.agent) {setUnavailable(true);return;}
+      setPicked({row:matches[0],conversation:Object.freeze({agent,path:source.path,...(source.transcriptSessionId ? {transcriptSessionId:source.transcriptSessionId} : {}),report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
     } catch {if(owns())setUnavailable(true);}
     finally {if(owns())setSelecting(false);}
   }
@@ -203,11 +205,13 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const isLinked = !!selected?.linked;
   // A Zellij pane is named by the agent's own report, so a conversation picked from the list has it too, unless another report claims the pane.
   const zellij = zellijSession ? zellijPane(row?.paneId) : undefined;
-  const proof:ComposerProof|undefined = tmux && !selected && row?.paneId ? {kind:'tmux',paneId:row.paneId}
+  // OpenCode takes its prompt as a paste and its Stop as two Escapes, and only through tmux: nothing else has been checked against it.
+  const guarded = !!kept && (kept.agent !== 'opencode' || (tmux && terminalInput?.backend === 'tmux'));
+  const proof:ComposerProof|undefined = !guarded ? undefined : tmux && !selected && row?.paneId ? {kind:'tmux',paneId:row.paneId}
     : zellij && zellij.session === zellijSession && sessions.filter(session => session.paneId === row?.paneId).length === 1 ? {kind:'zellij',session:zellij.session,pane:zellij.pane}
     : isLinked && selected?.conversation.herdr ? {kind:'herdr',pane:selected.conversation.herdr.paneId,terminal:selected.conversation.herdr.terminalId} : undefined;
   // A picked conversation has no destination to confirm under Herdr; under Zellij it takes input only through its own report's pane.
-  const composerLabels = terminalInput?.backend==='zellij' ? (proof?.kind==='zellij' ? terminalInput : undefined)
+  const composerLabels = !guarded ? undefined : terminalInput?.backend==='zellij' ? (proof?.kind==='zellij' ? terminalInput : undefined)
     : selected && !isLinked && terminalInput?.backend!=='tmux' ? undefined : terminalInput;
   const back = ()=>{request.current++;setPicked(undefined);setChoosing(!herdrSession);setUnavailable(false);setMenu(false);};
   const onChoose = (live:Parameters<NonNullable<Parameters<typeof HerdrAgentsPanel>[0]['onChooseSession']>>[0],server:string)=>{

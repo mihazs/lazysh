@@ -17,6 +17,8 @@ export const slashCommands: Record<Agent, readonly SlashCommand[]> = {
     {name: 'compact'}, {name: 'diff'}, {name: 'init'}, {name: 'new'}, {name: 'review'}, {name: 'status'},
     {name: 'model', picker: true}, {name: 'approvals', picker: true}, {name: 'resume', picker: true}, {name: 'mcp'}, {name: 'mention', picker: true},
   ],
+  // No command is offered that nothing here could verify; a prompt that starts with / is sent as typed.
+  opencode: [],
 };
 
 /** The commands a draft is asking for: only while the first word is being typed, never inside a longer prompt. */
@@ -33,6 +35,8 @@ export const slashText = (command: SlashCommand) => `/${command.name} `;
 /** The first character that switches the prompt box into another mode in the agent's own UI. */
 export type PromptMode = 'bash' | 'memory';
 export function promptMode(agent: Agent, draft: string): PromptMode | undefined {
+  // Nothing here has checked what a leading ! or # means in OpenCode's prompt, so it is not named as a mode.
+  if (agent === 'opencode') return;
   if (draft.startsWith('!')) return 'bash';
   if (agent === 'claude' && draft.startsWith('#')) return 'memory';
 }

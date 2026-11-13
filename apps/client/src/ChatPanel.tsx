@@ -4,7 +4,8 @@ import './ChatPanel.css';
 import {shellPath} from './attachment';
 import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
-import {parseReportedHistory,parseSnapshot,type ReportedHistorySource} from './AgentPanel';
+import {parseSnapshot,type ReportedHistorySource} from './AgentPanel';
+import {conversationSource,type ConversationAgent} from './agentConversationSource';
 import {formatNumber, t, useUi} from './i18n/core';
 import {formatCountdown,formatRelativeTime,useNow} from './relativeTime';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
@@ -222,7 +223,7 @@ export function activitySummary(turn: Turn): string {
 const NO_HISTORY = {paging: false, older: false, newer: false};
 
 /** A conversation the Agent view found for its pane from hook reports. */
-export type BoundConversation = Readonly<{agent: 'claude' | 'codex'; path: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
+export type BoundConversation = Readonly<{agent: ConversationAgent; path: string; /** OpenCode keeps every session in one database: the id picks the session. */transcriptSessionId?: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
@@ -261,7 +262,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [discovered, setDiscovered] = useState<
     { path: string; name: string; sessionId?: string }[]
   >([]);
-  const [transcriptSessionId, setTranscriptSessionId] = useState("");
+  const [transcriptSessionId, setTranscriptSessionId] = useState(bound?.transcriptSessionId ?? "");
   const [inputOpen,setInputOpen]=useState({generation:0,pending:false});
   const [opened, setOpened] = useState<{
     agent: string;
@@ -357,12 +358,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const canFollow = followable && sourceMatches;
   useLayoutEffect(() => {
     if (!shown) request.current++;
-    if (bound && (path !== bound.path || agent !== bound.agent)) {
+    if (bound && (path !== bound.path || agent !== bound.agent || transcriptSessionId !== (bound.transcriptSessionId ?? ''))) {
       request.current++; setFollowing(false); followRef.current = false;
-      setPath(bound.path); setAgent(bound.agent); setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setWork(undefined);
+      setPath(bound.path); setAgent(bound.agent); setTranscriptSessionId(bound.transcriptSessionId ?? ''); setOpened(undefined); setMessages([]); setHistory(NO_HISTORY); setActivity(undefined); setQueued([]); setWork(undefined);
       setOffset(0); setCheckpoint(undefined); setMore(false); setError('');
     }
-  }, [shown, bound, path, agent]);
+  }, [shown, bound, path, agent, transcriptSessionId]);
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
@@ -492,18 +493,18 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     const report = bound.report;
     try {
       // The three reads do not depend on each other: they run together, so the check costs one round trip, not three.
-      const [snapshot, reports, history] = await Promise.all([
+      const [snapshot, reports, source] = await Promise.all([
         // A Zellij pane has no tmux destination to compare; the agent report below is its only evidence.
         report.paneId && !zellijPane(report.paneId) ? invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}}) : undefined,
         invoke('agent_snapshot', {sessionId}),
-        invoke('agent_reported_history', {sessionId, agentSessionId: report.sessionId}),
+        // Claude Code and Codex name their transcript file in the reported history; OpenCode is found in its database.
+        conversationSource(invoke, sessionId, bound.agent, report.sessionId),
       ]);
       if (!still()) return;
       if (snapshot !== undefined && parseTerminalSnapshot(snapshot).destination.paneId !== report.paneId) throw new LocalUiError('chatChanged');
       const rows = parseSnapshot(reports), matches = rows.filter(row => row.sessionId === report.sessionId);
       if (matches.length !== 1 || matches[0].agent !== report.agent || (report.paneId && (matches[0].paneId !== report.paneId || rows.filter(row => row.paneId === report.paneId).length !== 1))) throw new LocalUiError('chatChanged');
-      const available = parseReportedHistory(history, report.sessionId);
-      if (available.status !== 'available' || available.path !== bound.path || (report.paneId && available.paneId !== report.paneId)) throw new LocalUiError('chatChanged');
+      if (!source || source.path !== bound.path || source.transcriptSessionId !== bound.transcriptSessionId || (report.paneId && source.paneId !== undefined && source.paneId !== report.paneId)) throw new LocalUiError('chatChanged');
     } catch (error) {if (still()) onBoundInvalid?.(); throw error;}
   }
   async function read(reset: boolean, automatic = false, prepare = false, slice?: WindowRequest) {

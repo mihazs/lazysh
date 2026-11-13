@@ -8,6 +8,7 @@ import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
 import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrChat';
 import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
+import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from './test/opencodeRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -788,6 +789,67 @@ describe('session info sheet',()=>{
     await withInfo({mcp:[{name:'x',state:'exploded'},{state:'connected'}],skills:[42,'bad\u001bname'],instructionFiles:'nope'});
     expect(within(options()).queryByRole('button',{name:'Session info'})).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Here is the plan.')).toBeTruthy();
+  });
+});
+describe('OpenCode pane',()=>{
+  // The companion's own output for a real OpenCode session; the hook report names the same session id.
+  const opencodeRow=(session=opencodeSession)=>({...row('OpenCode','%3'),sessionId:session});
+  const mount=async(rows:unknown[],discovered:unknown=opencodeDiscovery)=>{
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='tmux_chat')return tmuxChatReply(command,args);
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
+      if(command==='agent_transcripts')return discovered;
+      if(command==='agent_transcript')return opencodePage;
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
+      throw new Error(`Unexpected ${command}`);
+    });
+    await mountTmux();
+  };
+
+  it('binds from the hook report of this pane through its database and reads the session',async()=>{
+    await mount([opencodeRow()]);
+    expect(screen.getByText('reply with the single word ok')).toBeTruthy();
+    expect(screen.getByText('ok')).toBeTruthy();
+    expect(calls('agent_transcripts')[0]).toEqual({sessionId:'ssh',agent:'opencode'});
+    expect(calls('agent_transcript')[0]).toMatchObject({agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'});
+    expect(calls('agent_reported_history')).toEqual([]);
+  });
+
+  it('sends the prompt through the guarded input with its database session, and Stop is two Escapes a moment apart',async()=>{
+    await mount([opencodeRow()]);
+    fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:'Run the tests'}});await advance(0);
+    fireEvent.click(screen.getByRole('button',{name:'Send to the agent'}));await advance(0);
+    const inputs=()=>calls('tmux_chat').map(args=>(args as {action:{kind:string;input?:{kind:string;text?:string};source?:unknown}}).action).filter(action=>action.kind==='input');
+    expect(inputs().map(action=>action.input)).toEqual([{kind:'send',text:'Run the tests'}]);
+    expect(inputs()[0]).toMatchObject({source:{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'}});
+    fireEvent.click(screen.getByRole('button',{name:'Request stop'}));
+    fireEvent.click(screen.getByRole('button',{name:'Tap again to stop the agent'}));await advance(0);
+    expect(inputs().map(action=>action.input?.kind)).toEqual(['send','request_stop']);
+    await advance(400);
+    expect(inputs().map(action=>action.input?.kind)).toEqual(['send','request_stop','request_stop']);
+  });
+
+  it('keeps the pane in the partial state with Show terminal when its session is not in the database',async()=>{
+    await mount([opencodeRow()],{...opencodeDiscovery,sessions:[]});
+    expect(screen.getByText(/conversation/i)).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(calls('agent_transcript')).toEqual([]);
+  });
+
+  it('retires the view when the pane is taken over by another session',async()=>{
+    await mount([opencodeRow()]);
+    expect(screen.getByText('reply with the single word ok')).toBeTruthy();
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='tmux_chat')return tmuxChatReply(command,args);
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[opencodeRow('ses_other')]};
+      if(command==='agent_transcripts')return opencodeDiscovery;
+      throw new Error(`Unexpected ${command}`);
+    });
+    await advance(5000);
+    // Another session in the same database is not this conversation: nothing of it is offered, and the pane says so.
+    expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
+    expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
   });
 });
 
