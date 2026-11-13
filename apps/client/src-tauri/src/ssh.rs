@@ -746,6 +746,10 @@ pub(crate) struct SshHandle {
     handle: Arc<client::Handle<HostVerifier>>,
     open_slots: Arc<Semaphore>,
     pub(crate) herdr_unix: std::sync::atomic::AtomicU8,
+    pub(crate) host_probe: crate::companion::HostProbe,
+    /// Execs started on this connection, so a test can assert how many a user action costs.
+    #[cfg(test)]
+    pub(crate) execs: std::sync::atomic::AtomicU64,
     open_owner_gone: watch::Sender<bool>,
     forward_agent: crate::forward_agent::ForwardAgent,
     pub(crate) peer_address: Option<std::net::SocketAddr>,
@@ -1140,6 +1144,9 @@ where
         handle: Arc::new(handle),
         open_slots: Arc::new(Semaphore::new(4)),
         herdr_unix: crate::herdr_path::new_cache(),
+        host_probe: Default::default(),
+        #[cfg(test)]
+        execs: Default::default(),
         open_owner_gone: watch::channel(false).0,
         forward_agent,
         peer_address: None,
@@ -3002,6 +3009,10 @@ async fn exec_inner_with_handle(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    #[cfg(test)]
+    handle
+        .execs
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let deadline = tokio::time::Instant::now() + duration;
     let mut channel = match retained {
         Some(retained) => open_owned_channel_retained(handle, lease, deadline, retained).await?,

@@ -11,10 +11,15 @@ import heavyUrl from './fixtures/agent-page-heavy.json?url';
 
 /** SSH cost model. `execMs` is one host exec (a probe, a snapshot, a transcript read); `execs` is how many each native command runs. */
 export type Model = {execMs: number; controlMs: number; hostMs: number; page: 'typical' | 'heavy'; stream: boolean; mode: 'tmux' | 'herdr';
-  /** Sequential execs per native command: the companion probe plus the command, the Herdr tree reads around a conversation read. */
+  /** The exec counts of the baseline commit 9d0da93e: every companion command repeated the probe, the Herdr conversation read ran four execs. */
+  legacy: boolean;
+  /** Sequential execs per native command. */
   execs: Record<string, number>};
-const TMUX_EXECS = {agent_snapshot: 2, agent_reported_history: 2, agent_transcript: 2, agent_watch_start: 2, herdr_tree: 1, agent_herdr_conversation: 4};
-export const DEFAULT_MODEL: Model = {execMs: 8, controlMs: 4, hostMs: 90, page: 'typical', stream: true, mode: 'tmux', execs: TMUX_EXECS};
+const LEGACY_EXECS = {agent_snapshot: 2, agent_reported_history: 2, agent_transcript: 2, agent_watch_start: 2, multiplexer_sessions: 1, herdr_tree: 1, agent_herdr_conversation: 4};
+/** With the host probe cached the command is the only exec; a Herdr conversation read is the tree check overlapped with the conversation,
+ * then the tree again. The first companion command of a connection also waits for the one probe exec (`probe` below). */
+const EXECS = {agent_snapshot: 1, agent_reported_history: 1, agent_transcript: 1, agent_watch_start: 1, multiplexer_sessions: 1, herdr_tree: 1, agent_herdr_conversation: 2};
+export const DEFAULT_MODEL: Model = {execMs: 8, controlMs: 4, hostMs: 90, page: 'typical', stream: true, mode: 'tmux', legacy: false, execs: EXECS};
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const frame = () => new Promise<number>(resolve => requestAnimationFrame(resolve));
@@ -28,6 +33,7 @@ let started = 0;
 const calls: {command: string; start: number; end: number}[] = [];
 const commits: {phase: string; actual: number; start: number; commit: number}[] = [];
 const onRender: ProfilerOnRenderCallback = (_id, phase, actual, _base, start, commit) => { commits.push({phase, actual, start, commit}); };
+let probe: Promise<void> | undefined;
 let watch: {onmessage: (event: unknown) => void} | undefined;
 let page: Record<string, unknown> & {messages: {id: string}[]};
 let dispose = () => {};
@@ -44,12 +50,16 @@ const herdrTree = () => {
 };
 const entries = (messages: {id: string}[]) => messages.map(message => ({id: message.id, rev: 1, message}));
 
+const companionCommands = new Set(['agent_snapshot', 'agent_reported_history', 'agent_transcript', 'agent_watch_start', 'multiplexer_sessions', 'herdr_tree', 'agent_herdr_conversation']);
 async function native(command: string, args: Record<string, unknown>) {
   const start = performance.now();
+  // The host probe runs once per connection, and the commands that start together share it.
+  if (!model.legacy && companionCommands.has(command)) await (probe ??= sleep(model.execMs));
   const wait = async (ms: number) => { await sleep(ms); };
   let result: unknown;
   switch (command) {
     case 'multiplexer_sessions':
+      await wait(model.execs.multiplexer_sessions * model.execMs);
       result = [{name: 'owned'}];
       break;
     case 'herdr_tree':
@@ -120,8 +130,9 @@ function meter() {
 async function open(next: Partial<Model> = {}) {
   model = {...DEFAULT_MODEL, ...next, execs: {...DEFAULT_MODEL.execs, ...next.execs}};
   model.controlMs = Math.max(4, model.execMs / 2);
+  if (model.legacy) model.execs = LEGACY_EXECS;
   dispose();
-  calls.length = 0; commits.length = 0; watch = undefined;
+  calls.length = 0; commits.length = 0; watch = undefined; probe = undefined;
   install();
   applyAccessStatus({initialized: true, supported: true, reason: 'Synthetic benchmark fixture.', enabled: true, locked: false, generation: String(BigInt(accessSnapshot().status?.generation ?? '0') + 1n), nonce: 'a'.repeat(64)});
   const host = document.createElement('div');

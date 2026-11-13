@@ -11,6 +11,33 @@ mod install;
 mod release;
 mod resolve;
 mod transfer;
+/// A connection's positive-Unix probe result (see `resolve::detect`), shared by every companion command on it.
+#[derive(Default)]
+pub(crate) struct HostProbe(tokio::sync::OnceCell<Option<resolve::Unix>>);
+impl HostProbe {
+    /// Runs `probe` unless this connection already has an answer. Concurrent first callers share one probe.
+    async fn resolve<F, Fut>(&self, probe: F) -> Result<Option<resolve::Unix>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<resolve::Probed>>,
+    {
+        let answer = self
+            .0
+            .get_or_try_init(|| async {
+                match probe().await {
+                    Ok(resolve::Probed::Known(host)) => Ok(host),
+                    Ok(resolve::Probed::Unknown) => Err(None),
+                    Err(error) => Err(Some(error)),
+                }
+            })
+            .await;
+        match answer {
+            Ok(host) => Ok(host.clone()),
+            Err(None) => Ok(None),
+            Err(Some(error)) => Err(error),
+        }
+    }
+}
 pub(crate) async fn positive_unix(session: &Session, lease: &AccessLease) -> Result<bool> {
     Ok(resolve::detect(session, lease).await?.is_some())
 }
@@ -137,4 +164,85 @@ pub(crate) async fn owned_install(
     )
     .await
     .map_err(|failure| failure.error)
+}
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    fn linux() -> resolve::Unix {
+        resolve::Unix {
+            os: "linux",
+            arch: "x64",
+            uid: 1000,
+            home: "/home/owner".into(),
+            data: "/home/owner/.local/share".into(),
+        }
+    }
+    async fn known(asked: &AtomicUsize, host: Option<resolve::Unix>) -> Result<resolve::Probed> {
+        asked.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        Ok(resolve::Probed::Known(host))
+    }
+    #[tokio::test]
+    async fn a_connection_is_probed_once_even_when_commands_start_together() {
+        let (probe, asked) = (HostProbe::default(), AtomicUsize::new(0));
+        let (a, b, c) = tokio::join!(
+            probe.resolve(|| known(&asked, Some(linux()))),
+            probe.resolve(|| known(&asked, Some(linux()))),
+            probe.resolve(|| known(&asked, Some(linux())))
+        );
+        for answer in [a, b, c] {
+            assert_eq!(answer.unwrap().unwrap().uid, 1000);
+        }
+        assert_eq!(
+            probe
+                .resolve(|| known(&asked, None))
+                .await
+                .unwrap()
+                .unwrap()
+                .home,
+            "/home/owner"
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn a_host_that_is_not_positive_unix_is_remembered_too() {
+        let (probe, asked) = (HostProbe::default(), AtomicUsize::new(0));
+        assert!(probe
+            .resolve(|| known(&asked, None))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(probe
+            .resolve(|| known(&asked, Some(linux())))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn a_probe_that_did_not_answer_or_failed_is_asked_again() {
+        let (probe, asked) = (HostProbe::default(), AtomicUsize::new(0));
+        let unanswered = probe
+            .resolve(|| async { Ok(resolve::Probed::Unknown) })
+            .await;
+        assert!(unanswered.unwrap().is_none());
+        let failed = probe
+            .resolve(|| async {
+                Err::<resolve::Probed, _>(error("disconnected", "Session closed"))
+            })
+            .await;
+        assert_eq!(failed.unwrap_err().kind(), "disconnected");
+        assert!(probe
+            .resolve(|| known(&asked, Some(linux())))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(probe
+            .resolve(|| known(&asked, None))
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
 }

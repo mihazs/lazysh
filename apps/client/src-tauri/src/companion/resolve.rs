@@ -44,7 +44,21 @@ fn parse(text: &str) -> Option<Unix> {
         data: rows[5].into(),
     })
 }
+/// What one probe exec learned. `Unknown` means it could not run to an answer (timeout, odd output) and must be asked again.
+pub(super) enum Probed {
+    Known(Option<Unix>),
+    Unknown,
+}
+/// The host's answer, asked once per SSH connection: it cannot change while the connection stands, and every companion
+/// command needs it. A probe that did not answer is not remembered.
 pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Option<Unix>> {
+    session
+        .handle
+        .host_probe
+        .resolve(|| probe(session, lease))
+        .await
+}
+async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
     match ssh::exec_bounded(
         session,
         format!("sh -c {}", ssh::quote(PROBE)),
@@ -55,7 +69,7 @@ pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Opt
     )
     .await
     {
-        Ok(text) => Ok(parse(&text)),
+        Ok(text) => Ok(Probed::Known(parse(&text))),
         Err(error)
             if matches!(
                 error.kind(),
@@ -66,7 +80,7 @@ pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Opt
             if *session.cancel.borrow() {
                 return Err(super::error("disconnected", "Session closed"));
             }
-            Ok(None)
+            Ok(Probed::Unknown)
         }
         Err(error) => Err(error),
     }

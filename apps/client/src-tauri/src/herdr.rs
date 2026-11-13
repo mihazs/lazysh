@@ -474,26 +474,30 @@ pub async fn agent_herdr_conversation(
                 ));
             }
             let session = state.session(&session_id).await?;
-            let before = read_tree(&session, &herdr_session, &access).await?;
-            if !selected_agent(&before, &pane_id, &terminal_id, &agent, &agent_session_id) {
-                return Err(SshError::new(
-                    "herdr_target_missing",
-                    "The selected agent session is no longer available",
-                ));
-            }
             let command = format!(
                 "lazysh-agent herdr-conversation --agent {} --session-id {}",
                 quote(&agent),
                 quote(&agent_session_id)
             ) + &window.unwrap_or_default().flags()?;
-            let command = crate::companion::required_command(
-                &session,
-                command,
-                CONVERSATION_COMPANION_REQUIRED,
-                &access,
-            )
-            .await?;
-            let raw = crate::ssh::exec_for_access(&session, command, &access).await?;
+            // The check of the pane and the read of the conversation do not depend on each other, so they overlap; what the
+            // check found still decides first, and the tree is read again after the conversation (below).
+            let (before, raw) = tokio::join!(read_tree(&session, &herdr_session, &access), async {
+                let command = crate::companion::required_command(
+                    &session,
+                    command,
+                    CONVERSATION_COMPANION_REQUIRED,
+                    &access,
+                )
+                .await?;
+                crate::ssh::exec_for_access(&session, command, &access).await
+            });
+            if !selected_agent(&before?, &pane_id, &terminal_id, &agent, &agent_session_id) {
+                return Err(SshError::new(
+                    "herdr_target_missing",
+                    "The selected agent session is no longer available",
+                ));
+            }
+            let raw = raw?;
             let page = conversation_page(&raw, &agent)?;
             let after = read_tree(&session, &herdr_session, &access).await?;
             if !selected_agent(&after, &pane_id, &terminal_id, &agent, &agent_session_id)

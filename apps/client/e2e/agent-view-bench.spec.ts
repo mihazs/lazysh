@@ -56,7 +56,7 @@ async function run(page: Page, scenario: Scenario) {
   const before = await metrics(cdp);
   const profile = process.env.LAZYSH_BENCH_PROFILE;
   if (profile) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', {interval: 200}); await cdp.send('Profiler.start'); }
-  const opened = await page.evaluate(model => window.agentBench.open(model), {execMs: links[scenario.link], page: scenario.page, stream: scenario.stream, mode: scenario.mode ?? 'tmux', ...(scenario.hostMs === undefined ? {} : {hostMs: scenario.hostMs})});
+  const opened = await page.evaluate(model => window.agentBench.open(model), {execMs: links[scenario.link], page: scenario.page, stream: scenario.stream, mode: scenario.mode ?? 'tmux', legacy: process.env.LAZYSH_BENCH_LEGACY === '1', ...(scenario.hostMs === undefined ? {} : {hostMs: scenario.hostMs})});
   const after = await metrics(cdp);
   if (profile) {
     const {profile: cpu} = await cdp.send('Profiler.stop');

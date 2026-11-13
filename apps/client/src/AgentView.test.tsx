@@ -1131,3 +1131,53 @@ describe('working row',()=>{
     expect(working()).toEqual([]);
   });
 });
+
+describe('round trips before the first message',()=>{
+  /** Holds every host read until the test lets it answer, so what starts together shows as calls made before any answer. */
+  function held() {
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    const waiting:(()=>void)[]=[];
+    vi.mocked(invoke).mockImplementation((command,args,options)=>new Promise((resolve,reject)=>{
+      waiting.push(()=>base(command,args,options).then(resolve,reject));
+    }));
+    const release=async()=>{await act(async()=>{await vi.advanceTimersByTimeAsync(0);});const batch=waiting.splice(0);batch.forEach(answer=>answer());await act(async()=>{await vi.advanceTimersByTimeAsync(0);});};
+    return release;
+  }
+  const names=()=>vi.mocked(invoke).mock.calls.map(([command])=>command);
+
+  it('asks the host for its reports and this terminal for its pane together',async()=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('First prompt','First answer')]);
+    const release=held();
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    // Neither read has answered yet, and both are already out.
+    expect(names()).toEqual(expect.arrayContaining(['agent_snapshot','tmux_chat']));
+    expect(names()).not.toContain('agent_reported_history');
+    await release();
+    expect(names()).toContain('agent_reported_history');
+  });
+
+  it('reads the conversation as soon as the pane is bound, without checking the same report a second time first',async()=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('First prompt','First answer')]);
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await advance(0);
+    expect(screen.getByText('First answer')).toBeTruthy();
+    const first=names().indexOf('agent_transcript');
+    // Only the bind itself looked at the reports before the first read; the check that follows a read comes after it.
+    expect(names().slice(0,first).filter(command=>command==='agent_snapshot')).toHaveLength(1);
+    expect(names().slice(0,first).filter(command=>command==='agent_reported_history')).toHaveLength(1);
+  });
+
+  it('checks the report, the pane and the history together once a conversation has been read',async()=>{
+    host('claude',[row('Claude Code','%3')],'available',[turn('First prompt','First answer')]);
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await advance(0);
+    const release=held();
+    vi.mocked(invoke).mockClear();
+    // The next poll of a conversation that is already open checks the binding first: the three reads start together.
+    await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
+    expect(names().filter(command=>command!=='agent_watch_start'&&command!=='agent_approvals').sort()).toEqual(['agent_reported_history','agent_snapshot','tmux_chat']);
+    await release();
+    expect(names()).toContain('agent_transcript');
+  });
+});
