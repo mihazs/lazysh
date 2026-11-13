@@ -1,9 +1,9 @@
 //! `lazysh-agent update`: check for, install, dry-run and roll back the managed companion.
 //!
 //! Output contract and exit codes: docs/reference/companion-update.md.
-// Installing needs the managed-directory primitives of Linux and macOS; elsewhere only `--check` and
-// `--status` exist until the Windows replace lands, and the rest of this module is not reached.
-#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+// Installing exists where there is a managed directory to install into; elsewhere only `--check` and
+// `--status` exist, and the rest of this module is not reached.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 use clap::{Args as ClapArgs, ValueEnum};
 use lazysh_companion_release::{version, Config, Publisher, Selection, Which, MAX_BINARY};
 use report::{Failure, Fault, Latest, Output, Report};
@@ -11,15 +11,23 @@ use serde_json::{json, Value};
 use std::{io::IsTerminal, process::ExitCode, time::Duration};
 
 mod current;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod install;
 mod process;
 mod report;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod selftest;
+mod staging;
 mod state;
+// Descriptor-relative operations on Linux and macOS; plain paths on Windows. Under test the path
+// version also runs on Unix, where its logic can be exercised without a Windows host.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod store;
+#[cfg(any(windows, test))]
+#[path = "store_windows.rs"]
+#[cfg_attr(not(windows), allow(dead_code))]
+mod store_path;
+#[cfg(windows)]
+use store_path as store;
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Channel {
@@ -250,11 +258,9 @@ fn status(report: &mut Report) -> Result<(), Fault> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod install {
     use super::*;
-    /// Shortcut: installing, dry runs and rollback need the managed-directory primitives, which exist
-    /// on Linux and macOS only. The Windows replace (rename of the running image) is the next slice.
     pub async fn run(_: &Args, _: Mode, _: &Output, _: &mut Report) -> Result<(), Fault> {
         Err(Failure::UnsafeInstallLocation.into())
     }
@@ -267,7 +273,7 @@ fn usage_error(args: &Args, mode: Mode) -> Option<&'static str> {
         "--yes is required to change the installed companion without a terminal or with --json",
     )
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn confirmed(question: &str) -> bool {
     use std::io::{BufRead, Write};
     let _ = write!(std::io::stderr(), "{question} [y/N] ");

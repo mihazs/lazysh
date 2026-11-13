@@ -1,4 +1,4 @@
-//! Install, dry-run and roll back the managed companion (Linux and macOS).
+//! Install, dry-run and roll back the managed companion.
 //!
 //! Order matters: the release is resolved and pinned before anything is written; the download is
 //! staged in a private file that is not executable; size and SHA-256 are compared before it is
@@ -8,8 +8,9 @@ use super::{
     compare, confirmed, current,
     report::{Current, Failure, Fault, Output, Report},
     resolve, selftest,
+    staging::{commit, Identity},
     state::{self, Previous, Retained},
-    store::{Identity, Staged, Store},
+    store::{hash, Staged, Store, PREVIOUS},
     Args, Mode, Resolved, Standing,
 };
 use serde_json::{json, Value};
@@ -144,12 +145,14 @@ async fn apply(
     let mut download = resolved.publisher.download(selection).await?;
     let mut received = 0;
     while let Some(chunk) = download.chunk().await? {
-        staged.write(&chunk)?;
+        staged.staging.write(&chunk)?;
         received += chunk.len() as u64;
         output.progress(received, selection.bytes);
     }
     output.stage("verifying");
-    staged.seal(&selection.digest, selection.bytes)?;
+    staged
+        .staging
+        .seal(&selection.digest, selection.bytes, hash)?;
     output.stage("selfTesting");
     if !selftest::passes(&store.path(&staged), &selection.version) {
         return Err(Failure::SelfTestFailed.into());
@@ -183,8 +186,12 @@ fn replace(
     report: &mut Report,
 ) -> Result<Retained, Fault> {
     output.stage("replacing");
-    let identity = staged.identity().cloned().ok_or(Failure::Internal)?;
-    let kept = store.commit(staged, version, || output.stage("checkingInstalled"))?;
+    let identity = staged
+        .staging
+        .identity()
+        .cloned()
+        .ok_or(Failure::Internal)?;
+    let kept = commit(store, staged, version, || output.stage("checkingInstalled"))?;
     report.outcome = outcome;
     report.current = Some(installed(store, version, &identity));
     report.previous = kept
@@ -198,7 +205,7 @@ fn rollback(output: &Output, report: &mut Report) -> Result<(), Fault> {
     let store = Store::open(false)?.ok_or(Failure::NoPreviousVersion)?;
     let previous = state::State::read(&crate::state_directory()?)
         .previous
-        .filter(|_| store.exists(super::store::PREVIOUS))
+        .filter(|_| store.exists(PREVIOUS))
         .ok_or(Failure::NoPreviousVersion)?;
     let installed = current::detect()?;
     let had = store.current()?.is_some();
