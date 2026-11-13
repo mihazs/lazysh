@@ -134,15 +134,20 @@ fn output_is_filtered_by_port_sorted_and_capped_at_256() {
     let many: Vec<Listener> = (1..=300u16)
         .map(|port| listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 2000 + port).unwrap())
         .collect();
-    let capped = finish(many.clone(), &[]);
+    let at = chrono::Utc::now();
+    let capped = finish(many.clone(), &[], at);
     assert_eq!(capped["listeners"].as_array().unwrap().len(), MAX_LISTENERS);
     assert_eq!(capped["truncated"], true);
     assert_eq!(ports(&capped)[0], 2001);
-    let one = finish(many, &[2100, 9]);
+    let one = finish(many, &[2100, 9], at);
     assert_eq!(ports(&one), [2100]);
     assert!(one.get("truncated").is_none());
     assert_eq!(one["schemaVersion"], 1);
     assert_eq!(one["event"], "snapshot");
+    assert_eq!(
+        one["observedAt"],
+        at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    );
 }
 
 #[cfg(all(unix, target_endian = "little"))]
@@ -276,8 +281,12 @@ mod fake_proc {
             "TOKEN=secret-environment\0",
         )
         .unwrap();
-        let text = serde_json::to_string(&finish(proc::read(root.path(), 1000, 100).unwrap(), &[]))
-            .unwrap();
+        let text = serde_json::to_string(&finish(
+            proc::read(root.path(), 1000, 100).unwrap(),
+            &[],
+            chrono::Utc::now(),
+        ))
+        .unwrap();
         assert!(!text.contains("secret"), "{text}");
     }
 

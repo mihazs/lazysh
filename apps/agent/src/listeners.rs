@@ -93,7 +93,11 @@ fn listener(ip: IpAddr, port: u16) -> Option<Listener> {
 }
 
 /// Sorted by port so the cap keeps a stable subset, filtered before the cap.
-fn finish(mut listeners: Vec<Listener>, ports: &[u16]) -> Value {
+fn finish(
+    mut listeners: Vec<Listener>,
+    ports: &[u16],
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
     listeners.retain(|entry| ports.is_empty() || ports.contains(&entry.port));
     listeners.sort_by(|a, b| {
         (a.port, a.family, &a.address, a.pid).cmp(&(b.port, b.family, &b.address, b.pid))
@@ -101,7 +105,10 @@ fn finish(mut listeners: Vec<Listener>, ports: &[u16]) -> Value {
     listeners.dedup();
     let truncated = listeners.len() > MAX_LISTENERS;
     listeners.truncate(MAX_LISTENERS);
-    let mut out = json!({"schemaVersion": 1, "event": "snapshot", "listeners": listeners});
+    // The host's own clock at the read: `startedAt` is on the same clock, so the age of a listener is
+    // `observedAt - startedAt` whatever the clocks of the host and the device say.
+    let observed_at = observed_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut out = json!({"schemaVersion": 1, "event": "snapshot", "observedAt": observed_at, "listeners": listeners});
     if truncated {
         out["truncated"] = Value::Bool(true);
     }
@@ -113,7 +120,11 @@ pub fn run(options: &Options) -> Result<Option<Value>> {
         watch(options)?;
         return Ok(None);
     }
-    Ok(Some(finish(platform::read()?, &options.ports)))
+    Ok(Some(finish(
+        platform::read()?,
+        &options.ports,
+        chrono::Utc::now(),
+    )))
 }
 
 /// A listener is the same one while its address, port and owner stay the same.
@@ -159,14 +170,18 @@ fn watch(options: &Options) -> Result<()> {
         writeln!(stdout)?;
         Ok(stdout.flush()?)
     };
-    let first = finish(platform::read()?, &options.ports);
+    let first = finish(platform::read()?, &options.ports, chrono::Utc::now());
     let mut known = keys(&first);
     emit(first)?;
     let (mut polled, mut spoke) = (Instant::now(), Instant::now());
     while !closed.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(50));
         if polled.elapsed() >= Duration::from_millis(options.interval_ms) {
-            let now = keys(&finish(platform::read()?, &options.ports));
+            let now = keys(&finish(
+                platform::read()?,
+                &options.ports,
+                chrono::Utc::now(),
+            ));
             let appeared = now
                 .iter()
                 .filter(|(key, _)| !known.iter().any(|(old, _)| old == key));

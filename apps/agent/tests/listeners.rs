@@ -151,6 +151,13 @@ fn reports_loopback_and_wildcard_listeners_of_another_process_and_nothing_else()
         (1.into(), "snapshot".into())
     );
 
+    let observed: chrono::DateTime<chrono::Utc> =
+        value["observedAt"].as_str().unwrap().parse().unwrap();
+    assert!(
+        (chrono::Utc::now() - observed).num_seconds().abs() <= 5,
+        "{observed}"
+    );
+
     let own_uid = unsafe { libc::geteuid() };
     let exe = std::env::current_exe()
         .unwrap()
