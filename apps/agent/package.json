@@ -6,6 +6,7 @@
   "dependencies": {
     "@lazysh/account-usage": "workspace:*",
     "@lazysh/common": "workspace:*",
+    "@lazysh/companion-release": "workspace:*",
     "@lazysh/notification-client": "workspace:*"
   },
   "devDependencies": {

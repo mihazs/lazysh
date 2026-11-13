@@ -10,6 +10,10 @@ Follow [install and configure the companion](how-to/configure-companion.md). Ins
 
 **Planned: host-side update.** Today **Update companion** downloads the executable on the device. [Epic #1441](https://github.com/mihazs/lazysh/issues/1441) ([ADR 0003](architecture/adr-0003-host-side-companion-update.md)) moves it onto the host: the app sends a pinned version, size and SHA-256, the host downloads and verifies the release itself and replaces the managed executable atomically, keeping the previous one. The companion gains `lazysh-agent update` (`--check`, `--dry-run`, `--rollback`, `--status`, `--version`, `--json`; exit 10 means an update is available) and `lazysh-agent auto-update` (policy `off`, `notify` or `install`, default `install` since 2026-11-13, so that a companion also updates itself when a newer app connects; optional user-level timer). A companion that predates `update` answers the unknown subcommand with a usage error (exit status 2); the app then updates it with a short fixed script run over SSH instead. Until this ships the behavior described in [configure the companion](how-to/configure-companion.md#install-on-the-remote-host) applies.
 
+## Check for a newer companion
+
+On the host, `lazysh-agent update --check` reports whether a newer release is published for this platform and exits 10 when there is one (0 when up to date); `lazysh-agent update --status` shows the installed and previous copy offline. Both are read-only, and `--json` gives a stable result for scripts and the app. The release is verified against the same chain the app's installer uses, and nothing is downloaded. Installing from the command is not available yet. Flags, exit codes and the JSON result: [Companion update](reference/companion-update.md).
+
 ## Claude Code
 
 The companion also packages optional [installable product skills](product-skills.md)

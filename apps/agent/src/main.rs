@@ -40,6 +40,8 @@ impl WindowArgs {
 enum Command {
     /// Print the exact retained third-party licenses and attribution notices.
     Licenses,
+    /// Check whether a newer verified companion release exists, or show the installed one.
+    Update(lazysh_agent::update::Args),
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
@@ -315,6 +317,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 {"id": "herdr-apache", "text": include_str!("../../../packages/account-usage/licenses/HERDR-APACHE-2.0.txt")},
             ],
         })),
+        Command::Update(_) => return Err(Error::InvalidArgument),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
@@ -673,7 +676,11 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_account_usage::worker_main() {
         return code;
     }
-    match execute(Cli::parse()) {
+    let cli = Cli::parse();
+    if let Command::Update(args) = cli.command {
+        return lazysh_agent::update::run(args);
+    }
+    match execute(cli) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             // SQLite messages may contain paths or user-controlled schema names.
