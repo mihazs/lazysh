@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { androidDevice, androidSerial, benchUrl, git, installBenchBridge, require, root, test } from './fixtures/benchEnvironment';
+import { androidDevice, androidFocused, androidSerial, benchUrl, git, installBenchBridge, require, root, test } from './fixtures/benchEnvironment';
 
 // WebGL context-loss run of the renderer shootout (#1323, docs/architecture/terminal-benchmarks.md): the xterm.js WebGL addon
 // on the benchmark page, its context taken away with WEBGL_lose_context, and what the user would see afterwards. Correctness is
@@ -63,7 +63,10 @@ test.beforeEach(async ({ page, baseURL }) => {
   test.skip(!(await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'))), 'The browser has no WebGL2.');
 });
 
-test.afterEach(() => { expect(pageErrors, 'a lost or restored context must not throw in the page').toEqual([]); });
+test.afterEach(() => {
+  expect(pageErrors, 'a lost or restored context must not throw in the page').toEqual([]);
+  expect(androidFocused(), 'the WebView host lost the window focus: the run is disturbed').toBe(true);
+});
 
 for (const [name, restoreAfterMs] of [['restored quickly', 300], ['restored just inside the addon grace period', 2000]] as const) {
   test(`lost and ${name}`, async ({ page }) => {
