@@ -33,10 +33,17 @@ layout with the keyboard, runtime permission dialogs, notifications, journeys ac
    bun run --cwd apps/client mobile-e2e -- --mochaOpts.grep '@flaky' --mochaOpts.invert
    ```
 
-   Without `LAZYSH_E2E_APK` the build already installed on the guest is tested. Every spec file starts with the app's data
+   With `LAZYSH_E2E_APK` set, `JAVA_HOME` must point at a JDK (Appium verifies the signature). Without it the build already installed on the guest is tested. Every spec file starts with the app's data
    cleared, so hosts configured by hand on a shared guest are lost. Check without a device with `mobile-e2e:check`,
    `mobile-e2e:lint` and `mobile-e2e:unit` (moon: `client:check-mobile-e2e`, `client:lint-mobile-e2e`,
    `client:test-mobile-e2e-unit`).
+
+Specs that need a host call `connectOwnedHost()` (`pageobjects/connect-owned-host.ts`) in a `before` hook and `resetApp()` in
+`after`. It adds a host named `e2e-<run nonce>-<label>` through the real editor, signs in with the fixture's generated key
+(pasted from the clipboard) and trusts the fingerprint only when it equals the generated one. The launcher starts the owned hosts
+and forwards their ports with `adb reverse`; `LAZYSH_E2E_HOSTS=ssh,herdr,tmux` selects them (see the
+[README](../../apps/client/mobile-e2e/README.md)). The live `HERDR_*` and `TMUX*` variables are removed from the launcher while
+the fixtures run, so no child can reach a personal Herdr or tmux.
 
 The shared guest may be in use by another run. The suite takes an advisory lock per serial, records window size, density,
 navigation mode, IME and animation scale before it starts, and restores them at the end, including after a failure. If you
@@ -58,6 +65,7 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
    class HomePage extends Page {
      readonly context = 'WEBVIEW' as const;
      get root() { return $('aria/Add your first host'); }
+     async openHostEditor() { await this.tap(() => this.root); }
    }
    export default new HomePage();
    ```
@@ -79,12 +87,14 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 
    Create elements inside `page.in(...)` or a page object action: `$()` starts resolving when it is called, so an element
    made before the context switch is looked up in the previous context (an `aria/` lookup in `NATIVE_APP` fails with an
-   XPath error).
-4. Never sleep. Use `await expect(el).toBeDisplayed()` or `browser.waitUntil(cond, {timeout, timeoutMsg})`; `browser.pause`
+   XPath error). Page object actions take a thunk for this reason (`this.tap(() => this.root)`).
+4. Close the soft keyboard with `closeKeyboard()` before tapping a button: a tap that arrives while the keyboard resizes the
+   page is lost, and `browser.hideKeyboard()` presses Back and closes the dialog.
+5. Never sleep. Use `await expect(el).toBeDisplayed()` or `browser.waitUntil(cond, {timeout, timeoutMsg})`; `browser.pause`
    throws.
-5. Keep the test independent: create hosts through the fixture (they get a per-run name and are removed afterwards), do not
+6. Keep the test independent: create hosts through the fixture (they get a per-run name and `resetApp()` removes them), do not
    rely on another test having run, and change device state only through `support/device.ts`.
-6. If the UI has no unique accessible name for an element, add `data-testid="area-element"` in the component (kebab-case) in
+7. If the UI has no unique accessible name for an element, add `data-testid="area-element"` in the component (kebab-case) in
    the same pull request, and keep the Playwright locators unchanged.
 
 ## Add a regression test for a bug

@@ -1,0 +1,4 @@
+[
+  {"pattern": "\"content\":\"[A-Za-z0-9+/=]{40,}\"", "flags": "g", "replaceWith": "\"content\":\"[redacted clipboard]\""},
+  {"pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{0,8000}?-----END [A-Z ]*PRIVATE KEY-----", "flags": "g", "replaceWith": "[redacted private key]"}
+]

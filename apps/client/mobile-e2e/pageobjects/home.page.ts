@@ -6,5 +6,6 @@ class HomePage extends Page {
   readonly context = 'WEBVIEW' as const;
   get root() { return $('aria/Add your first host'); }
   get addFirstHost() { return this.root; }
+  async openHostEditor() { await this.tap(() => this.addFirstHost); }
 }
 export default new HomePage();
