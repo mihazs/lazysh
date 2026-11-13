@@ -26,9 +26,10 @@ bun run --cwd apps/client mobile-e2e -- --suite smoke
 ```
 
 Before the first spec the launcher starts owned hosts from `tests/support` and forwards their ports to the guest with
-`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` (default; `ssh,herdr` when the three Herdr variables below are set, which the Agent view smoke journey needs), `herdr` and `tmux`
+`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` and `sftp` (the default; `sftp` is an SSH host with the SFTP subsystem for Files, and its endpoint carries the host home), plus `herdr` and `herdr-agents` when the three Herdr variables below are set, `herdr` and `tmux`
 (these need `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN` and `LAZYSH_TEST_RECEIVER_BIN`, or `LAZYSH_TEST_TMUX`), or empty for
-none. The endpoint, fingerprint and private key are in a mode-0600 file in a per-run mode-0700 directory
+none. `herdr-agents` is a stock Herdr host with a Codex conversation on a pane that records every byte it is sent, a Codex agent that waits
+for an answer, a Claude agent, a tab with no agent and a recorded account report (see `agentsFixture` in `tests/support/androidHerdr.ts`). The endpoint, fingerprint and private key are in a mode-0600 file in a per-run mode-0700 directory
 (`LAZYSH_E2E_ENDPOINTS`); they are never logged, and the Appium log filters redact clipboard content and key blocks.
 
 The phone layout (side menu, no top bar) needs a portrait window narrower than 600 dp, so a tablet-shaped guest such as the
