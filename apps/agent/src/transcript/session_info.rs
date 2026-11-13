@@ -120,6 +120,65 @@ impl Session {
         session
     }
 
+    /// OpenCode records the model, agent, cost and token counts on each assistant message (V2 `model.id`, V1 `modelID`),
+    /// and the folder as the session's directory (V2) or the message's `path.cwd` (V1). `newest_first` are assistant messages.
+    pub(super) fn opencode(newest_first: &[&Value], directory: Option<&str>) -> Self {
+        let mut session = Self::default();
+        session.set(
+            "model",
+            newest_first
+                .iter()
+                .find_map(|data| label(&data["model"]["id"]).or_else(|| label(&data["modelID"])))
+                .map(|model| json!(model)),
+        );
+        session.set(
+            "mode",
+            newest_first
+                .iter()
+                .find_map(|data| label(&data["agent"]).or_else(|| label(&data["mode"])))
+                .map(|mode| json!(mode)),
+        );
+        // What the footer counts as the context in use: everything the last reply read and wrote.
+        session.set(
+            "usage",
+            newest_first.iter().find_map(|data| {
+                let tokens = &data["tokens"];
+                let total = [
+                    &tokens["input"],
+                    &tokens["output"],
+                    &tokens["reasoning"],
+                    &tokens["cache"]["read"],
+                    &tokens["cache"]["write"],
+                ]
+                .iter()
+                .try_fold(0u64, |sum, count| {
+                    count.as_u64().map(|count| sum.saturating_add(count))
+                })?;
+                // A reply still streaming has recorded no tokens yet.
+                (total > 0).then(|| json!({"usedTokens":total}))
+            }),
+        );
+        let costs: Vec<f64> = newest_first
+            .iter()
+            .filter_map(|data| data["cost"].as_f64())
+            .collect();
+        let usd: f64 = costs.iter().sum();
+        session.set(
+            "cost",
+            (!costs.is_empty() && usd.is_finite() && usd >= 0.0).then(|| json!({"usd":usd})),
+        );
+        let named = directory.and_then(|path| folder(&json!(path)));
+        session.set(
+            "folder",
+            named.or_else(|| {
+                newest_first
+                    .iter()
+                    .find_map(|data| folder(&data["path"]["cwd"]))
+            }),
+        );
+        session
+    }
+
     /// Feed every rollout record in order; later records replace earlier values.
     pub(super) fn codex(&mut self, record: &Value) {
         let payload = &record["payload"];

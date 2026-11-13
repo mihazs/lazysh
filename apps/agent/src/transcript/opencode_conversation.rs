@@ -1,4 +1,5 @@
 //! Read the selected OpenCode projection, never the model-context replay log.
+use super::session_info::Session;
 use super::window::{select, Window};
 use super::{
     block, database, interaction, open_transcript, Error, Result, SourceSnapshot, TranscriptAgent,
@@ -211,6 +212,25 @@ pub fn conversation_window(
             row.time,
         )?);
     }
+    let assistants: Vec<&Value> = rows
+        .iter()
+        .rev()
+        .filter(|r| r.role == "assistant" && !queued.contains(&r.id))
+        .filter(|r| !(kind == Schema::V2 && boundary.as_ref().is_some_and(|id| &r.id >= id)))
+        .map(|r| &r.data)
+        .collect();
+    // The V2 session row names its folder; a database or a test without the column simply has none.
+    let directory: Option<String> = (kind == Schema::V2)
+        .then(|| {
+            db.query_row(
+                "SELECT directory FROM session_v2 WHERE id=?1",
+                [session],
+                |r| r.get(0),
+            )
+            .ok()
+        })
+        .flatten();
+    let session_info = Session::opencode(&assistants, directory.as_deref()).into_value();
     let selected = select(all, window, limit)?;
     let activity = if kind == Schema::V1 {
         activity(&rows, &parts)
@@ -232,7 +252,7 @@ pub fn conversation_window(
         activity,
         queued: Vec::new(),
         work: super::opencode_work::tasks(tool_parts),
-        session: None,
+        session: session_info,
     })
 }
 

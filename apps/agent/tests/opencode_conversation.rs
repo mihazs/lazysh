@@ -440,3 +440,62 @@ fn a_v2_database_without_a_part_table_reads_its_inline_parts_and_lists_their_sub
     f.message("msg_c", 3, "user", json!({"text":"<system-reminder>\n[BACKGROUND TASK COMPLETED]\n\n**Completed:**\n- `bg_9`: Research\n</system-reminder>"}));
     assert_eq!(f.page(50)["work"][0]["state"], "done");
 }
+
+#[test]
+fn the_footer_facts_come_from_the_assistant_messages_and_stay_absent_when_unrecorded() {
+    for v2 in [true, false] {
+        let f = Fixture::new(v2);
+        f.message(
+            "msg_a",
+            1,
+            "user",
+            json!({"text":"hi","time":{"created":1}}),
+        );
+        // V2 names the model under `model.id`, V1 as `modelID`; both record the agent, cost and token counts.
+        let named = |model: &str, cost: f64, tokens: Value| {
+            let mut data = json!({"agent":"plan","cost":cost,"tokens":tokens});
+            if v2 {
+                data["model"] = json!({"id":model,"providerID":"opencode"});
+                data["content"] = json!([]);
+            } else {
+                data["modelID"] = json!(model);
+                data["path"] = json!({"cwd":"/work/app/","root":"/work"});
+            }
+            data
+        };
+        f.message(
+            "msg_b",
+            2,
+            "assistant",
+            named(
+                "big-pickle",
+                0.25,
+                json!({"input":100,"output":10,"reasoning":5,"cache":{"read":50,"write":3}}),
+            ),
+        );
+        f.message(
+            "msg_c",
+            3,
+            "assistant",
+            named(
+                "big-pickle",
+                0.5,
+                json!({"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}),
+            ),
+        );
+        if v2 {
+            f.db.execute_batch("ALTER TABLE session_v2 ADD COLUMN directory TEXT; UPDATE session_v2 SET directory='/work/app'").unwrap();
+        }
+        // The newest reply is still streaming and has no tokens yet: the context in use is the reply before it.
+        assert_eq!(
+            f.page(50)["session"],
+            json!({"model":"big-pickle","mode":"plan","usage":{"usedTokens":168},"cost":{"usd":0.75},"folder":"app"}),
+            "v2={v2}"
+        );
+    }
+    // A conversation that records none of it has no `session`, not a zeroed one.
+    let f = Fixture::new(true);
+    f.message("msg_a", 1, "user", json!({"text":"hi"}));
+    f.message("msg_b", 2, "assistant", json!({"content":[]}));
+    assert!(f.page(50).get("session").is_none());
+}
