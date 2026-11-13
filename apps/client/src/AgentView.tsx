@@ -6,12 +6,8 @@ import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate} from './HerdrWorkspaceCreateDialog';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
-<<<<<<< HEAD
-import AgentPickerDock, {type ScreenSource} from './AgentPickerDock';
-import AgentHistory from './AgentHistory';
-=======
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
->>>>>>> 526931de (feat(agents): answer Codex's approval prompt and list dialogs from the Agent view)
+import AgentHistory from './AgentHistory';
 import {publishAnswerGuard} from './agentDialogAnswer';
 import {parseReportedHistory, parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {parseTerminalSnapshot, type TerminalInputLabels} from './ChatTerminalInput';
