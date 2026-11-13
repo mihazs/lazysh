@@ -27,6 +27,7 @@ import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
+import type {StatusItem} from './agentBackgroundWork';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
@@ -598,6 +599,22 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // What the person typed, for the composer's receipts: harness events and tool results are not prompts.
   const promptTexts = useMemo(() => flow.filter(message => message.role === 'user' && !message.event).map(message => message.blocks.filter(block => block.type === 'text' && !block.card).map(block => block.text ?? '').join('\n')).filter(Boolean), [flow]);
   useEffect(() => onPrompts?.(promptTexts), [onPrompts, promptTexts]);
+  // A sub-agent's own conversation opens in place of this one; Back restores the reader where it was.
+  const [child, setChild] = useState<{path: string; title: string}>();
+  const parentView = useRef<{outer: ScrollPosition; list: number} | undefined>(undefined);
+  function openChild({childPath, label}: StatusItem) {
+    if (!childPath || !access.current()) return;
+    parentView.current = {outer: captureScrollPosition(chatRoot.current), list: messageList.current?.scrollTop ?? 0};
+    setChild({path: childPath, title: label});
+  }
+  useLayoutEffect(() => {
+    const saved = parentView.current;
+    if (child || !saved) return;
+    parentView.current = undefined;
+    restoreScrollPosition(saved.outer);
+    if (messageList.current) messageList.current.scrollTop = saved.list;
+  }, [child]);
+  useEffect(() => setChild(undefined), [sessionId, path]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
@@ -674,7 +691,11 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     {allowStage && <button type="button" className="icon-button" aria-expanded={draftHelpOpen} aria-controls={draftHelpId} aria-label={t('chatDraftHelp')} title={t('chatDraftHelp')} onClick={()=>setDraftHelpOpen(value=>!value)}><Info size={18} aria-hidden="true"/></button>}
   </div>;
   return (
-    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-watch={watchTarget && following ? watch.state : undefined} data-attachment-open={attachmentOpen || undefined} aria-label={t("chatTitle")}>
+    <section ref={chatRoot} className="tool-panel chat-panel" hidden={!shown} data-bound={bound ? "" : undefined} data-watch={watchTarget && following ? watch.state : undefined} data-attachment-open={attachmentOpen || undefined} data-child-open={child ? "" : undefined} aria-label={t("chatTitle")}>
+      {child && <div className="agent-child">
+        <header><button type="button" className="subtle-button" onClick={() => setChild(undefined)}><ArrowLeft size={18} aria-hidden="true"/>{t('agentStatusBack')}</button><strong title={child.title}>{child.title}</strong></header>
+        <ChatPanel sessionId={sessionId} bound={{agent: 'claude', path: child.path}} timeline allowStage={false} />
+      </div>}
       {!bound && <>
       <h3>{t("chatTitle")}</h3>
       <p>
@@ -844,7 +865,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {lagging && <p className="chat-watch-note" role="status" data-watch={watch.state}>{now - updated > 6000 ? t('chatWatchStale',{time:formatRelativeTime(updated,now)}) : t('chatWatchDelayed')}</p>}
       {watchTarget && following && watch.state === 'unsupported' && <p className="chat-watch-note" role="status" data-watch="unsupported">{t('chatWatchCompanion')} {onOpenCompanion && <button type="button" className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}</p>}
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
-      {timeline && bound && <AgentStatusPanel messages={messages} work={work} />}
+      {timeline && bound && <AgentStatusPanel messages={messages} work={work} onOpen={openChild} />}
       {timeline && bound && <AgentPlanChip messages={flow} />}
       {timeline && <AgentWorkingRow state={workState} label={liveState?.label} since={workSince} {...(turnRunning ? progress : {})} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}

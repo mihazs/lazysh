@@ -26,6 +26,7 @@ mod grok_conversation;
 mod herdr_session;
 mod inline_image;
 mod work;
+mod workflow;
 pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_window};
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
