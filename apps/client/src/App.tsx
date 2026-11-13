@@ -1477,7 +1477,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   /** A choice in a tools surface ends the visit: the sheet and the side menu page both close. */
   const closeTools=()=>{setMobileTools(false);setSidebar(false);};
   const toolButton=(className?:string)=>({id,label,Icon}:ReturnType<typeof views>[number])=>{
-    return <button type="button" key={id} className={className} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{closeTools();if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
+    return <button type="button" key={id} className={className} title={label} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{closeTools();if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
   };
   const mobileToolButton=toolButton();
 
@@ -2346,7 +2346,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </>}
           {sideMenuMode && <>
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
-            {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
+            <nav className="workspace-tools-grid" aria-label={t('appWorkspaceTools')}>
+              {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
+            </nav>
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});

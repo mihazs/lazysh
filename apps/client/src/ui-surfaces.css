@@ -278,6 +278,17 @@ input[type="search"] {
 .workspace-current-session { min-height: 44px; padding: 0 4px; color: var(--theme-muted); }
 .workspace-current-session strong { font-size: 13px; }
 .workspace-navigation-content > .subtle-button { width: 100%; min-height: 48px; justify-content: flex-start; padding-inline: 16px; border-radius: var(--ui-radius); background: var(--ui-row); }
+/* Workspace tools: a grid of icon buttons, three columns on a narrow phone and four from 400 px, icon above its label. */
+.workspace-tools-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 400px) { .workspace-tools-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.workspace-tools-grid > .subtle-button {
+  flex-direction: column; justify-content: center; gap: 6px; min-width: 0; min-height: 76px; padding: 10px 4px;
+  border-color: transparent; border-radius: var(--ui-radius); background: var(--ui-row); font-size: 12.5px; font-weight: 600; text-align: center;
+}
+.workspace-tools-grid > .subtle-button svg { flex: none; width: 22px; height: 22px; color: var(--accent); }
+.workspace-tools-grid > .subtle-button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tools-grid > .subtle-button:hover:not(:disabled), .workspace-tools-grid > .subtle-button[aria-current="page"] { background: var(--ui-row-pressed); }
+.workspace-tools-grid > .subtle-button:disabled { opacity: .5; }
 
 /* ---------- Reported activity ---------- */
 .agent-panel > .tool-bar { display: flex; align-items: center; gap: 4px; padding: 0 0 6px; border: 0; background: transparent; }

@@ -230,6 +230,55 @@ test.describe('phone, connected session',()=>{
     await expect(header(page)).toBeVisible();
   });
 
+  test('the Workspace tools are a grid of icon buttons in reading order, each opening its view',async({page})=>{
+    test.setTimeout(120_000);
+    await connectRemote(page);
+    await openBySwipe(page);
+    await tab(page,'Workspaces').tap();
+    const grid=menu(page).getByRole('navigation',{name:'Workspace tools',exact:true});
+    const tiles=grid.getByRole('button');
+    const names=['Terminal','Files','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices'];
+    await expect(tiles).toHaveText(names);
+    // The accessible name and the tooltip stay the full name when a narrow tile truncates its label.
+    for(const name of names)await expect(grid.getByRole('button',{name,exact:true})).toHaveAttribute('title',name);
+    const layout=()=>grid.evaluate(node=>{
+      const boxes=[...node.querySelectorAll('button')].map(button=>{
+        const box=button.getBoundingClientRect(),icon=button.querySelector('svg')!.getBoundingClientRect(),label=button.querySelector('span')!.getBoundingClientRect();
+        return {left:Math.round(box.left),top:Math.round(box.top),right:box.right,width:box.width,height:box.height,iconAbove:icon.bottom<=label.top};
+      });
+      return {boxes,columns:new Set(boxes.map(box=>box.left)).size,overflow:node.scrollWidth>node.clientWidth||boxes.some(box=>box.right>innerWidth)};
+    });
+    for(const [width,columns] of [[415,4],[360,3]] as const) {
+      await page.setViewportSize({width,height:900});
+      await expect.poll(async()=>(await layout()).columns).toBe(columns);
+      const {boxes,overflow}=await layout();
+      expect(overflow).toBe(false);
+      for(const box of boxes) {
+        expect(box.width).toBeGreaterThanOrEqual(48);
+        expect(box.height).toBeGreaterThanOrEqual(48);
+        expect(box.iconAbove).toBe(true);
+      }
+      // Reading order: left to right, then the next row.
+      expect(boxes.map(box=>box.top*10000+box.left)).toEqual(boxes.map(box=>box.top*10000+box.left).sort((a,b)=>a-b));
+    }
+    // Keyboard focus follows the same order.
+    await tiles.first().focus();
+    for(const name of names.slice(1)) {
+      await page.keyboard.press('Tab');
+      await expect(grid.getByRole('button',{name,exact:true})).toBeFocused();
+    }
+    // Every tool opens what its row opened, and the page closes over it.
+    for(const [name,view] of [['Files','files'],['Usage','usage'],['Attach','attachments'],['Apple status','apple'],['Transcript','chat'],['Diff','diff'],['Preview','preview'],['Dictate','voice'],['Devices','devices']] as const) {
+      await grid.getByRole('button',{name,exact:true}).tap();
+      await shut(page);
+      await expect(page.locator('.workspace-footer')).toHaveAttribute('data-view',view);
+      await page.getByRole('navigation',{name:'Tool navigation',exact:true}).getByRole('button',{name:'Return to terminal',exact:true}).tap();
+      await openBySwipe(page);
+      await tab(page,'Workspaces').tap();
+    }
+    await expect(grid.getByRole('button',{name:'Terminal',exact:true})).toHaveAttribute('aria-current','page');
+  });
+
   test('a connected session lists Agents, Workspaces, Connections, opens on Agents and each tab on its own',async({page})=>{
     await connectRemote(page);
     await openBySwipe(page);
