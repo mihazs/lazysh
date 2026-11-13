@@ -99,7 +99,7 @@ Other lifecycle rules, each with a test in `apps/client/src-tauri`:
 
 | Event | Native core |
 | --- | --- |
-| App lock | Kept. Delivery is held back exactly like the Channel (`core_output_respects_the_lock_and_background_gates_like_the_channel`), so unreturned credit bounds memory at the transport window; `terminal_core_open` and `terminal_core_text` are refused, `terminal_core_close` is allowed (`a_locked_app_can_free_a_core_but_not_open_or_read_one`). Unlock resumes with the screen intact (`an_unadopted_local_terminal_frees_its_core_but_an_adopted_one_keeps_it_through_a_lock`). |
+| App lock | Kept. Delivery is held back exactly like the Channel (`core_output_respects_the_lock_and_background_gates_like_the_channel`), so unreturned credit bounds memory at the transport window; `terminal_core_open` and `terminal_core_text` are refused, `terminal_core_close` is allowed (`a_locked_app_can_free_a_core_but_not_open_or_read_one`). The core of an adopted session is not freed by a lock or the unlock after it (`an_unadopted_local_terminal_frees_its_core_but_an_adopted_one_keeps_it_through_a_lock`), and held output is delivered after unlock (same gate test). |
 | Lock before the renderer acknowledges a new terminal | Freed with the unadopted session (`native_adoption_revokes_unknown_ids_after_response_serialization_but_keeps_owned_sessions`). |
 | Connect fails or is cancelled after the core was attached | Freed, since the renderer never learns the session id (`a_native_terminal_that_fails_to_start_frees_the_core_the_renderer_offered`). |
 | Session ends (exit, disconnect, lost transport) | Kept until `terminal_core_close` or a renderer replacement, so the final screen stays readable; bounded by the hub's scrollback budget. |
