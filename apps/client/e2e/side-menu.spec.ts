@@ -1,6 +1,7 @@
 import {expect,test,type Locator,type Page} from '@playwright/test';
 import {connectAttachmentTerminal} from './fixtures/attachmentTerminal';
 import {startLocalTerminal} from './fixtures/localTerminal';
+import {oneUi,reportGestureInsets} from './fixtures/gestureInsets';
 import {swipe} from './fixtures/touchSwipe';
 import {openPreferenceCategory} from './fixtures/workspaceControl';
 
@@ -111,6 +112,42 @@ test.describe('phone, connected session',()=>{
     await page.getByRole('button',{name:'Close hosts',exact:true}).tap();
     await shut(page);
     expect(await body()).toEqual(before);
+  });
+
+  test('on Android gesture navigation a handle inside the Back zone opens the page by drag and by tap, and the screen edge does not',async({page})=>{
+    await connectRemote(page);
+    await reportGestureInsets(page,oneUi);
+    const handle=page.locator('[data-gesture-handle="left"]');
+    await expect(handle).toBeVisible();
+    const grip=(await handle.boundingBox())!,y=grip.y+grip.height/2;
+    // The handle starts beyond the system's 32 dp Back zone, never inside it.
+    expect(grip.x).toBeGreaterThanOrEqual(32);
+    await swipe(page,[2,y],[300,y+4]);
+    await shut(page);
+    await page.waitForTimeout(900);
+    await swipe(page,[grip.x+grip.width/2,y],[300,y+4]);
+    await open(page);
+    await expect(handle).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await shut(page);
+    await handle.tap();
+    await open(page);
+  });
+
+  test('on Android gesture navigation a swipe from the area just inside the Back zone opens the page at the top as well',async({page})=>{
+    await connectRemote(page);
+    await reportGestureInsets(page,oneUi);
+    await page.waitForTimeout(400);
+    // The Back zone is 32 dp and the area is 4 dp past it, 40 dp deep.
+    await swipe(page,[20,150],[300,154]);
+    await shut(page);
+    await page.waitForTimeout(900);
+    await swipe(page,[90,150],[300,154]);
+    await shut(page);
+    await page.waitForTimeout(900);
+    await swipe(page,[50,150],[300,154]);
+    await open(page);
+    await settled(page);
   });
 
   test('a short swipe that stops early leaves the page closed',async({page})=>{

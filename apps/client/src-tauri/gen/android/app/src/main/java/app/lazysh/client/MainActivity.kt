@@ -18,6 +18,7 @@ class MainActivity : TauriActivity() {
     VaultPlugin.onWebViewCreated(this, webView)
     DisplayIdlePlugin.onWebViewCreated(this, webView)
     PrivateKeyboard.attach(webView)
+    EdgeGestureInsets.attach(webView)
     super.onWebViewCreate(webView)
   }
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +36,7 @@ class MainActivity : TauriActivity() {
       val types = WindowInsetsCompat.Type.systemBars() or
         WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
       val insets = windowInsets.getInsets(types)
+      EdgeGestureInsets.update(this, windowInsets)
       view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
       // Forward zeroed insets, including hide transitions, to prevent WebView
       // from applying the same occlusion twice or retaining stale safe areas.

@@ -54,6 +54,7 @@
     "allow-notify-agent-attention",
     "allow-notification-test",
     "allow-edge-gesture-exclusion",
+    "allow-edge-gesture-insets",
     "allow-open-notification-settings",
     "allow-request-notification-permission",
     "notification:allow-is-permission-granted",

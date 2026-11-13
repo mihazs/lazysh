@@ -173,12 +173,18 @@ describe("OSC52 clipboard requests", () => {
   expect(parsePreferences(keepDevicePreferences({...defaults, fontSize: 20}, parsePreferences({...defaults}))).toolbarKeyHeight).toBeUndefined();
   expect(keepDevicePreferences(null, mine)).toBeNull();
  });
- it("defaults the edge gestures on at 24 dp, stores only changes and ignores malformed values", () => {
-  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 24});
-  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 24}}), "edgeGestures")).toBe(false);
-  const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 40}})));
-  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 40});
-  for (const zoneWidth of [0, 15, 49, 30.5, "30", null]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(24);
+ it("defaults the edge gestures on at 40 dp, stores only changes and ignores malformed values", () => {
+  expect(edgeGestureSettings(defaults)).toEqual({leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode: "auto"});
+  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {leftMenu: true, zoneWidth: 40}}), "edgeGestures")).toBe(false);
+  const saved = parsePreferences(JSON.parse(JSON.stringify({...defaults, edgeGestures: {leftMenu: false, zoneWidth: 64}})));
+  expect(edgeGestureSettings(saved)).toEqual({leftMenu: false, bottomMenu: true, viewSwitch: true, zoneWidth: 64, mode: "auto"});
+  // The gesture style is stored only when it is not the automatic one, and an unknown value falls back to it.
+  expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode: "auto"}}), "edgeGestures")).toBe(false);
+  for (const mode of ["handles", "edges", "off"] as const) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {mode}})).mode).toBe(mode);
+  for (const mode of ["swipe", 1, null]) expect(Object.hasOwn(parsePreferences({...defaults, edgeGestures: {mode}}), "edgeGestures")).toBe(false);
+  for (const zoneWidth of [0, 15, 97, 30.5, "30", null]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(40);
+  // A zone is stored up to 96 dp, the widest band, and the old 24 dp default stays a choice.
+  for (const zoneWidth of [16, 24, 96]) expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {zoneWidth}})).zoneWidth).toBe(zoneWidth);
   expect(edgeGestureSettings(parsePreferences({...defaults, edgeGestures: {bottomMenu: "no", viewSwitch: 0}}))).toMatchObject({bottomMenu: true, viewSwitch: true});
   // It syncs with the other preferences.
   expect(syncablePreferences(saved).edgeGestures).toEqual(saved.edgeGestures);

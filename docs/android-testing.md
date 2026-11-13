@@ -369,3 +369,109 @@ private execution copy remains single-link mode0500 with byte equality and ances
 The existing uncached `test:android-ssh` owner selects `ownedRecordedConversationsThroughRealUi` in its separate `recorded-conversation-ui` report namespace. It uses the current source-built host companion from `LAZYSH_TEST_AGENT_BIN`, ordinary packaged-app SSH authentication and small shared synthetic Codex/OpenCode V1/V2 records. The public specification is reused by the Rust reader tests; it is not an official CLI capture. Private official-corpus compatibility evidence is kept separately. After those records it opens eight pages built from `apps/agent/tests/fixtures/interaction-cards` (`tests/support/recordedCards.ts`): Claude waiting on a question and then answered with a proposed plan, a Claude turn with Markdown and collapsed thinking, Codex working, stopped and idle turns, Codex recorded plan and question cards, and OpenCode V1 todos with a multiple-choice question. Each page must render the exact card, status and Markdown text the fixture names. The Linux native GUI suite (`apps/client/native-e2e/ssh.spec.ts`) runs the same records and pages in `native-linux`.
 
 The case requires exact selected messages, real reader overflow, Home/Refresh reading position and draft retention, return to the original terminal, explicit Stage without Send, and a fresh non-echo SSH challenge. Host checks retain the readonly corpus and companion hashes and original cleanup. Ordinary Android tests exclude this fixture-requiring method; its guarded host owner supplies the fixture and requires the exact executed JUnit case without skips. Compilation alone does not qualify this native flow, Android/vendor keyboards, or full platform parity.
+
+## Gesture navigation and Samsung One UI (#1380)
+
+The phone gestures (side menu, bottom menu, Agent view switch) start from handles and from swipe bands beside them, whose position comes from the live window insets. Android's own Back and Home gestures are detected from the screen edge, so a swipe that starts at the edge is the system's and the app never sees it. The app therefore does not compete for the edge: on gesture navigation a swipe starts in a band that begins just outside the system zone, `[system inset + 4 dp, system inset + zone width]` (default zone width 40 dp, so about 36 to 76 dp from the edge under the default Back sensitivity, 44 to 84 dp with the widest; Preferences allows 16 to 96 dp). The part of the band below the system inset is never claimed, the swipe must still travel inward past the 4 px slop with the direction lock, and the typing and selection guard still applies. On three-button navigation the system keeps no zone, so the band starts at the edge. The Edge swipes style (advanced) still starts at the physical edge and asks Android to exclude the handle rows. The Android shell reads `WindowInsetsCompat.Type.systemGestures()` and `Type.mandatorySystemGestures()` (and the `navigation_mode` setting as a hint), subtracts the padding the WebView already has, and hands the web layer the part of each system zone that reaches into the viewport: `{left, right, bottom, mandatoryBottom, navigation}` in dp. The web layer asks for it with the `edge_gesture_insets` command at start and hears every change as a `lazysh-gesture-insets` window event.
+
+What each layer proves:
+
+| Layer | Proves | Where |
+| --- | --- | --- |
+| JVM unit test | Exclusion rows are at most 200 dp, the bottom zone is never thinner than the launcher's swipe-up strip, stay above the bottom gesture zone and inside the window; a zone counts only where it reaches past the padding; the JSON the shell sends | `EdgeGestureBandsTest` |
+| Instrumented test | The real WebView keeps the claimed rects within its bounds and releases them; the reported insets are never negative and never exceed the window's own gesture insets | `NativeEdgeGestureExclusionTest` |
+| Vitest and Playwright | The band follows the simulated insets (gesture navigation against three buttons, narrow and wide Back sensitivity, zone width): a touch at 0 dp or inside the system inset is ignored, inside the band it fires, beyond the band it is ignored; the typing and selection guard still applies | `gestureInsets.test.tsx`, `edgeGestures.test.tsx`, `edge-gestures.spec.ts`, `bottom-menu.spec.ts`, `view-swipe.spec.ts`, `side-menu.spec.ts`, `gesture-test.spec.ts` |
+| Manual, real device | Home, Recents and Back are not triggered, and the menus open every time | the script below |
+
+The CI emulator uses three-button or no system navigation, so it cannot show whether the system takes a swipe. Waydroid can: its Android 13 image carries the AOSP gestural overlays and the Quickstep launcher (see "Waydroid verification" below). Real-device validation on a gesture-navigation Samsung One UI phone is still a required acceptance gate for #1380 and has not been run; record every run in the table at the end.
+
+### Waydroid verification
+
+Run on the local Waydroid session (Android 13, x86_64, AOSP SystemUI with the Quickstep launcher) with the debug emulator build and `wm size 1080x2340; wm density 420` (a 411 x 815 dp phone viewport, density 2.625). The app connected over SSH to a throwaway `sshd` on the host (the guest reaches it at 192.168.240.1) with a throwaway key. Swipes are `adb shell input touchscreen swipe` (a real DOWN, MOVEs about 8 ms apart, UP; the system gesture monitors see them as they would a finger). State is read from the page over the WebView DevTools socket (`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`): the side menu, the bottom menu, the session view and every touch the page received (`touchstart`, `touchend`, `touchcancel`). "Reached the app" counts a `touchstart` in the page; a count below ten means the system took the touch.
+
+Navigation is switched with `cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton` or `...navbar.gestural_wide_back`, then `settings get secure navigation_mode` (0 or 2) and the launcher check `cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME` (`com.android.launcher3.uioverrides.QuickstepLauncher`). Gesture style was set in the Preferences UI.
+
+Handle build (before the swipe bands, see the band table below for the final build), ten tries each, every figure is opened (or closed) / tries:
+
+| Navigation | Gesture style | Gesture | Result |
+| --- | --- | --- | --- |
+| 3-button | Automatic (edge swipes) | Left edge swipe, side menu | 10/10 (4/10 before the slop fix below) |
+| 3-button | Automatic (edge swipes) | Bottom edge swipe, bottom menu | 10/10 |
+| 3-button | Automatic (edge swipes) | Right edge swipe, Agent view | 10/10 |
+| 3-button | Automatic (edge swipes) | Back key closes the side menu / the bottom menu | 10/10, 10/10 |
+| 3-button | Handles | Drag the left / bottom / right handle | 10/10, 10/10, 10/10 |
+| 3-button | Handles | Tap the left / bottom / right handle | 10/10, 10/10, 10/10 |
+| 3-button | Handles | Back key closes the side menu / the bottom menu | 10/10, 10/10 |
+| Gesture (`gestural_wide_back`) | Handles | Drag the left / bottom / right handle | 10/10, 10/10, 10/10 |
+| Gesture | Handles | Tap the left / bottom / right handle | 10/10, 10/10, 10/10 |
+| Gesture | Handles | Back key closes the side menu / the bottom menu | 10/10, 10/10 |
+| Gesture | Handles | System Back gesture (edge swipe from x=2) closes the bottom menu / side menu / Agent view | 10/10, 10/10, 10/10 (0/10 before the scrim fix below: the app exited) |
+| Gesture | Handles | Tap on the bottom menu scrim closes it | 10/10 |
+| Gesture | Edge swipes | Left / right edge swipe at the claimed row | 29/30 (one of the first thirty went to the system), 10/10 |
+| Gesture | Edge swipes | Bottom swipe from just above the Home zone | 10/10 |
+| Gesture | Edge swipes | Left edge swipe outside the claimed row, bottom menu open | 10/10 taken by the system as Back (menu closed, side menu not opened), the page got `touchstart` then `touchcancel` |
+| Gesture | Edge swipes | Swipe up from inside the Home zone (y 2300) | 3/3 taken by the system (the launcher came to the front) |
+
+Swipe bands (the final build, ten tries each unless stated; band geometry as in the introduction, gesture style Automatic, zone width 40 dp). A swipe is `adb shell input touchscreen swipe x y x' y' 200` and `x` is in screen px (2.625 px per dp). "Taken by the system" is measured with the bottom menu open, so the system Back that ends the swipe does not leave the app: the menu closes, the side menu does not open, the app stays in front.
+
+| Navigation | Start of the swipe | Expected | Result |
+| --- | --- | --- | --- |
+| `gestural_wide_back` (inset 32 dp, band 36 to 76 dp) | left, x=100 / 131 / 195 px (38 / 50 / 74 dp) | side menu opens | 10/10, 10/10, 10/10 |
+| | right, x=930 px (57 dp from the right edge) | Agent view opens | 10/10 |
+| | bottom, y=2150 px (48 dp above the viewport bottom; the band is 28 to 68 dp) | bottom menu opens | 10/10 |
+| | left x=2 px (0.8 dp) and x=60 px (23 dp, inside the inset) | taken by the system | 10/10, 10/10 |
+| | right x=1078 px and x=1030 px | taken by the system | 10/10, 10/10 |
+| | left x=230 / 262 px (88 / 100 dp, beyond the band), right x=830 px, bottom y=2050 px (86 dp) | nothing opens, the page gets the touch | 10/10 each |
+| | up from y=2300 px (inside the Home strip) | taken by the launcher | 3/3 |
+| | vertical swipe, tap, selection active, toolbar swipes and taps inside the band | nothing opens; the toolbar still pages (10/10) and its keys still click (10/10); with a selection the band swipe is ignored 5/5 and opens again 5/5 once the selection is cleared | as listed |
+| | drag / tap the left, bottom and right handle | menus open | 10/10 each (six rows) |
+| | system Back gesture from x=2 closes the bottom menu / the Agent view | menu closed, app kept | 10/10, 10/10 |
+| `gestural_extra_wide_back` (inset 40 dp, `mEdgeWidthLeft=105`, band 44 to 84 dp) | left x=120 / 168 / 215 px (46 / 64 / 82 dp) | side menu opens | 10/10 each |
+| | right x=900 px, bottom y=2150 px | Agent view / bottom menu opens | 10/10, 10/10 |
+| | left x=2 px and x=90 px (34 dp: outside the Wide setting's inset, inside this one), right x=1078 px and x=990 px | taken by the system | 10/10 each |
+| | left x=250 / 300 px (95 / 114 dp), right x=830 px, bottom y=2050 px | nothing opens | 10/10 each |
+| | zone width 96 dp: left x=350 px (133 dp) / x=400 px (152 dp) | opens / does not | 10/10, 0/5 |
+| | zone width 16 dp: left x=150 px (57 dp) / x=190 px (72 dp) | opens / does not | 10/10, 0/5 |
+| 3-button (no system zone, band 0 to 40 dp) | left x=2 px (edge) and x=90 px (34 dp), right x=1078 px, bottom y=2205 px | menus open | 10/10 each |
+| | left x=150 px (57 dp, beyond the band) | nothing opens | 10/10 |
+
+The same swipe is taken by the system or by the app depending only on the inset the shell reports, which follows the Back sensitivity overlay: the Wide and Extra wide overlays gave `{"left":32,...}` and a 40 dp inset (`mEdgeWidthLeft=84` and `105`), and the band followed with no setting changed. Test gestures (Preferences) printed `Swipe from the swipe area beside the left edge reached the app (194 px)` for x=131 and `Swipe from the left edge was taken by the system` for x=40, with `System zones: left 32 dp, right 32 dp, bottom 24 dp, Home 24 dp`.
+
+Gesture navigation as the system reports it (`dumpsys activity service com.android.systemui/.SystemUIService`, `EdgeBackGestureHandler`): `mIsGesturalModeEnabled=true`, `mEdgeWidthLeft=84`, `mEdgeWidthRight=84` (32 dp), `mBottomGestureHeight=84.0`, `mExcludeRegion=SkRegion()` with the app in Handles mode (no exclusion claimed). `dumpsys window`: `ITYPE_LEFT_GESTURES frame=[0,0][84,2340]`, `ITYPE_RIGHT_GESTURES frame=[996,0][1080,2340]`, `ITYPE_BOTTOM_MANDATORY_GESTURES frame=[0,2256][1080,2340]`, `system_gesture_exclusion_limit_dp=200`, `mSystemGestureExclusion=SkRegion()`. In Edge swipes mode the app claims exactly its rows: `mSystemGestureExclusion=SkRegion((0,1478,63,2003)(1017,1478,1080,2003))` (24 dp wide, 200 dp tall, ending 104 dp above the bottom edge of the viewport). The Quickstep touch region (`dumpsys activity service com.android.launcher3/com.android.quickstep.TouchInteractionService`): `currentTouchableRotations=RectF(0.0, 2214.0, 1080.0, 2340.0)`, `mNavBarGesturalHeight=126`. The app's reported insets (the `lazysh-gesture-insets` event): `{"left":32,"right":32,"bottom":24,"mandatoryBottom":24,"navigation":"gesture"}` (and `bottom: 0` with the keyboard open), `{"left":0,"right":0,"bottom":0,"mandatoryBottom":0,"navigation":"buttons"}` with three buttons. Screenshots from the run: `/tmp/gw-16-3btn-terminal.png`, `gw-17-left-edge-3btn.png`, `gw-20-3btn-bottom-menu-open.png`, `gw-30-3btn-handles.png`, `gw-33-gestural-handles.png`, `gw-37-gestural-handles-fixed.png`, `gw-40-gestural-bottom-menu.png`, `gw-44-gestural-edges-mode.png` (kept on the author's machine, not in the repository).
+
+What the run found, all fixed in this change:
+
+1. **The edge recogniser never saw the swipe (left edge 4/10 on three-button navigation).** The engine waited for 10 CSS px of movement before deciding, but Chrome sends the first `touchmove` once the finger has crossed its own touch slop (8 dp) and that move is the last cancelable one; the following moves are not, and the page scrolls. The failing tries had a cancelable first move at dx 8 to 9 and then only non-cancelable ones. The decision slop is now 4 px (`edgeGestures.ts`), so the first move decides. 10/10 afterwards, on all three edges.
+2. **The bottom handle sat inside the Home strip (0/10 on gesture navigation).** The insets report the 32 dp mandatory gesture zone, but the launcher takes any touch that starts in the bottom `navigation_bar_frame_height` (48 dp, `mNavBarGesturalHeight=126`), and the navigation bar window already covers 24 dp of that. The app reported 8 dp, so the handle (and the side rows) were drawn 8 dp above the screen's bottom padding and every drag from it went Home. Swipes began to reach the app at y 2214 (screen px) and above, exactly the launcher region. `EdgeGesturePlugin.kt` now never reports less than that strip when `navigation_mode` is gesture (`EdgeGestureBands.homeZone`, unit-tested); the handle moved up 16 dp and opens the menu 10/10, by drag and by tap.
+3. **The system Back gesture exited the app instead of closing the bottom menu.** The bottom menu's scrim closed it on `pointerdown`. The Back gesture's finger lands on the scrim first (the system takes the touch a few milliseconds later), so the menu was already closed, the app had no Back handler registered any more and Back left the app (the logcat shows `Tauri/Plugin: app, command: removeListener` one millisecond after the gesture monitor stole the touch). The scrim now closes on `click`, which a touch the system took never produces, like the side menu's scrim.
+4. **The left side-menu handle was not wired** now that the side menu (#1360) is on `main`: `App.tsx` renders `<GestureHandle edge="left" gesture="leftMenu">` while the menu is closed and the left swipe is enabled.
+
+Left unverified on Waydroid, to be run on the real One UI phone below: One UI's own gesture hint strip, Back gesture sensitivity, the Edge panel and Samsung's gesture area (Quickstep's 48 dp region is the AOSP value; One UI's launcher may use another), a physical finger instead of injected events, rotation, the display cutout, predictive back animations, and `systemGestureExclusionRects` being honoured by the Samsung gesture handler. Two observations without a cause: one of thirty left-edge swipes in the Edge swipes style at the claimed row did not open the menu (the page saw `touchstart` then `touchcancel`; twenty more opened it), and twice, right after the activity was recreated by switching the navigation overlay and reconnecting, the first Back key after opening the side menu left the app instead of closing the menu (the app then showed its start page; it did not recur in the many Back presses before and after, and it is outside the gesture code, which only calls `onBackButtonPress`'s handler).
+
+### Manual One UI script
+
+Use a release or debug build with the gesture style left on **Automatic** (Preferences → Keyboard and gestures → Terminal touch gestures → Gesture style). Connect a session so the bottom bar and the Agent view are available. Repeat the whole script for each Settings → Display → Navigation bar combination:
+
+1. **Swipe gestures** → **Swipe from sides and bottom**, with Back gesture sensitivity at its default, then at its highest.
+2. **Swipe gestures** → **Swipe from bottom** only.
+3. **Navigation buttons** (three-button navigation). Here **Automatic** must pick edge swipes.
+
+For each combination:
+
+1. Open Preferences → Keyboard and gestures → **Test gestures**. Write down the navigation line, the system zones (left, right, bottom, Home) and whether the diagram draws a red band on every side the system owns. Rotate the phone and write the zones again; they must change with the window. Open the Edge panel handle (if enabled) and note whether the zones change.
+2. On that page swipe in from the left edge, the right edge and up from the bottom edge, ten times each. Under gesture navigation the system is expected to take most of these (the page then says so); write down how many of the ten it took on each edge, and whether any of them triggered Back, Home or Recents. That shows which edges the app cannot rely on.
+3. Go back to the terminal. Drag the **bottom handle** up ten times in a row (close the menu with the grip, Back or a swipe down between attempts). The menu must open all ten times without Home or Recents appearing. Tap the handle ten times: it must open every time.
+4. Drag the **right handle** to the left ten times: the Agent view must open each time without Back firing. Return with a swipe from the middle of the screen to the right, or the Terminal button.
+5. Swipe bands, with the gesture style on **Automatic** or **Handles**. Read the system zones from **Test gestures** (say 32 dp left and right, 24 dp bottom). Swipe inward, ten times each, from just beyond the zone (zone + 8 dp), from the middle of the band (zone + 28 dp) and from the far end of the band (zone + 36 dp, with the default 40 dp width): each opens its menu (left: the side menu, right: the Agent view, bottom: the bottom menu), and none triggers Back or Home. From inside the zone (zone - 4 dp) and from the edge itself the system must take the swipe (Back), never the app; from 20 dp beyond the end of the band nothing happens. Change Back gesture sensitivity and repeat: the band moves with the zone, with no app setting changed. Then raise the zone width in Preferences (up to 96 dp) and check the band follows it. Swipe up the screen's left band, tap in it, and select terminal text next to it: scrolling, taps and selection must keep working.
+6. Press Back with the bottom menu open: it must close the menu and stay in the session. Press Back again: normal Back behaviour (nothing is trapped).
+7. With the keyboard open, repeat step 3: the handle sits above the keyboard and still opens the menu.
+8. Switch Gesture style to **Edge swipes (advanced)**. Swipe from the left and right edges at the height of the handles, and up from just above the bottom handle row, ten times each. Outside the handle rows the Back gesture must still work (swipe in from the left edge near the top: Back). Switch to **Off**: no handle is drawn, the visible buttons are the only way in.
+9. Start typing and, while the keyboard is composing a word, drag a handle: nothing opens. Select text and drag a handle: nothing opens. Two-finger swipes bound to **Open the bottom menu** or **Switch between the terminal and the Agent view** (Preferences → two-finger swipe bindings) follow the same rule.
+
+Record: device model, One UI version, Android version, navigation mode, back sensitivity, results per step (n/10), and any swipe that triggered Back, Home or Recents. A step passes at 10/10. A failing combination blocks closing #1380.
+
+| Date | Device | One UI / Android | Navigation | Result |
+| --- | --- | --- | --- | --- |
+| not yet run | | | | |
+
+Known unverified points (Android documents none of them): whether the 200 dp exclusion cap applies per edge or per window, whether a WebView honours exclusion rects set on it for every touch, and what the Edge panel and back-sensitivity settings do to the reported zones. The script records the evidence for each.

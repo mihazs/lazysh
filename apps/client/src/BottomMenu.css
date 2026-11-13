@@ -34,13 +34,6 @@
 .terminal-pane > .bottom-menu-scrim {
   position: fixed; inset: 0; z-index: 19; background: rgb(0 0 0 / calc(var(--bottom-menu-progress, 1) * 35%));
 }
-/* The pill shows where the swipe starts, in the toolbar's bottom padding or over the status bar. It takes no touch, so it never covers a key or a terminal line. */
-.terminal-pane > .bottom-menu-handle {
-  position: fixed; left: 50%; bottom: calc(3px + env(safe-area-inset-bottom)); z-index: 3; transform: translateX(-50%);
-  width: 40px; height: 3px; pointer-events: none; transition: opacity 120ms ease-out;
-}
-.bottom-menu-handle > span { display: block; width: 100%; height: 100%; border-radius: 2px; background: color-mix(in srgb, var(--theme-text, var(--text)) 38%, transparent); }
-.terminal-pane > .bottom-menu-handle[data-hidden] { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .terminal-pane > .bottom-menu, .terminal-pane > .bottom-menu-handle { transition: none; }
+  .terminal-pane > .bottom-menu { transition: none; }
 }

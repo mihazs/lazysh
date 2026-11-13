@@ -214,6 +214,7 @@ pub fn run() {
                 notifications::notify_agent_attention,
                 notifications::notification_test,
                 edge_gestures::edge_gesture_exclusion,
+                edge_gestures::edge_gesture_insets,
                 session_background::open_notification_settings,
                 session_background::request_notification_permission,
                 voice::voice_models,

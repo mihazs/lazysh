@@ -40,15 +40,18 @@ describe('bottom menu',()=>{
     cleanup();
     render(<Harness />);fireEvent.click(screen.getByRole('button',{name:'Close bottom menu'}));expect(state()).toBe('closed');
     cleanup();
-    const view=render(<Harness />);fireEvent.pointerDown(view.container.querySelector('.bottom-menu-scrim')!);expect(state()).toBe('closed');
+    const view=render(<Harness />);const scrim=view.container.querySelector('.bottom-menu-scrim')!;
+    // A touch the system takes (the Back gesture starts on the scrim) must leave the menu open, so Back can still close it.
+    fireEvent.pointerDown(scrim);fireEvent.pointerCancel(scrim);expect(state()).toBe('open');
+    fireEvent.click(scrim);expect(state()).toBe('closed');
   });
-  it('shows the pill where the swipe starts, and a visible button instead when the swipe is switched off',()=>{
+  it('shows the handle where the swipe starts, and a visible button instead when the swipe is switched off',()=>{
     const view=render(<Harness start={false} />);
-    expect(view.container.querySelector('.bottom-menu-handle')).not.toBeNull();
+    expect(document.querySelector('.gesture-handle')).not.toBeNull();
     expect(screen.queryByRole('button',{name:'Open bottom menu'})).toBeNull();
     view.unmount();
     savePreferences({...defaults,edgeGestures:{leftMenu:true,bottomMenu:false,viewSwitch:true,zoneWidth:24}});
     const off=render(<Harness start={false} />);
-    expect(off.container.querySelector('.bottom-menu-handle')).toBeNull();
+    expect(document.querySelector('.gesture-handle')).toBeNull();
   });
 });
