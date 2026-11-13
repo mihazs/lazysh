@@ -9,16 +9,6 @@ use lazysh_terminal_runtime::{
 };
 use support::*;
 
-fn key(key: ffi::GhosttyKey, mods: u16, text: Option<&str>) -> KeyInput {
-    KeyInput {
-        key,
-        mods,
-        text: text.map(str::to_string),
-        composing: false,
-        release: false,
-    }
-}
-
 #[test]
 fn plain_text_wraps_at_the_right_edge() {
     let mut rt = runtime(10, 3);

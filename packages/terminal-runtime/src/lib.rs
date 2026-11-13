@@ -7,13 +7,17 @@
 //! ([`SizeAuthority`]); the runtime never invents one from the other.
 
 mod frame;
+mod hub;
 mod ingress;
 mod input;
 mod runtime;
 mod size;
 
 pub use frame::{Cell, Frame, Row};
-pub use ingress::{Ingress, Offer};
+pub use hub::{
+    Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
+};
+pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
 pub use runtime::{Config, Error, Events, Modes, TerminalRuntime};
 pub use size::{Size, SizeAuthority, SizeOutcome, MAX_CELLS};

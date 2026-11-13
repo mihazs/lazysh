@@ -6,8 +6,15 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size, terminal
-replies, key/mouse/paste encoding, and text inspection. It has no transport, renderer or thread; a runtime is
-`Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, and text inspection. A `TerminalRuntime` has no transport, renderer or
+thread; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+
+`Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
+[#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
+are the transport-independent service on top: a fixed pool of VT worker threads owns every session's runtime,
+transports call `Session::feed` and get credit back after VT processing, replies and encoded input leave through
+one `PtyWriter` that applies the host's access policy, and a registry enforces a global scrollback budget with
+attach/detach/close. See the "Session service" section of the design document.
 
 ## One Ghostty dependency
 
@@ -29,6 +36,7 @@ export ZIG=/path/to/zig-0.16.0 CARGO_TARGET_DIR="$root/target" \
   ZIG_LOCAL_CACHE_DIR="$root/zig-local" ZIG_GLOBAL_CACHE_DIR="$root/zig-global"
 cargo +1.96.1 test --locked
 cargo +1.96.1 run --release --example parse_bench   # host throughput, see docs/architecture/terminal-benchmarks.md
+cargo +1.96.1 run --release --example session_bench # pooled data path, input latency, memory
 ```
 
 ## Target status

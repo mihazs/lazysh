@@ -1,5 +1,5 @@
 use crate::frame::{Frame, Renderer};
-use crate::ingress::{Ingress, Offer};
+use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::size::{Size, SizeAuthority, SizeOutcome};
 use ghostty_vt::{ActiveScreen, Terminal};
@@ -90,7 +90,7 @@ pub struct TerminalRuntime {
     terminal: Terminal,
     renderer: Renderer,
     encoders: Encoders,
-    ingress: Ingress,
+    ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
     events: Events,
     size: Size,
@@ -123,7 +123,7 @@ impl TerminalRuntime {
             terminal,
             renderer: Renderer::new()?,
             encoders: Encoders::new()?,
-            ingress: Ingress::new(config.ingress_bytes),
+            ingress: IngressHandle::new(config.ingress_bytes),
             replies,
             events: Events::default(),
             size,
@@ -138,7 +138,9 @@ impl TerminalRuntime {
         self.ingress.offer(chunk)
     }
 
-    pub fn ingress(&self) -> &Ingress {
+    /// The producer side of the byte queue, cloneable so a transport can offer without borrowing
+    /// the runtime while a worker parses.
+    pub fn ingress(&self) -> &IngressHandle {
         &self.ingress
     }
 
@@ -293,6 +295,18 @@ impl TerminalRuntime {
             (cell_width_px, cell_height_px),
             input,
         )
+    }
+
+    /// Focus in/out report; empty unless the program enabled focus events (mode 1004).
+    pub fn encode_focus(&self, focused: bool) -> Result<Vec<u8>, Error> {
+        if !self.terminal.mode_get(ghostty_vt::MODE_FOCUS_EVENT)? {
+            return Ok(Vec::new());
+        }
+        Ok(ghostty_vt::encode_focus(if focused {
+            ghostty_vt::FocusEvent::Gained
+        } else {
+            ghostty_vt::FocusEvent::Lost
+        })?)
     }
 
     pub fn encode_paste(&self, text: &str) -> Result<Vec<u8>, Error> {
