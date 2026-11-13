@@ -7,14 +7,14 @@
 //!
 //! Everything here is decided offline from this process's version, the policy file and the record of
 //! the last run. Nothing here touches the network; the detached runner does.
-use super::Policy;
-use crate::{private_json, Error, Result, Store};
+use super::{instant, Policy};
+use crate::{private_json, update::Channel, Error, Result, Store};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use lazysh_companion_release::version;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    io,
+    io::{self, Read},
     path::Path,
     process::{Child, Command, Stdio},
     thread,
@@ -24,7 +24,8 @@ use std::{
 /// What an app sends on every exec it makes: the app's own version, `X.Y.Z`.
 pub const ENV: &str = "LAZYSH_APP_VERSION";
 const RECORD: &str = "app-update.json";
-const LOCK: &str = "app-update.lock";
+/// Held by whoever is running an update or a scheduled check: one at a time on a host.
+pub(super) const LOCK: &str = "app-update.lock";
 /// An update downloads under 12 MB; nothing legitimate runs longer than this.
 const DEADLINE: Wait = Wait::from_secs(600);
 /// A reported `done` stays visible this long, so the app that triggered it can see it finish.
@@ -60,7 +61,7 @@ pub struct Update {
 /// What the last runner left in `app-update.json`. Readers ignore unknown fields.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Record {
+pub(super) struct Record {
     schema_version: u8,
     from: String,
     to: String,
@@ -82,13 +83,11 @@ struct Record {
     #[serde(default)]
     not_before: Option<String>,
 }
-fn stamp(time: DateTime<Utc>) -> String {
+pub(super) fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 fn time(text: &Option<String>) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(text.as_deref()?)
-        .ok()
-        .map(|time| time.with_timezone(&Utc))
+    instant(&Value::from(text.clone()))
 }
 impl Record {
     fn new(from: &str, to: &str, state: State) -> Self {
@@ -105,6 +104,12 @@ impl Record {
             blocked: false,
             not_before: None,
         }
+    }
+    pub(super) fn state(&self) -> State {
+        self.state
+    }
+    pub(super) fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
     }
     fn update(&self, state: State) -> Update {
         Update {
@@ -123,7 +128,7 @@ fn read_record(directory: &Path) -> Option<Record> {
 }
 
 /// Retry delay after the `failures`-th consecutive failure: one hour, doubling, at most a day.
-fn backoff(failures: u32) -> Duration {
+pub(super) fn backoff(failures: u32) -> Duration {
     Duration::seconds((3600_i64 << failures.saturating_sub(1).min(5)).min(86_400))
 }
 
@@ -183,10 +188,16 @@ fn decide(
             })
             .map(|record| record.update(State::Done));
     }
-    match super::read(directory).map(|settings| settings.policy) {
-        Ok(Policy::Install) => {}
-        Ok(Policy::Notify) => return report(State::Skipped, Some("policyNotify")),
-        Ok(Policy::Off) => return report(State::Skipped, Some("policyOff")),
+    match super::read(directory) {
+        Ok(settings) if settings.policy == Policy::Install => {
+            if !settings.window_open() {
+                return report(State::Skipped, Some("outsideWindow"));
+            }
+        }
+        Ok(settings) if settings.policy == Policy::Notify => {
+            return report(State::Skipped, Some("policyNotify"))
+        }
+        Ok(_) => return report(State::Skipped, Some("policyOff")),
         Err(_) => return report(State::Skipped, Some("policyUnreadable")),
     }
     if rolled_back_from(directory, app) {
@@ -220,9 +231,12 @@ fn decide(
 /// `auto-update run` in its own process group with no inherited descriptors, so that it neither
 /// keeps an SSH exec channel open nor dies with it.
 fn spawn_runner(app: &str) -> io::Result<()> {
+    spawn_detached(&["auto-update", "run", "--app-version", app])
+}
+pub(super) fn spawn_detached(args: &[&str]) -> io::Result<()> {
     let mut command = Command::new(std::env::current_exe()?);
     command
-        .args(["auto-update", "run", "--app-version", app])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -235,7 +249,7 @@ fn spawn_runner(app: &str) -> io::Result<()> {
 }
 
 /// The user rolled back from this very version: it is not installed again behind their back.
-fn rolled_back_from(directory: &Path, app: &str) -> bool {
+pub(super) fn rolled_back_from(directory: &Path, app: &str) -> bool {
     let recorded = private_json::read(directory, "update-state.json")
         .ok()
         .flatten()
@@ -316,9 +330,16 @@ fn admit_update(
     Ok(Some(spawn()?))
 }
 
-fn spawn_update(app: &str) -> io::Result<Child> {
+fn spawn_update(target: &str, channel: Channel) -> io::Result<Child> {
     Command::new(std::env::current_exe()?)
-        .args(["update", "--yes", "--version", app])
+        .args([
+            "update",
+            "--yes",
+            "--version",
+            target,
+            "--channel",
+            channel.name(),
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -351,12 +372,12 @@ fn admit_and_settle(
     }
 }
 
-/// Wait for an admitted updater's exit status, or stop it after the deadline.
-fn update_child(mut child: Child) -> Option<i32> {
-    let deadline = Instant::now() + DEADLINE;
+/// Wait for a child's exit status, or stop it after `limit`.
+fn wait_exit(child: &mut Child, limit: Wait) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = child.try_wait().ok()? {
-            return status.code();
+            return Some(status);
         }
         if Instant::now() > deadline {
             let _ = child.kill();
@@ -367,8 +388,36 @@ fn update_child(mut child: Child) -> Option<i32> {
     }
 }
 
+/// Wait for an admitted updater's exit status, or stop it after the deadline.
+fn update_child(mut child: Child) -> Option<i32> {
+    wait_exit(&mut child, DEADLINE)?.code()
+}
+
+/// `update --check --json` of `channel`: the status it exits with and the result it printed, or
+/// `None` when it could not run or overran `limit`.
+pub(super) fn check_child(channel: Channel, limit: Wait) -> Option<(i32, Value)> {
+    let mut child = Command::new(std::env::current_exe().ok()?)
+        .args(["update", "--check", "--json", "--channel", channel.name()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let code = wait_exit(&mut child, limit)?.code()?;
+    let mut output = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let _ = stdout.take(64 * 1024).read_to_end(&mut output);
+    }
+    let result = String::from_utf8_lossy(&output)
+        .lines()
+        .last()
+        .and_then(|line| serde_json::from_str(line).ok())
+        .unwrap_or(Value::Null);
+    Some((code, result))
+}
+
 /// The fixed `error.kind` word for an `update` exit status (docs/reference/companion-update.md).
-fn kind(code: i32) -> &'static str {
+pub(super) fn kind(code: i32) -> &'static str {
     match code {
         20 => "networkUnavailable",
         21 => "releaseUnavailable",
@@ -443,15 +492,24 @@ pub fn run(app: &str) -> Result<Value> {
     let Some(_held) = private_json::lock(&directory, LOCK)? else {
         return Ok(json!({"state": "running", "to": app}));
     };
+    let record = install_held(&directory, app, Channel::Stable)?;
+    serde_json::to_value(&record).map_err(|_| Error::InvalidArgument)
+}
+
+/// Install release `target` of `channel` over this companion, with the runner lock held, and record
+/// the outcome in `app-update.json`: the guards the app-driven and the scheduled paths share.
+/// `update --yes --version` then resolves, verifies, replaces atomically and rolls back.
+pub(super) fn install_held(directory: &Path, target: &str, channel: Channel) -> Result<Record> {
     let now = Utc::now();
     let from = env!("CARGO_PKG_VERSION");
+    let app = target;
     // This check is authoritative only after taking the shared app-update lock.
-    if legacy_guarded(&directory, app, now) {
+    if legacy_guarded(directory, app, now) {
         let mut record = Record::new(from, app, State::Skipped);
         record.reason = Some("legacyGuard".into());
-        return serde_json::to_value(record).map_err(|_| Error::InvalidArgument);
+        return Ok(record);
     }
-    let earlier = read_record(&directory).filter(|record| record.to == app);
+    let earlier = read_record(directory).filter(|record| record.to == app);
     // Several commands may have spawned runners before the first one acquired this lock. A
     // delayed runner must honor the result that runner committed before considering another try.
     if let Some(mut record) = earlier
@@ -461,18 +519,18 @@ pub fn run(app: &str) -> Result<Value> {
         record.pid = None;
         record.finished_at = Some(stamp(now));
         let record = failed(record, "uncertain", true, now);
-        save(&directory, &record)?;
-        return serde_json::to_value(record).map_err(|_| Error::InvalidArgument);
+        save(directory, &record)?;
+        return Ok(record);
     }
     if let Some(record) = earlier.as_ref().filter(|record| postponed(record, now)) {
-        return serde_json::to_value(record).map_err(|_| Error::InvalidArgument);
+        return Ok(record.clone());
     }
     let mut record = Record::new(from, app, State::Running);
     record.failures = earlier.as_ref().map_or(0, |record| record.failures);
     record.pid = Some(std::process::id());
     record.started_at = Some(stamp(now));
-    save(&directory, &record)?;
-    let record = if active_turn(&directory, now) {
+    save(directory, &record)?;
+    let record = if active_turn(directory, now) {
         // Not in the middle of an agent turn; look again shortly.
         record.state = State::Skipped;
         record.reason = Some("activeTurn".into());
@@ -480,17 +538,17 @@ pub fn run(app: &str) -> Result<Value> {
         record.finished_at = Some(stamp(now));
         record.not_before = Some(stamp(now + DEFER));
         record
-    } else if rolled_back_from(&directory, app) {
+    } else if rolled_back_from(directory, app) {
         record.state = State::Skipped;
         record.reason = Some("rolledBack".into());
         record.pid = None;
         record.finished_at = Some(stamp(Utc::now()));
         record
     } else {
-        admit_and_settle(&directory, record, || spawn_update(app))
+        admit_and_settle(directory, record, || spawn_update(app, channel))
     };
-    save(&directory, &record)?;
-    serde_json::to_value(&record).map_err(|_| Error::InvalidArgument)
+    save(directory, &record)?;
+    Ok(record)
 }
 
 /// The recorded last run, for `auto-update status`.
@@ -592,13 +650,15 @@ mod tests {
         });
         entered_rx.recv().unwrap();
         assert!(matches!(
-            super::super::set(&state, 0, Policy::Off),
+            super::super::set(&state, 0, super::super::tests::change(Policy::Off)),
             Err(Error::Settings("SettingsBusy"))
         ));
         resume_tx.send(()).unwrap();
         assert!(worker.join().unwrap().wait().unwrap().success());
         assert_eq!(
-            super::super::set(&state, 0, Policy::Off).unwrap().policy,
+            super::super::set(&state, 0, super::super::tests::change(Policy::Off))
+                .unwrap()
+                .policy,
             Policy::Off
         );
         assert!(admit_update(&state, || panic!("off must not spawn"))
