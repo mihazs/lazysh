@@ -21,8 +21,7 @@ export async function connectOwnedHost(options: {kind?: HostKind; label?: string
   await HostEditor.useSsh();
   await HostEditor.saveHost();
   await HostsList.connectTo(name);
-  await ConnectDialog.pasteIdentity(endpoint.privateKey);
-  await ConnectDialog.connectWithKey();
+  await ConnectDialog.signIn(endpoint.privateKey);
   const shown = await ConnectDialog.shownFingerprint();
   if (shown !== endpoint.fingerprint) throw new Error(`The host key shown for ${name} is not the one the fixture generated`);
   await ConnectDialog.trustHostKey();

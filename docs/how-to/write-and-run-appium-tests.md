@@ -38,6 +38,12 @@ layout with the keyboard, runtime permission dialogs, notifications, journeys ac
    `mobile-e2e:lint` and `mobile-e2e:unit` (moon: `client:check-mobile-e2e`, `client:lint-mobile-e2e`,
    `client:test-mobile-e2e-unit`).
 
+The smoke journeys run in a phone-shaped window (the side menu and the edge swipe belong to the phone layout), so on a tablet-shaped
+guest such as Waydroid the suite sets 1080x2400 at 420 dpi before each session and restores the baseline afterwards. The Agent view
+journey needs the owned Herdr host: set `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN` and `LAZYSH_TEST_RECEIVER_BIN` (CI builds them
+with `cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver`) and the launcher starts it next to the SSH host.
+An owned SSH shell ends 90 seconds after it opens, so each smoke spec file connects for itself and stays well inside that.
+
 Specs that need a host call `connectOwnedHost()` (`pageobjects/connect-owned-host.ts`) in a `before` hook and `resetApp()` in
 `after`. It adds a host named `e2e-<run nonce>-<label>` through the real editor, signs in with the fixture's generated key
 (pasted from the clipboard) and trusts the fingerprint only when it equals the generated one. The launcher starts the owned hosts

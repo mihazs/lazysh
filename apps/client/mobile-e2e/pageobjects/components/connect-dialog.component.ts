@@ -23,7 +23,10 @@ class ConnectDialogComponent extends Page {
     });
   }
   async connectWithKey() { await this.closeKeyboard(); await this.tap(() => this.connect); }
-  async shownFingerprint() { return this.in(async () => { await this.fingerprint.waitForDisplayed({timeoutMsg: 'The host key review did not appear'}); return this.fingerprint.getText(); }); }
+  /** Signs in with the identity; a host whose key is already trusted connects here without the host key review. */
+  async signIn(privateKey: string) { await this.pasteIdentity(privateKey); await this.connectWithKey(); }
+  // The review appears after the SSH handshake, which a loaded guest can take a while to finish.
+  async shownFingerprint() { return this.in(async () => { await this.fingerprint.waitForDisplayed({timeout: 30_000, timeoutMsg: 'The host key review did not appear'}); return this.fingerprint.getText(); }); }
   async trustHostKey() { await this.tap(() => this.trust); }
 }
 export default new ConnectDialogComponent();

@@ -2117,7 +2117,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     {(wideSession?['terminal','agent','both'] as const:['terminal','agent'] as const).map(mode=>{
       const [label,Icon]=mode==='terminal'?[t('sessionViewTerminal'),TerminalSquare]:mode==='agent'?[t('sessionViewAgent'),Bot]:[t('sessionViewBoth'),Columns2];
       // Narrow headers show only the icon, so the session title keeps its room.
-      return <button key={mode} type="button" aria-pressed={activeSessionView===mode} aria-label={label} aria-keyshortcuts={mode==='agent' ? shiftedChordHint('Y').keys : undefined} title={mode==='agent' ? `${label} (${shiftedChordHint('Y').label})` : label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
+      return <button key={mode} type="button" data-testid={`session-view-${mode}`} aria-pressed={activeSessionView===mode} aria-label={label} aria-keyshortcuts={mode==='agent' ? shiftedChordHint('Y').keys : undefined} title={mode==='agent' ? `${label} (${shiftedChordHint('Y').label})` : label} onClick={()=>chooseSessionView(active,mode)}><Icon size={18} aria-hidden="true"/><span>{label}</span></button>;
     })}
   </div>;
   const connectionLabel = active?.connected
