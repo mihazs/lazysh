@@ -54,7 +54,9 @@ internal object LauncherIcons {
 
 /** Launcher-icon commands for the Rust app_icons module; renderer calls to this plugin are refused in Rust. */
 @TauriPlugin
-class AppIconPlugin(private val owner: Activity) : MobilePlugin(owner) {
+class AppIconPlugin(private val initialOwner: Activity) : MobilePlugin(initialOwner) {
+    /** The activity in front: Tauri builds this plugin once, with the first activity, which a recreation destroys (#1462). */
+    private val owner: Activity get() = currentActivity(initialOwner)
     private companion object {
         const val REASON = "The launcher icon is managed by Android on this device. Your open sessions stay connected; " +
             "the launcher may take a moment to show the new icon."

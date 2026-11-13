@@ -52,7 +52,9 @@ internal object FileExchange {
 
 /** Save, open and share commands for the Rust file_transfer module; renderer calls are refused in Rust. */
 @TauriPlugin
-class FileExchangePlugin(private val owner: Activity) : MobilePlugin(owner) {
+class FileExchangePlugin(private val initialOwner: Activity) : MobilePlugin(initialOwner) {
+    /** The activity in front: Tauri builds this plugin once, with the first activity, which a recreation destroys (#1462). */
+    private val owner: Activity get() = currentActivity(initialOwner)
     private fun request(invoke: Invoke): Pair<File, String>? = try {
         val args = invoke.getArgs()
         val name = args.getString("name")

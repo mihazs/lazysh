@@ -233,6 +233,25 @@ class NativeGestureNavigationTest {
         }
     }
 
+    /**
+     * The device plugins Tauri built with the first activity must act on the one in front after a recreation (#1462): the launcher icon
+     * is refused with "Open lazysh before changing the launcher icon" when its plugin judges a destroyed activity not to be in front, and
+     * the soft keyboard refuses with `soft_keyboard_unavailable`. CI saw the first one fail in `NativeWorkspaceTest` once this class had recreated the activity.
+     */
+    @Test fun theDevicePluginsActOnTheActivityInFrontAfterRecreation() {
+        awaitStartPage()
+        scenario.recreate()
+        awaitStartPage()
+        invokeFromPage("app_icon_status")
+        val current = JSONObject(outcome("the launcher icon")).getString("current")
+        invokeFromPage("set_app_icon", "{icon:'$current'}")
+        val selected = outcome("the launcher icon is set again")
+        assertFalse("the launcher icon plugin sees the activity in front: $selected", selected.startsWith("error"))
+        invokeFromPage("soft_keyboard", "{action:'status'}")
+        val keyboard = outcome("the soft keyboard status")
+        assertFalse("the soft keyboard plugin sees the activity in front: $keyboard", keyboard.startsWith("error"))
+    }
+
     /** The Rust command refuses what Android would clamp or ignore: a row taller than the 200 dp cap, an inverted row, a zone outside 1 to 96 dp. */
     @Test fun theShellRefusesRowsAndZonesAndroidCouldNotHonour() {
         awaitStartPage()

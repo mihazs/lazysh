@@ -116,7 +116,9 @@ internal object SessionBackgroundRuntime {
 }
 
 @TauriPlugin
-class SessionBackgroundPlugin(private val owner: Activity) : Plugin(owner) {
+class SessionBackgroundPlugin(private val initialOwner: Activity) : Plugin(initialOwner) {
+    /** The activity in front: Tauri builds this plugin once, with the first activity, which a recreation destroys (#1462). */
+    private val owner: Activity get() = currentActivity(initialOwner)
     @Command fun update(invoke: Invoke) = owner.runOnUiThread {
         try {
             val args = invoke.getArgs()

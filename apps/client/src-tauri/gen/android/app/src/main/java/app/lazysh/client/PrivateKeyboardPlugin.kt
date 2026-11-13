@@ -51,7 +51,9 @@ internal object PrivateKeyboard {
 
 /** Reached only through the Rust `terminal_private_keyboard` command; renderer calls to the plugin itself are refused there. */
 @TauriPlugin
-class PrivateKeyboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
+class PrivateKeyboardPlugin(private val initialOwner: Activity) : MobilePlugin(initialOwner) {
+    /** The activity in front: Tauri builds this plugin once, with the first activity, which a recreation destroys (#1462). */
+    private val owner: Activity get() = currentActivity(initialOwner)
     @Command fun set(invoke: Invoke) {
         val active = runCatching { invoke.getArgs().getBoolean("active") }.getOrNull()
             ?: return invoke.reject("private_keyboard_invalid")
