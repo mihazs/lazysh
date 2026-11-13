@@ -4,8 +4,7 @@ import { checkPasteSize, readClipboardText, useClipboardPlatform } from './devic
 import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { TerminalFitAddon } from "./terminalFit";
-import {installTerminalLinks, type PathLink} from "./terminalLinks";
+import type {PathLink} from "./terminalLinks";
 import {resolveTerminalPath} from "./hostPath";
 import HostPathSheet from "./HostPathSheet";
 import { ChevronsUp, Keyboard, KeyboardOff, Layers, Lock, PanelBottomClose, PanelBottomOpen, SquarePen } from "lucide-react";
@@ -18,17 +17,15 @@ import {expandComposerDraft,insertComposerToken,liveComposerAttachments,nextComp
 import TerminalSelectionTools from './TerminalSelectionTools';
 import {endTextComposition, isTextEditingActive, markTyping, registerTextInteraction} from './textInteraction';
 import { api as nativeApi } from "./bridge";
-import { bodyGestureSlots, decodeClipboardRequest, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, terminalPreferences, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
-import type {UnappliedTerminalEdit} from "./terminalIme";
-import { keepViewportScrolls, modifiedTerminalText, observeTerminalInput, syncTerminalViewport, type LiveSession } from "./terminal";
-import { applyTerminalTheme } from "./terminalBold";
+import type {UnappliedTerminalEdit} from "./terminalAdapter";
+import { modifiedTerminalText, type LiveSession } from "./terminal";
 import { nextTouchSelection, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import { carryKeyboard, keyboardCarried, mayFocusOnActivation, touchScreen } from "./softKeyboard";
 import { herdrNavigationCell, herdrOnScreen } from "./herdrNavigationCells";
-import "@xterm/xterm/css/xterm.css";
 import { toolbarColumns, visibleToolbarRows } from "./toolbarLayout";
 import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
 import "./ToolbarRows.css";
@@ -41,7 +38,7 @@ const labels: Partial<Record<ToolbarKey, string>> = {left: "←", up: "↑", dow
 type InputCaller = 'terminal-user' | 'terminal-nonuser' | 'named-key' | 'chord' | 'gesture';
 type InputOwner = {session: LiveSession; disposed: boolean};
 type DpadDirection = keyof typeof arrowLabelKeys;
-type DpadGesture = {readonly shift:boolean;pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;terminal:LiveSession['terminal'];id:string};
+type DpadGesture = {readonly shift:boolean;pointer:number;x:number;y:number;started:number;direction:DpadDirection|null;panned:boolean;sent:boolean;owner:InputOwner;adapter:LiveSession['adapter'];id:string};
 type PullDepth = 'pullShallow' | 'pullDeep';
 /** A header pull starts after 12 CSS pixels downward; 56 reaches the short depth and 144 the long one. */
 const pullStart = 12, pullShallow = 56, pullDeep = 144;
@@ -178,13 +175,13 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const pasteRead = useRef<AbortController | null>(null);
   const clipboardPlatform = useClipboardPlatform();
   const [pasteBusy, setPasteBusy] = useState(false);
-  const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
-  pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
+  const pasteView = useRef({active, connected: session.connected, id: session.id, adapter: session.adapter});
+  pasteView.current = {active, connected: session.connected, id: session.id, adapter: session.adapter};
   function writeInput(caller: InputCaller, data: string | string[], owner = inputOwner.current) {
     // Toolbar keys and chords are typing too (keyboard input is seen as key events; wheel reports and gestures are not typing).
     if (caller === 'named-key' || caller === 'chord') markTyping();
     const snapshot = () => {
-      const sameView = !!owner && pasteView.current.id === owner.session.id && pasteView.current.terminal === owner.session.terminal;
+      const sameView = !!owner && pasteView.current.id === owner.session.id && pasteView.current.adapter === owner.session.adapter;
       return {active: activeRef.current, connected: sameView ? pasteView.current.connected : !!owner?.session.connected,
         disposed: !owner || owner.disposed, currentOwner: !!owner && inputOwner.current === owner && sameView};
     };
@@ -200,7 +197,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       throw error;
     });
   }
-  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
+  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.adapter, session.connected, active]);
   const [link, setLink] = useState<string | null>(null);
   const [hostPath, setHostPath] = useState<{path: string; line?: number} | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
@@ -244,7 +241,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }, [active, session.adapter]);
   // Selection handles appear after a touch long-press; actions also after a mouse selection.
   const [selectionTools, setSelectionTools] = useState<{handles: boolean} | null>(null);
-  useEffect(() => {setSelectionTools(null); setHostPath(null);}, [session.id, session.terminal]);
+  useEffect(() => {setSelectionTools(null); setHostPath(null);}, [session.id, session.adapter]);
   useEffect(()=>{
     const available=active && (menuOpen || composing || searching || clipboard!==null || link!==null || hostPath!==null || dpadOpen || selectionTools!==null);
     onBackChange?.(session.id,available?()=>{
@@ -288,8 +285,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
   dpadView.current={session,enabled:dpadEnabled};
   function ownsDpad(gesture:DpadGesture) {
-    return dpadView.current.enabled&&dpadView.current.session.id===gesture.id&&dpadView.current.session.terminal===gesture.terminal
-      &&inputOwner.current===gesture.owner&&!gesture.owner.disposed&&gesture.owner.session.id===gesture.id&&gesture.owner.session.terminal===gesture.terminal
+    return dpadView.current.enabled&&dpadView.current.session.id===gesture.id&&dpadView.current.session.adapter===gesture.adapter
+      &&inputOwner.current===gesture.owner&&!gesture.owner.disposed&&gesture.owner.session.id===gesture.id&&gesture.owner.session.adapter===gesture.adapter
       &&activeRef.current&&dpadView.current.session.connected&&mounted.current&&access.current()&&!document.hidden
       &&!document.querySelector('[role="dialog"][aria-modal="true"]');
   }
@@ -310,7 +307,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const button=(event.target as Element).closest<HTMLButtonElement>('button[data-dpad-direction]');
     if(!button||event.button!==0||!inputOwner.current)return;
     event.preventDefault();
-    const gesture:DpadGesture={shift:modifierState.current.shift,pointer:event.pointerId,x:event.clientX,y:event.clientY,started:performance.now(),direction:button.dataset.dpadDirection as DpadDirection,panned:false,sent:false,owner:inputOwner.current,terminal:session.terminal,id:session.id};
+    const gesture:DpadGesture={shift:modifierState.current.shift,pointer:event.pointerId,x:event.clientX,y:event.clientY,started:performance.now(),direction:button.dataset.dpadDirection as DpadDirection,panned:false,sent:false,owner:inputOwner.current,adapter:session.adapter,id:session.id};
     if(!ownsDpad(gesture)||!Number.isFinite(event.clientX)||!Number.isFinite(event.clientY))return;
     // Without capture, preserve ordinary clicks but do not start an unowned hold.
     if(!event.currentTarget.setPointerCapture)return;
@@ -356,7 +353,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     document.addEventListener('focusin',focus,true);window.addEventListener('blur',blur);
     return()=>{cancelDpad();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointerup',end,true);document.removeEventListener('pointercancel',end,true);document.removeEventListener('focusin',focus,true);window.removeEventListener('blur',blur);};
   },[]);
-  useEffect(()=>{if(!active||!session.connected||!dpadEnabled)cancelDpad();return cancelDpad;},[active,session.id,session.terminal,session.connected,dpadEnabled]);
+  useEffect(()=>{if(!active||!session.connected||!dpadEnabled)cancelDpad();return cancelDpad;},[active,session.id,session.adapter,session.connected,dpadEnabled]);
   useEffect(()=>{
     const element=dpadElement.current;
     if(!element||!dpadEnabled||preferences.screenReader)return;
@@ -371,7 +368,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     };
     element.addEventListener('touchstart',start,{passive:false});
     return()=>element.removeEventListener('touchstart',start);
-  },[active,session.id,session.terminal,session.connected,dpadEnabled,preferences.screenReader]);
+  },[active,session.id,session.adapter,session.connected,dpadEnabled,preferences.screenReader]);
   const multiplexer = session.local ? undefined : session.attached?.kind;
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
 
@@ -454,9 +451,9 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     // Edge swipes wait while this terminal's own finger scroll runs.
     const scrolling = registerTextInteraction('scroll', () => !!scroll?.active);
     const safeDismiss=(owner:InputOwner|null)=>{
-      const terminal=session.terminal,adapter=session.adapter,area=terminal.textarea,modes=adapter.modes(),view=pasteView.current;
-      return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.terminal===terminal
-        &&view.id===session.id&&view.terminal===terminal&&view.connected&&activeRef.current&&mounted.current&&access.current()
+      const adapter=session.adapter,area=adapter.inputElement(),modes=adapter.modes(),view=pasteView.current;
+      return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.adapter===adapter
+        &&view.id===session.id&&view.adapter===adapter&&view.connected&&activeRef.current&&mounted.current&&access.current()
         &&!document.hidden&&document.hasFocus()&&!composingIme()&&imeInput.current?.idle===true&&!adapter.hasSelection()
         &&area===document.activeElement&&!area?.readOnly&&area?.value===''
         &&modes.mouseTracking==='none'&&adapter.atLiveScreen()
@@ -601,7 +598,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       element.removeEventListener('touchend', end, {capture: true});
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
-  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.terminal, session.adapter, session.connected, preferences.bodyGestures, multiplexer, invoke, access, reportError]);
+  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.adapter, session.connected, preferences.bodyGestures, multiplexer, invoke, access, reportError]);
 
   // Pulling the session header down runs the short or long pull action on release.
   const [pull, setPull] = useState<PullDepth | null>(null);
@@ -677,17 +674,17 @@ export default function TerminalPane({ session, active, swiping = false, typingA
 
   // A press on Herdr's own switch button or switcher navigates; xterm would also focus its input and raise the soft keyboard.
   useEffect(() => {
-    const element = container.current, terminal = session.terminal, adapter = session.adapter;
+    const element = container.current, adapter = session.adapter;
     if (!element) return;
     const press = (event: MouseEvent) => {
-      const input = terminal.textarea, cell = adapter.cellAt(event.clientX, event.clientY);
+      const input = adapter.inputElement(), cell = adapter.cellAt(event.clientX, event.clientY);
       if (!input || !cell || document.activeElement === input || !touchScreen()) return;
       // The press still reaches Herdr as a click; only the focus xterm gives its input on a press is refused.
       if (herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top)) {input.disabled = true; setTimeout(() => {input.disabled = false;});}
     };
     element.addEventListener('mousedown', press, true);
     return () => element.removeEventListener('mousedown', press, true);
-  }, [session.id, session.terminal, session.adapter]);
+  }, [session.id, session.adapter]);
 
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
@@ -700,40 +697,36 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   useEffect(() => {
     const element = container.current;
     if (!element) return;
-    const terminal = session.terminal;
-    const addon = new TerminalFitAddon();
-    terminal.loadAddon(addon);
+    const adapter = session.adapter;
     // The shell reports its directory with OSC 7 (`file://host/path`); relative paths resolve only against that.
     let cwd: string | undefined;
-    const cwdReport = terminal.parser.registerOscHandler(7, data => {
-      try { const url = new URL(data); if (url.protocol === "file:") cwd = decodeURIComponent(url.pathname); } catch { /* A malformed report keeps the last directory. */ }
-      return true;
-    });
+    const reports = adapter.subscribe(event => {
+      if (event.type === "cwd") cwd = event.path;
+      else if (event.type === "clipboard" && !pendingClipboard.current) {
+        pendingClipboard.current = true;
+        setClipboard(event.text);
+      }
+    }, ["cwd", "clipboard"]);
     const resolve = (link: PathLink) => resolveTerminalPath(api, session.id, link.path, cwd);
     const verified = new Map<string, {at: number; file: Promise<boolean>}>();
-    const links = installTerminalLinks(terminal, uri => {
-      const url = terminalWebUrl(uri);
-      if (url) setLink(url);
-    }, {
-      exists(link) {
-        if (!/^[~/]/.test(link.path) && !cwd) return Promise.resolve(false);
-        const key = `${cwd}\0${link.path}`, known = verified.get(key);
-        if (known && Date.now() - known.at < 10_000) return known.file;
-        const file = resolve(link).then(path => api.hostFileStat(session.id, path)).then(stat => stat.kind === "file", () => false);
-        verified.set(key, {at: Date.now(), file});
-        return file;
+    const links = adapter.registerLinks({
+      openUrl: uri => {
+        const url = terminalWebUrl(uri);
+        if (url) setLink(url);
       },
-      open: link => void resolve(link).then(path => { if (mounted.current && access.current()) setHostPath({path, line: link.line}); }, () => {}),
+      hostPaths: {
+        exists(link) {
+          if (!/^[~/]/.test(link.path) && !cwd) return Promise.resolve(false);
+          const key = `${cwd}\0${link.path}`, known = verified.get(key);
+          if (known && Date.now() - known.at < 10_000) return known.file;
+          const file = resolve(link).then(path => api.hostFileStat(session.id, path)).then(stat => stat.kind === "file", () => false);
+          verified.set(key, {at: Date.now(), file});
+          return file;
+        },
+        open: link => void resolve(link).then(path => { if (mounted.current && access.current()) setHostPath({path, line: link.line}); }, () => {}),
+      },
     });
-    const osc = terminal.parser.registerOscHandler(52, data => {
-      const text = decodeClipboardRequest(data);
-      if (text !== undefined && !pendingClipboard.current) {
-        pendingClipboard.current = true;
-        setClipboard(text);
-      }
-      return true;
-    });
-    terminal.attachCustomKeyEventHandler(event => {
+    const keys = adapter.interceptKeys(event => {
       if (event.type === "keydown" && !event.isComposing && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
         setSearching(true);
         requestAnimationFrame(() => focusTerminal(searchInput.current));
@@ -749,10 +742,9 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       }
       return true;
     });
-    if (terminal.element) element.append(terminal.element);
-    else terminal.open(element);
-    try {applyTerminalTheme(terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
-    const keyboardLane = (event: Event) => {if (event.target === terminal.textarea) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
+    void adapter.attach({kind: "dom", element}).catch(error => reportError(String(error)));
+    try {adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
+    const keyboardLane = (event: Event) => {if (event.target === adapter.inputElement()) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
     const literalLane = () => {inputLane.current = "literal";};
     const pointerLane = (event: Event) => {pointerInputEvent.current = event;};
     const lanes = ["keydown", "keypress", "input", "compositionstart", "compositionend"];
@@ -761,14 +753,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const pointerEvents = ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "wheel", "touchstart", "touchmove", "touchend", "touchcancel"];
     pointerEvents.forEach(name => document.addEventListener(name, pointerLane, true));
     const acceptsInput = () => activeRef.current && mounted.current && access.current() && pasteView.current.connected
-      && pasteView.current.id === session.id && pasteView.current.terminal === terminal;
+      && pasteView.current.id === session.id && pasteView.current.adapter === adapter;
     const owner: InputOwner = {session, disposed: false};
     inputOwner.current = owner;
-    const output = observeTerminalInput(terminal, (data, userInput) => {
+    const output = adapter.observeInput!((data, userInput) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
       if (userInput && (!acceptsInput() || document.hidden || !document.hasFocus()
-        || ((document.activeElement !== terminal.textarea || terminal.textarea?.readOnly) && !literalPaste.current && !pointerInput))) {
+        || ((document.activeElement !== adapter.inputElement() || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
         output.reset(); return;
       }
       if (userInput) {
@@ -795,25 +787,12 @@ export default function TerminalPane({ session, active, swiping = false, typingA
         void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
     };
     // Authoritative Mosh parser resizes never echo back to the server.
-    const size = session.moshResize ? session.moshResize.onResizeIntent(resizeRemote) : terminal.onResize(resizeRemote);
-    const screen = element.querySelector<HTMLElement>(".xterm-screen");
-    const viewport = element.querySelector<HTMLElement>(".xterm-viewport");
-    let viewportHeight = viewport?.clientHeight ?? 0;
-    // A taller container clamps the DOM viewport before any fit runs. That
-    // scroll is layout, not a reader: xterm would otherwise move the reader to
-    // the clamp and stop following output. Mosh resizes only after a round trip.
-    const clamped = (event: Event) => {
-      if (!viewport || event.target !== viewport || viewport.clientHeight === viewportHeight) return;
-      viewportHeight = viewport.clientHeight;
-      event.stopPropagation();
-      syncTerminalViewport(terminal);
-    };
-    element.addEventListener("scroll", clamped, true);
-    const scrolls = keepViewportScrolls(terminal, element);
+    const size = session.moshResize ? session.moshResize.onResizeIntent(resizeRemote)
+      : adapter.subscribe(event => {if (event.type === "resizeIntent") resizeRemote({cols: event.size.columns, rows: event.size.rows});}, ["resizeIntent"]);
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
-      const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
-      if (rowHeight > 0 && Number.isFinite(rowHeight)) {
+      const rowHeight = adapter.layoutRowHeight();
+      if (rowHeight > 0) {
         const minimum = `${rowHeight}px`;
         if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
       }
@@ -823,29 +802,18 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       // A closed Mosh screen retains its final canonical rows. A later stock
       // fit could discard its bottom rows when the final cursor is above them.
       if (session.moshResize) {
-        const proposed = session.connected ? addon.proposeDimensions() : undefined;
+        const proposed = session.connected ? adapter.proposeSize() : undefined;
         if (proposed) {
-          try {session.moshResize.requestSize(proposed.cols, proposed.rows);}
+          try {session.moshResize.requestSize(proposed.columns, proposed.rows);}
           catch {reportError(t('appUnavailableInThisAppBuild'));}
         }
-      } else {
-        const buffer = terminal.buffer.active;
-        // Stock resize moves scrolled-back history with the cursor.
-        const history = buffer.type === 'normal' && buffer.viewportY < buffer.baseY;
-        let top = buffer.viewportY;
-        // Reflow merges or splits wrapped rows; their logical line start survives.
-        if (history && addon.proposeDimensions()?.cols !== terminal.cols) while (top > 0 && buffer.getLine(top)?.isWrapped) top--;
-        const anchor = history ? terminal.registerMarker(top - buffer.baseY - buffer.cursorY) : undefined;
-        try {addon.fit();
-          if (anchor && !anchor.isDisposed && terminal.buffer.active === buffer) terminal.scrollToLine(anchor.line);
-        } finally {anchor?.dispose();}
-      }
-      syncTerminalViewport(terminal);
-      if (viewport) viewportHeight = viewport.clientHeight;
+      } else adapter.fit();
+      adapter.syncViewport();
     };
     fit.current = fitTerminal;
     const resize = new ResizeObserver(fitTerminal);
     resize.observe(element);
+    const screen = adapter.screenElement();
     if (screen) resize.observe(screen);
     fitTerminal();
     focusActivatedTerminal();
@@ -854,16 +822,15 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       if (inputOwner.current === owner) inputOwner.current = null;
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
-      element.removeEventListener("scroll", clamped, true); scrolls();
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
-      resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); osc.dispose(); cwdReport.dispose(); links.dispose(); addon.dispose();
-      terminal.attachCustomKeyEventHandler(() => true);
+      resize.disconnect(); imeInput.current = null; output.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
+      void adapter.detach();
       fit.current = null;
     };
   }, [session.id]);
 
   useEffect(() => {
-    try {applyTerminalTheme(session.terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
+    try {session.adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
     if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active]);
 
@@ -883,7 +850,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   function focusTerminal(target?: HTMLElement | null) {
     if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
     if (target !== undefined) target?.focus();
-    else {imeInput.current?.resume(); session.terminal.focus();}
+    else {imeInput.current?.resume(); session.adapter.focus();}
   }
   /** The terminal's cursor row in viewport coordinates, or null while nothing is measured. */
   function cursorBand() {
@@ -894,14 +861,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     return Number.isFinite(top) ? {top, bottom: top + row} : null;
   }
   /** The input that has focus while typing: the composer's editor while it is open, else the terminal. */
-  const keyboardTarget = () => composingRef.current ? composerInput.current : session.terminal.textarea;
+  const keyboardTarget = () => composingRef.current ? composerInput.current : session.adapter.inputElement();
   /** Focuses the input, then asks Android for the keyboard, which a focused input alone does not bring back after the system back gesture closed it. */
   function showKeyboard() {
     focusTerminal(composingRef.current ? composerInput.current : undefined);
     softKeyboard.request(true);
   }
   function hideKeyboard() {
-    if (composingRef.current) composerInput.current?.blur(); else session.terminal.blur();
+    if (composingRef.current) composerInput.current?.blur(); else session.adapter.blur();
     softKeyboard.request(false);
   }
   /** Touch devices follow the real keyboard; a desktop window only moves focus. */
@@ -911,7 +878,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   // Like xterm's keyboard input, sent keys return the reader to the live screen where the TUI answers them.
   function followLive() {session.adapter.followLive();}
   function sendNamed(key: string, physical?: KeyboardEvent, expectedOwner?:InputOwner) {
-    const current=()=>activeRef.current&&session.connected&&mounted.current&&access.current()&&(!expectedOwner||(inputOwner.current===expectedOwner&&!expectedOwner.disposed&&expectedOwner.session.id===session.id&&expectedOwner.session.terminal===session.terminal&&dpadView.current.session===session&&pasteView.current.id===session.id&&pasteView.current.terminal===session.terminal&&!document.querySelector('[role="dialog"][aria-modal="true"]')));
+    const current=()=>activeRef.current&&session.connected&&mounted.current&&access.current()&&(!expectedOwner||(inputOwner.current===expectedOwner&&!expectedOwner.disposed&&expectedOwner.session.id===session.id&&expectedOwner.session.adapter===session.adapter&&dpadView.current.session===session&&pasteView.current.id===session.id&&pasteView.current.adapter===session.adapter&&!document.querySelector('[role="dialog"][aria-modal="true"]')));
     if (!current()) return false;
     if (document.hidden) {clearModifiers(); repeated.current = true; return false;}
     imeInput.current?.flush();
@@ -958,7 +925,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const read = new AbortController(); pasteRead.current = read;
     setPasteBusy(true);
     const current = () => mounted.current && access.current() && !read.signal.aborted && pasteView.current.active && pasteView.current.connected
-      && pasteView.current.id === session.id && pasteView.current.terminal === session.terminal;
+      && pasteView.current.id === session.id && pasteView.current.adapter === session.adapter;
     try {
       const text = await readClipboardText(read.signal);
       // The retained terminal may now have a fresh onData handler after unlock.

@@ -1,7 +1,8 @@
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
-import {createTerminal,type LiveSession} from '../../src/terminal';
+import {createTerminal} from '../../src/xterm/terminal';
+import type {LiveSession} from '../../src/terminal';
 import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import {uiErrorText} from '../../src/i18n/localError';

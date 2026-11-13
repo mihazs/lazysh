@@ -5,6 +5,8 @@
  * xterm.js types or DOM nodes of a backend. See docs/architecture/terminal-adapter.md.
  */
 
+import type {PathLink} from './terminalLinks';
+
 export type TerminalBackendId = 'native' | 'xterm';
 
 export type TerminalSize = {columns: number; rows: number; pixelWidth?: number; pixelHeight?: number};
@@ -98,6 +100,10 @@ export type TerminalEvent =
   | {type: 'modes'; modes: TerminalModes}
   | {type: 'title'; title: string}
   | {type: 'bell'}
+  /** The shell reported its working directory (OSC 7 `file://host/path`); `path` is the decoded path. */
+  | {type: 'cwd'; path: string}
+  /** The program asked to write `text` to the clipboard (OSC 52); the UI decides whether to allow it. */
+  | {type: 'clipboard'; text: string}
   | {type: 'failure'; reason: TerminalFailure};
 
 export type UnappliedTerminalEdit = {text: string; truncated: boolean};
@@ -189,6 +195,23 @@ export interface TerminalAdapter {
   followLive(): void;
   /** Deliver one wheel notch where the pointer is: a mouse report when the program tracks the mouse, a scroll otherwise. */
   wheel(input: {clientX: number; clientY: number; deltaY: number; unit: 'pixel' | 'line'}): void;
+
+  /** Where the typed-input editor lives on a DOM backend: it holds focus while typing and its `value` is the IME's preedit. */
+  inputElement(): HTMLTextAreaElement | undefined;
+  /** The element holding the drawn rows, for layout observation; DOM backends only. */
+  screenElement(): HTMLElement | undefined;
+  /** One row's height in layout pixels (what the container must at least hold), 0 while nothing is measured. */
+  layoutRowHeight(): number;
+  /** The grid the mounted container can hold, measured; undefined while nothing is measurable. */
+  proposeSize(): TerminalSize | undefined;
+  /** Resizes to what the container holds. A reader scrolled into history keeps the line they were reading, even across a reflow. */
+  fit(): void;
+  /** Re-derives the scroll area after a layout change, so a clamp the layout caused is not mistaken for the reader scrolling. */
+  syncViewport(): void;
+  /** Sees every key event before the terminal; return false to keep it from the terminal. Dispose restores the default. */
+  interceptKeys(handler: (event: KeyboardEvent) => boolean): Disposable;
+  /** URL and host-path links in the output, plus OSC 8 hyperlinks, which all go to `openUrl`. Only host paths `exists` confirms are links. */
+  registerLinks(handlers: {openUrl(uri: string): void; hostPaths?: {exists(link: PathLink): Promise<boolean>; open(link: PathLink): void}}): Disposable;
 
   focus(): void;
   blur(): void;

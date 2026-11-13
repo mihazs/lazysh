@@ -2,9 +2,10 @@ import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
 import EdgeGestureHost from './EdgeGestureHost';
-import {createTerminal,type LiveSession} from '../../src/terminal';
+import {createTerminal} from '../../src/xterm/terminal';
+import type {LiveSession} from '../../src/terminal';
 import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
-import {installMoshResize} from '../../src/moshResize';
+import {installMoshResize} from '../../src/xterm/moshResize';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import '../../src/styles.css';
 

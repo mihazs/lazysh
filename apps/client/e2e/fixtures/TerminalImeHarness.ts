@@ -1,5 +1,5 @@
-import {createTerminal,observeTerminalInput} from '../../src/terminal';
-import type {UnappliedTerminalEdit} from '../../src/terminalIme';
+import {createTerminal,observeTerminalInput} from '../../src/xterm/terminal';
+import type {UnappliedTerminalEdit} from '../../src/terminalAdapter';
 import '@xterm/xterm/css/xterm.css';
 
 /** Synthetic text only. No native transport, host, input history or private keyboard data. */

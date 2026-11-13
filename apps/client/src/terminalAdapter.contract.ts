@@ -158,6 +158,28 @@ export function runTerminalAdapterContract(name: string, harness: ContractHarnes
       expect(adapter.size()).toEqual({columns: 20, rows: 5});
     });
 
+    it('reports the shell directory (OSC 7) and clipboard writes (OSC 52) as events, and ignores malformed ones', async () => {
+      const {adapter, write} = await open();
+      const seen: TerminalEvent[] = [];
+      adapter.subscribe(event => seen.push(event), ['cwd', 'clipboard']);
+      await write('\x1b]7;file://host/tmp/a%20b\x07\x1b]7;nonsense\x07\x1b]7;http://host/no\x07');
+      await write('\x1b]52;c;aGVsbG8=\x07\x1b]52;c;?\x07\x1b]52;c;not base64!\x07');
+      expect(seen).toEqual([{type: 'cwd', path: '/tmp/a b'}, {type: 'clipboard', text: 'hello'}]);
+    });
+
+    it('shows the UI every key event before the terminal, until released', async () => {
+      const {adapter} = await open();
+      if (!adapter.capabilities.ime) return;
+      const input = adapter.inputElement()!;
+      const seen: string[] = [];
+      const interception = adapter.interceptKeys(event => { seen.push(event.key); return event.key !== 'x'; });
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', bubbles: true, cancelable: true}));
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'y', bubbles: true, cancelable: true}));
+      interception.dispose();
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'z', bubbles: true, cancelable: true}));
+      expect(seen).toEqual(['x', 'y']);
+    });
+
     it('delivers only the event types a subscriber asked for', async () => {
       const {adapter, write} = await open();
       const seen: string[] = [];

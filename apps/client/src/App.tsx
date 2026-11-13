@@ -138,7 +138,7 @@ async function prepareSession(
   destination: string,
   lease: AccessLease,
 ) {
-  const { createTerminalAdapter, xtermView } = await import("./terminalBackends");
+  const { createTerminalAdapter } = await import("./terminalBackends");
   const { adapter } = await createTerminalAdapter();
   lease.assert();
   const session: LiveSession = {
@@ -147,7 +147,6 @@ async function prepareSession(
     name,
     destination,
     adapter,
-    terminal: xtermView(adapter),
     connected: true,
   };
   let pendingBytes = 0;

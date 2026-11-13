@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: 
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
-vi.mock("./terminalLinks", () => ({installTerminalLinks: (_terminal: unknown, open: (uri: string) => void) => {mocks.link = (_event, uri) => open(uri); return {dispose() {}};}}));
+vi.mock("./xterm/links", () => ({installTerminalLinks: (_terminal: unknown, open: (uri: string) => void) => {mocks.link = (_event, uri) => open(uri); return {dispose() {}};}}));
 const adapters = new WeakMap<object, XtermTerminalAdapter>();
 /** The real xterm backend over a mock terminal, one per terminal like a session's adapter. */
 function adapterOf(mock: unknown) {

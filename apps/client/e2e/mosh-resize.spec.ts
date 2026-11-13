@@ -3,7 +3,7 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {openMoshApp} from './fixtures/moshApp';
 import type {Terminal} from '@xterm/xterm';
 import {readFileSync} from 'node:fs';
-import type {MoshResizeController} from '../src/moshResize';
+import type {MoshResizeController} from '../src/xterm/moshResize';
 type Frame={cols:number;rows:number;state:number;bytesHex:string;expectedVisibleRows:number;expectedCursor:number[];expectedLongRow:string;expectedFirstRowBoldRed:boolean};
 const captured=JSON.parse(readFileSync(new URL('./fixtures/mosh-resize-frames.json',import.meta.url),'utf8')) as {frames:Frame[]};
 
@@ -14,7 +14,7 @@ const bytes=(value:string)=>Array.from(value.matchAll(/../g),part=>Number.parseI
 test.beforeEach(async({page})=>{
   await page.goto('/');
   await page.evaluate(async()=>{
-    const terminalModule='/src/terminal.ts',policyModule='/src/moshResize.ts';
+    const terminalModule='/src/xterm/terminal.ts',policyModule='/src/xterm/moshResize.ts';
     const {createTerminal}=await import(terminalModule),{installMoshResize}=await import(policyModule);
     const states:{owned:Owned;host:HTMLElement}[]=[];
     const make=(guarded:boolean):Owned=>{

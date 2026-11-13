@@ -1,8 +1,12 @@
 import type {Terminal} from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import {version} from '@xterm/xterm/package.json';
-import {installMoshResize} from './moshResize';
-import {applyXtermPreferences} from './terminalBold';
-import {createTerminal, observeTerminalInput} from './terminal';
+import {decodeClipboardRequest} from './preferences';
+import {installMoshResize} from './xterm/moshResize';
+import {TerminalFitAddon} from './xterm/terminalFit';
+import {installTerminalLinks} from './xterm/links';
+import {applyXtermPreferences} from './xterm/terminalBold';
+import {createTerminal, keepViewportScrolls, observeTerminalInput, syncTerminalViewport} from './xterm/terminal';
 import {inclusiveEnd} from './terminalTouchSelection';
 import {selectTerminalRange, terminalCellAt, terminalWordAt} from './xterm/selection';
 import type {
@@ -18,7 +22,7 @@ export const xtermCapabilities: TerminalCapabilities = {
   canonicalMoshResize: version === '5.5.0',
   customBoldColor: true,
 };
-const allEventTypes: readonly TerminalEvent['type'][] = ['resizeIntent', 'geometry', 'viewport', 'output', 'selection', 'modes', 'title', 'bell', 'failure'];
+const allEventTypes: readonly TerminalEvent['type'][] = ['resizeIntent', 'geometry', 'viewport', 'output', 'selection', 'modes', 'title', 'bell', 'failure', 'cwd', 'clipboard'];
 const mouseModes = new Set<TerminalModes['mouseTracking']>(['none', 'x10', 'vt200', 'drag', 'any']);
 
 /** The xterm.js backend: the terminal's state lives in the WebView, in one xterm `Terminal`. */
@@ -37,17 +41,41 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   /** `xterm` is the one terminal of this session; the adapter takes ownership and disposes it. */
   constructor(private readonly xterm: Terminal) {}
 
-  /** Transitional escape hatch for code still written against xterm (#1308); not part of the contract. */
-  get terminal(): Terminal { return this.xterm; }
+  /** The mounted view's seams (viewport clamp guard, scroll repair), undone on detach. */
+  private unmount: (() => void) | undefined;
+  private fitAddon: TerminalFitAddon | undefined;
+  private viewportHeight = 0;
 
+  /** Mounting is synchronous: when the promise is created the terminal is in the DOM and measurable. */
   async attach(target: TerminalMountTarget) {
     if (this.disposed) throw new Error('This terminal is disposed.');
     if (target.kind !== 'dom') throw new Error('The xterm backend draws into a DOM element.');
+    this.unmount?.();
+    if (!this.fitAddon) this.xterm.loadAddon(this.fitAddon = new TerminalFitAddon());
     if (!this.xterm.element) this.xterm.open(target.element);
     else if (this.xterm.element.parentElement !== target.element) target.element.append(this.xterm.element);
+    this.unmount = this.mountSeams(target.element);
   }
 
-  async detach() { this.xterm.element?.remove(); }
+  async detach() { this.unmount?.(); this.unmount = undefined; this.xterm.element?.remove(); }
+
+  /**
+   * A taller container clamps the DOM viewport before any fit runs. That scroll is layout, not a reader: xterm would
+   * otherwise move the reader to the clamp and stop following output. Mosh resizes only after a round trip.
+   */
+  private mountSeams(element: HTMLElement) {
+    const viewport = element.querySelector<HTMLElement>('.xterm-viewport');
+    this.viewportHeight = viewport?.clientHeight ?? 0;
+    const clamped = (event: Event) => {
+      if (!viewport || event.target !== viewport || viewport.clientHeight === this.viewportHeight) return;
+      this.viewportHeight = viewport.clientHeight;
+      event.stopPropagation();
+      syncTerminalViewport(this.xterm);
+    };
+    element.addEventListener('scroll', clamped, true);
+    const scrolls = keepViewportScrolls(this.xterm, element);
+    return () => { element.removeEventListener('scroll', clamped, true); scrolls(); };
+  }
 
   setActive(active: boolean) {
     // xterm draws only dirty rows on demand; "inactive" cannot suspend that, but a revived terminal repaints.
@@ -59,6 +87,7 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   dispose() {
     if (this.disposed) return this.disposed;
     // Everything below runs synchronously: the caller may drop its reference right after this call.
+    this.unmount?.(); this.unmount = undefined; this.fitAddon?.dispose();
     this.intents?.dispose(); this.canonical?.dispose();
     this.sources.forEach(group => group.forEach(source => source.dispose())); this.sources.clear();
     this.listeners.clear();
@@ -202,6 +231,50 @@ export class XtermTerminalAdapter implements TerminalAdapter {
     }));
   }
 
+  inputElement() { return this.xterm.textarea; }
+  screenElement() { return this.xterm.element?.querySelector<HTMLElement>('.xterm-screen') ?? undefined; }
+
+  layoutRowHeight() {
+    const screen = this.screenElement(), height = screen && this.xterm.rows > 0 ? Math.ceil(screen.clientHeight / this.xterm.rows) : 0;
+    return Number.isFinite(height) ? height : 0;
+  }
+
+  proposeSize() {
+    const proposed = this.fitAddon?.proposeDimensions();
+    return proposed && {columns: proposed.cols, rows: proposed.rows};
+  }
+
+  fit() {
+    const terminal = this.xterm, addon = this.fitAddon;
+    if (!addon) return;
+    const buffer = terminal.buffer.active;
+    // Stock resize moves scrolled-back history with the cursor.
+    const history = buffer.type === 'normal' && buffer.viewportY < buffer.baseY;
+    let top = buffer.viewportY;
+    // Reflow merges or splits wrapped rows; their logical line start survives.
+    if (history && addon.proposeDimensions()?.cols !== terminal.cols) while (top > 0 && buffer.getLine(top)?.isWrapped) top--;
+    const anchor = history ? terminal.registerMarker(top - buffer.baseY - buffer.cursorY) : undefined;
+    try {
+      addon.fit();
+      if (anchor && !anchor.isDisposed && terminal.buffer.active === buffer) terminal.scrollToLine(anchor.line);
+    } finally { anchor?.dispose(); }
+  }
+
+  syncViewport() {
+    syncTerminalViewport(this.xterm);
+    const viewport = this.xterm.element?.querySelector<HTMLElement>('.xterm-viewport');
+    if (viewport) this.viewportHeight = viewport.clientHeight;
+  }
+
+  interceptKeys(handler: (event: KeyboardEvent) => boolean): Disposable {
+    this.xterm.attachCustomKeyEventHandler(handler);
+    return {dispose: () => { if (!this.disposed) this.xterm.attachCustomKeyEventHandler(() => true); }};
+  }
+
+  registerLinks(handlers: Parameters<TerminalAdapter['registerLinks']>[0]) {
+    return installTerminalLinks(this.xterm, handlers.openUrl, handlers.hostPaths);
+  }
+
   focus() { this.xterm.focus(); }
   blur() { this.xterm.blur(); }
 
@@ -242,6 +315,15 @@ export class XtermTerminalAdapter implements TerminalAdapter {
         case 'modes': return [x.buffer.onBufferChange(() => this.emit({type: 'modes', modes: this.modes()}))];
         case 'title': return [x.onTitleChange(title => this.emit({type: 'title', title}))];
         case 'bell': return [x.onBell(() => this.emit({type: 'bell'}))];
+        case 'cwd': return [x.parser.registerOscHandler(7, data => {
+          try { const url = new URL(data); if (url.protocol === 'file:') this.emit({type: 'cwd', path: decodeURIComponent(url.pathname)}); } catch { /* A malformed report keeps the last directory. */ }
+          return true;
+        })];
+        case 'clipboard': return [x.parser.registerOscHandler(52, data => {
+          const text = decodeClipboardRequest(data);
+          if (text !== undefined) this.emit({type: 'clipboard', text});
+          return true;
+        })];
         default: return [];
       }
     };

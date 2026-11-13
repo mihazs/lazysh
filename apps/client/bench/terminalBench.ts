@@ -7,8 +7,8 @@ import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
 import type { Terminal } from '@xterm/xterm';
 import { mountTerminalHistoryHarness } from '../e2e/fixtures/TerminalHistoryHarness';
-import { createTerminal } from '../src/terminal';
-import { configureTerminalBold } from '../src/terminalBold';
+import { createTerminal } from '../src/xterm/terminal';
+import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { ansiColor, chunks, CHUNK, fullScreenRedraw, plainText, shellSession, summarize, type Workload } from './workloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */

@@ -391,7 +391,7 @@ test('observer disposal restores original readonly state and a rebound editor ac
     const {terminal,textarea:area,observation,writes}=window.ownedIme;
     observation.reset();observation.dispose();
     const restored=area.readOnly,completionRestored=area.getAttribute('autocomplete');
-    const {observeTerminalInput}=await import('/src/terminal.ts');
+    const {observeTerminalInput}=await import('/src/xterm/terminal.ts');
     area.readOnly=true;area.setAttribute('autocomplete','on');
     const readonly=observeTerminalInput(terminal,data=>writes.push(data));
     readonly.reset();readonly.resume();const retained=area.readOnly,completionActive=area.getAttribute('autocomplete');readonly.dispose();const disposed=area.readOnly,completionDisposed=area.getAttribute('autocomplete');
