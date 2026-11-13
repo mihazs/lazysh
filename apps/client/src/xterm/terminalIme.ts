@@ -110,6 +110,11 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     send(value);
     if (key) {if (focused()) replay(key); reset();}
   };
+  // Blink ends a composition without compositionend when deleteSurroundingText removes all of it (SwiftKey and
+  // others do that to erase a word they hold as composing). Waiting for the missing event would swallow every
+  // key until a hardware one. A key 229 or a plain insertion outside any composition proves it over.
+  const dropped = (event: KeyboardEvent | InputEvent) => composing && !ending && event.isComposing === false
+    && (event instanceof KeyboardEvent ? event.keyCode === 229 : event.inputType === 'insertText');
   const flush = () => {
     commitFallback();
     const value = composing || ending ? ownedDelta(area.value) : '';
@@ -130,6 +135,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     resume();
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
     keylessComposition = undefined;
+    if (dropped(event)) finish();
     if (!composing && !ending) commitFallback();
     if (event.key === 'Process' && !event.code && event.keyCode === 0 && !event.ctrlKey && !event.altKey && !event.metaKey) {
       hardware = false; event.stopImmediatePropagation(); return;
@@ -153,6 +159,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
   };
   const before = (event: InputEvent) => {
     if (event.target === area && !focused()) {event.preventDefault(); event.stopImmediatePropagation(); revoke(); return;}
+    if (event.target === area && dropped(event)) finish();
     if (event.target === area) commitFallback();
     if (event.target === area && !composing && !ending && !hardware && previous !== area.value) {
       const blocked = key229; reset(); key229 = blocked;
@@ -167,6 +174,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (event.target !== area) return;
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
     const keyless = keylessComposition && !keylessComposition.defaultPrevented; keylessComposition = undefined;
+    if (dropped(event)) finish();
     if (composing || ending) {event.stopImmediatePropagation(); return;}
     commitFallback();
     if (hardware) {reset(); return;}
@@ -197,7 +205,7 @@ export function observeTerminalIme(terminal: Terminal, userInput: () => boolean,
     if (event.target !== area) return;
     if (!focused()) {event.stopImmediatePropagation(); revoke(); return;}
     commitFallback();
-    if (ending) finish();
+    if (composing || ending) finish();
     const ownedStart = area.value === previous ? start : area.value.length;
     reset(); start = ownedStart; composing = true;
   };
