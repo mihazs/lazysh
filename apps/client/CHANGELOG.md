@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.55.0
+
+### Minor Changes
+
+- b4506f1: Add per-message and per-code-block copy, conversation search that opens folded tool rows, and a Conversation only choice to the Agent view.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.55.0
+  - @lazysh/common@1.55.0
+  - @lazysh/display-idle@1.55.0
+  - @lazysh/et-transport@1.55.0
+  - @lazysh/mosh-transport@1.55.0
+
 ## 1.54.1
 
 ### Patch Changes
