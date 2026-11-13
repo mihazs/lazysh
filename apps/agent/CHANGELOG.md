@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.59.0
+
+### Minor Changes
+
+- 6d4fb75: Add a read-only **Session info** sheet to the Agent view options for Claude Code: the MCP servers and whether they connected, the skills, agent types and instruction files the session loaded, from a new `session.info` object of the conversation page.
+
+### Patch Changes
+
+- @lazysh/account-usage@1.59.0
+  - @lazysh/common@1.59.0
+  - @lazysh/notification-client@1.59.0
+
 ## 1.58.0
 
 ### Patch Changes
