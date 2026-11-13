@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {liftDialog, none, type Lift} from './agentDialogLift';
 import {liftCodexDialog} from './agentDialogLiftCodex';
-import {useComposerControl} from './agentDialogAnswer';
+import {publishDialogOpen, useComposerControl} from './agentDialogAnswer';
 import {t} from './i18n/core';
 import type {TerminalAdapter} from './terminalAdapter';
 import './AgentPickerDock.css';
@@ -53,6 +53,8 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   const ownCard = waiting === 'question' || (waiting === 'approval' && agent === 'Claude Code');
   const control = useComposerControl(sessionId);
   const dialog = lift.kind === 'dialog' ? lift.dialog : undefined;
+  const open = shown && lift.kind !== 'none';
+  useEffect(() => {publishDialogOpen(sessionId, open); return () => publishDialogOpen(sessionId, false);}, [sessionId, open]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [ready, setReady] = useState(false);
   const signature = dialog?.signature;

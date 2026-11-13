@@ -6,7 +6,7 @@ import type {DialogAnswerer, TerminalControl} from './ChatTerminalInput';
  * and the conversation reads the combination. One entry per terminal session. A second guard, which only needs the pane to
  * still belong to the same reported session, lets the background-work panel send one message (a request to stop a task). */
 export type TaskStopper = (text: string) => Promise<boolean>;
-type Entry = {control?: TerminalControl; guard?: () => Promise<boolean>; answerer?: DialogAnswerer; taskGuard?: () => Promise<boolean>; stopper?: TaskStopper};
+type Entry = {control?: TerminalControl; guard?: () => Promise<boolean>; answerer?: DialogAnswerer; taskGuard?: () => Promise<boolean>; stopper?: TaskStopper; open?: boolean};
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 
@@ -21,6 +21,9 @@ function update(sessionId: string, change: Partial<Entry>) {
 }
 export const publishComposerControl = (sessionId: string, control?: TerminalControl) => update(sessionId, {control});
 export const publishAnswerGuard = (sessionId: string, guard?: () => Promise<boolean>) => update(sessionId, {guard});
+/** Whether the terminal screen shows a dialog of the agent, which takes Enter and typed keys itself: the composer sends it nothing. */
+export const publishDialogOpen = (sessionId: string, open: boolean) => update(sessionId, {open});
+export const useDialogOpen = (sessionId: string): boolean => useSyncExternalStore(subscribe, () => !!entries.get(sessionId)?.open);
 /** The composer's bound input as it is now, for a surface that checks the dialog itself before and after each key. */
 export const useComposerControl = (sessionId: string): TerminalControl | undefined => useSyncExternalStore(subscribe, () => entries.get(sessionId)?.control);
 export const publishTaskGuard = (sessionId: string, taskGuard?: () => Promise<boolean>) => update(sessionId, {taskGuard});

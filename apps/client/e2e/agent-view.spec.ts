@@ -1061,6 +1061,27 @@ test('a message queued while the agent works shows as a card between the turns a
   await expect(cards).toHaveCount(0,{timeout:6000});
 });
 
+test('holds Send while the agent waits for an answer, so Enter cannot answer its dialog, and sends the kept draft once it is answered',async({page},testInfo)=>{
+  await open(page);
+  await page.evaluate(()=>{window.agentView.state='needs_attention';window.agentView.summary='Bash';});
+  const agent=await showAgent(page);
+  const draft=agent.getByRole('textbox',{name:'Draft for this terminal',exact:true});
+  await draft.fill('no, use the trash instead');
+  const send=agent.getByRole('button',{name:'Send to the agent',exact:true});
+  await expect(agent.getByText(/The agent is waiting for your answer/)).toBeVisible({timeout:8000});
+  await expect(send).toBeDisabled();
+  // A touch keyboard keeps Enter as a new line; a hardware keyboard's Enter would send.
+  if(testInfo.project.name==='desktop')await draft.press('Enter');
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toEqual([]);
+  expect((await agent.getByText(/The agent is waiting for your answer/).boundingBox())!.x).toBeGreaterThanOrEqual(0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
+  await page.evaluate(()=>{window.agentView.state='working';});
+  await expect(send).toBeEnabled({timeout:8000});
+  await expect(draft).toHaveValue('no, use the trash instead');
+  await send.click();
+  await expect(agent.getByText('Answered: no, use the trash instead',{exact:true})).toBeVisible({timeout:6000});
+});
+
 test('live: a queued message arrives and leaves on stream frames without a poll',async({page})=>{
   const agent=await openLive(page,'stream');
   await expect(watchState(agent)).toHaveAttribute('data-watch','live');
