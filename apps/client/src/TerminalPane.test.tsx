@@ -124,7 +124,7 @@ describe('bottom menu',()=>{
     stubWindow(true);
     act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));
     const onBackChange=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession} active reportError={vi.fn()} onBackChange={onBackChange} />);
     const state=()=>document.querySelector('.bottom-menu')?.getAttribute('data-open');
     const handler=()=>onBackChange.mock.lastCall?.[1] as (()=>boolean)|null;
     for(let cycle=0;cycle<100;cycle++){
