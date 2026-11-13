@@ -25,6 +25,22 @@ pub fn gpu(cols: u16, rows: u16) -> WgpuRenderer {
         .expect("a GPU adapter is required")
 }
 
+/// A GPU renderer for `cols` x `rows` cells of `appearance`, which may be scaled.
+pub fn gpu_at(cols: u16, rows: u16, appearance: &Appearance) -> WgpuRenderer {
+    let (width, height) = surface(cols, rows, appearance);
+    let target = Target::new(width, height).with_policy(Policy::for_platform().with_software());
+    WgpuRenderer::create(target, appearance.clone()).expect("a GPU adapter is required")
+}
+
+/// The surface size of `cols` x `rows` cells of `appearance`, in device pixels.
+pub fn surface(cols: u16, rows: u16, appearance: &Appearance) -> (u32, u32) {
+    let m = appearance.metrics;
+    (
+        u32::from(cols) * m.cell_width,
+        u32::from(rows) * m.cell_height,
+    )
+}
+
 /// A core that received `bytes`.
 pub fn runtime(cols: u16, rows: u16, bytes: &[u8]) -> TerminalRuntime {
     let mut rt = support::runtime(cols, rows);
@@ -43,16 +59,33 @@ impl Pair {
     }
 
     pub fn with(gpu: WgpuRenderer, cols: u16, rows: u16) -> Self {
-        let blank = Image::new(
-            u32::from(cols) * W,
-            u32::from(rows) * H,
-            Theme::default().background,
-        )
-        .unwrap();
+        Self::at(gpu, cols, rows, &Appearance::default())
+    }
+
+    /// The pair at a given appearance: the reference renderer is created for the same surface.
+    pub fn at(gpu: WgpuRenderer, cols: u16, rows: u16, appearance: &Appearance) -> Self {
+        let (width, height) = surface(cols, rows, appearance);
+        let blank = Image::new(width, height, Theme::default().background).unwrap();
         Self {
             gpu,
-            cpu: ReferenceRenderer::create(blank, Appearance::default()).unwrap(),
+            cpu: ReferenceRenderer::create(blank, appearance.clone()).unwrap(),
         }
+    }
+
+    /// Both renderers recover from core state, as the host does after a loss: a snapshot, drawn
+    /// and presented (the reference renderer never lost anything and just repaints).
+    pub fn show_snapshot(&mut self, core: &mut TerminalRuntime) {
+        self.show(&core.snapshot().unwrap());
+    }
+
+    /// A new appearance and surface size on both renderers (a display scale change); returns the
+    /// rows each one repainted.
+    pub fn rescale(&mut self, cols: u16, rows: u16, appearance: &Appearance) -> (u32, u32) {
+        let (width, height) = surface(cols, rows, appearance);
+        for r in [&mut self.gpu as &mut dyn Resizable, &mut self.cpu] {
+            r.rescale(appearance, width, height);
+        }
+        self.flush()
     }
 
     /// Show a frame on both and return the rows each one drew.
@@ -69,7 +102,7 @@ impl Pair {
         assert_eq!(gpu, cpu, "both renderers judge the overlay alike");
     }
 
-    fn flush(&mut self) -> (u32, u32) {
+    pub fn flush(&mut self) -> (u32, u32) {
         let drawn = (self.gpu.draw().unwrap(), self.cpu.draw().unwrap());
         self.gpu.present().unwrap();
         self.cpu.present().unwrap();
@@ -96,5 +129,17 @@ impl Pair {
             at.unwrap() / 3 % gpu.width as usize,
             at.unwrap() / 3 / gpu.width as usize
         );
+    }
+}
+
+/// What a display scale change does to either renderer, so `Pair::rescale` treats them alike.
+trait Resizable {
+    fn rescale(&mut self, appearance: &Appearance, width: u32, height: u32);
+}
+
+impl<R: TerminalRenderer> Resizable for R {
+    fn rescale(&mut self, appearance: &Appearance, width: u32, height: u32) {
+        self.set_appearance(appearance.clone()).unwrap();
+        self.resize(width, height).unwrap();
     }
 }

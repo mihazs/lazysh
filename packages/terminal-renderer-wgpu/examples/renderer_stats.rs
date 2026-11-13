@@ -2,15 +2,19 @@
 //! layout draws and atlas traffic of the same frame stream as `wgpu_bench`; the cost of an idle
 //! screen (a hundred thousand draw and present calls with nothing changed: submissions, context
 //! switches of this process, nanoseconds per call); GPU memory by grid size; and glyph churn through
-//! a small atlas (memory and live buffers before and after, evictions).
+//! a small atlas (memory and live buffers before and after, evictions); the cursor blink timer over
+//! real time (wakeups and submissions per second, steady against blinking, three sessions on one
+//! timer); and forced device loss (time to recover the picture).
 //! Run in release: `cargo run --release --example renderer_stats`; the caller records the environment.
 
 #[path = "../../terminal-runtime/tests/support/mod.rs"]
 mod support;
 
 use lazysh_terminal_renderer_wgpu::{Target, WgpuRenderer};
-use lazysh_terminal_runtime::{Appearance, TerminalRenderer, TerminalRuntime};
-use std::time::Instant;
+use lazysh_terminal_runtime::{
+    Appearance, BlinkClock, Overlay, TerminalRenderer, TerminalRuntime, BLINK_HALF_PERIOD,
+};
+use std::time::{Duration, Instant};
 use support::{feed, feed_chunk, load_average, rss_kib, runtime, workloads, CHUNK, WINDOW};
 
 const VOLUME: usize = 16 * 1024 * 1024;
@@ -165,4 +169,115 @@ fn main() {
             g.passes,
         );
     }
+
+    blink_and_recovery();
+}
+
+const BLINK_SECONDS: u64 = 10;
+const SESSIONS: usize = 3;
+
+/// The host's single timer over real time: sleep to the instant the clock names, set the phase on
+/// every session, draw and present; count what that cost the process and the GPU.
+fn blink_and_recovery() {
+    println!("\nCursor blink over {BLINK_SECONDS} s of real time, {SESSIONS} sessions on one timer (80x24, half period {} ms)\n", BLINK_HALF_PERIOD.as_millis());
+    println!("| cursor | wakeups | wakeups per second | submissions per session | rows drawn per session | context switches | wake lateness p50 / max (us) |");
+    println!("|---|---|---|---|---|---|---|");
+    for (name, style) in [("blinking block", "\x1b[1 q"), ("steady block", "\x1b[2 q")] {
+        let mut sessions: Vec<_> = (0..SESSIONS)
+            .map(|_| {
+                let (mut r, mut rt) = (renderer(80, 24, 2048), runtime(80, 24));
+                feed(&mut rt, format!("prompt $ {style}").as_bytes());
+                show(&mut r, &mut rt);
+                r
+            })
+            .collect();
+        let before: Vec<_> = sessions
+            .iter()
+            .map(|r| (r.gpu_stats(), r.stats()))
+            .collect();
+        let switches = context_switches();
+        let clock = BlinkClock::new(BLINK_HALF_PERIOD, Duration::ZERO);
+        let (start, end) = (Instant::now(), Duration::from_secs(BLINK_SECONDS));
+        let (mut wakes, mut lateness) = (0u64, Vec::new());
+        loop {
+            let now = start.elapsed();
+            let due = match clock.next_wake(now, sessions.iter()) {
+                Some(at) if at <= end => at,
+                _ => {
+                    // Nothing to do before the end: the process sleeps through the rest.
+                    std::thread::sleep(end.saturating_sub(now));
+                    break;
+                }
+            };
+            std::thread::sleep(due.saturating_sub(now));
+            lateness.push(start.elapsed().saturating_sub(due).as_micros() as f64);
+            wakes += 1;
+            let overlay = Overlay {
+                cursor_phase_on: clock.phase_on(due),
+                ..Overlay::default()
+            };
+            for r in &mut sessions {
+                r.set_overlay(overlay).unwrap();
+                r.draw().unwrap();
+                r.present().unwrap();
+            }
+        }
+        lateness.sort_by(f64::total_cmp);
+        let (gpu, stats) = (sessions[0].gpu_stats(), sessions[0].stats());
+        println!(
+            "| {name} | {wakes} | {:.2} | {} | {} | {} | {} |",
+            wakes as f64 / BLINK_SECONDS as f64,
+            gpu.submissions - before[0].0.submissions,
+            stats.rows_drawn - before[0].1.rows_drawn,
+            context_switches() - switches,
+            if lateness.is_empty() {
+                "none".to_string()
+            } else {
+                format!(
+                    "{:.0} / {:.0}",
+                    lateness[lateness.len() / 2],
+                    lateness[lateness.len() - 1]
+                )
+            },
+        );
+    }
+
+    println!("\nForced device loss: 20 losses of a 80x24 renderer showing a screen of text, recovered from the core's snapshot (ms)\n");
+    println!("| step | p50 | min | max |");
+    println!("|---|---|---|---|");
+    let (mut r, mut rt) = (renderer(80, 24, 2048), runtime(80, 24));
+    feed(
+        &mut rt,
+        "日本語 recovery test \x1b[1mbold\x1b[0m\r\n$ "
+            .repeat(12)
+            .as_bytes(),
+    );
+    show(&mut r, &mut rt);
+    let (mut resume, mut redraw) = (Vec::new(), Vec::new());
+    for _ in 0..20 {
+        r.lose_device();
+        let started = Instant::now();
+        r.resume().unwrap();
+        resume.push(started.elapsed().as_secs_f64() * 1e3);
+        r.apply(&rt.snapshot().unwrap()).unwrap();
+        r.draw().unwrap();
+        r.present().unwrap();
+        redraw.push(started.elapsed().as_secs_f64() * 1e3);
+    }
+    for (step, mut v) in [
+        ("resume (device, pipeline, resources)", resume),
+        ("resume + snapshot + draw + present", redraw),
+    ] {
+        v.sort_by(f64::total_cmp);
+        println!(
+            "| {step} | {:.1} | {:.1} | {:.1} |",
+            v[v.len() / 2],
+            v[0],
+            v[v.len() - 1]
+        );
+    }
+    println!(
+        "\ndevice recoveries counted by the renderer: {}",
+        r.gpu_stats().device_recoveries
+    );
 }

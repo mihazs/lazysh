@@ -708,6 +708,23 @@ What this says, and does not say:
 - **The first GPU context still costs 64 MiB of resident memory** on this driver against 7 to 8 MiB for an xterm.js session; the renderer's own GPU memory (5 to 16 MiB by window size) is small next to it.
 - Not shown: any text (rasterization, shaping, font fallback and their atlas pressure: real glyph masks are larger and more varied than dot patterns), a window surface and presentation timing, Android (Vulkan or OpenGL ES drivers, surface loss), Apple, Windows, energy and thermals, a long-lived session's memory beyond 4,000 frames, and a CI run on real hardware (CI has only software adapters).
 
+### Cursor blink, display scale and device loss (host GPU, not a device)
+
+Measured with `cargo run --release --example renderer_stats` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1326](https://github.com/mihazs/lazysh/issues/1326)); raw output [`terminal-wgpu-renderer-stats-2.txt`](benchmarks/terminal-wgpu-renderer-stats-2.txt) (it repeats the tables of the section above, from a second run, then adds these two). Same host and offscreen, dot-pattern setup as above (load average 6.5 at the start); one run.
+
+**Blink wakeups.** The host's single timer over real time, 10 s, three sessions of 80x24 sharing one `BlinkClock` (half period 530 ms): sleep to the instant `next_wake` names, set the phase on every session, draw and present.
+
+| cursor | timer wakeups | per second | submissions per session | rows drawn per session | context switches of the process | wake lateness p50 / max |
+|---|---|---|---|---|---|---|
+| blinking block | 18 | 1.80 | 18 | 18 | 91 | 60 / 64 microseconds |
+| steady block | 0 | 0 | 0 | 0 | 1 | no timer armed |
+
+A blinking cursor cost one wakeup per phase change (18 in 10 s: the phase changes at 0.53, 1.06, ... 9.54 s) however many sessions share the timer, and in every session one row, one pass and one submission per wakeup. A steady cursor armed no timer, drew nothing and the process made one context switch in the 10 s. **The GPU does not stay awake with blink off.** The 91 switches with blink on are three sessions each waiting for its GPU work to finish at every phase (`present` waits), not a polling loop. This measures the timer and the renderer, not an Android `Handler` or a display's vsync, and not energy.
+
+**Device loss.** 20 forced losses of an 80x24 renderer showing 24 rows of text, each recovered from the core's snapshot, in milliseconds: `resume` (a new device, pipeline and resources) p50 20.4 (min 20.0, max 22.1); resume plus snapshot plus draw plus present p50 22.1 (min 21.7, max 23.9). The picture after every recovery was the uninterrupted one (`tests/lifecycle.rs`: five losses compared with the reference renderer, identical pixels, the driver's live buffers and textures equal to those of a fresh renderer; the test bounds recovery at 5 s because it runs a debug build beside nine other tests, where five recoveries took 154 ms at worst). What was simulated is `Device::destroy()` on a desktop GPU: a driver reset on a phone, a surface lost with its window (#1327), memory pressure and a GPU that comes back slower were not.
+
+**Display scale.** Not a timing: the renderer at 1x, 2x, 3x, 1.5x, 1.25x and back, switched by `set_appearance` and `resize` on the held screen (no snapshot), drew the reference renderer's pixels at every scale and the pixels of a renderer created at that scale; goldens at 2x and 3x are in the runtime crate. Refresh rate: one second of continuous output (a burst every millisecond) cost 60, 120 and 90 frames (within 2) on a 60, 120 and 90 Hz pacer, one submission each, and none once the output stopped.
+
 ### Android Canvas drawing of the shared layout (Waydroid, not a device)
 
 Measured with the harness in `apps/client/bench/android-canvas` ([#1323](https://github.com/mihazs/lazysh/issues/1323)): a throwaway APK (no Gradle, built by `build.sh` from the Android SDK command-line tools; it is not part of the app and not built by CI) that replays the shared layout of [`layout::row_draws`](native-rendering.md#terminal-renderer-api) with the Android `Canvas` API. The layouts are frames of draws written by `cargo run --release --example dump_layout -- <dir>` (packages/terminal-runtime): the 80x24 screen of each benchmark workload after every 256 KiB of its first 16 MiB (64 frames), 8x16 pixel cells, so the Canvas candidate draws exactly what the CPU reference renderer and the wgpu prototype draw. This is the "native drawing (Skia, Android Canvas)" candidate: the Android Canvas is Skia, so no separate Skia build was made; desktop Skia was not built.
