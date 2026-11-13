@@ -37,5 +37,9 @@ class SideMenuComponent extends Page {
   async endConnectionOf(host: string) { await this.tap(() => this.endConnection(host)); }
   /** Opens the pane of the listed agent; Herdr reads its workspaces first, which can take a few seconds. */
   async openHerdrAgent() { await this.tap(() => this.herdrAgent, 30_000); }
+  /** The row of the agent whose tab has this label: each row names its agent and the tab it runs in. */
+  /** A tab of the Workspaces section, which is how a pane with no agent is reached. */
+  async openHerdrTab(tab: string) { await this.tap(() => this.workspacesSection); await this.tap(() => $(`button*=${tab}`), 30_000); }
+  async openHerdrAgentIn(tab: string) { await this.tap(() => $(`button*=${tab}`), 30_000); }
 }
 export default new SideMenuComponent();
