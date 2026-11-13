@@ -14,6 +14,8 @@ dashboard, a local preview that needs a real browser. It sits beside [Preview](p
 dev server's port to the device and renders it there. Preview shows what a service on the host serves; the Host
 browser shows what a browser on the host displays.
 
+A different, planned feature opens a page that a host program requested in the browser **on the device** and tunnels a sign-in's `localhost` callback to the host; it does not view the host's browser. See [ADR 0004](architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md).
+
 ## Requirements
 
 Functional:
