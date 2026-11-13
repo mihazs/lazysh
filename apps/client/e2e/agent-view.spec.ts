@@ -6,7 +6,7 @@ import {tmuxChatBound,tmuxChatSnapshot} from '../src/test/tmuxChat';
 import {preview} from './fixtures/recorded-images/browser';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession} from '../src/test/opencodeRecorded';
 
-type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
+type Fixture={earlier:number;holdEarlier?:Promise<void>;uploads:string[];watchTargets:{inlineImages?:boolean;transcriptSessionId?:string}[];listed:string[];queued?:{text:string;timestamp?:string}[];turns:{prompt:string;answer:string}[];typed:string;stdin:string[];inputs:Record<string,unknown>[];attachments:number;state:string;summary?:string;session?:unknown;
   channels:Record<string,{onmessage:(event:unknown)=>void}>;/** Called with every input the guarded terminal accepts, so a test can play the TUI's reaction. */onKeys?:(input:Record<string,unknown>)=>void;polls:number;watchMode:'off'|'stream'|'old';watch?:{onmessage:(event:unknown)=>void};watchStops:number;
   emit:(frame:unknown)=>void;messages:()=>unknown[]};
 declare global {interface Window {approvals:{id:string;decisions:unknown[];gone:boolean};agentView:Fixture;agentViewBase:(command:string)=>{value:unknown}|undefined}}
@@ -101,11 +101,13 @@ async function open(page:Page) {
       if(command==='agent_watch_start'){
         if(fixture.watchMode==='off')throw new Error('The channel could not open');
         const events=args.events as {onmessage:(event:unknown)=>void};fixture.watch=events;
-        const target=args.target as {inlineImages?:boolean};fixture.watchTargets.push(target);
+        const target=args.target as {inlineImages?:boolean;transcriptSessionId?:string};fixture.watchTargets.push(target);
         setTimeout(()=>{
           if(fixture.watchMode==='old')return events.onmessage({type:'unavailable',reason:'companion_required'});
-          fixture.emit({type:'hello',protocol:1,agent:'codex'});
-          fixture.emit({type:'snapshot',gen:1,seq:1,entries:messages(target.inlineImages===true).map(message=>({id:(message as {id:string}).id,rev:1,message}))});
+          // An OpenCode stream carries the messages of its database session.
+          const shown=opencode?(opencode.page as {messages:unknown[]}).messages:messages(target.inlineImages===true);
+          fixture.emit({type:'hello',protocol:1,agent:opencode?'opencode':'codex'});
+          fixture.emit({type:'snapshot',gen:1,seq:1,entries:shown.map(message=>({id:(message as {id:string}).id,rev:1,message}))});
         });
         return 'watch-1';
       }
@@ -1009,6 +1011,22 @@ test('OpenCode: the pane\'s session is read from its database, and the prompt go
   expect(sent).toMatchObject({input:{kind:'send',text:'Run the tests'},source:{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession,view:'conversation'}});
   // No mode switch or file picker that only another agent has verified.
   await expect(agent.getByRole('button',{name:/mode/i})).toHaveCount(0);
+});
+
+test('OpenCode live: the stream is opened for the pane\'s database session and a reply grows over it without polling',async({page})=>{
+  await page.addInitScript(fixture=>{(window as unknown as {opencodeFixture:unknown}).opencodeFixture=fixture;},{session:opencodeSession,database:opencodeDatabase,discovery:opencodeDiscovery,page:opencodePage});
+  await open(page);
+  await page.evaluate(()=>{window.agentView.watchMode='stream';});
+  await switcher(page).getByRole('button',{name:'Agent',exact:true}).click();
+  const agent=agentView(page);
+  await expect(watchState(agent)).toHaveAttribute('data-watch','live');
+  expect((await fixture(page)).watchTargets).toEqual([{kind:'path',agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeSession}]);
+  await expect(agent.getByText('ok',{exact:true})).toBeVisible();
+  const polls=(await fixture(page)).polls;
+  const reply=opencodePage.messages[1];
+  await page.evaluate(([entry])=>window.agentView.emit({type:'delta',gen:1,seq:2,upserts:[{id:entry.id,rev:2,message:{...entry,blocks:[{type:'text',text:'ok, and more'}]}}],drops:[]}),[reply] as const);
+  await expect(agent.getByText('ok, and more',{exact:true})).toBeVisible();
+  expect((await fixture(page)).polls).toBe(polls);
 });
 
 test('an agent the view cannot read yet is named with Show terminal and no composer, never a guessed conversation',async({page})=>{

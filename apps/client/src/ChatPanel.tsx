@@ -405,8 +405,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const autoRead = useRef(() => {});
   autoRead.current = () => {void read(false,true);};
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
-  const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex'].includes(bound.agent)
-    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path,...(inlineImages?{inlineImages:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
+  // OpenCode's source is its database and the session in it, with no previews to ask for.
+  const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex','opencode'].includes(bound.agent) && (bound.agent!=='opencode' || (!!bound.transcriptSessionId && !bound.herdr))
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr} : {kind:'path',agent:bound.agent,path:bound.path,...(bound.agent==='opencode'?{transcriptSessionId:bound.transcriptSessionId}:inlineImages?{inlineImages:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
   const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.

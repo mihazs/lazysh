@@ -16,14 +16,7 @@ impl Fixture {
     fn new(v2: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("opencode.db");
-        let db = Connection::open(&path).unwrap();
-        let specification = recorded_conversations::specification();
-        db.execute_batch(
-            specification["opencodeSchemas"][if v2 { "v2" } else { "v1" }]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
+        let db = recorded_conversations::opencode_database(&path, if v2 { "v2" } else { "v1" });
         Self {
             _dir: dir,
             path,

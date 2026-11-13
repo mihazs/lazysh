@@ -255,7 +255,7 @@ enum Command {
         #[command(flatten)]
         window: WindowArgs,
     },
-    /// Stream upserts of one Claude Code or Codex conversation until stdin closes.
+    /// Stream upserts of one Claude Code, Codex or OpenCode conversation until stdin closes.
     TranscriptWatch {
         #[arg(long, value_enum)]
         agent: lazysh_agent::transcript::TranscriptAgent,
@@ -269,6 +269,9 @@ enum Command {
         /// A provider session id resolved inside the agent's own data root.
         #[arg(long)]
         session_id: Option<String>,
+        /// OpenCode: the session to read from the database `--path` names.
+        #[arg(long, conflicts_with = "session_id")]
+        database_session: Option<String>,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
         #[arg(long, default_value_t=250, value_parser=clap::value_parser!(u64).range(50..=5000))]
@@ -277,7 +280,7 @@ enum Command {
         #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
         protocol: u8,
         /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
-        #[arg(long, requires = "path")]
+        #[arg(long, conflicts_with = "session_id")]
         inline_images: bool,
     },
 }
@@ -618,6 +621,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             path,
             session_id,
+            database_session,
             limit,
             interval_ms,
             protocol: _,
@@ -627,6 +631,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 agent,
                 path,
                 session_id,
+                database_session,
                 limit,
                 interval: std::time::Duration::from_millis(interval_ms),
                 inline_images,

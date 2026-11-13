@@ -164,7 +164,8 @@ Within each state, the board groups reports by project on the connected host, mo
 ### Live conversation stream
 
 `lazysh-agent transcript-watch --agent claude|codex (--path FILE | --session-id UUID)
-[--limit 1..100] [--interval-ms 50..5000] [--protocol 1]` keeps one command channel open
+[--limit 1..100] [--interval-ms 50..5000] [--protocol 1]`, or `--agent opencode --path DATABASE
+--database-session ID`, keeps one command channel open
 and prints one JSON frame per line. `--path` reads a transcript file the way
 `transcript --view conversation` does; `--session-id` resolves a Claude Code or Codex
 session inside the agent's own data root the way `herdr-conversation` does, so no host
@@ -172,6 +173,17 @@ path is supplied. It ends when its standard input closes (an SSH channel going a
 SIGINT or SIGTERM, or when its output breaks; it keeps no state on the host and obeys no
 host setting beyond what the two readers above already check. Other agents have no stream
 and stay on paged reads.
+
+OpenCode keeps every session in one SQLite database, so its source is the database that
+`--path` names and the session `--database-session` picks, read the way `transcript --agent
+opencode --view conversation --session-id` reads it (read-only, bounded). The database runs in
+write-ahead-log mode: a committed row sits in `opencode.db-wal` until a checkpoint moves it into
+the file, and the file's length and modification time may not change for minutes. The check
+therefore also compares the length and modification time of the `-wal` file next to the database
+(a missing log counts as none), so a message OpenCode writes reaches the stream within one
+interval. `--database-session` takes no `--session-id` and no `--inline-images`, and the other
+two agents take none: a mismatch is a usage error. The frames are the ones above; a V1 database
+(which records its turn state) also streams `activity`.
 
 Every 250 ms (`--interval-ms`) it opens the file and compares identity, length and
 modification time. Only a change re-projects the conversation with the same bounded readers
