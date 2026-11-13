@@ -1,0 +1,21 @@
+[package]
+name = "lazysh-terminal-renderer-wgpu"
+version = "0.0.0"
+edition = "2021"
+description = "Prototype wgpu terminal renderer for the renderer shootout (#1323); not shipped"
+license = "GPL-3.0-or-later"
+publish = false
+rust-version = "1.96"
+
+# Nested workspace inside the runtime crate: it builds libghostty-vt with Zig through the runtime, and
+# wgpu must not reach the root workspace or the runtime crate's own lock file.
+[workspace]
+
+[dependencies]
+lazysh-terminal-runtime = { path = "../.." }
+wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+debug = false
