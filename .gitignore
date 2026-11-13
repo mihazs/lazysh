@@ -16,3 +16,6 @@ __pycache__/
 dist-bench/
 dist-bench-agent/
 apps/client/bench-results/
+
+apps/client/mobile-e2e/reports/
+apps/client/mobile-e2e/.appium/

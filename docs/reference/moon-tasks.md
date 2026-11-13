@@ -69,6 +69,9 @@ so `apps/client/src-tauri/moon.yml` declares `agent`, `mosh-transport`, `portabl
 | `check-native-gui` | `tsc --project tsconfig.native-gui.json` | yes |
 | `dev`, `dev-native` | Vite, or `tauri dev` | server presets |
 | `test-e2e`, `test-install-browser` | Playwright | no |
+| `setup-mobile-e2e` | installs the pinned UiAutomator2 driver into `mobile-e2e/.appium` | no |
+| `check-mobile-e2e`, `lint-mobile-e2e`, `test-mobile-e2e-unit` | strict `tsc`, scoped ESLint and Bun unit tests of the Appium suite, no device | no |
+| `test-mobile-e2e` | the Appium suite on the device in `ANDROID_SERIAL`; never part of `moon ci` unless named | no |
 | `test-native-gui` | namespaced Vitest GUI run, Linux only; builds `build-native` first | no |
 | `build-native` | `tauri build --no-bundle` | no |
 | `build-android`, `-emulator`, `-fdroid`, `-fdroid-emulator` | `tauri android build` | no |
