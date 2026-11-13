@@ -3,6 +3,8 @@ import {ChevronDown, ChevronRight} from 'lucide-react';
 import {deriveStatus, fromWork, runningOf, type StatusItem, type StatusKind} from './agentBackgroundWork';
 import type {WorkItem} from './agentWork';
 import AgentWorkflow from './AgentWorkflow';
+import AgentTaskStop from './AgentTaskStop';
+import type {TaskStopper} from './agentDialogAnswer';
 import {formatNumber, t} from './i18n/core';
 import {formatCountdown, useNow} from './relativeTime';
 import './AgentStatusPanel.css';
@@ -12,7 +14,7 @@ const shown = 3;
 const kinds = {shell: 'agentStatusShells', monitor: 'agentStatusMonitors', agent: 'agentStatusAgents', workflow: 'agentStatusWorkflows'} as const;
 const states = {running: 'agentStatusRunning', done: 'agentStatusDone', failed: 'agentStatusFailed', stopped: 'agentStatusStopped', unknown: 'agentStatusUnknown'} as const;
 
-function Row({item, now, onOpen}: {item: StatusItem; now: number; onOpen?: (item: StatusItem) => void}) {
+function Row({item, now, onOpen, stop}: {item: StatusItem; now: number; onOpen?: (item: StatusItem) => void; stop?: TaskStopper}) {
   const end = item.endedAt ?? now, elapsed = item.startedAt !== undefined && end >= item.startedAt ? formatCountdown(end - item.startedAt) : undefined;
   if (item.workflow) return <li data-state={item.state}><AgentWorkflow item={item} onOpen={onOpen} /></li>;
   const head = <>
@@ -28,12 +30,13 @@ function Row({item, now, onOpen}: {item: StatusItem; now: number; onOpen?: (item
   </details> : head}
     {item.detail && item.kind !== 'agent' && <small>{item.detail}</small>}
     {item.childPath && onOpen && <button type="button" className="subtle-button agent-status-open" onClick={() => onOpen(item)}>{t('agentStatusOpen')}</button>}
+    {stop && <AgentTaskStop item={item} send={stop} />}
   </li>;
 }
 
 /** The area under the prompt in the Claude Code TUI: counters for background shells and monitors that open their list, and the
  * tree of sub-agents and workflows. Compact (one row) until opened; nothing while no background work runs. */
-export default function AgentStatusPanel({messages, work, onOpen}: {messages: Shape; work?: readonly WorkItem[]; onOpen?: (item: StatusItem) => void}) {
+export default function AgentStatusPanel({messages, work, onOpen, stop}: {messages: Shape; work?: readonly WorkItem[]; onOpen?: (item: StatusItem) => void; /** Sends the agent one message, for a running task's Stop. */ stop?: TaskStopper}) {
   // The companion reads the whole conversation; without it the loaded messages are all there is.
   const derived = useMemo(() => work ? fromWork(work) : deriveStatus(messages), [messages, work]);
   const live = derived.some(item => item.state === 'running' || item.state === 'unknown');
@@ -57,9 +60,9 @@ export default function AgentStatusPanel({messages, work, onOpen}: {messages: Sh
         onClick={() => setViewer(current => current === kind ? undefined : kind)}>{t(kinds[kind], {count})}</button>)}
     </div>
     <div id={treeId} hidden={!open}>{open && <>
-      {tree.length > 0 && <ul className="agent-status-tree">{rows.map(item => <Row key={item.id} item={item} now={now} onOpen={onOpen} />)}</ul>}
+      {tree.length > 0 && <ul className="agent-status-tree">{rows.map(item => <Row key={item.id} item={item} now={now} onOpen={onOpen} stop={stop} />)}</ul>}
       {tree.length > shown && <button type="button" className="subtle-button" onClick={() => setMore(value => !value)}>{more ? t('agentStatusFewer') : t('agentStatusMore', {count: tree.length - shown})}</button>}
     </>}</div>
-    <div id={viewerId} hidden={!viewer}>{viewer && <ul className="agent-status-tree" aria-label={t(kinds[viewer], {count: listed.length})}>{listed.map(item => <Row key={item.id} item={item} now={now} onOpen={onOpen} />)}</ul>}</div>
+    <div id={viewerId} hidden={!viewer}>{viewer && <ul className="agent-status-tree" aria-label={t(kinds[viewer], {count: listed.length})}>{listed.map(item => <Row key={item.id} item={item} now={now} onOpen={onOpen} stop={stop} />)}</ul>}</div>
   </section>;
 }

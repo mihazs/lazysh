@@ -2373,4 +2373,11 @@ export const english = {
   agentStatusTokens: "{{tokens}} tokens",
   agentStatusMore: "{{count}} more",
   agentStatusFewer: "Show fewer",
+  agentStop: "Stop",
+  agentStopTask: "Stop {{task}}",
+  agentStopConfirm: "Ask the agent to stop it",
+  agentStopCancel: "Keep running",
+  agentStopAsked: "Asked the agent to stop it. Waiting for the record.",
+  agentStopUnconfirmed: "Not confirmed. The agent has not recorded it as stopped; check the terminal.",
+  agentStopFailed: "The request was not sent. Stop it in the terminal.",
 } as const;
