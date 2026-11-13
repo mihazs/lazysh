@@ -2,8 +2,8 @@
 
 Lookup tables for the Appium and WebdriverIO suite that drives the packaged Android app. The reasons are in
 [ADR 0002](../architecture/adr-0002-appium-webdriverio-android-e2e.md); the task steps are in
-[Write and run Appium tests](../how-to/write-and-run-appium-tests.md). Paths below are the target layout created by the
-scaffold issue; until it merges only the conventions apply.
+[Write and run Appium tests](../how-to/write-and-run-appium-tests.md). Paths below are the layout of
+`apps/client/mobile-e2e/`; fixtures-dependent parts (`hosts.ts`, `data/`) arrive with the fixtures issue.
 
 ## Versions
 
@@ -37,7 +37,7 @@ apps/client/mobile-e2e/
     hosts.ts                owned SSH, Herdr and tmux endpoints from tests/support
     artifacts.ts            failure screenshots, page source, logcat tail
   data/                     static, deterministic inputs (no secrets, no keys)
-  reports/                  generated; git-ignored (junit/, artifacts/, appium.log)
+  reports/                  generated; git-ignored (junit/, artifacts/, wdio-appium.log)
 ```
 
 `e2e/` stays Playwright and `native-e2e/` stays the desktop suite. Nothing in `mobile-e2e/` imports from them; shared

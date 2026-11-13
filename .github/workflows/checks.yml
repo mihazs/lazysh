@@ -108,10 +108,10 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           MOON_BASE: origin/${{ github.base_ref }}
-        run: bunx moon ci client:build client:check client:test -g -c 1
+        run: bunx moon ci client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -g -c 1
       - name: Build, type-check and test the client
         if: github.event_name != 'pull_request'
-        run: bunx moon run client:build client:check client:test -c 1
+        run: bunx moon run client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -c 1
       - name: Resolve the locked Playwright version
         id: playwright
         working-directory: apps/client

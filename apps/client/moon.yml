@@ -45,6 +45,31 @@ tasks:
     script: bwrap --unshare-user --unshare-net --dev-bind / / -- vitest run --config vitest.native-gui.config.ts
     deps: [~:build-native, ~:check-native-gui]
     options: {os: linux, cache: false}
+  # Appium + WebdriverIO suite for the Android app (ADR 0002). None of these is cached, and the device run never runs in
+  # `moon ci` unless a workflow names it.
+  setup-mobile-e2e:
+    command: bun run mobile-e2e:setup
+    options: *local
+  check-mobile-e2e:
+    type: test
+    command: bun run mobile-e2e:check
+    inputs: ['mobile-e2e/**/*', 'package.json']
+    options: *local
+  lint-mobile-e2e:
+    type: test
+    command: bun run mobile-e2e:lint
+    inputs: ['mobile-e2e/**/*', 'package.json']
+    options: *local
+  test-mobile-e2e-unit:
+    type: test
+    command: bun run mobile-e2e:unit
+    inputs: ['mobile-e2e/**/*', 'package.json']
+    options: *local
+  test-mobile-e2e:
+    type: test
+    command: bun run mobile-e2e
+    deps: [~:setup-mobile-e2e, ~:check-mobile-e2e, ~:lint-mobile-e2e, ~:test-mobile-e2e-unit]
+    options: {cache: false, runInCI: false}
   build-native:
     type: build
     command: tauri build --no-bundle

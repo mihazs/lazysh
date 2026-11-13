@@ -2,9 +2,8 @@
 
 Steps for the Appium and WebdriverIO suite that drives the packaged Android app. The decisions are in
 [ADR 0002](../architecture/adr-0002-appium-webdriverio-android-e2e.md) and the lookup tables in the
-[conventions reference](../reference/mobile-e2e-conventions.md). Commands marked **(scaffold)** are created by the scaffold
-issue of [epic #1396](https://github.com/mihazs/lazysh/issues/1396); their names are fixed there, and this page is updated in
-the same pull request.
+[conventions reference](../reference/mobile-e2e-conventions.md). The suite is part of
+[epic #1396](https://github.com/mihazs/lazysh/issues/1396); its layout and commands are in `apps/client/mobile-e2e/README.md`.
 
 ## Decide whether the test belongs here
 
@@ -22,16 +21,22 @@ layout with the keyboard, runtime permission dialogs, notifications, journeys ac
    `bun run build:android:emulator`. The APK is under
    `apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug`. Published release APKs are arm64-only and do
    not run on an x86_64 guest.
-3. Install the pinned Appium driver once **(scaffold)**: `bun run --cwd apps/client mobile-e2e:setup`. It installs
-   UiAutomator2 8.7.3 into a git-ignored `APPIUM_HOME`. Do not install Appium globally or with `sudo`.
-4. Run **(scaffold)**:
+3. Export the Android SDK and install the pinned Appium driver once:
+   `export ANDROID_HOME=<android sdk>` and `bun run --cwd apps/client mobile-e2e:setup`. The second command installs
+   UiAutomator2 8.7.3 into the git-ignored `apps/client/mobile-e2e/.appium`. Do not install Appium globally or with `sudo`.
+4. Run:
 
    ```sh
    LAZYSH_E2E_APK=<path to the debug apk> bun run test:mobile-e2e                 # smoke + regression
    bun run --cwd apps/client mobile-e2e -- --suite smoke
-   bun run --cwd apps/client mobile-e2e -- --spec specs/regression/gestures/1380-edge-swipe-vs-system-navigation.e2e.ts
+   bun run --cwd apps/client mobile-e2e -- --spec mobile-e2e/specs/smoke/launch.e2e.ts
    bun run --cwd apps/client mobile-e2e -- --mochaOpts.grep '@flaky' --mochaOpts.invert
    ```
+
+   Without `LAZYSH_E2E_APK` the build already installed on the guest is tested. Every spec file starts with the app's data
+   cleared, so hosts configured by hand on a shared guest are lost. Check without a device with `mobile-e2e:check`,
+   `mobile-e2e:lint` and `mobile-e2e:unit` (moon: `client:check-mobile-e2e`, `client:lint-mobile-e2e`,
+   `client:test-mobile-e2e-unit`).
 
 The shared guest may be in use by another run. The suite takes an advisory lock per serial, records window size, density,
 navigation mode, IME and animation scale before it starts, and restores them at the end, including after a failure. If you
@@ -42,36 +47,39 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 ## Write a test
 
 1. Pick the tier directory: `smoke/` (one of the ten critical journeys), `regression/<area>/` (one bug) or `journeys/`.
-2. Add or reuse a page object under `pageobjects/`. Getters return lazy elements, methods are user actions, there are no
-   assertions in page objects, and the file exports one instance.
+2. Add or reuse a page object under `pageobjects/`. It extends `Page`, names its context, returns lazy elements from
+   getters, offers user actions, has no assertions, and the file exports one instance.
 
    ```ts
-   // pageobjects/components/side-menu.component.ts
+   // pageobjects/home.page.ts
    import { $ } from '@wdio/globals';
-   import { inWebView } from '../../support/contexts';
+   import Page from './page';
 
-   class SideMenuComponent {
-     get root() { return $('[data-testid="side-menu"]'); }
-     async open() { await inWebView(() => edgeSwipe('left')); }
+   class HomePage extends Page {
+     readonly context = 'WEBVIEW' as const;
+     get root() { return $('aria/Add your first host'); }
    }
-   export default new SideMenuComponent();
+   export default new HomePage();
    ```
 
-3. Write the spec as one behaviour per `it`, asserting with the auto-retrying matchers:
+3. Write the spec as one behaviour per `it`, asserting with the auto-retrying matchers inside `page.in(...)`, which switches
+   to the page's context and back:
 
    ```ts
-   // specs/smoke/side-menu.e2e.ts
+   // specs/smoke/launch.e2e.ts
    import { expect } from '@wdio/globals';
-   import SideMenu from '../../pageobjects/components/side-menu.component';
+   import Home from '../../pageobjects/home.page';
 
-   describe('Side menu', () => {
-     it('opens from the left edge of a connected session', async () => {
-       await SideMenu.open();
-       await expect(SideMenu.root).toBeDisplayed();
+   describe('Launch', () => {
+     it('reaches the empty home with an invitation to add the first host', async () => {
+       await Home.in(() => expect(Home.root).toBeDisplayed());
      });
    });
    ```
 
+   Create elements inside `page.in(...)` or a page object action: `$()` starts resolving when it is called, so an element
+   made before the context switch is looked up in the previous context (an `aria/` lookup in `NATIVE_APP` fails with an
+   XPath error).
 4. Never sleep. Use `await expect(el).toBeDisplayed()` or `browser.waitUntil(cond, {timeout, timeoutMsg})`; `browser.pause`
    throws.
 5. Keep the test independent: create hosts through the fixture (they get a per-run name and are removed afterwards), do not
@@ -94,10 +102,10 @@ never run `herdr server stop`, `kill` or `tmux kill-server` against a process yo
 
 - The spec reporter names the test and the context it failed in. Failure artifacts are in
   `apps/client/mobile-e2e/reports/artifacts/<spec>/<test>/`: native and WebView screenshots, page sources, a `logcat` tail and
-  the Appium log. No screenshot is taken while a private key or password is on screen.
+  the tail of the Appium log. No screenshot or page source is taken while a private key or password is on screen.
 - A WebView `session not created` or `chrome not reachable` error usually means ChromeDriver does not match the guest
   WebView or the build is not debuggable. Check `adb shell cat /proc/net/unix | grep webview_devtools_remote` and that
-  `reports/appium.log` shows the matching ChromeDriver download.
+  `reports/wdio-appium.log` shows the matching ChromeDriver download.
 - For a selector problem, list the contexts and dump the page source from a short script, or use Appium Inspector against the
   same server and serial. Fix the selector, not the timeout.
 

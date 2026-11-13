@@ -31,6 +31,7 @@
     "test": "moon run :test :test-rust :test-hooks",
     "test:e2e": "moon run client:test-e2e",
     "test:native-gui": "moon run client:test-native-gui -c 1",
+    "test:mobile-e2e": "moon run client:test-mobile-e2e",
     "test:openssh": "moon run :test-openssh",
     "test:openssh-connections": "moon run :test-openssh-connections",
     "test:multiplexers": "moon run :test-multiplexers",

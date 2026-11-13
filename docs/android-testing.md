@@ -1,5 +1,10 @@
 # Android instrumentation
 
+The Appium and WebdriverIO device suite (`apps/client/mobile-e2e`) drives the packaged app from outside the process, across the
+native layer and the WebView. It is the layer for defects that need system gestures, a real input method or runtime
+permission dialogs. See [Write and run Appium tests](how-to/write-and-run-appium-tests.md); it uses the same x86_64 debug APK
+as the instrumented tests below and runs on the guest named by `ANDROID_SERIAL`.
+
 ## Controlled clock state for owned ntfy acceptance
 
 The dedicated ntfy owner uses the source-pinned API36/default AOSP provisioner,
