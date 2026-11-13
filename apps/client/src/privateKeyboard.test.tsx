@@ -74,7 +74,7 @@ describe("the Private keyboard setting", () => {
 
 function Harness() {
   usePrivateKeyboard();
-  return <><div className="terminal-canvas"><textarea className="xterm-helper-textarea" aria-label="terminal editor" /></div><textarea aria-label="chat composer" /><input aria-label="other field" /></>;
+  return <><div className="terminal-canvas"><textarea data-terminal-editor="" aria-label="terminal editor" /></div><textarea aria-label="chat composer" /><input aria-label="other field" /></>;
 }
 const focus = (name: string) => act(async () => { screen.getByLabelText(name).focus(); await new Promise(resolve => setTimeout(resolve)); });
 const blur = () => act(async () => { (document.activeElement as HTMLElement).blur(); await new Promise(resolve => setTimeout(resolve)); });

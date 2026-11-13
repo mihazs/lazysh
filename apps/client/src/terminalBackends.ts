@@ -1,7 +1,6 @@
-import type {Terminal} from '@xterm/xterm';
 import type {TerminalAdapter} from './terminalAdapter';
 import {createBackendRegistry, type BackendPreference, type SelectOptions} from './terminalBackendRegistry';
-import {createXtermTerminalAdapter, xtermCapabilities, XtermTerminalAdapter} from './xtermTerminalAdapter';
+import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
 const registry = createBackendRegistry();
 registry.register({
@@ -26,10 +25,4 @@ export function developerBackendOverride(): BackendPreference | undefined {
 /** The terminal of one new session, from the backend selection rules. */
 export function createTerminalAdapter(options: SelectOptions = {}) {
   return registry.create({override: developerBackendOverride(), ...options});
-}
-
-/** The xterm view of a session. TerminalPane still draws xterm directly (#1308); it cannot show another backend yet. */
-export function xtermView(adapter: TerminalAdapter): Terminal {
-  if (!(adapter instanceof XtermTerminalAdapter)) throw new Error(`The terminal pane cannot show the ${adapter.backend} backend yet.`);
-  return adapter.terminal;
 }

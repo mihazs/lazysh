@@ -1,7 +1,7 @@
 import type { Terminal } from '@xterm/xterm';
-import {terminalPreferences,type Preferences} from './preferences';
-import {xtermOptions} from './xtermOptions';
-import type {TerminalPreferences} from './terminalAdapter';
+import {terminalPreferences,type Preferences} from '../preferences';
+import {xtermOptions} from '../xtermOptions';
+import type {TerminalPreferences} from '../terminalAdapter';
 
 export function applyXtermPreferences(terminal: Terminal, preferences: TerminalPreferences) {
   configureTerminalBold(terminal, preferences.boldColor);

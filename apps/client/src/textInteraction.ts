@@ -1,4 +1,5 @@
 import {useEffect, useRef} from 'react';
+import {terminalEditorSelector, terminalRootSelector} from './terminalAdapter';
 
 /**
  * The guard behind every edge gesture: true while the user types or edits text, or while a
@@ -101,7 +102,7 @@ observe();
 
 function textFieldFocused(): boolean {
   const element = document.activeElement;
-  if (!element || element === document.body || element.classList.contains('xterm-helper-textarea')) return false;
+  if (!element || element === document.body || element.matches(terminalEditorSelector)) return false;
   if (element instanceof HTMLTextAreaElement) return !element.readOnly && !element.disabled;
   if (element instanceof HTMLInputElement) return !nonTextInputs.has(element.type) && !element.readOnly && !element.disabled;
   return element instanceof HTMLElement && element.isContentEditable;
@@ -111,7 +112,7 @@ function rangeSelected(): boolean {
   const selection = document.getSelection();
   if (!selection || selection.isCollapsed || selection.type !== 'Range') return false;
   const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode?.parentElement;
-  return !anchor?.closest('.xterm');
+  return !anchor?.closest(terminalRootSelector);
 }
 
 /** The kinds holding right now; empty when gestures may run. */

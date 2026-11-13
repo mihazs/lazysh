@@ -1,7 +1,7 @@
-import {createTerminal, applyTerminalTheme} from '../../src/terminal';
+import {createTerminal, applyTerminalTheme} from '../../src/xterm/terminal';
 import {defaults, parsePreferences} from '../../src/preferences';
 import {importedTheme} from '../../src/themeImport';
-import '@xterm/xterm/css/xterm.css';
+import '../../src/xterm/styles';
 
 export function mountThemeRenderingHarness() {
   const host = document.createElement('section');

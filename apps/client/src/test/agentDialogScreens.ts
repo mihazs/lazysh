@@ -10,7 +10,7 @@ export const modelScreen = (to: number) => onTmux(dialogScreen('model')).map(row
 export function fakeTerminal(initial: string[]) {
   let rows = initial;
   const listeners = new Set<() => void>();
-  const terminal: ScreenSource = {rows: 40, buffer: {active: {baseY: 0, getLine: y => ({translateToString: () => rows[y] ?? ''})}},
-    onWriteParsed: listener => {listeners.add(listener); return {dispose: () => {listeners.delete(listener);}};}};
+  const terminal: ScreenSource = {readRows: (first, count) => Array.from({length: count}, (_, row) => rows[first + row] ?? ''), viewport: () => ({top: 0, rows: 40, length: 40, following: true}),
+    subscribe: listener => {const notify = () => listener({type: 'output'}); listeners.add(notify); return {dispose: () => {listeners.delete(notify);}};}};
   return {terminal, set: (next: string[], notify = true) => {rows = next; if (notify) listeners.forEach(listener => listener());}};
 }

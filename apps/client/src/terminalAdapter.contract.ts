@@ -113,11 +113,108 @@ export function runTerminalAdapterContract(name: string, harness: ContractHarnes
       expect(adapter.selectWordAt({x: 7, y: 0})).toEqual({start: {x: 6, y: 0}, end: {x: 9, y: 0}});
       expect(adapter.selectWordAt({x: 5, y: 0})).toEqual({start: {x: 5, y: 0}, end: {x: 5, y: 0}});
       await sleep(0);
-      expect(events.some(event => event.type === 'selection' && event.selection?.text === '世界')).toBe(true);
+      expect(events.some(event => event.type === 'selection' && event.range?.start.x === 6 && event.range.end.x === 9)).toBe(true);
       adapter.clearSelection();
       expect(adapter.getSelection()).toBeUndefined();
       adapter.selectAll();
       expect(adapter.getSelection()?.text).toContain('hello 世界 end');
+    });
+
+    it('answers selection questions without building text, and clears on request', async () => {
+      const {adapter, events, write} = await open();
+      await write('hello 世界 end\r\n');
+      expect(adapter.hasSelection()).toBe(false);
+      expect(adapter.selectionRange()).toBeUndefined();
+      expect(adapter.selectedText()).toBe('');
+      adapter.select({start: {x: 6, y: 0}, end: {x: 9, y: 0}});
+      expect(adapter.hasSelection()).toBe(true);
+      expect(adapter.selectionRange()).toEqual({start: {x: 6, y: 0}, end: {x: 9, y: 0}});
+      expect(adapter.selectedText()).toBe('世界');
+      events.length = 0;
+      adapter.clearSelection();
+      await sleep(0);
+      expect(adapter.hasSelection()).toBe(false);
+      expect(events).toContainEqual({type: 'selection', range: undefined});
+    });
+
+    it('selects across rows by absolute coordinates, ending on the last column', async () => {
+      const {adapter, write} = await open();
+      await write('aaaaaaaaaaaaaaaaaaaa\r\nbbbbbbbbbbbbbbbbbbbb\r\ncc\r\n');
+      // 20 columns: the end cell is the last column of row 1, not the first of row 2.
+      adapter.select({start: {x: 5, y: 0}, end: {x: 19, y: 1}});
+      expect(adapter.selectionRange()).toEqual({start: {x: 5, y: 0}, end: {x: 19, y: 1}});
+      expect(adapter.selectedText()).toBe(`${'a'.repeat(15)}\n${'b'.repeat(20)}`);
+    });
+
+    it('reports where the screen is drawn, the cursor and the configured scrollback', async () => {
+      const adapter = await harness.create();
+      made.push(adapter);
+      expect(adapter.screenBounds()).toBeUndefined();
+      await adapter.attach(harness.target());
+      expect(adapter.screenBounds()).toEqual({left: expect.any(Number), top: expect.any(Number), width: expect.any(Number), height: expect.any(Number)});
+      await adapter.write!(text('ab\r\ncd'));
+      expect(adapter.cursor()).toEqual({x: 2, y: 1});
+      expect(adapter.metrics().scrollbackLines).toBeGreaterThanOrEqual(200);
+      expect(adapter.size()).toEqual({columns: 20, rows: 5});
+    });
+
+    it('reports the shell directory (OSC 7) and clipboard writes (OSC 52) as events, and ignores malformed ones', async () => {
+      const {adapter, write} = await open();
+      const seen: TerminalEvent[] = [];
+      adapter.subscribe(event => seen.push(event), ['cwd', 'clipboard']);
+      await write('\x1b]7;file://host/tmp/a%20b\x07\x1b]7;nonsense\x07\x1b]7;http://host/no\x07');
+      await write('\x1b]52;c;aGVsbG8=\x07\x1b]52;c;?\x07\x1b]52;c;not base64!\x07');
+      expect(seen).toEqual([{type: 'cwd', path: '/tmp/a b'}, {type: 'clipboard', text: 'hello'}]);
+    });
+
+    it('shows the UI every key event before the terminal, until released', async () => {
+      const {adapter} = await open();
+      if (!adapter.capabilities.ime) return;
+      const input = adapter.inputElement()!;
+      const seen: string[] = [];
+      const interception = adapter.interceptKeys(event => { seen.push(event.key); return event.key !== 'x'; });
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', bubbles: true, cancelable: true}));
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'y', bubbles: true, cancelable: true}));
+      interception.dispose();
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'z', bubbles: true, cancelable: true}));
+      expect(seen).toEqual(['x', 'y']);
+    });
+
+    it('delivers only the event types a subscriber asked for', async () => {
+      const {adapter, write} = await open();
+      const seen: string[] = [];
+      adapter.subscribe(event => seen.push(event.type), ['output']);
+      await write('x\r\n');
+      adapter.requestSize({columns: 25, rows: 6});
+      expect(new Set(seen)).toEqual(new Set(['output']));
+    });
+
+    it('announces each applied write as output', async () => {
+      const {events, write} = await open();
+      events.length = 0;
+      await write('x');
+      expect(events.filter(event => event.type === 'output')).toHaveLength(1);
+    });
+
+    it('knows when the primary screen shows live output', async () => {
+      const {adapter, write} = await open();
+      expect(adapter.atLiveScreen()).toBe(true);
+      await write(Array.from({length: 40}, (_, i) => `row ${i}`).join('\r\n'));
+      expect(adapter.atLiveScreen()).toBe(true);
+      adapter.scroll({kind: 'toTop'});
+      expect(adapter.atLiveScreen()).toBe(false);
+      adapter.scroll({kind: 'toBottom'});
+      await write('\x1b[?1049h');
+      expect(adapter.atLiveScreen()).toBe(false);
+    });
+
+    it('returns a reader of history to the live screen when typed input would', async () => {
+      const {adapter, write} = await open();
+      await write(Array.from({length: 40}, (_, i) => `row ${i}`).join('\r\n'));
+      adapter.scroll({kind: 'toTop'});
+      expect(adapter.viewport().following).toBe(false);
+      adapter.followLive();
+      expect(adapter.viewport().following).toBe(true);
     });
 
     it('searches the whole buffer, wrapping, in both directions', async () => {

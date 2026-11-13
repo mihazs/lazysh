@@ -198,7 +198,7 @@ test('visible-screen challenge oracle requires dismissal after a held native cli
   await openSessions(page);
   await page.keyboard.press('Escape');
   const observation = await page.evaluate(async () => {
-    const modulePath = '/src/terminal.ts';
+    const modulePath = '/src/xterm/terminal.ts';
     const {createTerminal} = await import(modulePath);
     const clipboardPath = '/src/deviceClipboard.ts';
     const {readClipboardText} = await import(clipboardPath);

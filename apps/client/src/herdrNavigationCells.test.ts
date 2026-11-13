@@ -1,11 +1,12 @@
+// @vitest-environment jsdom
 import {describe,expect,it} from 'vitest';
-import type {Terminal} from '@xterm/xterm';
 import {herdrNavigationCell,herdrOnScreen} from './herdrNavigationCells';
+import {XtermTerminalAdapter} from './xtermTerminalAdapter';
 
-/** A 46-column buffer of `above` rows of history and then `rows`, read from `viewportY`. */
+/** A 46-column buffer of `above` rows of history and then `rows`, read from `viewportY`, behind the real xterm adapter. */
 function screen(rows:string[],viewportY=0,above=viewportY) {
   const lines=[...Array(above).fill('history'),...rows];
-  return {cols:46,buffer:{active:{viewportY,getLine:(y:number)=>lines[y]===undefined?undefined:{translateToString:(_trim:boolean,start=0,end=46)=>lines[y].padEnd(46).slice(start,end)}}}} as unknown as Terminal;
+  return new XtermTerminalAdapter({cols:46,rows:rows.length,buffer:{active:{viewportY,baseY:above,length:lines.length,getLine:(y:number)=>lines[y]===undefined?undefined:{translateToString:(_trim:boolean,start=0,end=46)=>lines[y].padEnd(46).slice(start,end)}}}} as never);
 }
 const header=['● Development  tab 1',`${' 1 blocked'.padEnd(36)}│ switch  `,'agent output'];
 const switcher=[` switch${' '.repeat(29)}│  close  `,'','● Development','● codex-builder'];
@@ -27,13 +28,11 @@ describe("Herdr's own navigation inside the terminal",()=>{
     expect(herdrNavigationCell(screen(['switch to close']),3,0)).toBe(false);
   });
   it('is on screen while Herdr draws it on the live screen, wherever the reader is scrolled to',()=>{
-    const live=(rows:string[])=>{const terminal=screen(rows);Object.assign(terminal.buffer.active,{baseY:0});return terminal;};
+    const live=(rows:string[])=>screen(rows);
     expect(herdrOnScreen(live(header))).toBe(true);
     expect(herdrOnScreen(live(switcher))).toBe(true);
     expect(herdrOnScreen(live(['dev@box:~$ ','ls']))).toBe(false);
-    const scrolled=screen(header,0,5);
-    Object.assign(scrolled.buffer.active,{baseY:5});
-    expect(herdrOnScreen(scrolled)).toBe(true);
+    expect(herdrOnScreen(screen(header,0,5))).toBe(true);
   });
   it('follows the visible rows, not the live screen, once the reader has scrolled up into history',()=>{
     expect(herdrNavigationCell(screen(header,5),40,1)).toBe(true);

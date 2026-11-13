@@ -81,8 +81,8 @@ vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 // The status bar's pane-agent read has its own tests; here it would share the mocked Herdr snapshots the Agent view tests count.
 vi.mock('./useCurrentPaneAgent',()=>({useCurrentPaneAgent:()=>null}));
-vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
-vi.mock("./moshResize", () => ({installMoshResize: (...args:unknown[])=>mocks.installMoshResize(...args)}));
+vi.mock("./xterm/terminal", async importOriginal => ({...await importOriginal<typeof import("./xterm/terminal")>(), createTerminal: () => mocks.createTerminal()}));
+vi.mock("./xterm/moshResize", () => ({installMoshResize: (...args:unknown[])=>mocks.installMoshResize(...args)}));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
     mocks.terminalPaneProps(props);

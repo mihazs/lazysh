@@ -1,5 +1,6 @@
 import type {Terminal} from '@xterm/xterm';
 import {version} from '@xterm/xterm/package.json';
+import type {CanonicalResize} from '../terminalAdapter';
 
 type Line={length:number;isWrapped:boolean;resize(cols:number,cell:unknown):boolean};
 type Lines={length:number;maxLength:number;get(index:number):Line|undefined;push(line:Line):void;splice(index:number,count:number):void;trimStart(count:number):void};
@@ -108,12 +109,7 @@ function installCanonicalResize(terminal:Terminal):Hook {
   return hook;
 }
 
-export type MoshResizeController={
-  requestSize(cols:number,rows:number):void;
-  onResizeIntent(listener:(size:{cols:number;rows:number})=>void):{dispose():void};
-  close():Promise<void>;dispose():void;
-  readonly failure:'invalid-frame'|'partial-frame'|null;
-};
+export type MoshResizeController=CanonicalResize;
 const controllers=new WeakMap<Terminal,MoshResizeController>();
 
 /** Only a child known to be Mosh may install this before its first output.
